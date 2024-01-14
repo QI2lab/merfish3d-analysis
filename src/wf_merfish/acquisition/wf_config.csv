@@ -1,0 +1,4 @@
+pump_com_port,COM12
+valve_com_port,COM11
+pixel_size_um,0.088
+scan_axis_step_um,0.315

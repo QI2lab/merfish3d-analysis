@@ -1,0 +1,43 @@
+# https://peps.python.org/pep-0517/
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# https://peps.python.org/pep-0621/
+[project]
+name = "wf-merfish"
+description = "Acquisition and post-processing for qi2lab widefield MERFISH"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD 3-Clause License" }
+authors = [
+    { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
+]
+dynamic = ["version"]
+dependencies = ["numpy", "tifffile", "zarr", "numba", "pycromanager",
+                "numcodecs", "psfmodels", "cmap", "SimpleITK", 
+                "pandas", "tqdm", "magicgui[pyqt5]", "napari",
+                "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field",
+                "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main#egg=multiview-stitcher"]
+
+[tool.hatch.version]
+path = "src/wf_merfish/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+only-include = ["src"]
+sources = ["src"]
+
+# extras
+# https://peps.python.org/pep-0621/#dependencies-optional-dependencies
+[project.optional-dependencies]
+test = ["pytest>=6.0"]
+gpu = ["cupy-cuda11x",
+       'cucim ; platform_system != "Windows"',
+       'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim ; platform_system != "Linux"']
+
+[project.urls]
+Source = "https://github.com/dpshepherd/wf-merfish"
+Tracker = "https://github.com/dpshepherd/wf-merfish/issues"
