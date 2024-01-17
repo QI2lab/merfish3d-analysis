@@ -104,3 +104,7 @@ ENV/
 # IDE settings
 .vscode/
 test.csv
+*.pyc
+src/wf_merfish/test_postprocess.py
+src/wf_merfish/test_roundalignment.py
+src/wf_merfish/test_stitching.py

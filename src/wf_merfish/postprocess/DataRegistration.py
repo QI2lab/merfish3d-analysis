@@ -8,20 +8,23 @@ Shepherd 2023/09 - initial commit
 import numpy as np
 from pathlib import Path
 from typing import Union, Optional
+from numpy.typing import NDArray
 import zarr
 import gc
 from cmap import Colormap
 import warnings
 import SimpleITK as sitk
 from numcodecs import blosc
-from wf_merfish.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform
+from wf_merfish.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform, normalize_histograms
+from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
 
 class DataRegistration:
     def __init__(self,
                  dataset_path: Union[str, Path],
                  overwrite_registered: bool = False,
                  perform_optical_flow: bool = False,
-                 tile_idx: Optional[int] = None):
+                 tile_idx: Optional[int] = None,
+                 psf: Optional[NDArray] = None):
         """
         Retrieve and pre-process one tile from qi2lab 3D widefield zarr structure.
         Apply rigid and optical flow registration transformations if available.
@@ -39,9 +42,7 @@ class DataRegistration:
 
         if tile_idx is None:
             tile_idx = 0
-        self._tile_idx = tile_idx
-        self._tile_id = 'tile'+str(tile_idx).zfill(4)
-        
+        self._tile_idx = tile_idx        
         self._parse_dataset()
         
         self._perform_optical_flow = perform_optical_flow
@@ -52,6 +53,7 @@ class DataRegistration:
         self._compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
         blosc.set_nthreads(6)
         self._overwrite_registered = overwrite_registered
+        self._psf = psf
 
     # -----------------------------------
     # property access for class variables
@@ -173,18 +175,20 @@ class DataRegistration:
         Parse dataset to discover number of tiles, number of rounds, and voxel size.
         """
 
-        tile_ids = list(self._dataset.group_keys())
-        self._num_tiles = len(tile_ids)
+        polyDT_dir_path = self._dataset_path
+        self._tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
+        self._num_tiles = len(self._tile_ids)
+        self._tile_id = self._tile_ids[self._tile_idx]
 
-        current_tile = zarr.open_group(self._dataset_path,mode='r',path=self._tile_idx)
-        self._round_ids = list(current_tile.group_keys())
+        current_tile_dir_path = polyDT_dir_path / Path(self._tile_id)
+        self._round_ids = [entry.name.split('.')[0]  for entry in current_tile_dir_path.iterdir() if entry.is_dir()]
         round_id = self._round_ids[0]
-        current_round = zarr.open_group(self._dataset_path,mode='r',
-                                        path=self._tile_idx + "/" + round_id)
+        current_round_zarr_path = current_tile_dir_path / Path(round_id + ".zarr")
+        current_round = zarr.open(current_round_zarr_path,mode='r')
 
-        self._voxel_size = np.asarray(current_tile['voxel_zyx_um'], dtype=np.float32)
+        self._voxel_size = np.asarray(current_round.attrs['voxel_zyx_um'], dtype=np.float32)
 
-        del current_round, current_tile
+        del current_round
         gc.collect()
 
     def load_raw_data(self):
@@ -192,7 +196,7 @@ class DataRegistration:
         Load raw data across rounds.
         """
 
-        if self._tile_coordinates is None:
+        if self._tile_idx is None:
             print('Set tile position first.')
             print('e.g. DataLoader.tile_idx = 0')
             return None
@@ -201,20 +205,21 @@ class DataRegistration:
         stage_positions = []
         
         for round_id in self._round_ids:
-            current_round = zarr.open_group(self._dataset_path,mode='r',path=self._tile_idx+'/'+round_id)
+            current_round_zarr_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+            current_round = zarr.open(current_round_zarr_path,mode='r')
             data_raw.append(np.asarray(current_round['raw_data'], dtype=np.uint16))
-            stage_positions.append(np.asarray(current_round.attrs['stage_position'], dtype=np.float32))
+            stage_positions.append(np.asarray(current_round.attrs['stage_zyx_um'], dtype=np.float32))
 
         self._data_raw = np.stack(data_raw, axis=0)
         self._stage_positions = np.stack(stage_positions,axis=0)
-        del data_raw, stage_positions
+        del data_raw, stage_positions, current_round
         gc.collect()
 
     def load_registered_data(self):
         """
         If available, load registered data across rounds.
         """
-        if self._tile_coordinates is None:
+        if self._tile_idx is None:
             print('Set tile position first.')
             print('e.g. DataLoader.tile_idx = 0')
             return None
@@ -222,11 +227,12 @@ class DataRegistration:
         data_registered = []
         try:
             for round_id in self._round_ids:
-                current_round = zarr.open_group(self._dataset_path,mode='r',path=self._tile_idx+'/'+round_id)
+                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                current_round = zarr.open(current_round_path,mode='r')
                 data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
                         
             self._data_registered = np.stack(data_registered,axis=0)
-            del data_registered
+            del data_registered, current_round
             gc.collect()
             self._has_registered_data = True
 
@@ -247,79 +253,175 @@ class DataRegistration:
         
         if self._data_raw is None:
             self.load_raw_data()
+            
+        lib = getlib()
+            
+        ref_image_decon = richardson_lucy_nc(self._data_raw[0,:],
+                                            psf=self._psf,
+                                            numiterations=100,
+                                            regularizationfactor=.001,
+                                            lib=lib)
         
-        ref_image_sitk = sitk.GetImageFromArray(self._data_raw[0,:].astype(np.float32))
+        current_round_path = self._dataset_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
+        current_round = zarr.open(current_round_path,mode='a')
+        
+        try:
+            data_reg_zarr = current_round.zeros('registered_data',
+                                            shape=ref_image_decon.shape,
+                                            chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
+                                            compressor=self._compressor,
+                                            dtype=np.uint16)
+        except Exception:
+            data_reg_zarr = current_round['registered_data']
+        
+        data_reg_zarr[:] = ref_image_decon
+                    
+        ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
+        
+        del current_round_path, current_round, data_reg_zarr
+        gc.collect()
 
-        for round_id in self._round_ids[1:]:
-            current_round = zarr.open_group(self._dataset_path,mode='a',
-                                            path=self._tile_id+'/'+round_id)
-            try:
-                test_reg = np.asarray(current_round['registered_data'], dtype=np.uint16)
-            except Exception:
-                has_registered = False
-            else:
-                has_registered = True
-            del test_reg
-            gc.collect()
+        for r_idx, round_id in enumerate(self._round_ids[1:]):
+            r_idx = r_idx + 1
+            current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+            current_round = zarr.open(current_round_path,mode='a')                
                 
-            if (self._overwrite_registered and has_registered) or not(has_registered):
-                mov_image_sitk = sitk.GetImageFromArray(self._data_raw[round_id,:].astype(np.float32))
+            mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
+                                            psf=self._psf,
+                                            numiterations=100,
+                                            regularizationfactor=.001,
+                                            lib=lib)
+
+            mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
+                            
+            downsample_factor = 2
+            if downsample_factor > 1:
+                ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+            else:
+                ref_ds_image_sitk = ref_image_sitk
+                mov_ds_image_sitk = mov_image_sitk
+                
+            _, initial_xy_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                                                            mov_ds_image_sitk,
+                                                            use_mask=False,
+                                                            downsample_factor=downsample_factor,
+                                                            projection='z')
+            
+            intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
+
+            mov_image_sitk = apply_transform(ref_image_sitk,
+                                                mov_image_sitk,
+                                                intial_xy_transform)
+            
+            del ref_ds_image_sitk
+            gc.collect()
+            
+            downsample_factor = 2
+            if downsample_factor > 1:
+                ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+            else:
+                mov_ds_image_sitk = mov_image_sitk
+                
+            _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                                                        mov_ds_image_sitk,
+                                                        use_mask=False,
+                                                        downsample_factor=downsample_factor,
+                                                        projection='search')
+            
+            intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
+
+            mov_image_sitk = apply_transform(ref_image_sitk,
+                                            mov_image_sitk,
+                                            intial_z_transform)
+            
+            del ref_ds_image_sitk
+            gc.collect()
+            
+            downsample_factor = 4
+            if downsample_factor > 1:
+                ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+            else:
+                mov_ds_image_sitk = mov_image_sitk
                                 
+            _, xyz_shift_4x = compute_rigid_transform(ref_ds_image_sitk, 
+                                                        mov_ds_image_sitk,
+                                                        use_mask=False,
+                                                        downsample_factor=downsample_factor,
+                                                        projection=None)
+    
+            
+            final_xyz_shift = np.asarray(initial_xy_shift) + np.asarray(intial_z_shift) + np.asarray(xyz_shift_4x)                        
+            current_round.attrs["rigid_xform_xyz_um"] = final_xyz_shift.tolist()
+            
+            xyz_transform_4x = sitk.TranslationTransform(3, xyz_shift_4x)
+            mov_image_sitk = apply_transform(ref_image_sitk,
+                                                    mov_image_sitk,
+                                                    xyz_transform_4x)
+            del ref_ds_image_sitk
+            gc.collect()
+            
+            if self._perform_optical_flow:
+                    
                 downsample_factor = 4
                 if downsample_factor > 1:
                     ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
                     mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
                 else:
                     mov_ds_image_sitk = mov_image_sitk
-                    
-                _, xyz_shift = compute_rigid_transform(ref_ds_image_sitk, 
-                                                       mov_ds_image_sitk,
-                                                       use_mask=False,
-                                                       downsample_factor=downsample_factor,
-                                                       projection=None)
-                                
-                current_round.attrs["rigid_xform_xyz_um"] = xyz_shift.tolist()
 
-                final_transform = sitk.TranslationTransform(3, xyz_shift)
-                mov_translation_sitk = apply_transform(ref_image_sitk,
-                                                       mov_image_sitk,
-                                                       final_transform)
-                del ref_image_sitk, mov_image_sitk
+                ref_ds_image = sitk.GetArrayFromImage(ref_ds_image_sitk).astype(np.float32)
+                mov_ds_image = sitk.GetArrayFromImage(mov_ds_image_sitk).astype(np.float32)
+                del ref_ds_image_sitk, mov_ds_image_sitk
                 gc.collect()
                 
+                of_xform_4x = compute_optical_flow(ref_ds_image,mov_ds_image)
+                del ref_ds_image, mov_ds_image
+                gc.collect()
 
-                if self._perform_optical_flow:
-                    downsample_factor = 4
-                    if downsample_factor > 1:
-                        mov_ds_image_sitk = downsample_image(mov_translation_sitk, downsample_factor)
-                    else:
-                        mov_ds_image_sitk = mov_translation_sitk
+                try:
+                    of_xform_zarr = current_round.zeros('of_xform_4x',
+                                                    shape=of_xform_4x.shape,
+                                                    chunks=(1,1,of_xform_4x.shape[2],of_xform_4x.shape[3]),
+                                                    compressor=self._compressor,
+                                                    dtype=np.float32)
+                except Exception:
+                    of_xform_zarr = current_round['of_xform_4x']
+                
+                of_xform_zarr[:] = of_xform_4x
+                
+                of_4x_sitk = sitk.GetImageFromArray(of_xform_4x.transpose(1, 2, 3, 0).astype(np.float64),
+                                                        isVector = True)
+                final_shape = mov_image_sitk.GetSize()
+                optical_flow_sitk = sitk.Resample(of_4x_sitk,final_shape)
+                displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+                del of_4x_sitk, of_xform_4x
+                gc.collect()
+                
+                # apply optical flow 
+                mov_image_sitk = sitk.Resample(mov_image_sitk,displacement_field)
+                data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.uint16)
 
-                    ref_ds_image = sitk.GetArrayFromImage(ref_ds_image_sitk).astype(np.float32)
-                    mov_ds_image = sitk.GetArrayFromImage(mov_ds_image_sitk).astype(np.float32)
-                    del ref_ds_image_sitk, mov_ds_image_sitk, mov_translation_sitk
-                    gc.collect()
-                    
-                    of_xform_4x = compute_optical_flow(ref_ds_image,mov_ds_image)
-                    del ref_ds_image, mov_ds_image
-                    gc.collect()
-
-                    try:
-                        of_xform_zarr = current_round.zeros('of_xform_4x',
-                                                        shape=(of_xform_4x.shape[0],
-                                                            of_xform_4x.shape[1],
-                                                            of_xform_4x.shape[2]),
-                                                        chunks=(1,of_xform_4x.shape[1],of_xform_4x.shape[2]),
-                                                        compressor=self._compressor,
-                                                        dtype=np.float32)
-                    except Exception:
-                        of_xform_zarr = current_round['of_xform_4x']
-                    
-                    of_xform_zarr[:] = of_xform_4x
-
-        self._has_rigid_registrations=True
-        if self.perform_optical_flow:
-            self._has_of_registrations=True
+                del optical_flow_sitk, displacement_field
+                gc.collect()
+            else:
+                data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.uint16)
+                
+            try:
+                data_reg_zarr = current_round.zeros('registered_data',
+                                                shape=data_registered.shape,
+                                                chunks=(1,data_registered.shape[1],data_registered.shape[2]),
+                                                compressor=self._compressor,
+                                                dtype=np.uint16)
+            except Exception:
+                data_reg_zarr = current_round['registered_data']
+            
+            data_reg_zarr[:] = data_registered
+        
+        del ref_image_sitk
+        gc.collect()
                 
     def apply_registrations(self):
         """
@@ -331,26 +433,46 @@ class DataRegistration:
             print('e.g. DataLoader.tile_idx = 0')
             return None
         
+        if self._data_raw is None:
+            self.load_raw_data()
+        
         if not(self._has_rigid_registrations):
             self.load_rigid_registrations()
             if not(self._has_rigid_registrations):
                 self.generate_registrations()
+                self.load_rigid_registrations()
 
         if self._perform_optical_flow and not(self._has_of_registrations):
             self.load_opticalflow_registrations()
             if not(self._has_of_registrations):
                 self.generate_registrations()
+                self.load_opticalflow_registrations()
+                
+        lib = getlib()
   
         for r_idx, round_id in enumerate(self._round_ids):
-            current_round = zarr.open_group(self._dataset_path,mode='a',
-                                            path=self._tile_id+'/'+round_id)
-            if round_id == self._round_ids[0]:
-                data_registered = self._raw_data[r_idx,:]
-                ref_image_sitk = sitk.GetImageFromArray(self._data_raw[0,:].astype(np.float32))
+            current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+            current_round = zarr.open(current_round_path,mode='a')
+            
+            if r_idx == 0:
+                ref_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
+                                                     psf=self._psf,
+                                                     numiterations=100,
+                                                     regularizationfactor=.001,
+                                                     lib=lib)
+                data_registered = ref_image_decon.copy()
+                ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
+                del ref_image_decon
+                gc.collect()
             else:
-                mov_image_sitk = sitk.GetImageFromArray(self._data_raw[r_idx,:].astype(np.float32))
-                rigid_xform = np.asarray(current_round.attrs["rigid_xform_xyz_um"],
-                                                     dtype=np.float32)
+                mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
+                                                     psf=self._psf,
+                                                     numiterations=100,
+                                                     regularizationfactor=.001,
+                                                     lib=lib)
+                
+                mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
+                rigid_xform = self._rigid_xforms[(r_idx-1),:]
                 total_shift_xyz = [float(i) for i in rigid_xform]
                 final_transform = sitk.TranslationTransform(3, total_shift_xyz)
 
@@ -358,11 +480,11 @@ class DataRegistration:
                                                        mov_image_sitk,
                                                        final_transform)
                 
-                del final_transform
+                del final_transform, mov_image_decon
                 gc.collect()
 
                 if self.perform_optical_flow:
-                    of_xform_4x = self._of_xform_4x[0,:]
+                    of_xform_4x = self._of_xforms[(r_idx-1),:]
                     # prepare 4x downsample optical flow for sitk, upsample, and create transform
                     of_4x_sitk = sitk.GetImageFromArray(of_xform_4x.transpose(1, 2, 3, 0).astype(np.float64),
                                                         isVector = True)
@@ -383,9 +505,7 @@ class DataRegistration:
 
             try:
                 data_reg_zarr = current_round.zeros('registered_data',
-                                                shape=(data_registered.shape[0],
-                                                    data_registered.shape[1],
-                                                    data_registered.shape[2]),
+                                                shape=data_registered.shape,
                                                 chunks=(1,data_registered.shape[1],data_registered.shape[2]),
                                                 compressor=self._compressor,
                                                 dtype=np.uint16)
@@ -393,6 +513,8 @@ class DataRegistration:
                 data_reg_zarr = current_round['registered_data']
             
             data_reg_zarr[:] = data_registered
+            
+        del lib
                 
     def load_rigid_registrations(self):
         """
@@ -404,23 +526,22 @@ class DataRegistration:
             print('e.g. DataLoader.tile_idx = 0')
             return None
 
-        total_xform = []
+        rigid_xform = []
         self._has_rigid_registrations = False
 
         try:
-            for round_id in range(self._num_r):
-                current_round = zarr.open_group(self._dataset_path,mode='a',
-                                            path=self._tile_id+'/'+round_id)
+            for round_id in self._round_ids[1:]:
+                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                current_round = zarr.open(current_round_path,mode='r')
                 
-                total_xform.append(np.asarray(current_round.attrs['rigid_xform_xyz_um'],dtype=np.float32))
-        except Exception:
-            self._total_xform = None
-            self._has_rigid_registrations = False
-        else:
-            self._total_xform = np.stack(total_xform,axis=0)
+                rigid_xform.append(np.asarray(current_round.attrs['rigid_xform_xyz_um'],dtype=np.float32))
+            self._rigid_xforms = np.stack(rigid_xform,axis=0)
             self._has_rigid_registrations = True
-        del total_xform
-        gc.collect()
+            del rigid_xform
+            gc.collect()
+        except Exception:
+            self._rigid_xforms = None
+            self._has_rigid_registrations = False
 
     def load_opticalflow_registrations(self):
         """"
@@ -431,19 +552,18 @@ class DataRegistration:
         self._has_of_registrations = False
 
         try:
-            for round_id in range(self._num_r):
-                current_round = zarr.open_group(self._dataset_path,mode='a',
-                                            path=self._tile_id+'/'+round_id)
+            for round_id in self._round_ids[1:]:
+                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                current_round = zarr.open(current_round_path,mode='r')
                 
-                of_xform.append(np.asarray(current_round['of_xform_xyz_um'],dtype=np.float32))
-        except Exception:
-            self._of_xform = None
-            self._has_of_registrations = False
-        else:
-            self._of_xform = np.stack(of_xform,axis=0)
+                of_xform.append(np.asarray(current_round['of_xform_4x'],dtype=np.float32))
+                self._of_xforms = np.stack(of_xform,axis=0)
             self._has_of_registrations = True
-        del of_xform
-        gc.collect()
+            del of_xform
+            gc.collect()
+        except Exception:
+            self._of_xforms = None
+            self._has_of_registrations = False
 
     # def export_tiled_tiffs(self,
     #                        tile_size: int = 425,
@@ -643,13 +763,13 @@ class DataRegistration:
                      Colormap('chrisluts:OPF_Orange'),
                      Colormap('cmap:magenta')]
         
-        for idx in range(self._num_channels):
+        for idx in range(len(self._round_ids)):
             middle_slice = self._data_registered[idx].shape[0]//2
             viewer.add_image(data=self._data_registered[idx],
                              name=self._round_ids[idx],
                              scale=self._voxel_size,
                              blending='additive',
                              colormap=colormaps[idx].to_napari(),
-                             contrast_limits=[100,np.percentile(self._data_registered[idx][middle_slice,:].ravel(),99.98)])
+                             contrast_limits=[100,6000])
 
         napari.run()

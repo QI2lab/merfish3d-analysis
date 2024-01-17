@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-<<<<<<< HEAD
 
 import re
 import pandas as pd
@@ -7,13 +6,6 @@ from datetime import datetime
 import os
 import pathlib
 
-def read_metadata(fname):
-    """
-    Read data from csv file consisting of one line giving titles, and the other giving values. Return as dictionary
-
-    :param fname:
-    :return metadata:
-=======
 '''
 QI2lab OPM suite
 Reconstruction tools
@@ -44,8 +36,8 @@ def read_metadatafile(fname: Union[str,Path]) -> Dict:
     -------
     metadata: Dict
         metadata dictionary
->>>>>>> ba61ba8 (Initial commit)
     """
+
     scan_data_raw_lines = []
 
     with open(fname, "r") as f:
@@ -76,7 +68,6 @@ def read_metadatafile(fname: Union[str,Path]) -> Dict:
 
     return metadata
 
-<<<<<<< HEAD
 def read_config_file(config_path):
     """
     Read data from csv file consisting of one line giving titles, and the other giving values. Return as dictionary
@@ -115,18 +106,6 @@ def read_fluidics_program(program_path):
 
     return df_fluidics
 
-def write_metadata(data_dict, save_path):
-    """
-
-    :param data_dict: dictionary of metadata entries
-    :param save_path:
-    :return:
-    """
-    pd.DataFrame([data_dict]).to_csv(save_path)
-
-def time_stamp():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 def append_index_filepath(filepath):
     """
     Append a number to a file path if the file already exists,
@@ -145,7 +124,7 @@ def append_index_filepath(filepath):
     if to_pathlib:
         filepath = pathlib.Path(filepath)
     return filepath
-=======
+
 def write_metadata(data_dict: Dict, 
                    save_path: Union[str,Path]):
     """
@@ -191,4 +170,3 @@ def return_data_dask(dataset: Dataset,
 
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
->>>>>>> ba61ba8 (Initial commit)

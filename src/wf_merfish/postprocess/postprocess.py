@@ -28,27 +28,32 @@ from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
 from typing import Dict, Generator, Optional
+from superqt.utils import thread_worker, ensure_main_thread
 
 # parse experimental directory, load data, and process
-def postprocess(selected_options: Dict[str,bool], 
+@thread_worker
+def postprocess(correction_option: str, 
+                stitching_options: Dict[str,bool], 
                 dataset_path: Path, 
                 codebook_path: Path, 
                 bit_order_path: Path,
                 noise_map_path: Optional[Path] = None,
                 darkfield_image_path: Optional[Path] = None,
                 shading_images_path: Optional[Path] = None) -> Generator[Dict[str, int], None, None]:
-
+    
+    
     hotpixel_flag = False
     shading_flag = False
     round_registration_flag = False
     tile_registration_flag = False
-    for option_name, is_selected in selected_options.items():
+    if correction_option == "Hotpixel correct" and (noise_map_path is not None):
+        hotpixel_flag = True
+    elif correction_option == "Flatfield correct" and (noise_map_path is not None) and (darkfield_image_path is not None) and (shading_images_path is not None):
+        shading_flag = True
+    
+    for option_name, is_selected in stitching_options.items():
         if is_selected:
-            if option_name == "Hotpixel correct" and (noise_map_path is not None):
-                hotpixel_flag = True
-            elif option_name == "Flatfield correct" and (noise_map_path is not None) and (darkfield_image_path is not None) and (shading_images_path is not None):
-                shading_flag = True
-            elif option_name == "Register polyDT each tile across rounds":
+            if option_name == "Register polyDT each tile across rounds":
                 round_registration_flag = True
             elif option_name == "Register polyDT all tiles first round":
                 tile_registration_flag = True
@@ -95,26 +100,32 @@ def postprocess(selected_options: Dict[str,bool],
 
     # create output directory
     output_dir_path_base = dataset_path
-    output_dir_path = output_dir_path_base / 'processed'
+    output_dir_path = output_dir_path_base / 'processed_v2'
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # create directory for data type
-    polyDT_output_dir_path = output_dir_path / Path('polyDT.zarr')
+    # polyDT_output_dir_path = output_dir_path / Path('polyDT.zarr')
+    # polyDT_output_dir_path.mkdir(parents=True, exist_ok=True)
+    # compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
+    # polyDT_zarr = zarr.open(str(polyDT_output_dir_path), mode="a")
+    
+    polyDT_output_dir_path = output_dir_path / Path('polyDT')
     polyDT_output_dir_path.mkdir(parents=True, exist_ok=True)
-    compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
-    polyDT_zarr = zarr.open(str(polyDT_output_dir_path), mode="a")
 
-    readout_output_dir_path = output_dir_path / Path('readouts.zarr')
+    # readout_output_dir_path = output_dir_path / Path('readouts.zarr')
+    # readout_output_dir_path.mkdir(parents=True, exist_ok=True)
+    # compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
+    # readout_zarr = zarr.open(str(readout_output_dir_path), mode="a")
+    
+    readout_output_dir_path = output_dir_path / Path('readouts')
     readout_output_dir_path.mkdir(parents=True, exist_ok=True)
-    compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
-    readout_zarr = zarr.open(str(readout_output_dir_path), mode="a")
 
     calibrations_output_dir_path = output_dir_path / Path('calibrations.zarr')
     calibrations_output_dir_path.mkdir(parents=True, exist_ok=True)
     compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
     calibrations_zarr = zarr.open(str(calibrations_output_dir_path), mode="a")
-
-    blosc.set_nthreads(6)
+    
+    blosc.set_nthreads(20)
                      
     # import image processing functions
     if hotpixel_flag and not(shading_flag):
@@ -129,19 +140,25 @@ def postprocess(selected_options: Dict[str,bool],
     tile_idx=0
 
     # TO DO : Load from WF setup data
-    channel_ids = channels_in_data
+    channel_ids = ['T-P1',
+                   'T-P2',
+                   'T-P3',
+                   'T-P4',
+                   'F-Blue',
+                   'F-Yellow',
+                   'F-Red']
 
     # load codebook and experimental order from disk
     codebook_df = pd.read_csv(codebook_path)
     bit_order_df = pd.read_csv(bit_order_path)
     bit_order = bit_order_df.to_numpy()
-
+    
     # deal with calibrations first
     # save noise map
     if noise_map_path is not None and (hotpixel_flag or shading_flag):
         noise_map = imread(noise_map_path)
         noise_map_zarr = calibrations_zarr.zeros('noise_map',
-                                            shape=(noise_map.shape[0],noise_map[1]),
+                                            shape=noise_map.shape,
                                             chunks=(noise_map.shape[0],noise_map.shape[1]),
                                             compressor=compressor,
                                             dtype=np.uint16)
@@ -151,7 +168,7 @@ def postprocess(selected_options: Dict[str,bool],
     if darkfield_image_path is not None and (hotpixel_flag or shading_flag):
         darkfield_image = imread(darkfield_image_path)
         darkfield_image_zarr = calibrations_zarr.zeros('darkfield_image',
-                                                        shape=(darkfield_image.shape[0],darkfield_image[1]),
+                                                        shape=darkfield_image.shape,
                                                         chunks=(darkfield_image.shape[0],darkfield_image.shape[1]),
                                                         compressor=compressor,
                                                         dtype=np.uint16)
@@ -161,7 +178,7 @@ def postprocess(selected_options: Dict[str,bool],
     if shading_images_path is not None and (hotpixel_flag or shading_flag):
         shading_images = imread(shading_images_path)
         shading_images_zarr = calibrations_zarr.zeros('shading_images',
-                                                        shape=(shading_images.shape[0],shading_images.shape[0],shading_images[1]),
+                                                        shape=shading_images.shape,
                                                         chunks=(1,shading_images.shape[0],shading_images.shape[1]),
                                                         compressor=compressor,
                                                         dtype=np.uint16)
@@ -178,24 +195,24 @@ def postprocess(selected_options: Dict[str,bool],
     calibrations_zarr.attrs["num_tiles"] = num_tiles
     calibrations_zarr.attrs["channels_in_data"] = channels_in_data
     calibrations_zarr.attrs["tile_overlap"] = tile_overlap
-
+    
     # generate and save PSFs
     channel_psfs = []
-    for idx, channel_id in enumerate(channel_ids[4:]):
-        channel_psfs = channel_psfs.append(make_psf(z=33,
-                                                nx=33,
-                                                dxy=pixel_size,
-                                                dz=axial_step,
-                                                NA=1.35,
-                                                wvl=em_wavelengths[idx+4],
-                                                ns=1.33,
-                                                ni=1.51,
-                                                ni0=1.51,
-                                                model='vectorial'))
+    for channel_id in channels_in_data:
+        channel_psfs.append(make_psf(z=33,
+                            nx=33,
+                            dxy=pixel_size,
+                            dz=axial_step,
+                            NA=1.35,
+                            wvl=em_wavelengths[channel_id],
+                            ns=1.33,
+                            ni=1.51,
+                            ni0=1.51,
+                            model='vectorial'))
     channel_psfs = np.array(channel_psfs)
 
     psf_data = calibrations_zarr.zeros('psf_data',
-                                        shape=(channel_psfs.shape[0],channel_psfs.shape[1],channel_psfs.shape[2],channel_psfs[3]),
+                                        shape=(channel_psfs.shape[0],channel_psfs.shape[1],channel_psfs.shape[2],channel_psfs.shape[3]),
                                         chunks=(1,1,channel_psfs.shape[2],channel_psfs.shape[3]),
                                         compressor=compressor,
                                         dtype=np.uint16)
@@ -228,11 +245,10 @@ def postprocess(selected_options: Dict[str,bool],
             while(not(read_metadata)):
                 try:
                     df_stage_positions = read_metadatafile(stage_position_path)
+                    read_metadata = True
                 except Exception:
                     read_metadata = False
-                    time.sleep(60*1)
-                else:
-                    read_metadata = True
+                    time.sleep(60*1)                    
 
             if not(skip_tile):
 
@@ -268,80 +284,66 @@ def postprocess(selected_options: Dict[str,bool],
                 # open dataset directory using NDTIFF
                 try:
                     dataset = Dataset(str(tile_dir_path_to_load))
+                    file_load = True
                 except Exception:
                     file_load = False
                     print('Dataset loading error. Skipping this stage position.')
-                else:
-                    file_load = True
+  
 
                 # polyDT zarr store
-                try:
-                    polyDT_current_tile = polyDT_zarr.create_group(tile_name)
-                except Exception:
-                    polyDT_current_tile = zarr.open_group(polyDT_zarr,mode='a',path=tile_name)
-
-                try:
-                    polydT_current_round = polyDT_current_tile.create_group(round_name)
-                except Exception:
-                    polydT_current_round = zarr.open_group(polyDT_output_dir_path,mode='a',path=tile_name + "/" + round_name)
+                polyDT_tile_dir_path = polyDT_output_dir_path / Path(tile_name)
+                polyDT_tile_dir_path.mkdir(parents=True, exist_ok=True)
+                polydT_round_dir_path = polyDT_tile_dir_path / Path(round_name + '.zarr')
+                polydT_round_zarr = zarr.open(str(polydT_round_dir_path), mode="a")
+                
 
                 # yellow readout zarr store
-                yellow_readout_round_idx = bit_order[r_idx,0]
+                yellow_readout_round_idx = bit_order[r_idx,1]
                 yellow_bit_name = "bit"+str(yellow_readout_round_idx).zfill(2)
-                try:
-                    yellow_current_tile = readout_zarr.create_group(tile_name)
-                except Exception:
-                    yellow_current_tile = zarr.open_group(readout_output_dir_path,mode='a',path=tile_name)
-          
-                try:
-                    yellow_current_bit = yellow_current_tile.create_group(yellow_bit_name)
-                except Exception:
-                    yellow_current_bit = zarr.open_group(readout_output_dir_path,mode='a',path=tile_name + "/" + yellow_bit_name)
+                yellow_tile_dir_path = readout_output_dir_path / Path(tile_name)
+                yellow_tile_dir_path.mkdir(parents=True, exist_ok=True)
+                yellow_bit_dir_path = yellow_tile_dir_path / Path(yellow_bit_name + '.zarr')
+                yellow_bit_zarr = zarr.open(str(yellow_bit_dir_path), mode="a")
+                
 
                 # red readout zarr store
-                red_readout_round_idx = bit_order[r_idx,1]
+                red_readout_round_idx = bit_order[r_idx,2]
                 red_bit_name = "bit"+str(red_readout_round_idx).zfill(2)
-                try:
-                    red_current_tile = readout_zarr.create_group(tile_name)
-                except Exception:
-                    red_current_tile = zarr.open_group(readout_output_dir_path,mode='a',path=tile_name)
-          
-                try:
-                    red_current_bit = red_current_tile.create_group(red_bit_name)
-                except Exception:
-                    red_current_bit = zarr.open_group(readout_output_dir_path,mode='a',path=tile_name + "/" + red_bit_name)
+                red_tile_dir_path = readout_output_dir_path / Path(tile_name)
+                red_tile_dir_path.mkdir(parents=True, exist_ok=True)
+                red_bit_dir_path = red_tile_dir_path / Path(red_bit_name + '.zarr')
+                red_bit_zarr = zarr.open(str(red_bit_dir_path), mode="a")
 
                 if file_load:
                     # loop over all channels in this round/tile
                     for channel_id, ch_idx in zip(channels_ids_in_data_tile,channels_idxs_in_data_tile):
-
                         # load raw data into memory via Dask
                         raw_data_success = False
                         try:
                             raw_data = return_data_dask(dataset,channel_id)
+                            raw_data_success = True
                         except Exception:
                             raw_data_success = False
                             print('Internal NDTIFF error. Skipping this tile/channel combination.')
-                        else:
-                            raw_data_success = True
-                        
+                                                   
                         if raw_data_success:
                         
                             # load psf into memory
                             ex_wvl = ex_wavelengths[ch_idx]
                             em_wvl = em_wavelengths[ch_idx]
-
+                            exposure_ms = exposures_ms[ch_idx]
+                            
                             if channel_id == 'F-Blue':
-                                current_channel = polydT_current_round
+                                current_channel = polydT_round_zarr
                                 current_channel.attrs['bits'] = bit_order[r_idx,:].tolist()
                                 current_channel.attrs["tile_overlap"] = tile_overlap
                             elif channel_id == 'F-Yellow':
-                                current_channel = yellow_current_bit
-                                current_channel.attrs['round'] = np.array([int(r_idx)]).tolist()
+                                current_channel = yellow_bit_zarr
+                                current_channel.attrs['round'] = int(r_idx)
                             elif channel_id == 'F-Red':
-                                current_channel = red_current_bit
-                                current_channel.attrs['round'] = np.array([int(r_idx)]).tolist()
-
+                                current_channel = red_bit_zarr
+                                current_channel.attrs['round'] = int(r_idx)
+                                
                             if shading_flag:
                                 raw_data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
                             elif not(shading_flag) and (hotpixel_flag):
@@ -355,17 +357,15 @@ def postprocess(selected_options: Dict[str,bool],
                             
                             current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                             current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
-                            current_channel.attrs['excitation_um'] = np.array([float(ex_wvl)]).tolist()
-                            current_channel.attrs['emission_um'] = np.array([float(em_wvl)]).tolist()
-                            current_channel.attrs['exposure_ms'] = np.asarray([float(exposures_ms[4])]).tolist()
-                            current_channel.attrs['hotpixel'] = list(bool(hotpixel_flag))
-                            current_channel.attrs['shading'] = list(bool(shading_flag))
+                            current_channel.attrs['excitation_um'] = float(ex_wvl)
+                            current_channel.attrs['emission_um'] = float(em_wvl)
+                            current_channel.attrs['exposure_ms'] = float(exposure_ms)
+                            current_channel.attrs['hotpixel'] = bool(hotpixel_flag)
+                            current_channel.attrs['shading'] = bool(shading_flag)
                             
                             current_raw_data[:] = raw_data
-
-                            progress_updates['Channel'] = ch_idx
-                            progress_updates['Round'] = r_idx
-                            progress_updates['Tile'] = tile_idx
+                            
+                            progress_updates['Channel'] = ((ch_idx-channels_idxs_in_data_tile[0]+1) / len(channels_idxs_in_data_tile)) * 100
                             yield progress_updates
 
                     dataset.close()
@@ -373,37 +373,40 @@ def postprocess(selected_options: Dict[str,bool],
                     gc.collect()
 
             progress_updates['Channel'] = 0
-            progress_updates['Round'] = r_idx
-            progress_updates['Tile'] = tile_idx
+            progress_updates['Round'] = ((r_idx+1) / num_r) * 100
             yield progress_updates
 
         progress_updates['Channel'] = 0
         progress_updates['Round'] = 0
-        progress_updates['Tile'] = tile_idx
+        progress_updates['Tile'] = ((tile_idx+1) / num_tiles) * 100
         yield progress_updates
+        
+    progress_updates['Channel'] = 100
+    progress_updates['Round'] = 100
+    progress_updates['Tile'] = 100
+    yield progress_updates
                     
     if round_registration_flag:
         run_optical_flow = True
         from wf_merfish.postprocess.DataRegistration import DataRegistration
 
         for tile_idx in range(num_tiles):
-            if tile_idx == 0:
-                data_register_factory = DataRegistration(dataset_path=polyDT_output_dir_path,
-                                                         overwrite_registered=False,
-                                                         perform_optical_flow=run_optical_flow,
-                                                         tile_idx=tile_idx)
-            else:
-                data_register_factory.tile_idx = tile_idx
+            data_register_factory = DataRegistration(dataset_path=polyDT_output_dir_path,
+                                                        overwrite_registered=False,
+                                                        perform_optical_flow=run_optical_flow,
+                                                        tile_idx=tile_idx,
+                                                        psf=channel_psfs[0,:])
+
             data_register_factory.generate_registrations()
             data_register_factory.load_rigid_registrations()
             if run_optical_flow:
                 data_register_factory.load_opticalflow_registrations()
             data_register_factory.apply_registrations()
 
-            progress_updates['PolyDT Tile'] = (tile_idx / num_tiles) * 100
+            progress_updates['PolyDT Tile'] = ((tile_idx+1) / num_tiles) * 100
             yield progress_updates
 
-        del data_register_factory
+            del data_register_factory
 
     if tile_registration_flag:
         import dask.diagnostics
@@ -421,23 +424,22 @@ def postprocess(selected_options: Dict[str,bool],
         stitched_dir_path = output_dir_path / Path('round000_stitched')
         stitched_dir_path.mkdir(parents=True, exist_ok=True)
 
-        for tile_idx in range(num_tiles):
+        tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
 
-            tile_name = 'tile'+str(tile_idx).zfill(4)
+        for tile_idx, tile_id in enumerate(tile_ids):
 
-            polyDT_current_tile = zarr.open_group(polyDT_zarr,
-                                                  mode='a',
-                                                  path=tile_name + "/" + "round000")
+            polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
+            polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
 
             voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                              dtype=np.float32)
+                                                dtype=np.float32)
 
             scale = {'z': voxel_zyx_um[0],
-                     'y': voxel_zyx_um[1],
-                     'x': voxel_zyx_um[2]}
+                    'y': voxel_zyx_um[1],
+                    'x': voxel_zyx_um[2]}
             
             tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                              dtype=np.float32)
+                                                dtype=np.float32)
             tile_grid_positions = {
                 'z': tile_position_zyx_um[0],
                 'y': tile_position_zyx_um[1],
@@ -445,14 +447,12 @@ def postprocess(selected_options: Dict[str,bool],
             }
             
             overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
-                                              dtype=np.float32)
-
+                                                dtype=np.float32)
 
             im_data = np.asarray(polyDT_current_tile['raw_data'],dtype=np.uint16)
 
             shape = {dim: im_data.shape[-idim] for idim, dim in enumerate(scale.keys())}
-            translation = {dim: tile_grid_positions[dim] * (1 - overlap) * shape[dim] * scale[dim]
-                    for dim in scale}
+            translation = {dim: np.round((tile_grid_positions[dim] / scale[dim]),1) for dim in scale}
 
             ngff_im = ngff_zarr.NgffImage(
                     im_data,
@@ -460,19 +460,19 @@ def postprocess(selected_options: Dict[str,bool],
                     scale=scale,
                     translation=translation,
                     )
-
+            
             ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
 
-            zarr_path = stitched_dir_path / Path(tile_name + ".zarr")
+            zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
 
             ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
 
             msim = ngff_utils.ngff_multiscales_to_msim(
-            ngff_zarr.from_ngff_zarr(zarr_path),
-            transform_key=io.METADATA_TRANSFORM_KEY)
+                        ngff_zarr.from_ngff_zarr(zarr_path),
+                        transform_key=io.METADATA_TRANSFORM_KEY)
 
             msims.append(msim)
-
+            
         with dask.diagnostics.ProgressBar():
 
             params = registration.register(
@@ -512,5 +512,21 @@ def postprocess(selected_options: Dict[str,bool],
                 fused_ngff_multiscales,
                 )
 
-    progress_updates['polyDT Round'] = 100
-    yield progress_updates
+            progress_updates['polyDT Round'] = 100
+            yield progress_updates
+    
+if __name__ == '__main__':
+    
+    data_path = Path('/mnt/opm3/20240104_ECL_control6_unamp')
+    codebook_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
+    exp_order_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
+
+    test = postprocess(selected_options={'Hotpixel correct': False,
+                                        'Flatfield correct': False,
+                                        'Register polyDT each tile across rounds': True,
+                                        'Register polyDT all tiles first round': True},
+                        dataset_path=data_path,
+                        codebook_path=codebook_path,
+                        bit_order_path=exp_order_path)
+    
+    test.start()

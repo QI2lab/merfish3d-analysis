@@ -172,16 +172,18 @@ def compute_rigid_transform(image1: sitk.Image,
     
     if projection is not None:
         if projection == 'z':
-            image1_np = np.max(image1_np,axis=0)
-            image2_np = np.max(image2_np,axis=0)
+            image1_np = np.squeeze(np.max(image1_np,axis=0))
+            image2_np = np.squeeze(np.max(image2_np,axis=0))
         elif projection == 'y':
-            image1_np = np.max(image1_np,axis=1)
-            image2_np = np.max(image2_np,axis=1)
+            image1_np = np.squeeze(np.max(image1_np,axis=1))
+            image2_np = np.squeeze(np.max(image2_np,axis=1))
             
             
     if projection == 'search':
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
-            ref_slice = cp.asarray(image1_np[image1_np.shape[0]//2,:,:])
+            image1_cp = cp.asarray(image1_np)
+            ref_slice_idx = image1_cp.shape[0]//2
+            ref_slice = image1_cp[ref_slice_idx,:,:]
             image2_cp = cp.asarray(image2_np)
             ssim = []
             for z_idx in range(image1_np.shape[0]):
@@ -191,27 +193,28 @@ def compute_rigid_transform(image1: sitk.Image,
                 ssim.append(cp.asnumpy(ssim_slice))
             
             ssim = np.array(ssim)
-            found_shift = float(image1_np.shape[0]//2 - np.argmax(ssim))
+            found_shift = float(ref_slice_idx - np.argmax(ssim))
 
     else:
         # Perform Fourier cross-correlation
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
             if use_mask:
                 mask = cp.zeros_like(image1_np)
-                mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
-                    image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                mask[:,
+                    image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6,
+                    image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[2]//6] = 1
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
-                                        moving_image=cp.asarray(image2_np),
-                                        upsample_factor=40,
-                                        reference_mask=mask,
-                                        return_error='always',
-                                        disambiguate=True)
+                                                        moving_image=cp.asarray(image2_np),
+                                                        upsample_factor=10,
+                                                        reference_mask=mask,
+                                                        return_error='always',
+                                                        disambiguate=True)
             else:
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
-                        moving_image=cp.asarray(image2_np),
-                        upsample_factor=40,
-                        return_error='always',
-                        disambiguate=True)
+                                                        moving_image=cp.asarray(image2_np),
+                                                        upsample_factor=10,
+                                                        return_error='always',
+                                                        disambiguate=True)
 
             shift = cp.asnumpy(shift_cp)
         else:
@@ -243,7 +246,7 @@ def compute_rigid_transform(image1: sitk.Image,
                          0.,
                          shift_reversed[1]]
         elif projection == 'search':
-            shift_xyz = [0.,0.,-1.*found_shift]
+            shift_xyz = [0.,0.,-downsample_factor*found_shift]
     else:
         shift_xyz = shift_reversed
 

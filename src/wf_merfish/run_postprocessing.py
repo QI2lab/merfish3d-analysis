@@ -10,9 +10,9 @@ def create_gui():
     directory_selector = FileEdit(mode='d', label='Dataset')
     codebook_selector = FileEdit(mode='r', label='Codebook', filter='*.csv', visible=False)
     bit_order_selector = FileEdit(mode='r', label='Bit Order', filter='*.csv', visible=False)
-    noise_map_selector = FileEdit(mode='r', label='Noise Map', filter='*.tiff', visible=False)
-    darkfield_selector = FileEdit(mode='r', label='Darkfield', filter='*.tiff', visible=False)
-    shading_selector = FileEdit(mode='r', label='Shading', filter='*.tiff', visible=False)
+    noise_map_selector = FileEdit(mode='r', label='Noise Map', filter='*.tiff, *.tif', visible=False)
+    darkfield_selector = FileEdit(mode='r', label='Darkfield', filter='*.tiff, *.tif', visible=False)
+    shading_selector = FileEdit(mode='r', label='Shading', filter='*.tiff, *.tif', visible=False)
 
     # Correction options dropdown
     correction_options = ComboBox(label="Correction Options", choices=["None", "Hotpixel correct", "Flatfield correct"], visible=False)
@@ -25,9 +25,9 @@ def create_gui():
     summary_label = Label(value="", visible=False)
 
     # Default progress bars and labels
-    progress_labels = [Label(value="Round", visible=False),
-                       Label(value="Tile", visible=False),
-                       Label(value="Channel", visible=False)]
+    progress_labels = [Label(value="Channel", visible=False),
+                       Label(value="Round", visible=False),
+                       Label(value="Tile", visible=False)]
     progress_bars = [ProgressBar(value=0, max=100, visible=False) for _ in range(3)]
 
     # Function to handle directory selection
@@ -80,16 +80,27 @@ def create_gui():
                 return False
         return True
         
-    # # Worker function with nested loops
-    # @thread_worker
-    # def nested_task(selected_options, dataset_path, codebook_path, bit_order_path, noise_map_path=None, darkfield_path=None, shading_path=None):
-    #     # Implement task logic here using the provided arguments
-    #     pass
-
     # Function to handle progress updates
-    def update_progress(value):
-        # Implement progress update logic here
-        pass
+    def update_progress(progress_updates):
+        # Dictionary mapping progress bar names to their respective label values
+        progress_bar_names = {
+            "Round": "Round",
+            "Tile": "Tile",
+            "Channel": "Channel",
+            "PolyDT Tile": "PolyDT Tile",  # Adjust the label value as per your setup
+            "PolyDT Round": "PolyDT Round",  # Adjust the label value as per your setup
+        }
+
+        for key, progress_value in progress_updates.items():
+            if key in progress_bar_names:
+                # Find the progress bar by its label
+                for widget in layout:
+                    if isinstance(widget, Label) and widget.value == progress_bar_names[key]:
+                        # The next widget in the layout after the label should be the progress bar
+                        index = layout.index(widget) + 1
+                        if index < len(layout) and isinstance(layout[index], ProgressBar) and layout[index].visible:
+                            layout[index].value = progress_value
+                            break
 
     # Start button (initially visible)
     start_button = PushButton(text="Start Task", visible=False)
@@ -103,7 +114,7 @@ def create_gui():
 
     # Start the task
     def start_task():
-        selected_options = {option.text: option.value for option in other_options if option.value}
+        stitching_options = {option.text: option.value for option in other_options if option.value}
         
         # Clear existing progress bars and labels
         for widget in layout:
@@ -117,10 +128,10 @@ def create_gui():
             layout.extend([label, bar])
 
         # Add additional progress bars for specific options
-        if selected_options.get('Register polyDT each tile across rounds'):
+        if stitching_options.get('Register polyDT each tile across rounds'):
             layout.extend([Label(value="PolyDT Tile", visible=True), 
                         ProgressBar(value=0, max=100, visible=True)])
-        if selected_options.get('Register polyDT all tiles first round'):
+        if stitching_options.get('Register polyDT all tiles first round'):
             layout.extend([Label(value="PolyDT Round", visible=True), 
                         ProgressBar(value=0, max=100, visible=True)])
 
@@ -129,16 +140,25 @@ def create_gui():
         shading_path = shading_selector.value if validate_tiff_file(shading_selector.value) else None
 
         # Start the worker with additional arguments
-        worker = postprocess(selected_options, directory_selector.value, 
+        worker = postprocess(correction_options.value, stitching_options, directory_selector.value, 
                              codebook_selector.value, bit_order_selector.value,
                              noise_map_path, darkfield_path, shading_path)
         worker.yielded.connect(update_progress)
         worker.start()
 
     def update_start_button_visibility():
-        start_button.visible = correction_options.value == "None" or check_all_files_valid()
+        correction_choice = correction_options.value
+        valid_noise_map = validate_tiff_file(noise_map_selector.value) if noise_map_selector.visible else True
+        valid_darkfield = validate_tiff_file(darkfield_selector.value) if darkfield_selector.visible else True
+        valid_shading = validate_tiff_file(shading_selector.value) if shading_selector.visible else True
+
+        start_button.visible = (correction_choice == "None" or
+                                (correction_choice == "Hotpixel correct" and valid_noise_map) or
+                                (correction_choice == "Flatfield correct" and valid_noise_map and valid_darkfield and valid_shading))
+
 
     correction_options.changed.connect(update_start_button_visibility)
+    noise_map_selector.changed.connect(update_start_button_visibility)
 
     start_button.clicked.connect(start_task)
     exit_button.clicked.connect(close_gui)
@@ -155,7 +175,7 @@ def create_gui():
                 shading_selector, summary_label] + other_options + [start_button, exit_button])
 
     # Show the GUI with the specified window title
-    layout.native.setWindowTitle("Postprocess qi2lab widefield MERFISH")
+    layout.native.setWindowTitle("Postprocess raw data - qi2lab widefield MERFISH")
     layout.show(run=True)
 
 create_gui()
