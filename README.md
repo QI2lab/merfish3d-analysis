@@ -8,7 +8,7 @@
 Acquisition and post-processing for qi2lab widefield MERFISH
 
 
-qi2lab MERFISH zarr layout
+## qi2lab MERFISH zarr layout v0.1
 - /project_root
   - /calibrations.zarr
     - .zattrs contains codebook, bit order, and other key metadata
@@ -17,14 +17,23 @@ qi2lab MERFISH zarr layout
   - /polyDT
     - /tile000
       - /round0000.zarr
-        - .zattrs contains recorded XYZ stage position, wavelength, bit linker info
+        - .zattrs
+          - <stage_zyx_um>
+          - <wavelengths_um> (excitation, emission)
+          - <voxel_size_zyx_um>
+          - <bit_linker>
+          - <world_xyz_um> (from multiview-stitcher registration)
         - <raw_data>
         - <registered_data> (note this is the same as the raw data for the first round)
       - /round0001.zarr
-        - .zattrs contains recorded XYZ stage position, wavelength, affine transform, bit linker info
+        - .zattrs
+          - <stage_zyx_um>
+          - <wavelengths> (excitation, emission)
+          - <bit_linker>
+          - <rigid_xyz_um> (rigid registration for round 0 alignment)
         - <raw_data>
-        - <optical_flow_4x_downsample>
-        - <registered_data> (warped back to round 0 coordinate system)
+        - <of_xyz_4x_downsample> (optical flow field)
+        - <registered_data> (deformable registration applied after rigid for round 0 alignment)
       - /roundNNNN.zarr
     - /tile001
     - ...
@@ -32,7 +41,10 @@ qi2lab MERFISH zarr layout
   - /readouts
     - /tile0000
       - /bit00.zarr
-        - .zattrs contains recorded wavelength and round linker info
+        - .zattrs
+          - <wavelengths_um> (excitation, emission)
+          - <voxel_size_zyx_um>
+          - <round_linker>
         - <raw_data>
       - /bit01.zarr
       - ...
@@ -57,6 +69,13 @@ qi2lab MERFISH zarr layout
     - /tile0001
     - ...
     - /tileNNNN
-      
+  - /stitching
+    - /polydT
+      - tile0000.ome.zarr
+      - tile0001.ome.zarr
+      ....
+      - tileNNNN.ome.zarr
+  - /fused
+    - fused_polyDT.ome.zarr
       
       
