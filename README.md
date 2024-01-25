@@ -11,9 +11,12 @@ Acquisition and post-processing for qi2lab widefield MERFISH
 ## qi2lab MERFISH zarr layout v0.1
 - /project_root
   - /calibrations.zarr
-    - .zattrs contains codebook, bit order, and other key metadata
-    - <noise_map>
-    - <psf_data>
+    - .zattrs
+      - <exp_codebook> (with blank codes)
+      - <exp_order> (e.g. round 0 -> codebook bits 0,1)
+      - <metadata> (objective NA, channels used, etc...)
+    - <camera_noise_map> (used for hotpixel correction)
+    - <psf_data> (calculated based on experiment metadata)
   - /polyDT
     - /tile000
       - /round0000.zarr
@@ -64,7 +67,7 @@ Acquisition and post-processing for qi2lab widefield MERFISH
   - /decoded
     - /tile0000
       - decoding_parameters.json
-      - local_decoding_results.parquet
+      - tile_coord_decoding_results.parquet
       - world_coord_decoding_results.parquet
     - /tile0001
     - ...
@@ -73,7 +76,7 @@ Acquisition and post-processing for qi2lab widefield MERFISH
     - /polydT
       - tile0000.ome.zarr
       - tile0001.ome.zarr
-      ....
+      - ....
       - tileNNNN.ome.zarr
   - /fused
     - fused_polyDT.ome.zarr
