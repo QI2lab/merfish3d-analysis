@@ -21,7 +21,7 @@ qi2lab MERFISH zarr layout
         - <raw_data>
         - <registered_data> (note this is the same as the raw data for the first round)
       - /round0001.zarr
-        - .zattrs contains
+        - .zattrs contains recorded XYZ stage position, wavelength, affine transform, bit linker info
         - <raw_data>
         - <optical_flow_4x_downsample>
         - <registered_data> (warped back to round 0 coordinate system)
