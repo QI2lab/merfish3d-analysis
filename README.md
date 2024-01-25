@@ -22,7 +22,7 @@ Acquisition and post-processing for qi2lab widefield MERFISH
           - <wavelengths_um> (excitation, emission)
           - <voxel_size_zyx_um>
           - <bit_linker>
-          - <world_xyz_um> (from multiview-stitcher registration)
+          - <world_zyx_um> (rigid registration for world coordinate alignment of all polyDT tiles in first round)
         - <raw_data>
         - <registered_data> (note this is the same as the raw data for the first round)
       - /round0001.zarr
