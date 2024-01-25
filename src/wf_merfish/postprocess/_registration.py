@@ -1,27 +1,30 @@
 """
 Image registration functions using scikit-image and SimpleITK.
 
+2024/01 - Doug Shepherd.
+          Updates for qi2lab MERFISH file format v1.0
 2023/07 - Doug Shepherd
 """
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Union, List, Sequence, Tuple, Optional
+from typing import Union, List, Sequence, Tuple, Optional, Dict
 import SimpleITK as sitk
 import deeds
 
-CUPY_AVAILABLE = True
+
 try:
     import cupy as cp # type: ignore
     xp = cp
+    CUPY_AVAILABLE = True
 except ImportError:
     xp = np
     CUPY_AVAILABLE = False
 
-CUCIM_AVAILABLE = True
 try:
     from cucim.skimage.registration import phase_cross_correlation # type: ignore
     from cucim.skimage.metrics import structural_similarity # type: ignore
+    CUCIM_AVAILABLE = True
 except ImportError:
     from skimage.registration import phase_cross_correlation # type: ignore
     from skimage.metrics import structural_similarity # type: ignore
@@ -140,20 +143,20 @@ def normalize_histograms(image1: sitk.Image,
 
     return image2_matched
 
-def compute_rigid_transform(image1: sitk.Image, 
-                            image2: sitk.Image,
+def compute_rigid_transform(image1: Union[sitk.Image,NDArray], 
+                            image2: Union[sitk.Image,NDArray],
                             use_mask: Optional[bool] = False,
                             downsample_factor: Optional[float] = 4.0,
-                            projection: Optional[str] = None) -> Tuple[sitk.Image,Sequence[float]]:
+                            projection: Optional[str] = None) -> Tuple[sitk.TranslationTransform,Sequence[float]]:
     """
     Calculate initial translation transform using scikit-image
     phase cross correlation. Create simpleITK transform using shift.
 
     Parameters
     ----------
-    image1: simpleITK image
+    image1: Union[simpleITK image,NDArray]
         reference image
-    image2: simpleITK image
+    image2: Union[simpleITK image,NDArray]
         moving image
     use_mask: bool
         use mask for middle 1/3 of image
@@ -194,6 +197,18 @@ def compute_rigid_transform(image1: sitk.Image,
             
             ssim = np.array(ssim)
             found_shift = float(ref_slice_idx - np.argmax(ssim))
+        else:
+            ref_slice_idx = image1_np.shape[0]//2
+            ref_slice = image1_np[ref_slice_idx,:,:]
+            ssim = []
+            for z_idx in range(image1_np.shape[0]):
+                ssim_slice = structural_similarity(ref_slice.astype(np.uint16),
+                                                   image2_np[z_idx,:].astype(np.uint16),
+                                                   data_range=np.max(ref_slice)-np.min(ref_slice))
+                ssim.append(ssim_slice)
+            
+            ssim = np.array(ssim)
+            found_shift = float(ref_slice_idx - np.argmax(ssim))
 
     else:
         # Perform Fourier cross-correlation
@@ -219,19 +234,22 @@ def compute_rigid_transform(image1: sitk.Image,
             shift = cp.asnumpy(shift_cp)
         else:
             if use_mask:
-                mask = cp.zeros_like(image1_np)
+                mask = np.zeros_like(image1_np)
                 mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
                     image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
+                                                        moving_image=image2_np,
+                                                        upsample_factor=10,
+                                                        reference_mask=mask,
+                                                        return_error='always',
+                                                        disambiguate=True)
             else:
-                mask = None
-            
-            shift, _, _ = phase_cross_correlation(reference_image=image1_np, 
-                                                moving_image=image2_np,
-                                                upsample_factor=40,
-                                                reference_mask=mask,
-                                                return_error='always',
-                                                disambiguate=True)
-
+                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
+                                                        moving_image=image2_np,
+                                                        upsample_factor=10,
+                                                        return_error='always',
+                                                        disambiguate=True)
+    
         # Convert the shift to a list of doubles
         shift = [float(i*-1*downsample_factor) for i in shift]
         shift_reversed = shift[::-1]
@@ -255,81 +273,71 @@ def compute_rigid_transform(image1: sitk.Image,
 
     return transform, shift_xyz
 
-def warp_coordinates(coordinates: List[Sequence[float]], 
-                     translation_transform: sitk.Transform, 
-                     displacement_field_transform: Optional[sitk.Transform] = None) -> List[Sequence[float]]:
+def warp_localizations(localizations: List[Sequence[float]], 
+                       bit_order: Dict,
+                       round_ids: List[str],
+                       tile_ids: List[str],
+                       bit_ids: List[str],
+                       rigid_xforms: Dict, 
+                       of_xforms: Dict = None) -> List[Sequence[float]]:
     """
-    First apply a translation transform to the coordinates, then warp them using a given displacement field.
+    TO DO: Work in progress to apply over all tiles and bits.
 
+    
+    First apply a translation transform to the coordinates.
+    Second, if available, warp them using a given displacement field.
+    
     Parameters
     ----------
-    coordinates: List[Sequence[float]] 
+    localizations: List[Sequence[float]] 
         List of tuples representing the coordinates.
-        MUST be in xyz order!
-    translation_transform: sitk Translation transform
-        simpleITK translation transform
-    displacement_field_transform: sitk DisplacementField transform
-        simpleITK displacement field transform
+    bit_order: Dict
+        Lookup table that links bits to rounds 
+    rigid_xforms: Dict
+        Nested dictionary of rigid_xforms
+    of_xforms: Dict
+        Nested dictionary of of_xforms
         
     Returns
     -------
-    warped_coordinates: List[Sequence[float]]
-        List of tuples representing warped coordinates
-        Returned in xyz order!
-    """
-    
-    warped_coordinates = []
-    for coord in coordinates:
-        # Convert the coordinate to physical space
-        physical_coord = displacement_field_transform.TransformIndexToPhysicalPoint(coord)
-        
-        # Apply the translation transform
-        translated_physical_coord = translation_transform.TransformPoint(physical_coord)
-        
-        # Apply the displacement field transform
-        if displacement_field_transform is not None:
-            warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
-        
-            warped_coordinates.append(warped_coord)
-        else:
-            warped_coordinates.append(translated_physical_coord)
-
-    return warped_coordinates
-
-def make_flow_vectors(field: Union[NDArray,List[NDArray]],
-                      mask: NDArray = None) -> NDArray:
-    """
-    Arrange the results of a optical flow method to display vectors in a 3D volume.
-    
-    Parameters
-    ----------
-    field: NDArray or List[NDArray]
-        Result from scikit-image or cucim ILK or TLV1 methods, or from DEEDS.
-    mask: NDArray
-        Boolean mask to select areas where the flow field needs to be computed.
-    
-    Returns
-    -------
-    flow_field: NDArray
-        A (im_size x 2 x ndim) array indicating origin and final position of voxels.
+    localizations: List[Sequence[float]]
+        all localizations with transforms applied
     """
 
-    nz, ny, nx = field[0].shape
+    # loop over all tiles and bits
+    for tile_id in enumerate(tile_ids):
+        for bit_id in enumerate(bit_ids):
+            round_id = round_ids[bit_order[tile_id][bit_id]]
+            rigid_xform = np.asarray(rigid_xforms[tile_id][round_id])
+            translation_transform = sitk.TranslationTransform(3, rigid_xform)
 
-    z_coords, y_coords, x_coords = np.meshgrid(
-        np.arange(nz), 
-        np.arange(ny), 
-        np.arange(nx),
-        indexing='ij',
-        )
+            if of_xforms is not None:
+                of_xform = np.asarray(of_xforms[tile_id][round_id])
 
-    if mask is not None:
-        origin = np.vstack([z_coords[mask], y_coords[mask], x_coords[mask]]).T
-        shift = np.vstack([field[0][mask], field[1][mask], field[2][mask]]).T 
-    else:
-        origin = np.vstack([z_coords.ravel(), y_coords.ravel(), x_coords.ravel()]).T
-        shift = np.vstack([field[0].ravel(), field[1].ravel(), field[2].ravel()]).T 
+                of_sitk = sitk.GetImageFromArray(of_xform.transpose(1, 2, 3, 0).astype(np.float64),
+                                                            isVector = True)
+                final_shape = mov_image_sitk.GetSize()
+                optical_flow_sitk = sitk.Resample(of_sitk,final_shape)
+                displacement_field_transform = sitk.DisplacementFieldTransform(optical_flow_sitk)
 
-    flow_field = np.moveaxis(np.dstack([origin, shift]), 1, 2) 
-    
-    return flow_field
+            current_localizations = localizations['detected_coords']['bit_id' == bit_id]
+
+            current_localizations = np.reverse(current_localizations)
+
+            for coord in current_localizations:
+                # Convert the coordinate to physical space
+                physical_coord = displacement_field_transform.TransformIndexToPhysicalPoint(coord)
+                
+                # Apply the translation transform
+                translated_physical_coord = translation_transform.TransformPoint(physical_coord)
+                
+                # Apply the displacement field transform
+                if displacement_field_transform is not None:
+                    warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
+                
+
+                    warped_coordinates.append(warped_coord)
+                else:
+                    warped_coordinates.append(translated_physical_coord)
+
+        return warped_coordinates

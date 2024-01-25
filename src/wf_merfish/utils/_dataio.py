@@ -8,7 +8,7 @@ Read and write metadata, read raw data, Zarr creation, Zarr conversion
 '''
 
 import re
-from typing import Dict, Union
+from typing import Dict, Union, List
 from numpy.typing import NDArray
 import pandas as pd
 import numpy as np
@@ -143,127 +143,82 @@ def return_data_dask(dataset: Dataset,
 
     return np.squeeze(data)
 
-def load_localizations(
-    dir_load, rounds=None, x_pos=None, y_pos=None, z_pos=None, channels=None,
-    has_xdata=True, extra_str='', save_x_idx=True, save_y_idx=True, save_z_idx=True, 
-    save_r_idx=True, save_ch_idx=True, round_idx_to_name=False, n_ch=None, ch_offset=1,
-    load_fitted_var=True, load_candidates=True, load_filter_conditions=True,
-    filter_inplace=False, localize_format=1):
+def load_localizations(localization_paths: Dict[Union[Path,str]],
+                       tile_ids: List[Union[Path,str]],
+                       bit_ids: List[Union[Path,str]],
+                       load_candidates: bool,
+                       load_fitted_var: bool,
+                       load_filter_conditions: bool,
+                       filter_inplace: bool=False) -> pd.DataFrame:
     """
-    Read files from spot localizations and assemble them.
-    
+    Load all localizations from a qi2lab MERFISH dataset.
+
     Parameters
     ----------
-    localize_format : int
-        Version of file formats and structure used during decoding.
-        1: use .parquet file
-        0: use .npy files
+    localization_paths: Dict[Union[Path,str]]
+        nested dictionary of path to directory containing localization results
+        for [tile][round]     
+    tile_ids: List[Union[Path,str]]
+        list of tile_ids
+    bit_ids: List[Union[Path,str]])
+        list of bit ids
+    load_candidates: bool 
+        flag to load spot candidates
+    load_fitted_var: bool
+        flag to load fitted variables
+    load_filter_conditions: bool
+        flag to load filter conditions
+    filter_inplace: bool
+        flag to filter spots
+
+    Returns
+    -------
+    all_data: pd.DataFrame
+        all localization results 
     """
-
-    if rounds is None:
-        # rounds *names* from 1 to end included
-        rounds = range(8)
-    if x_pos is None:
-        x_pos = [0]
-    if y_pos is None:
-        y_pos = [0]
-    if z_pos is None:
-        z_pos = [0]
-    if channels is None:
-        channels = [1, 2]
-    if n_ch is None:
-        n_ch = len(channels)
-    if localize_format == 1:
-        fext = 'parquet'
-        read_fct = pd.read_parquet
-    elif localize_format == 0:
-        fext = 'npy'
-        read_fct = np.load
-
     all_spots = []
+    all_tiles = []
     all_bits = []
     all_fit_vars = []
     all_candidates = []
     all_conditions = []
-    all_x_idx = []
-    all_y_idx = []
-    all_z_idx = []
-    all_r_idx = []
-    all_ch_idx = []
-    
-    for r_idx in rounds:
-        if round_idx_to_name:
-            r_name = r_idx + 1
-        else:
-            r_name = r_idx
-        for ch_idx in channels:
-            bit_idx = get_bit_from_round(r_idx, ch_idx, n_ch, ch_offset)
-            for x_idx in x_pos:
-                for y_idx in y_pos:
-                    for z_idx in z_pos:
-                        if has_xdata:
-                            base_name = f'r00{r_name:0>2d}_x00{x_idx:0>2d}_y00{y_idx:0>2d}_z00{z_idx:0>2d}_ch_idx-{ch_idx}{extra_str}'
-                        else:
-                            base_name = f'r00{r_name:0>2d}_y00{y_idx:0>2d}_z00{z_idx:0>2d}_ch_idx-{ch_idx}{extra_str}'
-                        # load coords z / y / x and boolean selector
-                        file_name = f'localized_spots_{base_name}.{fext}'
-                        spots = read_fct(dir_load / file_name)
-                        # use only selected spots after filtering
-                        if filter_inplace:
-                            if localize_format == 1:
-                                select = spots['select'].values
-                                spots = spots.loc[select, ['z', 'y', 'x']].values
-                            elif localize_format == 0:
-                                select = spots[:, -1].astype(bool)
-                                spots = spots[select, :3]
-                        all_spots.append(spots)
 
-                        # keep track of bit id across rounds and channels
-                        all_bits.extend([bit_idx] * len(spots))
-                        if save_r_idx:
-                            all_r_idx.extend([r_idx] * len(spots))
-                        if save_ch_idx:
-                            all_ch_idx.extend([ch_idx] * len(spots))
-                        if save_x_idx:
-                            all_x_idx.extend([x_idx] * len(spots))
-                        if save_y_idx:
-                            all_y_idx.extend([y_idx] * len(spots))
-                        if save_z_idx:
-                            all_z_idx.extend([z_idx] * len(spots))
+    for tile_idx, tile_id in enumerate(tile_ids):
+        for bit_idx, bit_id in enumerate(bit_ids):
+            localization_path = localization_paths[tile_id][bit_id]
 
-                        # load fitted variables
-                        if load_fitted_var:                    
-                            file_name = f'fitted_variables_{base_name}.{fext}'
-                            fit_vars = read_fct(dir_load / file_name)
-                            if filter_inplace:
-                                if localize_format == 1:
-                                    fit_vars = fit_vars.loc[select, :]
-                                elif localize_format == 0:
-                                    fit_vars = fit_vars[select, :]
-                            all_fit_vars.append(fit_vars)
+            # load coords z / y / x and boolean selector
+            spots = pd.read_parquet(localization_path / Path('localized_spots.parquet'))
+            # use only selected spots after filtering
+            if filter_inplace:
+                select = spots['select'].values
+                spots = spots.loc[select, ['z', 'y', 'x']].values
+            all_spots.append(spots)
 
-                        # load candidates
-                        if load_candidates:                    
-                            file_name = f'localization_candidates_{base_name}.{fext}'
-                            candidates = read_fct(dir_load / file_name)
-                            if filter_inplace:
-                                if localize_format == 1:
-                                    candidates = candidates.loc[select, :]
-                                elif localize_format == 0:
-                                    candidates = candidates[select, :]
-                            all_candidates.append(candidates)
+            # keep track of bit id across rounds and channels
+            all_tiles.extend([tile_idx] * len(spots))
+            all_bits.extend([bit_idx] * len(spots))
+            
+            # load fitted variables
+            if load_fitted_var:                    
+                fit_vars = pd.read_parquet(localization_path / Path('fitted_variables.parquet'))
+                if filter_inplace:
+                    fit_vars = fit_vars.loc[select, :]
+                all_fit_vars.append(fit_vars)
 
-                        # load filter conditions
-                        if load_filter_conditions:                    
-                            file_name = f'filter_conditions_{base_name}.{fext}'
-                            conditions = read_fct(dir_load / file_name)
-                            if filter_inplace:
-                                if localize_format == 1:
-                                    conditions = conditions.loc[select, :]
-                                elif localize_format == 0:
-                                    conditions = conditions[select, :]
-                            all_conditions.append(conditions)
+            # load candidates
+            if load_candidates:                    
+                candidates = pd.read_parquet(localization_path / Path('localization_candidates.parquet'))
+                if filter_inplace:
+                    candidates = candidates.loc[select, :]
+                all_candidates.append(candidates)
 
+            # load filter conditions
+            if load_filter_conditions:                    
+                conditions = pd.read_parquet(localization_path / Path('filter_conditions.parquet'))
+                if filter_inplace:
+                    conditions = conditions.loc[select, :]
+                all_conditions.append(conditions)
     
     all_spots = np.vstack(all_spots)
     col_names = ['z', 'y', 'x']
@@ -272,17 +227,8 @@ def load_localizations(
         # /!\ this assumes `select` is the last column /!\
         col_names = col_names + ['select']
     detected_coords = pd.DataFrame(data=all_spots, columns=col_names)
+    detected_coords['tile_idx'] = all_tiles
     detected_coords['bit_idx'] = all_bits
-    if save_r_idx:
-        detected_coords['rounds'] = all_r_idx
-    if save_ch_idx:
-        detected_coords['channels'] = all_ch_idx
-    if save_x_idx:
-        detected_coords['x_idx'] = all_x_idx
-    if save_y_idx:
-        detected_coords['y_idx'] = all_y_idx
-    if save_z_idx:
-        detected_coords['z_idx'] = all_z_idx
     
     all_data = {}
     all_data['detected_coords'] = detected_coords
@@ -339,7 +285,6 @@ def load_localizations(
         all_data['all_conditions'] = all_conditions
     
     return all_data
-
 
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
