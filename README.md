@@ -35,24 +35,24 @@ qi2lab MERFISH zarr layout
       - /bitNN.zarr
   - /localizations
     - /tile0000
-      - /bit00.zarr
-        - .zattrs contains localization parameters, round linker info
-        - <raw_localization_results>
-        - <registered_localization_results>
-      - /bit01.zarr
+      - /bit00
+        - localization_parameters.json
+        - raw_localization_results.parquet
+        - registered_localization_results.parquet
+      - /bit01
       - ...
-      - /bitNN.zarr
+      - /bitNN
     - /tile0001
     - ....
     - /tileNNNN
   - /decoded
-    - /tile0000.zarr
-      - .zattrs contains decoding parameters
-      - <local_decoding_results>
-      - <world_coord_decoding_results>
-    - /tile0001.zarr
+    - /tile0000
+      - decoding_parameters.json
+      - local_decoding_results.parquet
+      - world_coord_decoding_results.parquet
+    - /tile0001
     - ...
-    - /tileNNNN.zarr
+    - /tileNNNN
       
       
       
