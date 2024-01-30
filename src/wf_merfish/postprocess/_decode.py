@@ -18,6 +18,8 @@ from copy import deepcopy
 from sklearn.base import BaseEstimator, TransformerMixin
 from numbers import Number
 from sklearn.neighbors import BallTree
+from typing import Optional, Any, List, Tuple, Union, Iterable, Callable, Dict, Set
+from pathlib import Path
 
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
@@ -26,19 +28,41 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 #          furthermore, need to remove old decoding method.
 #          simulation code can live in it's own repo, this should be a clean
 #          file just for decoding.
-#        - type hints and docstrings for all functions 
 #        - what is the plan with the stepwise decoding?
 #        - how to rework for a better dask strategy?
 
-def make_mask_from_used_spots(n_spots, combinations, select, reverse=False):
+def make_mask_from_used_spots(n_spots: int, 
+                              combinations: List[Tuple[int, ...]], 
+                              select: List[bool], 
+                              reverse: bool = False) -> np.ndarray:
     """
     Make a boolean mask to filter spots used in combinations.
-    
-    Example
-    -------
+
+    Parameters:
+    -----------
+    n_spots : int
+        The total number of spots.
+
+    combinations : List[Tuple[int, ...]]
+        List of combinations of spot indices.
+
+    select : List[bool]
+        A list of boolean values indicating whether each combination is selected.
+
+    reverse : bool, optional
+        If True, the function returns the inverse of the mask (spots not used).
+        Default is False.
+
+    Returns:
+    --------
+    np.ndarray
+        A boolean mask indicating which spots are used based on the given combinations and selection.
+
+    Example:
+    --------
     >>> combinations = optim_results['spots_combinations']
     >>> select = optim_results['best_combi']
-    >>> mask = mask_from_used_spots(len(coords), combinations, select)
+    >>> mask = make_mask_from_used_spots(len(coords), combinations, select)
     """
     
     # flatten the list of tuples
@@ -55,30 +79,53 @@ def make_mask_from_used_spots(n_spots, combinations, select, reverse=False):
 
 
 def compute_distances(
-    source, target, dist_method="xy_z_orthog", metric="euclidean", tilt_vector=None
-):
+        source: np.ndarray,
+        target: np.ndarray,
+        dist_method: str = "xy_z_orthog",
+        metric: str = "euclidean",
+        tilt_vector: Optional[np.ndarray] = None
+    ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
+    Compute distances between sets of points.
+
     Parameters
     ----------
-    source : ndarray
+    source : np.ndarray
         Coordinates of the first set of points.
-    target : ndarray
+
+    target : np.ndarray
         Coordinates of the second set of points.
-    dist_method : str
+
+    dist_method : str, optional
         Method used to compute distances. If 'isotropic', standard distances are computed considering all axes
-        simultaneously. If 'xy_z_orthog' 2 distances are computed, for the xy plane and along the z axis
-        respectively. If 'xy_z_tilted' 2 distances are computed for the tilted plane and its normal axis.
+        simultaneously. If 'xy_z_orthog', two distances are computed for the xy plane and along the z axis
+        respectively. If 'xy_z_tilted', two distances are computed for the tilted plane and its normal axis.
+        Default is 'xy_z_orthog'.
+
+    metric : str, optional
+        The distance metric to be used. Default is 'euclidean'.
+
+    tilt_vector : np.ndarray, optional
+        Tilt vector used in the 'xy_z_tilted' method. Default is None.
+
+    Returns
+    -------
+    np.ndarray or Tuple[np.ndarray, np.ndarray]
+        The computed distances. If 'dist_method' is 'isotropic', a single array is returned.
+        If 'dist_method' is 'xy_z_orthog', a tuple of two arrays is returned (dist_z, dist_xy).
+        If 'dist_method' is 'xy_z_tilted', the method is not implemented yet, and NotImplementedError is raised.
 
     Example
     -------
     >>> source = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
     >>> target = np.array([[0, 0, 0], [-3, 0, 2], [0, 0, 10]])
     >>> compute_distances(source, target)
-        (array([0, 4, 0]), array([0., 2., 5.]))
-    >>> compute_distances(source, target, metric='L1')
-        (array([0, 4, 0]), array([0, 2, 7]))
+    array([0., 4., 0.])
 
+    >>> compute_distances(source, target, metric='L1')
+    array([0, 2, 7])
     """
+
     if dist_method == "isotropic":
         dist = cdist(source, target, metric=metric)
         return dist
@@ -95,49 +142,53 @@ def compute_distances(
 
 
 def find_neighbor_spots_in_round(
-    source,
-    target,
-    dist_params,
-    dist_method="isotropic",
-    metric="euclidean",
-    return_bool=False,
-):
+    source: np.ndarray,
+    target: np.ndarray,
+    dist_params: Union[float, np.ndarray],
+    dist_method: str = "isotropic",
+    metric: str = "euclidean",
+    return_bool: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     For each spot in a given round ("source"), find if there are neighbors
     in another round ("target") within a given distance.
 
     Parameters
     ----------
-    source : ndarray
+    source : np.ndarray
         Coordinates of spots in the source round.
-    target : ndarray
+
+    target : np.ndarray
         Coordinates of spots in the target round.
-    dist_method : str
+
+    dist_method : str, optional
         Method used to compute distance between spots.
-        Can be isotropic, or xy_z_orthog
-    dist_params : float or array
+        Can be isotropic, or xy_z_orthog. Default is "isotropic".
+
+    dist_params : float or np.ndarray
         Threshold distance to classify spots as neighbors.
-        Multiple threshold can be used depending on the method, typically 2
-        to have a threshold for the xy plane and one for the z axis.
-    return_bool : bool
+        Multiple thresholds can be used depending on the method.
+        Typically, 2 thresholds for xy plane and z axis in xy_z_orthog.
+        
+    return_bool : bool, optional
         If True, return a vector indicating the presence of neighbors
-        for spots in the source set.
+        for spots in the source set. Default is False.
 
     Returns
     -------
-    pairs : ndarray
-        Pairs of neighbors.
-    has_neighb : array
-        Array indicating the presence of neighbors for each spot in their source round.
+    Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]
+        Pairs of neighbors if return_bool is False.
+        Array indicating the presence of neighbors for each spot in their source round if return_bool is True.
 
     Example
     -------
-    >>> source = np.array([[0, 0, 0],
-                           [0, 2, 0]])
-    >>> target = np.array([[0, 0, 0],
-                           [1, 0, 0],
-                           [0, 2, 0],
-                           [0, 0, 3]])
+    >>> source = np.array([[0, 0, 0], [0, 2, 0]])
+    >>> target = np.array([[0, 0, 0], [1, 0, 0], [0, 2, 0], [0, 0, 3]])
+    >>> find_neighbor_spots_in_round(source, target, dist_params=2)
+    array([[0, 2]])
+
+    >>> find_neighbor_spots_in_round(source, target, dist_params=[1, 1], return_bool=True)
+    array([ True, False])
     """
 
     # Compute all distances between spots of given round and all other spots of other round
@@ -219,13 +270,51 @@ def explain():
     print(text)
 
 
-def make_neighbors_lists(coords, spot_ids, spot_rounds, dist_params, max_positive_bits, 
-                         dist_method="isotropic", verbose=1, **kwargs):
+def make_neighbors_lists(
+    coords: np.ndarray,
+    spot_ids: np.ndarray,
+    spot_rounds: np.ndarray,
+    dist_params: Union[float, np.ndarray],
+    max_positive_bits: int,
+    dist_method: str = "isotropic",
+    verbose: int = 1,
+    **kwargs
+) -> List[Tuple[Tuple[int, ...], Tuple[int, ...]]]:
     """
     Build a list of neighbors' ids for each round, starting from each spot.
 
+    Parameters
+    ----------
+    coords : np.ndarray
+        Coordinates of spots.
+
+    spot_ids : np.ndarray
+        Spot IDs.
+
+    spot_rounds : np.ndarray
+        Round information for each spot.
+
+    dist_params : float or np.ndarray
+        Threshold distance to classify spots as neighbors.
+        Multiple thresholds can be used depending on the method.
+
+    max_positive_bits : int
+        Maximum number of positive bits in the resulting combinations.
+
+    dist_method : str, optional
+        Method used to compute distance between spots.
+        Can be isotropic, or xy_z_orthog. Default is "isotropic".
+
+    verbose : int, optional
+        If greater than 0, display progress using tqdm. Default is 1.
+
+    Returns
+    -------
+    List[Tuple[Tuple[int, ...], Tuple[int, ...]]]
+        A list of tuples representing neighbors' ids for each round.
+
     Example
-    --------
+    -------
     >>> coords_r0 = np.array([[0, 0, 0],
                               [0, 2, 0]])
     >>> coords_r1 = np.array([[0, 0, 0],
@@ -287,10 +376,30 @@ def make_neighbors_lists(coords, spot_ids, spot_rounds, dist_params, max_positiv
     return neighbors
 
 
-def spots_product(*args, repeat=1, verbose=1):
+def spots_product(
+    *args: List[int],
+    repeat: int = 1,
+    verbose: int = 1
+) -> List[List[Optional[int]]]:
     """
     Make combinations of elements, picking either a single element or none per list.
-    Absence of element is indicated by -1. This is a modified receipe from itertools.
+    Absence of element is indicated by -1. This is a modified recipe from itertools.
+
+    Parameters
+    ----------
+    *args : List[int]
+        Lists of elements.
+
+    repeat : int, optional
+        Number of times to repeat the lists. Default is 1.
+
+    verbose : int, optional
+        If greater than 1, display progress using tqdm. Default is 1.
+
+    Yields
+    ------
+    List[Optional[int]]
+        Combinations of elements, where absence of element is indicated by -1.
 
     Example
     -------
@@ -312,20 +421,30 @@ def spots_product(*args, repeat=1, verbose=1):
         yield prod
 
 
-def make_combinations_single_spot(spots, size_bcd_min=2, size_bcd_max=6):
+def make_combinations_single_spot(
+    spots: List[List[Optional[int]]],
+    size_bcd_min: int = 2,
+    size_bcd_max: int = 6
+) -> List[List[Optional[int]]]:
     """
     Build barcodes from all possible combinations of localized spots' ids across rounds.
 
     Parameters
     ----------
-    spots : list(list)
-        Lists of neighbors in each rounds for each spot.
+    spots : List[List[Optional[int]]]
+        Lists of neighbors in each round for each spot.
+
+    size_bcd_min : int, optional
+        Minimum size of the barcode. Default is 2.
+
+    size_bcd_max : int, optional
+        Maximum size of the barcode. Default is 6.
 
     Returns
     -------
-    contribs : list(list)
+    List[List[Optional[int]]]
         Contributing spots' ids of barcode sequences.
-    
+
     Example
     -------
     >>> spots = [[2], [4, 5], [], [], [8]]
@@ -354,9 +473,34 @@ def make_combinations_single_spot(spots, size_bcd_min=2, size_bcd_max=6):
     return contribs
 
 
-def make_combinations(neighbors, size_bcd_min=2, size_bcd_max=6, verbose=1):
+def make_combinations(
+    neighbors: List[List[List[Optional[int]]]],
+    size_bcd_min: int = 2,
+    size_bcd_max: int = 6,
+    verbose: int = 1
+) -> List[List[List[Optional[int]]]]:
     """
-    
+    Build barcodes from all possible combinations of localized spots' ids across rounds.
+
+    Parameters
+    ----------
+    neighbors : List[List[List[Optional[int]]]]
+        Lists of neighbors in each round for each spot.
+
+    size_bcd_min : int, optional
+        Minimum size of the barcode. Default is 2.
+
+    size_bcd_max : int, optional
+        Maximum size of the barcode. Default is 6.
+
+    verbose : int, optional
+        If greater than 0, display progress using tqdm. Default is 1.
+
+    Returns
+    -------
+    List[List[List[Optional[int]]]]
+        List of barcode sequences.
+
     Example
     -------
     >>> coords_r0 = np.array([[0, 0, 0],
@@ -390,40 +534,55 @@ def make_combinations(neighbors, size_bcd_min=2, size_bcd_max=6, verbose=1):
         combinations.extend(
             make_combinations_single_spot(spots, size_bcd_min, size_bcd_max)
             )
-        # uncomment to observe what's happening:
-        # print('spots', spots, ' --> ', make_combinations_single_spot(spots, size_bcd_min, size_bcd_max))
     # remove duplicate sets of combinations
     combinations = list(set(combinations))
+    # TODO: test optimisation of the previous line with the next 2 lines:
+    # combinations = list(set(tuple(map(tuple, c)) for c in combinations))
+    # combinations = [list(map(list, c)) for c in combinations]
 
     return combinations
 
 
-def make_barcode_from_contributors(contribs, spot_rounds, n_bits=None, verbose=1):
+def make_barcode_from_contributors(
+    contribs: List[List[int]],
+    spot_rounds: np.ndarray,
+    n_bits: Optional[int] = None,
+    verbose: int = 1
+) -> Tuple[np.ndarray, Dict[int, set]]:
     """
+    Generate barcode sequences from contributors.
+
     Parameters
     ----------
-    contribs : list(list)
-        Ids of spots contributing to barcode sequences.
-    spot_rounds : array
+    contribs : List[List[int]]
+        IDs of spots contributing to barcode sequences.
+
+    spot_rounds : np.ndarray
         Round index of each spot.
-    n_bits : int
-        Number of bits in barcodes.
+
+    n_bits : Optional[int], optional
+        Number of bits in barcodes. If not provided, inferred from the maximum round index.
+
+    verbose : int, optional
+        If greater than 0, display progress using tqdm. Default is 1.
 
     Returns
     -------
-    bcd_sequences : array
-        Barcode sequences from all possible spots ids combinations.
-    spots_bcd : dict
-        Inform for each spot the barcode ids it contributes to. 
+    Tuple[np.ndarray, Dict[int, set]]
+        Tuple containing:
+        - bcd_sequences : np.ndarray
+            Barcode sequences from all possible spots IDs combinations.
+        - spots_bcd : Dict[int, set]
+            Information for each spot about the barcode IDs it contributes to.
 
     Example
     -------
     >>> contribs = [(0, 5), (1, 3), (2, 4, 6)]
     >>> spot_rounds = np.array([0, 0, 1, 1, 2, 3, 3])
     >>> make_barcode_from_contributors(contribs, spot_rounds, n_bits=None)
-    array([[1, 0, 0, 1],
+    (array([[1, 0, 0, 1],
            [1, 1, 0, 0],
-           [0, 1, 1, 1]])
+           [0, 1, 1, 1]]), {0: {0}, 5: {0}, 1: {1}, 3: {1}, 2: {2}, 4: {2}, 6: {2}})
     """
 
     spots_bcd = {}
@@ -445,16 +604,33 @@ def make_barcode_from_contributors(contribs, spot_rounds, n_bits=None, verbose=1
         # make network spots-barcodes to record spots contributions
         for spot_id in contrib:
             if spot_id in spots_bcd.keys():
-                spots_bcd[spot_id].update({i})  # it' a set, not dictionary
+                # TODO: check if new spot_id are added or replace previous ones
+                spots_bcd[spot_id].update({i})  # it' a set, not a dictionary
             else:
                 spots_bcd[spot_id] = {i}
 
     return bcd_sequences, spots_bcd
 
 
-def std_distance(coords):
+def std_distance(coords: np.ndarray) -> float:
     """
     Compute the standard deviation of distances of points to their mean center.
+
+    Parameters
+    ----------
+    coords : np.ndarray
+        Coordinates of points.
+
+    Returns
+    -------
+    float
+        Standard deviation of distances to the mean center.
+
+    Example
+    -------
+    >>> coords = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+    >>> std_distance(coords)
+    0.4714045207910317
     """
 
     if coords.shape[1] == 2:
@@ -471,26 +647,45 @@ def std_distance(coords):
     return sd
 
 
-def find_barcode_min_dist(barcode, codebook_keys, codebook_vals, max_err=1):
+def find_barcode_min_dist(
+    barcode: np.ndarray,
+    codebook_keys: np.ndarray,
+    codebook_vals: np.ndarray,
+    max_err: int = 1
+) -> Tuple[Optional[str], int]:
     """
     Find the minimum distance between a barcode and all barcodes in a codebook,
     and infer the identity of this barcode.
 
     Parameters
     ----------
-    barcodes : ndarray
-        Barcodes detected starting from spots in all rounds, shape (n_barcodes, n_rounds).
-    codebook_keys : array
+    barcode : np.ndarray
+        Barcode detected starting from spots in all rounds, shape (n_barcodes, n_rounds).
+
+    codebook_keys : np.ndarray
         List of keys of the codebook.
-    codebook_vals : ndarray
+
+    codebook_vals : np.ndarray
         2D array of binary values of the codebook.
+
+    max_err : int, optional
+        Maximum allowable error for inferring barcode identity. Default is 1.
+
+    Returns
+    -------
+    Tuple[Optional[str], int]
+        A tuple containing:
+        - bcd_species : Optional[str]
+            Inferred barcode identity.
+        - min_err : int
+            Minimum Hamming distance between the given barcode and the codebook.
 
     Example
     -------
-    >>> barcode = np.array([1,1,1,0,0,0,0,0]).reshape((1, -1))
-    >>> codebook = {'a': np.array([1,1,1,1,0,0,0,0]),
-                    'b': np.array([0,0,1,1,1,1,0,0]),
-                    'c': np.array([0,0,0,0,1,1,1,1])}
+    >>> barcode = np.array([1, 1, 1, 0, 0, 0, 0, 0]).reshape((1, -1))
+    >>> codebook = {'a': np.array([1, 1, 1, 1, 0, 0, 0, 0]),
+                    'b': np.array([0, 0, 1, 1, 1, 1, 0, 0]),
+                    'c': np.array([0, 0, 0, 0, 1, 1, 1, 1])}
     >>> cbk_keys, cbk_vals = dict_to_2D_array(codebook)
     >>> find_barcode_min_dist(barcode, cbk_keys, cbk_vals, max_err=1)
     ('a', 1)
@@ -509,29 +704,38 @@ def find_barcode_min_dist(barcode, codebook_keys, codebook_vals, max_err=1):
     return bcd_species, min_err
 
 
-def compute_errors(barcodes, codebook_vals):
+def compute_errors(
+    barcodes: np.ndarray,
+    codebook_vals: np.ndarray
+) -> np.ndarray:
     """
-    Compute the hamming distance between barcode sequences and their closest
+    Compute the Hamming distance between barcode sequences and their closest
     allowed sequence in a codebook.
 
     Parameters
     ----------
-    barcodes : ndarray
+    barcodes : np.ndarray
         Barcodes detected starting from spots in all rounds, shape (n_barcodes, n_rounds).
-    codebook_vals : ndarray
+
+    codebook_vals : np.ndarray
         2D array of binary values of the codebook.
+
+    Returns
+    -------
+    np.ndarray
+        Array containing the Hamming distance for each barcode.
 
     Example
     -------
-    >>> barcodes = np.array([[0,1,1,1,1,0,0,0],
-                             [1,1,1,0,0,0,0,0],
-                             [1,1,0,0,0,1,1,1]])
-    >>> codebook = {'a': np.array([1,1,1,1,0,0,0,0]),
-                    'b': np.array([0,0,1,1,1,1,0,0]),
-                    'c': np.array([0,0,0,0,1,1,1,1])}
+    >>> barcodes = np.array([[0, 1, 1, 1, 1, 0, 0, 0],
+                             [1, 1, 1, 0, 0, 0, 0, 0],
+                             [1, 1, 0, 0, 0, 1, 1, 1]])
+    >>> codebook = {'a': np.array([1, 1, 1, 1, 0, 0, 0, 0]),
+                    'b': np.array([0, 0, 1, 1, 1, 1, 0, 0]),
+                    'c': np.array([0, 0, 0, 0, 1, 1, 1, 1])}
     >>> cbk_keys, codebook_vals = dict_to_2D_array(codebook)
     >>> compute_errors(barcodes, codebook_vals)
-    (array([2, 1, 3])
+    array([2, 1, 3])
     """
 
     # compute distances between barcode and codebook's barcodes
@@ -542,30 +746,58 @@ def compute_errors(barcodes, codebook_vals):
     return min_err
 
 
-def build_barcodes_stats(coords, fit_vars, contribs, barcodes, codebook_keys, 
-                         codebook_vals, dist_method="isotropic", max_err=1, verbose=1):
+def build_barcodes_stats(
+    coords: np.ndarray,
+    fit_vars: np.ndarray,
+    contribs: List[List[int]],
+    barcodes: np.ndarray,
+    codebook_keys: np.ndarray,
+    codebook_vals: np.ndarray,
+    dist_method: str = "isotropic",
+    max_err: int = 1,
+    verbose: int = 1
+) -> pd.DataFrame:
     """
-    Make the matrix that holds all informations about all potential barcodes, 
+    Make the matrix that holds all information about all potential barcodes,
     their contributing spots ids, and derived statistics.
 
     Parameters
     ----------
-    coords : ndarray
+    coords : np.ndarray
         Coordinates of localized spots.
-    fit_vars : ndarray
+
+    fit_vars : np.ndarray
         Results of 3D fits during spots localization. For now the columns are:
-        [amplitude,]
-    contribs : list(list)
+        [amplitude,].
+
+    contribs : List[List[int]]
         List of contributing spot ids for each barcode.
+
+    barcodes : np.ndarray
+        Barcodes detected starting from spots in all rounds, shape (n_barcodes, n_rounds).
+
+    codebook_keys : np.ndarray
+        List of keys of the codebook.
+
+    codebook_vals : np.ndarray
+        2D array of binary values of the codebook.
+
+    dist_method : str, optional
+        Method used to compute distances. 'isotropic' or 'xy_z_orthog'. Default is 'isotropic'.
+
+    max_err : int, optional
+        Maximum allowable error for inferring barcode identity. Default is 1.
+
+    verbose : int, optional
+        Verbosity level. Default is 1.
 
     Returns
     -------
-    stats : DataFrame
-        Statistics of barcodes: mean position [z, y, x], (z dispersion), x/y dispersion,
-        mean amplitude, sequences min error to codebook sequences.
-    species : list(str)
-        Barcodes' species infered from the smallest hamming distance between sequences.
-    
+    stats : pd.DataFrame
+            Statistics of barcodes: mean position [z, y, x], (z dispersion), x/y(/z) dispersion,
+            mean amplitude, sequences min error to codebook sequences, barcodes' species inferred 
+            from the smallest Hamming distance between sequences.
+
     Example
     -------
     >>> coords = np.array([[0, 0, 0],
@@ -575,16 +807,14 @@ def build_barcodes_stats(coords, fit_vars, contribs, barcodes, codebook_keys,
     >>> contribs = [(0, 1), (0, 1, 2)]
     >>> barcodes = np.array([[1, 1, 0, 0, 0, 0, 0, 0],
                              [1, 1, 1, 0, 0, 0, 0, 0]])
-    >>> codebook = {'a': np.array([0,0,0,0,1,1,1,1]),
-                    'b': np.array([1,1,1,1,0,0,0,0]),
-                    'c': np.array([1,0,1,0,1,0,1,0])}
+    >>> codebook = {'a': np.array([0, 0, 0, 0, 1, 1, 1, 1]),
+                    'b': np.array([1, 1, 1, 1, 0, 0, 0, 0]),
+                    'c': np.array([1, 0, 1, 0, 1, 0, 1, 0])}
     >>> cbk_keys, cbk_vals = dict_to_2D_array(codebook)
     >>> build_barcodes_stats(coords, fit_vars, contribs, barcodes, cbk_keys, cbk_vals)
-    (array([[0.        , 0.5       , 0.5       , 1.41421356, 1.15470054,
-            4.        , 2.        ],
-            [1.        , 1.        , 1.        , 1.41421356, 1.15470054,
-            6.        , 1.        ]]),
-    ['b', 'b'])
+    (       z    y    x  z/x/y std  amplitude  amplitude std  error species
+    0  0.0  0.5  0.5   1.414214   4.0          2.0     0      b
+    1  1.0  1.0  1.0   1.414214   6.0          1.0     0      b)
     """
 
     # make stats
@@ -635,16 +865,42 @@ def build_barcodes_stats(coords, fit_vars, contribs, barcodes, codebook_keys,
     return stats
 
 
-def transform_bit_data(data, select=None, r_mean=1, reverse=False):
+def transform_bit_data(
+    data: np.ndarray,
+    select: Optional[np.ndarray] = None,
+    r_mean: float = 1,
+    reverse: bool = False
+) -> np.ndarray:
     """
-    Transform amplitudes so that selected spots have a specific mean amplitude, 
+    Transform amplitudes so that selected spots have a specific mean amplitude,
     and reverse the min and max of the distribution.
-    
+
     Parameters
     ----------
-    r_mean : float
-        Target mean of selected spots amplitudes.
+    data : np.ndarray
+        Array of amplitudes.
+
+    select : Optional[np.ndarray], optional
+        Indices of the selected spots. If None, the entire array is considered. Default is None.
+
+    r_mean : float, optional
+        Target mean of selected spots' amplitudes. Default is 1.
+
+    reverse : bool, optional
+        If True, reverse the distribution. Default is False.
+
+    Returns
+    -------
+    np.ndarray
+        Transformed amplitudes.
+
+    Example
+    -------
+    >>> data = np.array([1, 2, 3, 4, 5])
+    >>> transform_bit_data(data, select=[1, 3], r_mean=2, reverse=True)
+    array([4., 2., 3., 0., 5.])
     """
+    # TODO: check this generated example
     
     data -= data.min()
     # mean of selected spots
@@ -699,9 +955,32 @@ def recompute_barcodes_amplitudes(fit_vars, contribs, verbose=1):
     return amp_mean
 
 
-def make_empty_stats(dist_params):
+def make_empty_stats(dist_params: Union[Number, np.ndarray]) -> pd.DataFrame:
     """
     Make an empty stats DataFrame in case no barcode exists.
+
+    Parameters
+    ----------
+    dist_params : Union[Number, np.ndarray]
+        The distance parameters. If a single number is provided, assume isotropic distances.
+        If an array is provided, assume anisotropic distances.
+
+    Returns
+    -------
+    pd.DataFrame
+        An empty DataFrame with columns for barcode statistics.
+
+    Example
+    -------
+    >>> make_empty_stats(1.0)
+    Empty DataFrame
+    Columns: [z, y, x, z/x/y std, amplitude, amplitude std, error, species]
+    Index: []
+
+    >>> make_empty_stats(np.array([1.0, 2.0, 3.0]))
+    Empty DataFrame
+    Columns: [z, y, x, z std, x/y std, amplitude, amplitude std, error, species]
+    Index: []
     """
     
     if isinstance(dist_params, Number):
@@ -712,33 +991,108 @@ def make_empty_stats(dist_params):
     return stats
 
 
-def reverse_sigmoid(x, w0, b):
-    """ Return the reverse sigmoid of an array"""
+def reverse_sigmoid(x: np.ndarray, w0: float, b: float) -> np.ndarray:
+    """
+    Return the reverse sigmoid of an array.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Input array.
+
+    w0 : float
+        Parameter controlling the asymptote of the reverse sigmoid curve.
+
+    b : float
+        Parameter controlling the shape of the reverse sigmoid curve.
+
+    Returns
+    -------
+    np.ndarray
+        Reverse sigmoid values for the input array.
+
+    Example
+    -------
+    >>> x_values = np.array([1, 2, 3, 4])
+    >>> reverse_sigmoid(x_values, w0=5.0, b=2.0)
+    array([4.94117647, 4.5       , 4.16494845, 4.05882353])
+    """
     return w0 - x**4 / (b**4 + x**4)
 
-def logistic(x, w0=1, k=1, b=0):
+def logistic(x: np.ndarray, w0: float = 1.0, k: float = 1.0, b: float = 0.0) -> np.ndarray:
+    """
+    Compute the logistic function for an array.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Input array.
+
+    w0 : float, optional
+        Asymptotic value of the logistic curve. Default is 1.0.
+
+    k : float, optional
+        Steepness of the logistic curve. Default is 1.0.
+
+    b : float, optional
+        Horizontal shift of the logistic curve. Default is 0.0.
+
+    Returns
+    -------
+    np.ndarray
+        Logistic values for the input array.
+
+    Example
+    -------
+    >>> x_values = np.array([1, 2, 3, 4])
+    >>> logistic(x_values, w0=2.0, k=2.0, b=1.0)
+    array([1.        , 1.76159416, 1.96402758, 1.99505475])
+    """
     return w0 / (1 + np.exp(-k * (x - b)))
 
-def compute_barcode_multiplicity(spots_combinations, spots_bcd, 
-                                 bcd_per_spot_params, fct=None):
+def compute_barcode_multiplicity(
+    spots_combinations: List[List[int]],
+    spots_bcd: Dict[int, List[int]],
+    bcd_per_spot_params: Dict[str, Union[float, int]],
+    fct: callable = None
+) -> np.ndarray:
     """
     Compute a loss for each barcode depending on the multiplicity of their
     contributing spots, which is the number of potential barcodes per spot.
     A reverse sigmoid function is applied to the distribution of the maximum
-    multiplicities o barcodes to help "ranking" barcodes.
-    
+    multiplicities of barcodes to help "ranking" barcodes.
+
     Parameters
     ----------
-    bcd_per_spot_params : dict
+    spots_combinations : List[List[int]]
+        List of lists representing the combinations of spots for each barcode.
+
+    spots_bcd : Dict[int, List[int]]
+        Dictionary where keys are spot indices and values are lists of barcode indices
+        indicating which barcodes the spots contribute to.
+
+    bcd_per_spot_params : Dict[str, Union[float, int]]
         Parameters to compute the multiplicity loss. Keys are 'w0' and 'b', and 
         optionally 'weight' to modify its importance relative to other losses.
         The default weight is ~1/3 so this loss has the same importance as spots 
         dispersion and mean amplitude when added to the barcode loss.
-    
+
+    fct : callable, optional
+        Function to compute the multiplicity value from a list of spot indices.
+        The default is np.max.
+
+    Returns
+    -------
+    np.ndarray
+        Multiplicity loss values for each barcode.
+
     Example
     -------
-    >>> spots_combinations = [[0, 1, 2, 3], [2, 3, 4, 5]]
-    >>> spots_bcd = {0: [0], 1: [0], 2: [0, 1], 3: [0, 1], 4: [1], 5: [1]}
+    >>> spots_combinations = [[0, 1, 2, 3], [2, 3, 4, 5], [6, 7, 8, 9]]
+    >>> spots_bcd = {0: [0], 1: [0], 2: [0, 1], 3: [0, 1], 4: [1], 5: [1], 6: [2], 7: [2], 8: [2], 9: [2]}
+    >>> bcd_per_spot_params = {'w0': 1.0, 'b': 1.0, 'weight': 0.5}
+    >>> compute_barcode_multiplicity(spots_combinations, spots_bcd, bcd_per_spot_params)
+    array([0.36552929, 0.36552929, 0.25      ])
     """
     
     if fct is None:
@@ -762,26 +1116,41 @@ def compute_barcode_multiplicity(spots_combinations, spots_bcd,
     return loss_multiplicities
 
 
-def remap_spots_bcd(spots_bcd, select, size=None, verbose=1):
+def remap_spots_bcd(
+    spots_bcd: Dict[int, List[int]],
+    select: np.ndarray,
+    size: int = None,
+    verbose: int = 1
+) -> Dict[int, List[int]]:
     """
     Modify the values of a dictionary given a boolean array that filters this
     dictionary.
 
     Parameters
     ----------
-    spots_bcd : dict
+    spots_bcd : Dict[int, List[int]]
         For each spot, all barcodes it contributed to.
-    select : array(bool)
+
+    select : np.ndarray
         Filters the list of spots combinations making the barcodes.
+
     size : int, optional, default None
         Provide a known count of selected elements to avoid computing it.
+
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if 1, show progress bar; if >1, show details.
+
+    Returns
+    -------
+    Dict[int, List[int]]
+        Modified dictionary with remapped values.
 
     Example
     -------
     If we start with:
     >>> spots_combinations = [(0, 1, 2), (1, 2), (0, 1, 3), (4, 5), (3, 6)]
     >>> spots_bcd = {0: [0, 2], 1: [0, 1, 2], 2: [0, 1], 3:[2, 4], 4: [3], 5: [3], 6: [4]}
-    and we filter `spots_combinations` with a bolean array
+    and we filter `spots_combinations` with a boolean array
     >>> select = np.array([True, False, True, False, True])
     this results in `spots_combinations = [(0, 1, 2), (0, 1, 3), (3, 6)]`
     To remap the values of `spot_bcd`, we use:
@@ -806,11 +1175,63 @@ def remap_spots_bcd(spots_bcd, select, size=None, verbose=1):
     return new_spots_bcd
 
 
-# def filter_barcodes(sequences, stats, combinations, spots_bcd=None, 
-#                     max_err=1, err_col=-1, verbose=1):
+# def filter_barcodes(
+#     sequences: np.ndarray,
+#     stats: np.ndarray,
+#     combinations: List[Tuple[int]],
+#     spots_bcd: Optional[Dict[int, List[int]]] = None,
+#     max_err: int = 1,
+#     err_col: int = -1,
+#     verbose: int = 1
+# ) -> Tuple[np.ndarray, np.ndarray, List[Tuple[int]], Optional[Dict[int, List[int]]], np.ndarray]:
 #     """
 #     Filter the barcodes statistics array given barcodes sequences errors.
+
+#     Parameters
+#     ----------
+#     sequences : np.ndarray
+#         Barcodes detected starting from spots in all rounds, shape (n_barcodes, n_rounds).
+
+#     stats : np.ndarray
+#         Statistics of barcodes: mean position [z, y, x], (z dispersion), x/y dispersion,
+#         mean amplitude, sequences min error to codebook sequences.
+
+#     combinations : List[Tuple[int]]
+#         List of contributing spot ids for each barcode.
+
+#     spots_bcd : Optional[Dict[int, List[int]]], default None
+#         For each spot, all barcodes it contributed to.
+
+#     max_err : int, optional, default 1
+#         Maximum allowed error in barcode sequences.
+
+#     err_col : int, optional, default -1
+#         Index of the error column in the stats array.
+
+#     verbose : int, optional, default 1
+#         Verbosity level. If 0, silent; if 1, show progress bar; if >1, show details.
+
+#     Returns
+#     -------
+#     Tuple[np.ndarray, np.ndarray, List[Tuple[int]], Optional[Dict[int, List[int]]], np.ndarray]
+#         Filtered sequences, stats, combinations, remapped spots_bcd, and selection array.
+
+#     Example
+#     -------
+#     >>> sequences = np.array([[0, 1, 1, 1, 1, 0, 0, 0],
+#                              [1, 1, 1, 0, 0, 0, 0, 0]])
+#     >>> stats = np.array([[0.0, 0.5, 0.5, 1.41421356, 1.15470054, 4.0, 2.0, 1],
+#                           [1.0, 1.0, 1.0, 1.41421356, 1.15470054, 6.0, 1.0, 1]])
+#     >>> combinations = [(0,), (1,)]
+#     >>> spots_bcd = {0: [0, 1], 1: [0, 1]}
+#     >>> filter_barcodes(sequences, stats, combinations, spots_bcd, max_err=1, err_col=-1)
+#     (array([[1, 1, 1, 0, 0, 0, 0, 0]]),
+#     array([[1., 1., 1., 1.41421356, 1.15470054, 6., 1., 1.]]),
+#     [(1,)],
+#     {0: [0], 1: [0]},
+#     array([False,  True]))
 #     """
+#     # TODO: check generated example
     
 #     select = stats[:, err_col] <= max_err
 #     sequences = sequences[select, :]
@@ -831,31 +1252,51 @@ def remap_spots_bcd(spots_bcd, select, size=None, verbose=1):
 #     return sequences, stats, combinations, select
 
 
-# def filter_max_bcd_per_spot(max_bcd_per_spot, bcd_sequences, spots_combinations, spots_bcd):
+# def filter_max_bcd_per_spot(
+#     max_bcd_per_spot: int,
+#     bcd_sequences: np.ndarray,
+#     spots_combinations: List[Tuple[int]],
+#     spots_bcd: Dict[int, List[int]],
+#     verbose: int = 0
+# ) -> Tuple[np.ndarray, List[Tuple[int]], Dict[int, List[int]]]:
 #     """
 #     Filter barcodes and spots when the latter have too many related barcodes.
-    
+
 #     Parameters
 #     ----------
 #     max_bcd_per_spot : int
 #         Maximum number of barcodes spots can be related to before being filtered.
-#     bcd_sequences : array
+
+#     bcd_sequences : np.ndarray
 #         Barcode sequences from all possible spots ids combinations.
-#     spots_combinations : list(list)
+
+#     spots_combinations : List[Tuple[int]]
 #         For each barcode, its contributing spots.
-#     spots_bcd : dict
+
+#     spots_bcd : Dict[int, List[int]]
 #         For each spot, all barcodes it contributed to.
+
+#     verbose : int, optional, default 0
+#         Verbosity level. If 0, silent; if >0, show details.
 
 #     Returns
 #     -------
-#     bcd_sequences : array
-#         Barcode sequences from all possible spots ids combinations.
-#     spots_combinations : list(list)
-#         For each barcode, its contributing spots.
-#     spots_bcd : dict
-#         For each spot, all barcodes it contributed to.
+#     Tuple[np.ndarray, List[Tuple[int]], Dict[int, List[int]]]
+#         Filtered bcd_sequences, spots_combinations, and spots_bcd.
+
+#     Example
+#     -------
+#     >>> max_bcd_per_spot = 1
+#     >>> bcd_sequences = np.array([[1, 0, 0],
+#                                   [0, 1, 1],
+#                                   [1, 0, 1]])
+#     >>> spots_combinations = [(0,), (1, 2), (0, 2)]
+#     >>> spots_bcd = {0: [0, 2], 1: [1], 2: [1, 2]}
+#     >>> filter_max_bcd_per_spot(max_bcd_per_spot, bcd_sequences, spots_combinations, spots_bcd)
+#     (array([[1, 0, 1]]), [(0, 2)], {0: [0]})
 #     """
-    
+
+#     # TODO: check generated example
 #     select_spots = np.full(len(spots_bcd.keys()), True)
 #     select_bcds = np.full(len(bcd_sequences), True)
     
@@ -880,13 +1321,59 @@ def remap_spots_bcd(spots_bcd, select, size=None, verbose=1):
 #     return bcd_sequences, spots_combinations, select
 
 
-def prefilter_barcodes_error(bcd_sequences, codebook_vals, spots_combinations,  
-                             spots_bcd=None, max_err=1, verbose=1):
+def prefilter_barcodes_error(
+    bcd_sequences: np.ndarray,
+    codebook_vals: np.ndarray,
+    spots_combinations: List[Tuple[int]],
+    spots_bcd: Optional[Dict[int, List[int]]] = None,
+    max_err: int = 1,
+    verbose: int = 1
+) -> Tuple[np.ndarray, List[Tuple[int]], Optional[Dict[int, List[int]]], np.ndarray, np.ndarray]:
     """
-    Filter the arrays of barcodes, contributing spots and updating the 
-    spot-barcode network given barcodes sequences errors.
+    Filter the arrays of barcodes, contributing spots, and update the 
+    spot-barcode network given barcode sequence errors.
+
+    Parameters
+    ----------
+    bcd_sequences : np.ndarray
+        Barcode sequences from all possible spots ids combinations.
+
+    codebook_vals : np.ndarray
+        2D array of binary values of the codebook.
+
+    spots_combinations : List[Tuple[int]]
+        For each barcode, its contributing spots.
+
+    spots_bcd : Optional[Dict[int, List[int]]], default None
+        For each spot, all barcodes it contributed to.
+
+    max_err : int, optional, default 1
+        Maximum allowed error in barcode sequences.
+
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if >0, show details.
+
+    Returns
+    -------
+    Tuple[np.ndarray, List[Tuple[int]], Optional[Dict[int, List[int]]], np.ndarray, np.ndarray]
+        Filtered bcd_sequences, spots_combinations, new_spots_bcd, errors, and select.
+
+    Example
+    -------
+    >>> bcd_sequences = np.array([[1, 0, 0],
+                                  [0, 1, 1],
+                                  [1, 0, 1]])
+    >>> codebook_vals = np.array([[1, 0, 0],
+                                  [0, 1, 1],
+                                  [1, 0, 1]])
+    >>> spots_combinations = [(0,), (1, 2), (0, 2)]
+    >>> spots_bcd = {0: [0, 2], 1: [1], 2: [1, 2]}
+    >>> prefilter_barcodes_error(bcd_sequences, codebook_vals, spots_combinations, spots_bcd, max_err=1)
+    (array([[1, 0, 0],
+            [1, 0, 1]]), [(0,), (0, 2)], {0: [0], 2: [1]})
     """
     
+    # TODO: check generated example
     errors = compute_errors(bcd_sequences, codebook_vals)
     select = errors <= max_err
     bcd_sequences = bcd_sequences[select]
@@ -907,14 +1394,86 @@ def prefilter_barcodes_error(bcd_sequences, codebook_vals, spots_combinations,
     return bcd_sequences, spots_combinations, errors, select
 
 
-def filter_barcodes_array(data, threshold, bcd_sequences, spots_combinations, 
-                          stats, direction='greater', spots_bcd=None,
-                          stats_norm=None, verbose=1):
+def filter_barcodes_array(
+    data: np.ndarray,
+    threshold: float,
+    bcd_sequences: np.ndarray,
+    spots_combinations: List[Tuple[int]],
+    stats: pd.DataFrame,
+    direction: str = 'greater',
+    spots_bcd: Optional[Dict[int, List[int]]] = None,
+    stats_norm: Optional[pd.DataFrame] = None,
+    verbose: int = 1
+) -> List[Union[np.ndarray, List[Tuple[int]], pd.DataFrame, Optional[Dict[int, List[int]]], Optional[pd.DataFrame], np.ndarray]]:
     """
-    Filter barcodes and several related variable, and update the 
+    Filter barcodes and several related variables and update the 
     spot-barcode network given an array of values and a hard threshold.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Array of values used for filtering.
+
+    threshold : float
+        Hard threshold for filtering.
+
+    bcd_sequences : np.ndarray
+        Barcode sequences from all possible spots ids combinations.
+
+    spots_combinations : List[Tuple[int]]
+        For each barcode, its contributing spots.
+
+    stats : pd.DataFrame
+        Statistics of barcodes.
+
+    direction : str, optional, default 'greater'
+        Direction of the filtering. 'greater' keeps values greater than the threshold,
+        'less' keeps values less than the threshold.
+
+    spots_bcd : Optional[Dict[int, List[int]]], default None
+        For each spot, all barcodes it contributed to.
+
+    stats_norm : Optional[pd.DataFrame], default None
+        Additional statistics used for normalization.
+
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if >0, show details.
+
+    Returns
+    -------
+    List[Union[np.ndarray, List[Tuple[int]], pd.DataFrame, Optional[Dict[int, List[int]]], Optional[pd.DataFrame], np.ndarray]]
+        Filtered bcd_sequences, spots_combinations, stats, new_spots_bcd, stats_norm, and select.
+
+    Example
+    -------
+    >>> data = np.array([1.2, 0.8, 1.5, 0.7, 2.0])
+    >>> threshold = 1.0
+    >>> bcd_sequences = np.array([[1, 0, 0],
+                                  [0, 1, 1],
+                                  [1, 0, 1],
+                                  [0, 0, 1],
+                                  [1, 1, 1]])
+    >>> spots_combinations = [(0,), (1, 2), (0, 2), (2,), (0, 1, 2)]
+    >>> stats = pd.DataFrame({
+           'z': [0, 1, 2, 1, 0],
+           'y': [1, 2, 3, 2, 1],
+           'x': [0, 1, 0, 2, 1],
+           'error': [1, 0, 1, 0, 2],
+           'species': ['a', 'b', 'c', 'a', 'b']
+        })
+    >>> filter_barcodes_array(data, threshold, bcd_sequences, spots_combinations, stats)
+    [array([[0, 1, 1],
+           [1, 0, 1],
+           [1, 1, 1]]), [(0, 2), (0, 1, 2), (0, 1, 2)], 
+           'z': [1, 2, 0],
+           'y': [2, 3, 1],
+           'x': [1, 0, 1],
+           'error': [0, 1, 2],
+           'species': ['b', 'c', 'b']], 
+           {0: [1, 2], 1: [0, 1, 2], 2: [0, 1, 2]}, None, array([ True, False,  True, False,  True])]
     """
     
+    # TODO: check generated example
     if direction == 'greater':
         select = data > threshold
     else:
@@ -942,16 +1501,29 @@ def filter_barcodes_array(data, threshold, bcd_sequences, spots_combinations,
     return results
 
         
-def build_barcodes_network_array(combinations, verbose=1):
+def build_barcodes_network_array(combinations: List[Tuple[int]], verbose: int = 1) -> np.ndarray:
     """
     Build the graph of barcodes, where nodes are barcode ids and edges represent 
     common contributing spot ids. 
     This is the version for array-based networks.
 
+    Parameters
+    ----------
+    combinations : List[Tuple[int]]
+        List of tuples where each tuple represents the contributing spot ids for a barcode.
+
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if >0, show details.
+
+    Returns
+    -------
+    np.ndarray
+        2D array representing the edges in the barcode network.
+
     Example
     -------
     >>> combinations = [(0, 1, 2), (1, 2), (0, 1), (4, 5), (3, 6)]
-    >>> build_barcodes_network(combinations)
+    >>> build_barcodes_network_array(combinations)
     array([[0, 1],
            [0, 2],
            [1, 2],
@@ -983,17 +1555,24 @@ def build_barcodes_network_array(combinations, verbose=1):
     return pairs
 
 
-def build_barcodes_network(spots_combinations, spots_bcd, verbose=1):
+def build_barcodes_network(spots_combinations: List[List[int]], spots_bcd: Dict[int, List[int]], verbose: int = 1) -> Dict[int, Set[int]]:
     """
     Build the graph of barcodes, where nodes are barcode ids and edges represent 
     common contributing spot ids.
 
     Parameters
     ----------
-    spots_combinations : list(list)
+    spots_combinations : List[List[int]]
         For each barcode, its contributing spots.
-    spots_bcd : dict
+    spots_bcd : Dict[int, List[int]]
         For each spot, all barcodes it contributed to.
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if >0, show details.
+
+    Returns
+    -------
+    Dict[int, Set[int]]
+        Dictionary representing the edges in the barcode network.
 
     Example
     -------
@@ -1023,23 +1602,38 @@ def build_barcodes_network(spots_combinations, spots_bcd, verbose=1):
 
 
 def build_barcodes_network_trim(
-    bcd_sequences, 
-    spots_combinations, 
-    spots_bcd,
-    stats,
-    stats_norm,
-    verbose=1,
-    ):
+    bcd_sequences: np.ndarray,
+    spots_combinations: List[List[int]],
+    spots_bcd: Dict[int, List[int]],
+    stats: pd.DataFrame,
+    stats_norm: pd.DataFrame,
+    verbose: int = 1,
+) -> Union[None, Tuple[None, np.ndarray, List[List[int]], pd.DataFrame, pd.DataFrame]]:
     """
     Look for connected barcodes, and discard the connected ones with the worst loss.
     Update related barcodes objects.
 
     Parameters
     ----------
-    spots_combinations : list(list)
+    bcd_sequences : np.ndarray
+        Barcode sequences from all possible spots ids combinations.
+    spots_combinations : List[List[int]]
         For each barcode, its contributing spots.
-    spots_bcd : dict
+    spots_bcd : Dict[int, List[int]]
         For each spot, all barcodes it contributed to.
+    stats : pd.DataFrame
+        Statistics of barcodes: mean position [z, y, x], (z dispersion), x/y dispersion,
+        mean amplitude, sequences min error to codebook sequences.
+    stats_norm : pd.DataFrame
+        Normalized statistics of barcodes.
+    verbose : int, optional, default 1
+        Verbosity level. If 0, silent; if >0, show details.
+
+    Returns
+    -------
+    Union[None, Tuple[None, np.ndarray, List[List[int]], pd.DataFrame, pd.DataFrame]]
+        Tuple containing None for `pairs` (to signal further functions that barcodes have been filtered),
+        filtered `bcd_sequences`, updated `spots_combinations`, and filtered `stats` and `stats_norm`.
 
     Example
     -------
@@ -1103,11 +1697,27 @@ def build_barcodes_network_trim(
 
 class PercentileRescaler(BaseEstimator, TransformerMixin):
     """
-    Rescale values between 0 and 1 for each column using a low and high
+    A class to escale values between 0 and 1 for each column using a low and high
     percentile bound for each column.
     If percentile range is given for each colums, it must be as a list or array 
     if data is an array, or as a dictionnary too if data is a dataframe, 
     with keys corresponding to the dataframe's columns.
+
+    Methods
+    -------
+    find_boundaries(X, low, up, col_name=None, y=None):
+        Find the boundaries for rescaling based on percentiles.
+    fit(X, y=None):
+        Fit the rescaler to the input data.
+
+    Attributes
+    ----------
+    data_type : str
+        The type of the input data ('ndarray' or 'dataframe').
+    lower_bound : list or dict
+        Lower bounds for rescaling.
+    upper_bound : list or dict
+        Upper bounds for rescaling.
     
     Example
     -------
@@ -1158,7 +1768,33 @@ class PercentileRescaler(BaseEstimator, TransformerMixin):
         self.perc_low = perc_low
         self.perc_up = perc_up
         
-    def find_boundaries(self, X, low, up, col_name=None, y=None):
+    def find_boundaries(self, X: np.ndarray, low: float, up: float,
+                        col_name: Optional[Union[str, int]] = None, y: Optional[np.ndarray] = None) -> None:
+        """
+        Find the boundaries for rescaling based on percentiles.
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data array.
+        low : float
+            Lower percentile for rescaling.
+        up : float
+            Upper percentile for rescaling.
+        col_name : Union[str, int], optional
+            Column name or index (only applicable if data_type is 'dataframe').
+        y : np.ndarray, optional
+            Target array (not used in this method).
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        - This method updates the lower_bound and upper_bound attributes based on the specified percentiles.
+        """
+
         X = np.copy(X)
         thresh_low = np.percentile(X, low)
         thresh_up = np.percentile(X, up) - thresh_low
@@ -1169,7 +1805,27 @@ class PercentileRescaler(BaseEstimator, TransformerMixin):
             self.lower_bound[col_name] = thresh_low
             self.upper_bound[col_name] = thresh_up  
 
-    def fit(self, X, y=None):
+    def fit(self, X: Union[np.ndarray, pd.DataFrame], y: Optional[np.ndarray] = None) -> 'PercentileRescaler':
+        """
+        Fit the rescaler to the input data.
+
+        Parameters
+        ----------
+        X : Union[np.ndarray, pd.DataFrame]
+            Input data array or DataFrame.
+        y : np.ndarray, optional
+            Target array (not used in this method).
+
+        Returns
+        -------
+        PercentileRescaler
+            The fitted rescaler instance.
+
+        Notes
+        -----
+        - This method determines the type of the input data and initializes the rescaling parameters.
+        """
+
         if isinstance(X, np.ndarray):
             self.data_type = 'ndarray'
             self.lower_bound = []
@@ -1210,7 +1866,30 @@ class PercentileRescaler(BaseEstimator, TransformerMixin):
                     self.find_boundaries(X.loc[:, i].values, self.perc_low[i], self.perc_up[i], col_name=i)
         return self
     
-    def transform(self, X, y=None):
+    def transform(self, 
+                  X: Union[np.ndarray, pd.DataFrame], 
+                  y: Optional[np.ndarray] = None
+                  ) -> Union[np.ndarray, pd.DataFrame]:
+        """
+        Transform the input data based on the fitted rescaler.
+
+        Parameters
+        ----------
+        X : Union[np.ndarray, pd.DataFrame]
+            Input data array or DataFrame.
+        y : np.ndarray, optional
+            Target array (not used in this method).
+
+        Returns
+        -------
+        Union[np.ndarray, pd.DataFrame]
+            Transformed data.
+
+        Notes
+        -----
+        - This method rescales each column of the input data based on the previously fitted rescaler parameters.
+        """
+
         if self.data_type == 'ndarray':
             X = np.copy(X)
             for i in range(X.shape[1]):
@@ -1242,16 +1921,45 @@ class PercentileRescaler(BaseEstimator, TransformerMixin):
         return X
     
 
-def normalize_stats(stats, rescaler=None, rescaler_kwargs=None, reverse_cols=['amplitude']):
+def normalize_stats(
+    stats: pd.DataFrame,
+    rescaler: Optional[PercentileRescaler] = None,
+    rescaler_kwargs: Optional[Dict[str, List[int]]] = None,
+    reverse_cols: Optional[List[str]] = ['amplitude']
+) -> Tuple[pd.DataFrame, Optional[PercentileRescaler]]:
     """
-    Perform data transformation on barcode statistics to make variable more
-    comparable to each other, so we can use more meaningfull weights.
+    Perform data transformation on barcode statistics to make variables more
+    comparable to each other, enabling the use of more meaningful weights.
 
     Parameters
     ----------
-    stat : DataFrame
-        (z dispersion), x/y dispersion, mean amplitude, std amplitude, sequence error.
-        There is no mean_z, mean_y or mean_x, but if that's the case they are trimmed.
+    stats : pd.DataFrame
+        DataFrame containing statistics such as (z dispersion), x/y dispersion, mean amplitude, std amplitude,
+        sequence error. If coordinates (z, y, x) are present, they are discarded.
+    rescaler : Optional[PercentileRescaler], default=None
+        Rescaler object for transforming the data. If not provided, a new one will be created.
+    rescaler_kwargs : Optional[Dict[str, List[int]]], default=None
+        Keyword arguments to initialize the PercentileRescaler if `rescaler` is not provided.
+        Default is set based on the presence of 'z std' in the columns.
+    reverse_cols : Optional[List[str]], default=['amplitude']
+        List of columns to reverse (0 <--> 1) in the resulting DataFrame.
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, Optional[PercentileRescaler]]
+        A tuple containing the normalized statistics DataFrame and the rescaler used for the transformation.
+
+    Notes
+    -----
+    - If 'z' is present in the columns, the coordinates 'z', 'y', 'x' are discarded in the normalized DataFrame.
+    - If `rescaler` is not provided, a PercentileRescaler will be created with default or specified `rescaler_kwargs`.
+    - If `reverse_cols` is provided, specified columns will be reversed (0 <--> 1) in the resulting DataFrame.
+
+    Examples
+    --------
+    >>> normalized_stats, scaler = normalize_stats(stats_df)
+    >>> normalized_stats, scaler = normalize_stats(stats_df, rescaler_kwargs={'perc_low': [0, 0, 0, 0], 'perc_up': [100, 100, 100, 100]})
+    >>> normalized_stats, scaler = normalize_stats(stats_df, rescaler=my_custom_rescaler, reverse_cols=['amplitude', 'other_column'])
     """
     
     if 'z' in stats.columns:
@@ -1282,20 +1990,41 @@ def normalize_stats(stats, rescaler=None, rescaler_kwargs=None, reverse_cols=['a
     return stats_norm, rescaler
 
 
-def compute_individual_losses(stats, weights, inplace=False):
+def compute_individual_losses(
+    stats: pd.DataFrame,
+    weights: Union[list, tuple, pd.Series, np.ndarray],
+    inplace: bool = False
+) -> Union[pd.DataFrame, np.ndarray]:
     """
     Compute the contribution to loss of each individual barcode.
 
     Parameters
     ----------
-    stat : DataFrame
-        (z dispersion), x/y dispersion, mean amplitude, std amplitude, sequence error, species.
-        There is no mean_z, mean_y or mean_x.
-    weights : array
-        Coefficients of each variable in stats for the loss. The last coefficient
-        is for the number of barcodes in the combination considered.
-    inplace : bool
+    stats : pd.DataFrame
+        DataFrame containing statistics such as (z dispersion), x/y dispersion, mean amplitude, std amplitude,
+        sequence error, and species. There is no mean_z, mean_y, or mean_x.
+    weights : Union[list, tuple, pd.Series, np.ndarray]
+        Coefficients of each variable in stats for the loss. The last coefficient is for the number of barcodes
+        in the combination considered.
+    inplace : bool, default=False
         If True, stack the loss to the stats array and return stats.
+
+    Returns
+    -------
+    Union[pd.DataFrame, np.ndarray]
+        If inplace is True, returns the modified DataFrame with an additional 'loss' column.
+        If inplace is False, returns the computed losses as a 1D array.
+
+    Notes
+    -----
+    - The 'weights' array should include coefficients for each variable in 'stats' plus one additional coefficient
+      for the number of barcodes in the combination considered.
+    - If 'inplace' is True, the 'loss' column is added to the 'stats' DataFrame.
+
+    Examples
+    --------
+    >>> losses = compute_individual_losses(stats_df, weights_array)
+    >>> updated_stats = compute_individual_losses(stats_df, weights_array, inplace=True)
     """
 
     num_cols = [x for x in stats if x != 'species']
@@ -1306,17 +2035,31 @@ def compute_individual_losses(stats, weights, inplace=False):
     return loss
 
 
-def compute_selection_loss(indiv_loss, weights, loss_params, fct_aggreg=np.mean):
+def compute_selection_loss(
+    indiv_loss: np.ndarray,
+    weights: Union[list, tuple, np.ndarray],
+    loss_params: Dict[str, Union[int, float]],
+    fct_aggreg: Callable[[np.ndarray], float] = np.mean
+) -> float:
     """
+    Compute the selection loss based on individual barcode losses.
+
     Parameters
     ----------
-    indiv_loss : darray
+    indiv_loss : np.ndarray
         Individual losses of barcodes.
-    weights : array
-        Coefficients of each variable in stats for the loss. The last coeafficient
+    weights : Union[list, tuple, np.ndarray]
+        Coefficients of each variable in stats for the loss. The last coefficient
         is for the number of barcodes in the combination considered.
-    loss_params : dict
-        General informations and parameters to parametrize the loss.
+    loss_params : Dict
+        General information and parameters to parameterize the loss.
+    fct_aggreg : Callable[[np.ndarray], float], default=np.mean
+        Aggregation function to combine individual losses.
+
+    Returns
+    -------
+    float
+        The computed selection loss.
     """
     
     # Contribution of selection size to the loss
@@ -1325,19 +2068,63 @@ def compute_selection_loss(indiv_loss, weights, loss_params, fct_aggreg=np.mean)
     return loss
 
 
-def powerset(iterable, size_min=1, size_max=None):
-    "powerset([1,2,3]) --> (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+def powerset(
+    iterable: Iterable,
+    size_min: int = 1,
+    size_max: int = None
+) -> Iterable[Tuple]:
+    """
+    Generate the powerset of an iterable.
+
+    Parameters
+    ----------
+    iterable : Iterable
+        The input iterable for which the powerset is generated.
+    size_min : int, optional
+        The minimum size of subsets in the powerset (default is 1).
+    size_max : int, optional
+        The maximum size of subsets in the powerset (default is the length of the iterable).
+
+    Returns
+    -------
+    Iterable[Tuple]
+        An iterable containing tuples representing subsets of the input iterable.
+
+    Examples
+    --------
+    >>> list(powerset([1, 2, 3]))
+    [(1,), (2,), (3,), (1, 2), (1, 3), (2, 3), (1, 2, 3)]
+    >>> list(powerset([1, 2, 3], size_min=2)
+    [(1, 2), (1, 3), (2, 3), (1, 2, 3)]
+    """
+
     if size_max is None:
         size_max = len(iterable)
     return itertools.chain.from_iterable(itertools.combinations(iterable, r) for r in range(size_min, size_max+1))
 
 
-def is_valid_array(bcd_combination, pairs, n_bcd_min, n_bcd_max):
+def is_valid_array(bcd_combination: Tuple[int, ...], pairs: np.ndarray, n_bcd_min: int, n_bcd_max: int) -> bool:
     """
     Check if a combination of selected barcodes is valid, i.e. barcode ids are not
     connected in the barcode network due to common contributing spots, and the
     number of selected barcode is within a size range.
     This is the version for array-based networks.
+
+    Parameters
+    ----------
+    bcd_combination : Tuple[int, ...]
+        The combination of selected barcode ids to be checked for validity.
+    pairs : np.ndarray
+        The barcode network represented as an array of pairs of connected barcode ids.
+    n_bcd_min : int
+        The minimum number of selected barcodes allowed.
+    n_bcd_max : int
+        The maximum number of selected barcodes allowed.
+
+    Returns
+    -------
+    bool
+        True if the combination is valid, False otherwise.
 
     Example
     -------
@@ -1365,11 +2152,30 @@ def is_valid_array(bcd_combination, pairs, n_bcd_min, n_bcd_max):
     return True
 
 
-def is_valid(bcd_combination, pairs, n_bcd_min=1, n_bcd_max=np.inf):
+def is_valid(bcd_combination: Tuple[int, ...], 
+             pairs: Dict[int, set], 
+             n_bcd_min: int = 1, 
+             n_bcd_max: Union[int, float] = float('inf')) -> bool:
     """
     Check if a combination of selected barcodes is valid, i.e. barcode ids are not
     connected in the barcode network due to common contributing spots, and the
     number of selected barcode is within a size range.
+
+    Parameters
+    ----------
+    bcd_combination : Tuple[int, ...]
+        The combination of selected barcode ids to be checked for validity.
+    pairs : Dict[int, set]
+        The barcode network represented as a dictionary of connected barcode ids.
+    n_bcd_min : int, optional
+        The minimum number of selected barcodes allowed (default is 1).
+    n_bcd_max : Union[int, float], optional
+        The maximum number of selected barcodes allowed (default is infinity).
+
+    Returns
+    -------
+    bool
+        True if the combination is valid, False otherwise.
 
     Example
     -------
@@ -1383,7 +2189,7 @@ def is_valid(bcd_combination, pairs, n_bcd_min=1, n_bcd_max=np.inf):
     False
     """
 
-    if (len(bcd_combination) < n_bcd_min) or (len(bcd_combination) > n_bcd_max):
+    if not n_bcd_min <= len(bcd_combination) <= n_bcd_max:
         return False
     for i, bcd_src in enumerate(bcd_combination):
         if bcd_src in pairs.keys():
@@ -1393,11 +2199,48 @@ def is_valid(bcd_combination, pairs, n_bcd_min=1, n_bcd_max=np.inf):
     return True
 
 
-def find_best_barcodes_combination(stats, pairs, loss_function, weights, 
-                                   loss_params=None, n_best=1, n_bcd_min=1, 
-                                   n_bcd_max=None, n_bcd_combis=None, verbose=1):
+def find_best_barcodes_combination(
+    stats: pd.DataFrame,
+    pairs: Dict[int, set],
+    loss_function: Callable,
+    weights: np.ndarray,
+    loss_params: Optional[Dict[str, Union[int, float]]] = None,
+    n_best: int = 1,
+    n_bcd_min: int = 1,
+    n_bcd_max: Optional[int] = None,
+    n_bcd_combis: Optional[int] = None,
+    verbose: int = 1,
+) -> Tuple[np.ndarray, float]:
     """
     Try all combinations of barcodes and save the one with the best loss function.
+
+    Parameters
+    ----------
+    stats : pd.DataFrame
+        DataFrame containing barcode statistics.
+    pairs : Dict[int, set]
+        The barcode network represented as a dictionary of connected barcode ids.
+    loss_function : Callable
+        The loss function to be minimized, taking a Series of losses, weights, and optional parameters.
+    weights : np.ndarray
+        Coefficients of each variable in stats for the loss.
+    loss_params : Optional[Dict[str, Union[int, float]]], optional
+        General informations and parameters to parametrize the loss.
+    n_best : int, optional
+        The number of best combinations to save (default is 1).
+    n_bcd_min : int, optional
+        The minimum number of selected barcodes allowed (default is 1).
+    n_bcd_max : Optional[int], optional
+        The maximum number of selected barcodes allowed (default is None).
+    n_bcd_combis : Optional[int], optional
+        Total number of barcode combinations if known, used for progress tracking (default is None).
+    verbose : int, optional
+        Verbosity level (default is 1).
+
+    Returns
+    -------
+    Tuple[np.ndarray, float]
+        Tuple containing the best barcode combination and its corresponding loss.
     """
 
     n_bcd = len(stats)
@@ -1423,7 +2266,11 @@ def find_best_barcodes_combination(stats, pairs, loss_function, weights,
     return best_combi, best_loss
 
 
-def clean_selection_array(bcd_select, pairs, new_candidates=None):
+def clean_selection_array(
+    bcd_select: np.ndarray,
+    pairs: np.ndarray,
+    new_candidates: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Correct a selection of barcodes by eliminating barcodes linked to each other
     in their network (`pairs`), while potentially iterating in a specific order.
@@ -1431,19 +2278,19 @@ def clean_selection_array(bcd_select, pairs, new_candidates=None):
 
     Parameters
     ----------
-    bcd_select : array(bool)
+    bcd_select : np.ndarray
         Selected barcodes.
-    pairs : ndarray
+    pairs : np.ndarray
         Matrix linking pairs of barcodes by their id.
-    new_candidates : array(int) or None (default)
+    new_candidates : Optional[np.ndarray], optional
         If not None, specific order to iterate over barcodes and eliminate their 
         neighbors (given by `pairs`) in the selection.
-    
+
     Returns
     -------
-    bcd_select : array(bool)
+    bcd_select : np.ndarray
         Cleaned barcodes selection.
-    
+
     Example
     -------
     >>> bcd_select = np.array([True, True, False, False, True, True, True]) 
@@ -1468,24 +2315,28 @@ def clean_selection_array(bcd_select, pairs, new_candidates=None):
     return bcd_select
 
 
-def clean_selection(bcd_select, pairs, new_candidates=None):
+def clean_selection(
+    bcd_select: np.ndarray,
+    pairs: Dict[int, set],
+    new_candidates: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Correct a selection of barcodes by eliminating barcodes linked to each other
     in their network (`pairs`), while potentially iterating in a specific order.
 
     Parameters
     ----------
-    bcd_select : array(bool)
+    bcd_select : np.ndarray
         Selected barcodes.
-    pairs : ndarray
-        Matrix linking pairs of barcodes by their id.
-    new_candidates : array(int) or None (default)
+    pairs : Dict[int, set]
+        Dictionary linking barcode ids to sets of neighboring barcode ids.
+    new_candidates : Optional[np.ndarray], optional
         If not None, specific order to iterate over barcodes and eliminate their 
         neighbors (given by `pairs`) in the selection.
-    
+
     Returns
     -------
-    bcd_select : array(bool)
+    bcd_select : np.ndarray
         Cleaned barcodes selection.
     
     Example
@@ -1508,13 +2359,63 @@ def clean_selection(bcd_select, pairs, new_candidates=None):
     return bcd_select
 
 
-def search_stochastic_combinations(stats, pairs, loss_function, weights, 
-                                   loss_params=None, maxiter=200, patience='maxiter',
-                                   min_candidates=None, max_candidates=None, mean_candidates=None,
-                                   history=False, initialize='maxloss', 
-                                   propose_method='single_step', n_repeats=1, verbose=1):
+def search_stochastic_combinations(
+    stats: pd.DataFrame,
+    pairs: Dict[int, set],
+    loss_function: Callable,
+    weights: np.ndarray,
+    loss_params: Optional[Dict] = None,
+    maxiter: int = 200,
+    patience: Union[int, str] = 'maxiter',
+    min_candidates: Optional[int] = None,
+    max_candidates: Optional[Union[int, float]] = None,
+    mean_candidates: Optional[float] = None,
+    history: bool = False,
+    initialize: str = 'maxloss',
+    propose_method: str = 'single_step',
+    n_repeats: int = 1,
+    verbose: int = 1
+) -> Dict[str, Union[np.ndarray, List[np.ndarray], pd.DataFrame]]:
     """
     Search the best set of barcodes with random combinations.
+
+    Parameters
+    ----------
+    stats : pd.DataFrame
+        DataFrame containing barcode statistics.
+    pairs : Dict[int, set]
+        Links pairs of barcodes by their id.
+    loss_function : function
+        Function to compute the loss.
+    weights : np.ndarray
+        Coefficients of each variable in stats for the loss.
+    loss_params : Optional[Dict], optional
+        General informations and parameters to parametrize the loss.
+    maxiter : int, optional
+        Maximum number of iterations. Default is 200.
+    patience : Union[int, str], optional
+        Patience parameter to control early stopping. If 'maxiter', patience is set to maxiter.
+    min_candidates : Optional[int], optional
+        Minimum number of candidates for each iteration. Default is None.
+    max_candidates : Optional[Union[int, float]], optional
+        Maximum number of candidates for each iteration. Default is None.
+    mean_candidates : Optional[float], optional
+        Mean number of candidates for each iteration. Default is None.
+    history : bool, optional
+        Whether to record the history of the optimization. Default is False.
+    initialize : str, optional
+        Method to initialize barcode candidates. Default is 'maxloss'.
+    propose_method : str, optional
+        Method to propose new candidates. Default is 'single_step'.
+    n_repeats : int, optional
+        Number of repeats for proposing new candidates. Default is 1.
+    verbose : int, optional
+        Verbosity level. Default is 1.
+
+    Returns
+    -------
+    results : dict
+        A dictionary containing the results of the optimization.
     """
 
     rng = default_rng()
@@ -1709,54 +2610,127 @@ def search_stochastic_combinations(stats, pairs, loss_function, weights,
     return results
     
 
-def optimize_spots(coords, 
-                   fit_vars, 
-                   spot_ids, 
-                   spot_rounds, 
-                   dist_params, 
-                   codebook,
-                   n_pos_bits=None, 
-                   n_bits=None, 
-                   size_bcd_min=None, 
-                   size_bcd_max=None, 
-                   err_corr_dist=1, 
-                   weights='auto', 
-                   max_positive_bits=0.5, 
-                   barcodes_exploration='stochastic', 
-                   n_bcd_min_coef=0.75, 
-                   n_bcd_max_coef=2, 
-                   maxiter=200, 
-                   patience='maxiter', 
-                   max_candidates='auto', 
-                   n_repeats=1,
-                   filter_intensity=None, 
-                   filter_loss=None, 
-                   max_bcd_per_spot=None, 
-                   bcd_per_spot_params=None, 
-                   rescale_used_spots=True, 
-                   n_steps_rescale_used=10, 
-                   rescaler=None, 
-                   rescaler_kwargs=None,
-                   propose_method='single_step', 
-                   initialize='maxloss', 
-                   trim_network=True, 
-                   history=False, 
-                   return_extra=False, 
-                   return_contribs=False, 
-                   return_barcodes_loss=False, 
-                   verbose=1):
+def optimize_spots(
+    coords: pd.DataFrame,
+    fit_vars: np.ndarray,
+    spot_ids: np.ndarray,
+    spot_rounds: np.ndarray,
+    dist_params: Union[Number, Dict],
+    codebook: Dict[str, str],
+    n_pos_bits: Optional[int] = None,
+    n_bits: Optional[int] = None,
+    size_bcd_min: Optional[int] = None,
+    size_bcd_max: Optional[int] = None,
+    err_corr_dist: int = 1,
+    weights: Union[str, np.ndarray] = 'auto',
+    max_positive_bits: Union[int, float] = 0.5,
+    barcodes_exploration: str = 'stochastic',
+    n_bcd_min_coef: float = 0.75,
+    n_bcd_max_coef: float = 2,
+    maxiter: int = 200,
+    patience: Union[int, str] = 'maxiter',
+    max_candidates: Union[int, str] = 'auto',
+    n_repeats: int = 1,
+    filter_intensity: Optional[float] = None,
+    filter_loss: Optional[float] = None,
+    max_bcd_per_spot: Optional[int] = None,
+    bcd_per_spot_params: Optional[Dict] = None,
+    rescale_used_spots: bool = True,
+    n_steps_rescale_used: int = 10,
+    rescaler: Optional[callable] = None,
+    rescaler_kwargs: Optional[Dict] = None,
+    propose_method: str = 'single_step',
+    initialize: str = 'maxloss',
+    trim_network: bool = True,
+    history: bool = False,
+    return_extra: bool = False,
+    return_contribs: bool = False,
+    return_barcodes_loss: bool = False,
+    verbose: int = 1
+) -> Dict:
     """
-    
+    Optimize barcodes decoding based on spots data.
+
     Parameters
     ----------
-    max_positive_bits : float, int
-        Ratio or number of allowed bits wehere neighbors are found for a given spot
-        before being filtered.
-    rescale_used_spots : bool
-        If True, spots amplitude are iteratively rescaled given the amplitude of 
-        spots used to build barcodes.
-    n_steps_rescale_used : int
+    coords : pd.DataFrame
+        DataFrame containing the coordinates of spots.
+    fit_vars : np.ndarray
+        Array containing fit variables.
+    spot_ids : np.ndarray
+        Array containing spot IDs.
+    spot_rounds : np.ndarray
+        Array containing spot rounds.
+    dist_params : Union[Number, Dict]
+        Distribution parameters for spot proximity.
+    codebook : Dict[str, str]
+        Mapping from gene names to binary sequences.
+    n_pos_bits : Optional[int], optional
+        Number of positive bits in the barcode sequence.
+    n_bits : Optional[int], optional
+        Total number of bits in the barcode sequence.
+    size_bcd_min : Optional[int], optional
+        Minimum size of a valid barcode selection.
+    size_bcd_max : Optional[int], optional
+        Maximum size of a valid barcode selection.
+    err_corr_dist : int, optional
+        Error correction distance for barcodes.
+    weights : Union[str, np.ndarray], optional
+        Weights for individual barcodes during optimization.
+    max_positive_bits : Union[int, float], optional
+        Maximum number or ratio of allowed positive bits in neighbors.
+    barcodes_exploration : str, optional
+        Exploration method for optimizing barcodes ('all', 'stochastic').
+    n_bcd_min_coef : float, optional
+        Coefficient for computing the minimum number of barcodes.
+    n_bcd_max_coef : float, optional
+        Coefficient for computing the maximum number of barcodes.
+    maxiter : int, optional
+        Maximum number of optimization iterations.
+    patience : Union[int, str], optional
+        Maximum number of non-improving iterations or 'maxiter'.
+    max_candidates : Union[int, str], optional
+        Maximum number of candidates for optimization.
+    n_repeats : int, optional
+        Number of repeats for stochastic optimization.
+    filter_intensity : Optional[float], optional
+        Threshold for filtering barcodes based on intensity.
+    filter_loss : Optional[float], optional
+        Threshold for filtering barcodes based on loss.
+    max_bcd_per_spot : Optional[int], optional
+        Maximum number of barcodes per spot.
+    bcd_per_spot_params : Optional[Dict], optional
+        Parameters for computing individual barcode multiplicity loss.
+    rescale_used_spots : bool, optional
+        If True, spots amplitudes are iteratively rescaled given the
+        amplitude of spots used to build barcodes.
+    n_steps_rescale_used : int, optional
         Number of iterations to rescale spots amplitudes.
+    rescaler : Optional[callable], optional
+        Custom rescaling function for amplitudes.
+    rescaler_kwargs : Optional[Dict], optional
+        Additional arguments for the rescaler function.
+    propose_method : str, optional
+        Method for proposing candidates during optimization.
+    initialize : str, optional
+        Initialization method for candidates.
+    trim_network : bool, optional
+        If True, trim the barcode network during optimization.
+    history : bool, optional
+        If True, record the optimization history.
+    return_extra : bool, optional
+        If True, return additional information in the result.
+    return_contribs : bool, optional
+        If True, return contributing spots information in the result.
+    return_barcodes_loss : bool, optional
+        If True, return barcodes loss information in the result.
+    verbose : int, optional
+        Verbosity level.
+
+    Returns
+    -------
+    results : Dict
+        Variable containing all results.
     """
 
     # check parameters
@@ -2187,36 +3161,106 @@ def optimize_spots(coords,
 
 
 def decode_optimized_chunks(
-    chunk_id, 
-    dir_save, 
-    coords, 
-    coords_lim, 
-    fitted_vars, 
-    spot_rounds, 
-    codebook, 
-    dist_params,
-    n_pos_bits=None, 
-    n_bits=None, 
-    size_bcd_min=None, 
-    size_bcd_max=None, 
-    err_corr_dist=1, 
-    weights='auto', 
-    bcd_per_spot_params=None,
-    max_positive_bits=0.5,
-    barcodes_exploration='stochastic', 
-    n_bcd_min_coef=0.75,
-    n_bcd_max_coef=2, 
-    maxiter=200, 
-    patience='maxiter', 
-    max_candidates='auto',
-    propose_method='single_step', # 'iter_bcd', 'from_off', 'from_all'
-    initialize='maxloss', # 'meanloss', 'minloss', 'minrand', 'maxloss', 'maxrand'
-    trim_network=True,
-    file_exist='skip',
-    extra_str='',
-    verbose=0,
-    ):
+    chunk_id: int, 
+    dir_save: Path, 
+    coords: np.ndarray, 
+    coords_lim: Dict[str, Optional[float]], 
+    fitted_vars: np.ndarray, 
+    spot_rounds: np.ndarray, 
+    codebook: Dict[str, str], 
+    dist_params: Union[float, Dict],
+    n_pos_bits: Optional[int] = None, 
+    n_bits: Optional[int] = None, 
+    size_bcd_min: Optional[int] = None, 
+    size_bcd_max: Optional[int] = None, 
+    err_corr_dist: int = 1, 
+    weights: Union[str, np.ndarray] = 'auto', 
+    bcd_per_spot_params: Optional[Dict] = None,
+    max_positive_bits: Union[int, float] = 0.5,
+    barcodes_exploration: str = 'stochastic', 
+    n_bcd_min_coef: float = 0.75,
+    n_bcd_max_coef: float = 2, 
+    maxiter: int = 200, 
+    patience: Union[int, str] = 'maxiter', 
+    max_candidates: Union[int, str] = 'auto',
+    propose_method: str = 'single_step',
+    initialize: str = 'maxloss',
+    trim_network: bool = True,
+    file_exist: str = 'skip',
+    extra_str: str = '',
+    verbose: int = 0,
+) -> Tuple[int, int]:
     """
+    Optimize barcodes decoding on spatially chunked data.
+    
+    Parameters
+    ----------
+    chunk_id : int
+        ID of the chunk.
+    dir_save : Path
+        Path to the directory where results will be saved.
+    coords : np.ndarray
+        Array containing spot coordinates.
+    coords_lim : Dict[str, Optional[float]]
+        Dictionary with limits for spot coordinates (z_lim_min, z_lim_max, y_lim_min, y_lim_max, x_lim_min, x_lim_max).
+    fitted_vars : np.ndarray
+        Array containing fitted variables.
+    spot_rounds : np.ndarray
+        Array containing spot rounds.
+    codebook : Dict[str, str]
+        Mapping from gene names to binary sequences.
+    dist_params : Union[float, Dict]
+        Distribution parameters for spot proximity.
+    n_pos_bits : Optional[int], optional
+        Number of positive bits in the barcode sequence.
+    n_bits : Optional[int], optional
+        Total number of bits in the barcode sequence.
+    size_bcd_min : Optional[int], optional
+        Minimum size of a valid barcode selection.
+    size_bcd_max : Optional[int], optional
+        Maximum size of a valid barcode selection.
+    err_corr_dist : int, optional
+        Error correction distance for barcodes.
+    weights : Union[str, np.ndarray], optional
+        Weights for individual barcodes during optimization.
+    bcd_per_spot_params : Optional[Dict], optional
+        Parameters for computing individual barcode multiplicity loss.
+    max_positive_bits : Union[int, float], optional
+        Maximum number or ratio of allowed positive bits in neighbors.
+    barcodes_exploration : str, optional
+        Exploration method for optimizing barcodes ('all', 'stochastic').
+    n_bcd_min_coef : float, optional
+        Coefficient for computing the minimum number of barcodes.
+    n_bcd_max_coef : float, optional
+        Coefficient for computing the maximum number of barcodes.
+    maxiter : int, optional
+        Maximum number of optimization iterations.
+    patience : Union[int, str], optional
+        Maximum number of non-improving iterations or 'maxiter'.
+    max_candidates : Union[int, str], optional
+        Maximum number of candidates for optimization.
+    propose_method : str, optional
+        Method for proposing candidates during optimization.
+    initialize : str, optional
+        Initialization method for candidates.
+    trim_network : bool, optional
+        If True, trim the barcode network during optimization.
+    file_exist : str, optional
+        Handling of existing result files ('skip', 'overwrite', 'increment').
+    extra_str : str, optional
+        Extra string to append to the result file name.
+    verbose : int, optional
+        Verbosity level.
+
+    Returns
+    -------
+    n_bcd, n_tot : Tuple[int, int]
+        Number of decoded barcodes and total number of spots.
+
+    Notes
+    -----
+    - The main results are saved as csv files in dir_save.
+
     Example
     -------
     >>> spot_rounds = detected_coords.loc[select_coords, ['rounds']].values.ravel()
@@ -2303,25 +3347,27 @@ def decode_optimized_chunks(
     return n_bcd, n_tot
 
 
-def merge_stepwise_results(all_res, dict_idxs=None):
+def merge_stepwise_results(
+        all_res: List[Dict], 
+        dict_idxs: Optional[List[Union[int, np.ndarray]]] = None) -> Dict:
     """
     Merge dictionaries stored in a list with identical keys, concatenating
     1D and 2D arrays and numbers. Stores additional keys to inform about index
     of origin in the list.
-    
+
     Parameters
     ----------
-    all_res : list(dict)
-        List of dictionnaries holding arrays and numbers.
-    dict_idxs : list of array
+    all_res : List[Dict]
+        List of dictionaries holding arrays and numbers.
+    dict_idxs : Optional[List[Union[int, np.ndarray]]], optional
         Indices to track the dictionary of origin of merged data.
-    
+
     Returns
     -------
-    merged_res : dict
-        Dictionnary with same keys as those stored in the list, but with values
+    merged_res : Dict
+        Dictionary with the same keys as those stored in the list, but with values
         merged by concatenation of arrays or numbers. Adds keys with `_step_idx`
-        to allow filtering by dictionary of origin in the input list.
+        to allow filtering by the dictionary of origin in the input list.
     """
     
     if len(all_res) == 1:
@@ -2378,46 +3424,67 @@ def merge_stepwise_results(all_res, dict_idxs=None):
 
 
 def step_wise_optimize_decoding(
-    coords, 
-    fit_vars, 
-    spot_ids, 
-    spot_rounds, 
-    search_distances,
-    error_distances,
-    bcd_per_spot_params,
-    codebook,
-    weights,
-    history=False,
-    return_extra=False,
-    steps_filter_intensity=None,
-    steps_filter_loss=None,
-    filter_intensity_perc=5,
-    filter_loss_perc=95,
-    verbose=0,
-    ):
+    coords: np.ndarray, 
+    fit_vars: np.ndarray, 
+    spot_ids: np.ndarray, 
+    spot_rounds: np.ndarray, 
+    search_distances: Union[int, List[Union[float, np.ndarray]]],
+    error_distances: Union[int, List[Union[float, np.ndarray]]],
+    bcd_per_spot_params: Optional[Union[Dict, List[Union[Dict, None]]]],
+    codebook: np.ndarray,
+    weights: str,
+    history: bool = False,
+    return_extra: bool = False,
+    steps_filter_intensity: Optional[Union[int, List[int]]] = None,
+    steps_filter_loss: Optional[Union[int, List[int]]] = None,
+    filter_intensity_perc: int = 5,
+    filter_loss_perc: int = 95,
+    verbose: int = 0,
+) -> Dict:
     """
     Perform a step-wise optimization by varying at each step the search radius for
     spots neighbors and the allowed error in barcode sequence.
-    
+
     Parameters
     ----------
-    coords : ndarray
+    coords : np.ndarray
         Coordinates of localized spots.
-    fit_vars : ndarray
+    fit_vars : np.ndarray
         Results of 3D fits during spots localization.
-    spot_ids : array
+    spot_ids : np.ndarray
         Unique identifier for each spot.
-    spot_rounds : array
+    spot_rounds : np.ndarray
         Bit index in barcode sequence for each spot.
-    search_distances : array or list
+    search_distances : Union[int, List[Union[float, np.ndarray]]]
         All distances successively considered.
-    error_distances : integer or array or list
+    error_distances : Union[int, List[Union[float, np.ndarray]]]
         Number of allowed errors in barcode sequence, if integer it applies
         to all steps, if iterable it applies per step.
-    steps_filter_intensity : integer or array or list
+    bcd_per_spot_params : Optional[Union[Dict, List[Union[Dict, None]]]]
+        Parameters for barcode decoding per spot or per step.
+    codebook : np.ndarray
+        Codebook for decoding barcodes.
+    weights : str
+        Weighting scheme for optimization.
+    history : bool, optional
+        Whether to store optimization history.
+    return_extra : bool, optional
+        Whether to return extra information.
+    steps_filter_intensity : Optional[Union[int, List[int]]], optional
         Steps at which barcodes are filtered given their mean amplitude.
-    steps_filter_loss : integer or array or list
+    steps_filter_loss : Optional[Union[int, List[int]]], optional
         Steps at which barcodes are filtered given their loss.
+    filter_intensity_perc : int, optional
+        Percentage value for filtering barcodes by intensity.
+    filter_loss_perc : int, optional
+        Percentage value for filtering barcodes by loss.
+    verbose : int, optional
+        Verbosity level.
+
+    Returns
+    -------
+    merged_results : Dict
+        Merged dictionary with the results of the step-wise optimization.
     """
 
     all_steps_results = []
@@ -2518,23 +3585,88 @@ def step_wise_optimize_decoding(
     return merged_results
 
 
-def array_to_dict(arr):
+def array_to_dict(arr: Union[np.ndarray, List]) -> Dict[int, Any]:
+    """
+    Convert an array into a dictionary with indices as keys.
+
+    Parameters
+    ----------
+    arr : Union[np.ndarray, List]
+        The input array or list.
+
+    Returns
+    -------
+    Dict[int, Any]
+        A dictionary where keys are the indices of the list elements, and
+        values are the corresponding elements.
+    """
     return dict(enumerate(arr))
 
 
-def dict_to_array(dico):
+def dict_to_array(dico: Dict[Any, Any]) -> np.ndarray:
+    """
+    Convert a dictionary's values into a NumPy array.
+
+    Parameters
+    ----------
+    dico : Dict[Any, Any]
+        The input dictionary.
+
+    Returns
+    -------
+    np.ndarray
+        A NumPy array containing the values from the input dictionary.
+    """
     return np.array(list(dico.values()))
 
-def dict_to_2D_array(dico):
+
+def dict_to_2D_array(dico: Dict[Any, np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Convert a dictionary of arrays to a 2D NumPy array.
+
+    Parameters
+    ----------
+    dico : Dict[Any, np.ndarray]
+        The input dictionary where values are NumPy arrays.
+
+    Returns
+    -------
+    Tuple[np.ndarray, np.ndarray]
+        A tuple containing two NumPy arrays:
+        - The first array represents keys.
+        - The second array is a 2D array containing values.
+
+    Example
+    -------
+    >>> codebook = {'a': np.array([1, 1, 1, 1, 0, 0, 0, 0]),
+                    'b': np.array([0, 0, 1, 1, 1, 1, 0, 0]),
+                    'c': np.array([0, 0, 0, 0, 1, 1, 1, 1])}
+    >>> cbk_keys, cbk_vals = dict_to_2D_array(codebook)
+    """
     table = np.array(list(dico.items()))
     keys = table[:, 0]
     vals = np.vstack(table[:, 1])
     return keys, vals
 
-def df_to_listarray(df, col_split, usecols=None):
+
+def df_to_listarray(df: pd.DataFrame, col_split: str, usecols: Optional[Union[str, List[str]]] = None) -> List[np.ndarray]:
     """
-    Transform a dataframe into a list of 2D arrays, grouped by `col_split`.
+    Transform a DataFrame into a list of 2D arrays, grouped by `col_split`.
     The reciprocal function is `list_arrays_to_df`.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame.
+    col_split : str
+        The column by which the DataFrame is split into groups.
+    usecols : Union[str, List[str]], optional
+        Columns to be included in the arrays, by default None (uses all columns).
+
+    Returns
+    -------
+    listarray : List[np.ndarray]
+        A list of 2D NumPy arrays, each corresponding to a group in `col_split`.
     """
     if usecols is None:
         usecols = df.columns
@@ -2543,9 +3675,24 @@ def df_to_listarray(df, col_split, usecols=None):
     ]
     return listarray
 
-def array_str_to_int(data):
+
+def array_str_to_int(data: np.ndarray) -> np.ndarray:
     """
     Transform an array of strings into an array of integers.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        The input array of strings.
+
+    Returns
+    -------
+    int_array : np.ndarray
+        An array of integers obtained by converting the input strings.
+
+    Notes
+    -----
+    The input array should be of shape (nb_rows, 1, nb_cols).
     """
     nb_rows = len(data)
     nb_cols = len(data[0, 0])
@@ -2554,11 +3701,29 @@ def array_str_to_int(data):
         int_array[i] = np.array([int(s) for s in data[i, 0]])
     return int_array
 
-def list_arrays_to_df(data, data_col_name=None, index_col_name='round'):
+
+def list_arrays_to_df(
+        data: List[np.ndarray], 
+        data_col_name: Union[None, List[str]] = None, 
+        index_col_name: str = 'round') -> pd.DataFrame:
     """
-    Transform a list of 2D array to a dataframe, with an additional column 
+    Transform a list of 2D arrays to a DataFrame, with an additional column 
     indicating the array index of each row.
     The reciprocal function is `df_to_listarray`.
+
+    Parameters
+    ----------
+    data : List[np.ndarray]
+        The list of 2D arrays to be transformed into a DataFrame.
+    data_col_name : Union[None, List[str]], optional
+        The column names for the data columns. If None, default names will be used.
+    index_col_name : str, optional
+        The name for the column indicating the array index of each row.
+
+    Returns
+    -------
+    df : pd.DataFrame
+        A DataFrame containing the data from the list of 2D arrays.
     """
     stacked = np.vstack(data)
     ids= []
@@ -2574,5 +3739,21 @@ def list_arrays_to_df(data, data_col_name=None, index_col_name='round'):
     df.iloc[:, -1] = df.iloc[:, -1].astype(int)
     return df
 
-def unique_nested_iterable(a):
+
+def unique_nested_iterable(a: Iterable[Iterable]) -> List:
+    """
+    Flatten a nested iterable and return a list of unique elements.
+
+    Parameters
+    ----------
+    a : Iterable[Iterable]
+        The nested iterable to be flattened.
+
+    Returns
+    -------
+    List
+        A list containing unique elements from the nested iterable.
+    """
+    # TODO: compare with generated optimization to ensure uniqueness:
+    # return list(set(functools.reduce(operator.iconcat, a, [])))
     return functools.reduce(operator.iconcat, a, [])
