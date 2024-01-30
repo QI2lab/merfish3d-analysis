@@ -24,11 +24,7 @@ from pathlib import Path
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-# TO DO: - tear out all functions that are not used in decoding.
-#          furthermore, need to remove old decoding method.
-#          simulation code can live in it's own repo, this should be a clean
-#          file just for decoding.
-#        - what is the plan with the stepwise decoding?
+# TO DO: - what is the plan with the stepwise decoding?
 #        - how to rework for a better dask strategy?
 
 def make_mask_from_used_spots(n_spots: int, 
@@ -1500,60 +1496,6 @@ def filter_barcodes_array(
 
     return results
 
-        
-def build_barcodes_network_array(combinations: List[Tuple[int]], verbose: int = 1) -> np.ndarray:
-    """
-    Build the graph of barcodes, where nodes are barcode ids and edges represent 
-    common contributing spot ids. 
-    This is the version for array-based networks.
-
-    Parameters
-    ----------
-    combinations : List[Tuple[int]]
-        List of tuples where each tuple represents the contributing spot ids for a barcode.
-
-    verbose : int, optional, default 1
-        Verbosity level. If 0, silent; if >0, show details.
-
-    Returns
-    -------
-    np.ndarray
-        2D array representing the edges in the barcode network.
-
-    Example
-    -------
-    >>> combinations = [(0, 1, 2), (1, 2), (0, 1), (4, 5), (3, 6)]
-    >>> build_barcodes_network_array(combinations)
-    array([[0, 1],
-           [0, 2],
-           [1, 2],
-           [2, 4]])
-    """
-
-    n_bcd = len(combinations)
-    pairs = []
-    # starting from all barcode ('source')
-    if verbose > 0:
-        iterable = enumerate(tqdm(combinations, desc='barcodes ids'))
-    else:
-        iterable = enumerate(combinations)
-    for bcd_src_id, combination in iterable:
-        # for each contributing spot id
-        for spot_id in combination:
-            # look in all following barcode targets
-            for bcd_trg_id in range(bcd_src_id + 1, n_bcd):
-                if spot_id in combinations[bcd_trg_id]:
-                    pairs.append([bcd_src_id, bcd_trg_id])
-    if len(pairs) == 0:
-        pairs.append([])
-    pairs = np.vstack(pairs)
-    # remove duplicate edges
-    if verbose > 1:
-        print("    Removing duplicate pairs")
-    pairs = np.unique(pairs, axis=0)
-
-    return pairs
-
 
 def build_barcodes_network(spots_combinations: List[List[int]], spots_bcd: Dict[int, List[int]], verbose: int = 1) -> Dict[int, Set[int]]:
     """
@@ -2103,55 +2045,6 @@ def powerset(
     return itertools.chain.from_iterable(itertools.combinations(iterable, r) for r in range(size_min, size_max+1))
 
 
-def is_valid_array(bcd_combination: Tuple[int, ...], pairs: np.ndarray, n_bcd_min: int, n_bcd_max: int) -> bool:
-    """
-    Check if a combination of selected barcodes is valid, i.e. barcode ids are not
-    connected in the barcode network due to common contributing spots, and the
-    number of selected barcode is within a size range.
-    This is the version for array-based networks.
-
-    Parameters
-    ----------
-    bcd_combination : Tuple[int, ...]
-        The combination of selected barcode ids to be checked for validity.
-    pairs : np.ndarray
-        The barcode network represented as an array of pairs of connected barcode ids.
-    n_bcd_min : int
-        The minimum number of selected barcodes allowed.
-    n_bcd_max : int
-        The maximum number of selected barcodes allowed.
-
-    Returns
-    -------
-    bool
-        True if the combination is valid, False otherwise.
-
-    Example
-    -------
-    >>> bcd_combination = (0, 1, 2)
-    >>> pairs = np.array([[0, 3],
-                          [1, 4]])
-    >>> is_valid(bcd_combination, pairs)
-    True
-    >>> bcd_combination = (0, 1, 2)
-    >>> pairs = np.array([[0, 3],
-                          [1, 2]])
-    >>> is_valid(bcd_combination, pairs)
-    False
-    """
-
-    if n_bcd_max < len(bcd_combination) < n_bcd_min:
-        return False
-    for i, bcd_src in enumerate(bcd_combination):
-        select_src = np.logical_or(pairs[:, 0] == bcd_src, pairs[:, 1] == bcd_src)
-        for bcd_trg in bcd_combination[i+1:]:
-            select_trg = np.logical_or(pairs[:, 0] == bcd_trg, pairs[:, 1] == bcd_trg)
-            select_common = np.logical_and(select_src, select_trg)
-            if np.any(select_common):
-                return False
-    return True
-
-
 def is_valid(bcd_combination: Tuple[int, ...], 
              pairs: Dict[int, set], 
              n_bcd_min: int = 1, 
@@ -2264,55 +2157,6 @@ def find_best_barcodes_combination(
                 best_loss = loss
                 best_combi = bcd_combination
     return best_combi, best_loss
-
-
-def clean_selection_array(
-    bcd_select: np.ndarray,
-    pairs: np.ndarray,
-    new_candidates: Optional[np.ndarray] = None
-) -> np.ndarray:
-    """
-    Correct a selection of barcodes by eliminating barcodes linked to each other
-    in their network (`pairs`), while potentially iterating in a specific order.
-    This is the version for array-based networks.
-
-    Parameters
-    ----------
-    bcd_select : np.ndarray
-        Selected barcodes.
-    pairs : np.ndarray
-        Matrix linking pairs of barcodes by their id.
-    new_candidates : Optional[np.ndarray], optional
-        If not None, specific order to iterate over barcodes and eliminate their 
-        neighbors (given by `pairs`) in the selection.
-
-    Returns
-    -------
-    bcd_select : np.ndarray
-        Cleaned barcodes selection.
-
-    Example
-    -------
-    >>> bcd_select = np.array([True, True, False, False, True, True, True]) 
-    >>> pairs = np.array([[0, 2],
-                          [1, 4],
-                          [2, 5],
-                          [5, 6]])
-    >>> new_candidates = np.array([4, 5])
-    >>> clean_selection(bcd_select, pairs, new_candidates)
-    array([ True, False, False, False,  True,  True, False])
-    """
-
-    if new_candidates is None:
-        new_candidates = np.arange(len(bcd_select))
-    for i in new_candidates:
-        # avoid considering new candidates filtered out by previous new candidates
-        if bcd_select[i]:
-            neighb_ids = np.hstack((pairs[pairs[:, 0] == i, 1],
-                                    pairs[pairs[:, 1] == i, 0]))
-            if len(neighb_ids) > 0:
-                bcd_select[neighb_ids] = False
-    return bcd_select
 
 
 def clean_selection(
