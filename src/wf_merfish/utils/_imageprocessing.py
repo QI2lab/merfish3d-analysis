@@ -4,9 +4,7 @@ Image processing functions for qi2lab LED widefield MERFISH data
 
 import numpy as np
 import gc
-from typing import Union
 from numpy.typing import NDArray
-from dask.array.core import Array
 
 # GPU
 CUPY_AVIALABLE = True
@@ -20,16 +18,9 @@ else:
     xp = cp
     from cupyx.scipy import ndimage # type: ignore
  
-CUCIM_AVAILABLE = True
-try:
-    from cucim.skimage.exposure import match_histograms # type: ignore
-except ImportError:
-    from skimage.exposure import match_histograms # type: ignore
-    CUCIM_AVAILABLE = False
-
 def replace_hot_pixels(noise_map: NDArray, data: NDArray) -> NDArray:
     """
-    Replace hot pixels with mean values surrounding it.
+    Replace all hot pixels with median values surrounding them.
 
     Parameters
     ----------
@@ -119,35 +110,3 @@ def correct_shading(darkfield_image: NDArray,
         data = data.astype(np.uint16)
 
     return data
-
-def equalize_rounds(data_registered: Union[NDArray,Array]) -> NDArray:
-    """
-    Histogram equalization across rounds
-    
-    Parameters
-    ----------
-    data_registered: Union[NDArray,da.Array]
-        registered image data. 16 x nz x ny x nx.
-    
-    Returns
-    -------
-    data_equalized: NDArray
-        equalized image data.
-    """
-
-    data_registered = xp.asarray(data_registered,dtype=xp.uint16)
-
-    for z_idx in range(data_registered.shape[1]):
-        ref = data_registered[0,z_idx,:]
-        for bit_idx in range(data_registered.shape[0])[1:]:
-            data_registered[bit_idx,z_idx,:] = match_histograms(data_registered[bit_idx,z_idx,:],ref)
-                
-    if CUPY_AVIALABLE and CUCIM_AVAILABLE:
-        data_registered = xp.asnumpy(data_registered).astype(np.uint16)
-        gc.collect()
-        cp.clear_memo()
-        cp._default_memory_pool.free_all_blocks()
-    else:
-        data_registered = data_registered.astype(np.uint16)
-    
-    return data_registered

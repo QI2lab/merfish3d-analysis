@@ -1,27 +1,30 @@
 """
 Image registration functions using scikit-image and SimpleITK.
 
+2024/01 - Doug Shepherd.
+          Updates for qi2lab MERFISH file format v1.0
 2023/07 - Doug Shepherd
 """
 
 import numpy as np
 from numpy.typing import NDArray
-from typing import Union, List, Sequence, Tuple, Optional
+from typing import Union, List, Sequence, Tuple, Optional, Dict
 import SimpleITK as sitk
 import deeds
 
-CUPY_AVAILABLE = True
+
 try:
     import cupy as cp # type: ignore
     xp = cp
+    CUPY_AVAILABLE = True
 except ImportError:
     xp = np
     CUPY_AVAILABLE = False
 
-CUCIM_AVAILABLE = True
 try:
     from cucim.skimage.registration import phase_cross_correlation # type: ignore
     from cucim.skimage.metrics import structural_similarity # type: ignore
+    CUCIM_AVAILABLE = True
 except ImportError:
     from skimage.registration import phase_cross_correlation # type: ignore
     from skimage.metrics import structural_similarity # type: ignore
@@ -140,20 +143,20 @@ def normalize_histograms(image1: sitk.Image,
 
     return image2_matched
 
-def compute_rigid_transform(image1: sitk.Image, 
-                            image2: sitk.Image,
+def compute_rigid_transform(image1: Union[sitk.Image,NDArray], 
+                            image2: Union[sitk.Image,NDArray],
                             use_mask: Optional[bool] = False,
                             downsample_factor: Optional[float] = 4.0,
-                            projection: Optional[str] = None) -> Tuple[sitk.Image,Sequence[float]]:
+                            projection: Optional[str] = None) -> Tuple[sitk.TranslationTransform,Sequence[float]]:
     """
     Calculate initial translation transform using scikit-image
     phase cross correlation. Create simpleITK transform using shift.
 
     Parameters
     ----------
-    image1: simpleITK image
+    image1: Union[simpleITK image,NDArray]
         reference image
-    image2: simpleITK image
+    image2: Union[simpleITK image,NDArray]
         moving image
     use_mask: bool
         use mask for middle 1/3 of image
@@ -194,6 +197,18 @@ def compute_rigid_transform(image1: sitk.Image,
             
             ssim = np.array(ssim)
             found_shift = float(ref_slice_idx - np.argmax(ssim))
+        else:
+            ref_slice_idx = image1_np.shape[0]//2
+            ref_slice = image1_np[ref_slice_idx,:,:]
+            ssim = []
+            for z_idx in range(image1_np.shape[0]):
+                ssim_slice = structural_similarity(ref_slice.astype(np.uint16),
+                                                   image2_np[z_idx,:].astype(np.uint16),
+                                                   data_range=np.max(ref_slice)-np.min(ref_slice))
+                ssim.append(ssim_slice)
+            
+            ssim = np.array(ssim)
+            found_shift = float(ref_slice_idx - np.argmax(ssim))
 
     else:
         # Perform Fourier cross-correlation
@@ -219,19 +234,22 @@ def compute_rigid_transform(image1: sitk.Image,
             shift = cp.asnumpy(shift_cp)
         else:
             if use_mask:
-                mask = cp.zeros_like(image1_np)
+                mask = np.zeros_like(image1_np)
                 mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
                     image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
+                                                        moving_image=image2_np,
+                                                        upsample_factor=10,
+                                                        reference_mask=mask,
+                                                        return_error='always',
+                                                        disambiguate=True)
             else:
-                mask = None
-            
-            shift, _, _ = phase_cross_correlation(reference_image=image1_np, 
-                                                moving_image=image2_np,
-                                                upsample_factor=40,
-                                                reference_mask=mask,
-                                                return_error='always',
-                                                disambiguate=True)
-
+                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
+                                                        moving_image=image2_np,
+                                                        upsample_factor=10,
+                                                        return_error='always',
+                                                        disambiguate=True)
+    
         # Convert the shift to a list of doubles
         shift = [float(i*-1*downsample_factor) for i in shift]
         shift_reversed = shift[::-1]
