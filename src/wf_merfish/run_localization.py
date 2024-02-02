@@ -1,7 +1,49 @@
+import napari
 from magicgui.widgets import Container, FileEdit, ComboBox, PushButton, ProgressBar, Label
-from pathlib import Path
 from superqt.utils import thread_worker
-from wf_merfish.postprocess.localization import visualize_tile, localize_tile, batch_localize
+from pathlib import Path
+import time
+from PyQt5.QtWidgets import QApplication
+
+# Custom worker functions (to be defined in a separate file, e.g., workers.py)
+@thread_worker
+def visualize_worker(path: Path, prepare_and_show_napari):
+    # Your visualization logic here
+    prepare_and_show_napari()  # Prepare and show Napari
+    yield  # Pause execution until Napari is closed
+    # Continue with the rest of the logic
+
+def prepare_and_show_napari_for_localization(tile_id,em_wvl, voxel_zyx_um):
+    viewer = napari.Viewer()
+
+    # Add the plugin dock widget
+    dock_widget, plugin_widget = viewer.window.add_plugin_dock_widget(
+        "napari-spot-detection", "Spot detection"
+    )
+
+    # Set the plugin widget parameters
+    plugin_widget.txt_ri.setText('1.51')
+    plugin_widget.txt_lambda_em.setText(str(em_wvl * 100))
+    plugin_widget.txt_dc.setText(str(voxel_zyx_um[1]))
+    plugin_widget.txt_dstage.setText(str(voxel_zyx_um[0]))
+    plugin_widget.chk_skewed.setChecked(False)
+
+    viewer.show()
+    wait_for_viewer_to_close(viewer)
+
+def wait_for_viewer_to_close(viewer):
+    # Wait for the viewer to close
+    while viewer.window._qt_window.isVisible():
+        time.sleep(0.1)  # Small delay to prevent freezing
+        QApplication.processEvents()  # Process other Qt events
+
+# Example usage in a worker function
+@thread_worker
+def visualize_worker(path: Path):
+    # Your visualization logic here
+    prepare_and_show_napari_for_localization(em_wvl, voxel_zyx_um)
+    yield  # Pause execution until Napari is closed
+    # Continue with the rest of the logic
 
 def create_gui():
     # Main GUI container
@@ -18,38 +60,24 @@ def create_gui():
                        Label(value="Tile", visible=False)]
     progress_bars = [ProgressBar(value=0, max=100, visible=False) for _ in range(2)]
 
-    # # Placeholder functions for thread workers
-    @thread_worker
-    def visualize_worker(path: Path):
-        # Your visualization logic here
-        pass
+    # Function to open Napari and wait for it to close
+    def open_napari_and_wait():
+        viewer = napari.Viewer()
+        viewer.show()
 
-    @thread_worker
-    def localize_worker(path: Path):
-        # Your localization logic here
-        pass
-
-    @thread_worker
-    def batch_localize_worker(directory: Path):
-        # Your batch localization logic here
-        yield {"Bit": 50, "Tile": 50}  # Example yield, replace with actual progress
-        
-    def get_directories(directory: Path):
-        # Replace with your actual function to list directories
-        if not directory.is_dir():
-            return []
-
-        return [subdir for subdir in directory.iterdir() if subdir.is_dir()]
+        # Wait for the viewer to close
+        while viewer.window._qt_window.isVisible():
+            time.sleep(0.1)  # Small delay to prevent freezing
+            QApplication.processEvents()  # Process other Qt events
 
     # Function to handle directory selection
     def handle_directory_change(event):
         if directory_selector.value:
             directory_path = Path(directory_selector.value)
-            list_of_dirs = get_directories(directory_path)  # Replace with your actual function
-            dropdown_menu.choices = [p.name for p in list_of_dirs]
-            dropdown_menu.visible = True
-            visualize_button.visible = True
-            localize_button.visible = True
+            csv_files = list(directory_path.glob('*.csv'))
+            if csv_files:
+                dropdown_menu.choices = [p.name for p in csv_files]
+                dropdown_menu.visible = True
 
     # Function to update progress bars
     def update_progress(progress):
@@ -58,27 +86,16 @@ def create_gui():
 
     # Button click handlers
     def on_visualize_clicked():
-        visualize_worker = visualize_worker(Path(dropdown_menu.value))
-        visualize_worker.start()
+        worker = visualize_worker(Path(dropdown_menu.value), open_napari_and_wait)
+        worker.start()
 
     def on_localize_clicked():
-        localize_worker = localize_worker(Path(dropdown_menu.value))
-        localize_worker.start()
-
-    def on_batch_localize_clicked():
-        batch_localize_worker = batch_localize_worker(directory_selector.value)
-        batch_localize_worker.yielded.connect(update_progress)
-        batch_localize_worker.start()
-        # Add default progress bars and labels
-        for label, bar in zip(progress_labels, progress_bars):
-            label.visible = True
-            bar.visible = True
-            layout.extend([label, bar])
+        worker = localize_worker(Path(dropdown_menu.value), open_napari_and_wait)
+        worker.start()
 
     # Buttons (initially hidden)
     visualize_button = PushButton(text="Visualize", visible=False, clicked=on_visualize_clicked)
     localize_button = PushButton(text="Localize This Tile", visible=False, clicked=on_localize_clicked)
-    batch_localize_button = PushButton(text="Batch Localize All Tiles", visible=False, clicked=on_batch_localize_clicked)
     exit_button = PushButton(text="Exit", clicked=lambda: layout.native.close())
 
     # Connect the directory selector change event
@@ -86,7 +103,7 @@ def create_gui():
 
     # Add widgets to the layout
     layout.extend([directory_selector, dropdown_menu, visualize_button, localize_button, 
-                   batch_localize_button, bit_progress_bar, tile_progress_bar, exit_button])
+                   bit_progress_bar, tile_progress_bar, exit_button])
 
     # Show the GUI
     layout.native.setWindowTitle("Localize spots - qi2lab widefield MERFISH")

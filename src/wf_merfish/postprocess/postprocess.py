@@ -28,7 +28,8 @@ from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
 from typing import Dict, Generator, Optional
-from superqt.utils import thread_worker, ensure_main_thread
+from superqt.utils import thread_worker
+
 
 # parse experimental directory, load data, and process
 @thread_worker
@@ -64,6 +65,7 @@ def postprocess(correction_option: str,
     pixel_size = 2.4 / (60 * (165/180)) #TO DO: fix to load from file.
     axial_step = .310 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
+    binning = 2
     num_r = df_metadata['num_r']
     num_tiles = df_metadata['num_xyz']
     chan_dpc1_active = df_metadata['dpc1_active']
@@ -195,13 +197,15 @@ def postprocess(correction_option: str,
     calibrations_zarr.attrs["num_tiles"] = num_tiles
     calibrations_zarr.attrs["channels_in_data"] = channels_in_data
     calibrations_zarr.attrs["tile_overlap"] = tile_overlap
+    calibrations_zarr.attrs["binning"] = 2
+    
     
     # generate and save PSFs
     channel_psfs = []
     for channel_id in channels_in_data:
         channel_psfs.append(make_psf(z=33,
                             nx=33,
-                            dxy=pixel_size,
+                            dxy=pixel_size*binning,
                             dz=axial_step,
                             NA=1.35,
                             wvl=em_wavelengths[channel_id],
@@ -398,10 +402,10 @@ def postprocess(correction_option: str,
                                                         psf=channel_psfs[0,:])
 
             data_register_factory.generate_registrations()
-            data_register_factory.load_rigid_registrations()
-            if run_optical_flow:
-                data_register_factory.load_opticalflow_registrations()
-            data_register_factory.apply_registrations()
+            # data_register_factory.load_rigid_registrations()
+            # if run_optical_flow:
+            #     data_register_factory.load_opticalflow_registrations()
+            # data_register_factory.apply_registrations()
 
             progress_updates['PolyDT Tile'] = ((tile_idx+1) / num_tiles) * 100
             yield progress_updates
@@ -409,6 +413,7 @@ def postprocess(correction_option: str,
             del data_register_factory
 
     if tile_registration_flag:
+        
         import dask.diagnostics
         import ngff_zarr
         from multiview_stitcher import (
@@ -419,85 +424,121 @@ def postprocess(correction_option: str,
             registration,
         )
 
+
+        polyDT_output_dir_path = output_dir_path / Path('polyDT')
+
         msims = []
 
-        stitched_dir_path = output_dir_path / Path('round000_stitched')
+        stitched_dir_path = output_dir_path / Path('stitched')
         stitched_dir_path.mkdir(parents=True, exist_ok=True)
 
         tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
 
+        psf = None
+
         for tile_idx, tile_id in enumerate(tile_ids):
-
-            polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
-
-            voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                                dtype=np.float32)
-
-            scale = {'z': voxel_zyx_um[0],
-                    'y': voxel_zyx_um[1],
-                    'x': voxel_zyx_um[2]}
             
-            tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                                dtype=np.float32)
-            tile_grid_positions = {
-                'z': tile_position_zyx_um[0],
-                'y': tile_position_zyx_um[1],
-                'x': tile_position_zyx_um[2],
-            }
-            
-            overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
-                                                dtype=np.float32)
+            if tile_idx == 0:
+                pass
+            else:
+                polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
+                polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
 
-            im_data = np.asarray(polyDT_current_tile['raw_data'],dtype=np.uint16)
+                voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                                    dtype=np.float32)
 
-            shape = {dim: im_data.shape[-idim] for idim, dim in enumerate(scale.keys())}
-            translation = {dim: np.round((tile_grid_positions[dim] / scale[dim]),1) for dim in scale}
+                scale = {'z': voxel_zyx_um[0],
+                        'y': np.round(voxel_zyx_um[1]*2,3),
+                        'x': np.round(voxel_zyx_um[2]*2,3)}
+                
+                tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                                    dtype=np.float32)
+                
+                if psf is None:
+                    psf = make_psf(z=33,
+                        nx=33,
+                        dxy=scale['z'],
+                        dz=scale['x'],
+                        NA=1.35,
+                        wvl=.520,
+                        ns=1.33,
+                        ni=1.51,
+                        ni0=1.51,
+                        model='vectorial')
 
-            ngff_im = ngff_zarr.NgffImage(
-                    im_data,
-                    dims=('z', 'y', 'x'),
-                    scale=scale,
-                    translation=translation,
-                    )
-            
-            ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
+                tile_grid_positions = {
+                    'z': tile_position_zyx_um[0],
+                    'y': tile_position_zyx_um[1],
+                    'x': tile_position_zyx_um[2],
+                }
+                
+                overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
+                                                    dtype=np.float32)
 
-            zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
+                im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
+                
+                shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
+                translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
 
-            ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
+                ngff_im = ngff_zarr.NgffImage(
+                        im_data,
+                        dims=('z', 'y', 'x'),
+                        scale=scale,
+                        translation=translation,
+                        )
+                
+                # These translations match the recorded stage position converted to pixels
+                
+                ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
 
-            msim = ngff_utils.ngff_multiscales_to_msim(
-                        ngff_zarr.from_ngff_zarr(zarr_path),
-                        transform_key=io.METADATA_TRANSFORM_KEY)
+                zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
 
-            msims.append(msim)
+                ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
+
+                msim = ngff_utils.ngff_multiscales_to_msim(
+                            ngff_zarr.from_ngff_zarr(zarr_path),
+                            transform_key=io.METADATA_TRANSFORM_KEY)
+
+                msims.append(msim)
+                
+                del polyDT_current_tile
+                
+        # fig, ax = vis_utils.plot_positions(
+        #     msims,
+        #     use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
+        #     transform_key='affine_metadata'
+        #     )
+
+        # plt.show()
             
         with dask.diagnostics.ProgressBar():
 
             params = registration.register(
                 msims,
-                registration_binning={'z': 1, 'y': 4, 'x': 4},
+                registration_binning={'z': 2, 'y': 4, 'x': 4},
                 reg_channel_index=0,
                 transform_key='affine_metadata',
             )
-
+            
         for msim, param in zip(msims, params):
             msi_utils.set_affine_transform(msim, param, transform_key='affine_registered', base_transform_key='affine_metadata')
 
         for imsim, msim in enumerate(msims):
             affine = np.array(msi_utils.get_transform_from_msim(msim, transform_key='affine_registered')[0])
+            polyDT_current__path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
+            polyDT_current_tile = zarr.open(polyDT_current__path,mode='a')
             polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
+            del polyDT_current_tile
 
         sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
 
         stitched_output_path = stitched_dir_path / Path("round000_fused.zarr")
 
-        fused = fusion.fuse(
-            sims[:],
-            transform_key='affine_registered',
-            output_chunksize=256,
-            )
+        with dask.diagnostics.ProgressBar():
+            fused = fusion.fuse(
+                sims[:],
+                transform_key='affine_registered'
+                )
 
         with dask.diagnostics.ProgressBar():
 
@@ -505,15 +546,12 @@ def postprocess(correction_option: str,
                 fused,
                 transform_key='affine_registered')
 
-            fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff, scale_factors=[])
+            fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,scale_factors=[])
 
             ngff_zarr.to_ngff_zarr(
                 stitched_output_path,
                 fused_ngff_multiscales,
                 )
-
-            progress_updates['polyDT Round'] = 100
-            yield progress_updates
     
 if __name__ == '__main__':
     

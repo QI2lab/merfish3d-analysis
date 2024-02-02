@@ -256,12 +256,12 @@ class DataRegistration:
             
         lib = getlib()
             
-        ref_image_decon = richardson_lucy_nc(self._data_raw[0,:],
+        ref_image_decon = richardson_lucy_nc(np.asarray(self._data_raw[0,:]),
                                             psf=self._psf,
-                                            numiterations=100,
+                                            numiterations=40,
                                             regularizationfactor=.001,
                                             lib=lib)
-        
+                
         current_round_path = self._dataset_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
         current_round = zarr.open(current_round_path,mode='a')
         
@@ -288,7 +288,7 @@ class DataRegistration:
                 
             mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
                                             psf=self._psf,
-                                            numiterations=100,
+                                            numiterations=40,
                                             regularizationfactor=.001,
                                             lib=lib)
 
@@ -742,8 +742,18 @@ class DataRegistration:
         Generate napari figure for debugging
         """
         import napari
+        from qtpy.QtWidgets import QApplication
+
+        def on_close_callback():
+            viewer.layers.clear()
+            gc.collect()
         
         viewer = napari.Viewer()
+        app = QApplication.instance()
+
+        app.lastWindowClosed.connect(on_close_callback)
+        viewer.window._qt_window.setWindowTitle(self._tile_ids[self._tile_idx] + ' alignment aross rounds')
+        
         colormaps = [Colormap('cmap:white'),
                      Colormap('cmap:cyan'),
                      Colormap('cmap:yellow'),
@@ -764,12 +774,11 @@ class DataRegistration:
                      Colormap('cmap:magenta')]
         
         for idx in range(len(self._round_ids)):
-            middle_slice = self._data_registered[idx].shape[0]//2
             viewer.add_image(data=self._data_registered[idx],
                              name=self._round_ids[idx],
                              scale=self._voxel_size,
                              blending='additive',
                              colormap=colormaps[idx].to_napari(),
-                             contrast_limits=[100,6000])
+                             contrast_limits=[200,10000])
 
         napari.run()

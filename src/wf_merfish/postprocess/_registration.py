@@ -255,46 +255,48 @@ def compute_rigid_transform(image1: sitk.Image,
 
     return transform, shift_xyz
 
-def warp_coordinates(coordinates: List[Sequence[float]], 
-                     translation_transform: sitk.Transform, 
-                     displacement_field_transform: Optional[sitk.Transform] = None) -> List[Sequence[float]]:
-    """
-    First apply a translation transform to the coordinates, then warp them using a given displacement field.
+# def warp_coordinates(coordinates: List[Sequence[float]], 
+#                      tile_translation_transform: sitk.Transform, 
+#                      displacement_field_transform: Optional[sitk.Transform] = None,
+#                      stage_translation_transform: Optional[sitk.Transform] = None,
+#                      stage_refine_translation_transform: Optional[sitk.Transform] = None -> List[Sequence[float]]:
+#     """
+#     First apply a translation transform to the coordinates, then warp them using a given displacement field.
 
-    Parameters
-    ----------
-    coordinates: List[Sequence[float]] 
-        List of tuples representing the coordinates.
-        MUST be in xyz order!
-    translation_transform: sitk Translation transform
-        simpleITK translation transform
-    displacement_field_transform: sitk DisplacementField transform
-        simpleITK displacement field transform
+#     Parameters
+#     ----------
+#     coordinates: List[Sequence[float]] 
+#         List of tuples representing the coordinates.
+#         MUST be in xyz order!
+#     translation_transform: sitk Translation transform
+#         simpleITK translation transform
+#     displacement_field_transform: sitk DisplacementField transform
+#         simpleITK displacement field transform
         
-    Returns
-    -------
-    warped_coordinates: List[Sequence[float]]
-        List of tuples representing warped coordinates
-        Returned in xyz order!
-    """
+#     Returns
+#     -------
+#     warped_coordinates: List[Sequence[float]]
+#         List of tuples representing warped coordinates
+#         Returned in xyz order!
+#     """
     
-    warped_coordinates = []
-    for coord in coordinates:
-        # Convert the coordinate to physical space
-        physical_coord = displacement_field_transform.TransformIndexToPhysicalPoint(coord)
+#     warped_coordinates = []
+#     for coord in coordinates:
+#         # Convert the coordinate to physical space
+#         physical_coord = displacement_field_transform.TransformIndexToPhysicalPoint(coord)
         
-        # Apply the translation transform
-        translated_physical_coord = translation_transform.TransformPoint(physical_coord)
+#         # Apply the translation transform
+#         translated_physical_coord = translation_transform.TransformPoint(physical_coord)
         
-        # Apply the displacement field transform
-        if displacement_field_transform is not None:
-            warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
+#         # Apply the displacement field transform
+#         if displacement_field_transform is not None:
+#             warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
         
-            warped_coordinates.append(warped_coord)
-        else:
-            warped_coordinates.append(translated_physical_coord)
+#             warped_coordinates.append(warped_coord)
+#         else:
+#             warped_coordinates.append(translated_physical_coord)
 
-    return warped_coordinates
+#     return warped_coordinates
 
 def make_flow_vectors(field: Union[NDArray,List[NDArray]],
                       mask: NDArray = None) -> NDArray:
