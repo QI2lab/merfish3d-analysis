@@ -82,3 +82,11 @@ Acquisition and post-processing for qi2lab widefield MERFISH
     - fused_polyDT.ome.zarr
       
       
+## Installation
+
+On MacOS, if you have issues building `deeds`, run:
+```bash
+brew install llvm libomp
+echo 'export PATH="/opt/homebrew/Cellar/llvm/17.0.6_1/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```

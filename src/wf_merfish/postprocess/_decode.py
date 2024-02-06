@@ -2758,7 +2758,7 @@ def optimize_spots(
     # Compute in advance individual barcodes loss
     if verbose > 0:
         print("Computing individual barcodes loss")
-    if weights == 'auto':
+    if isinstance(weights, str) and weights == 'auto':
         # (z dispersion), x/y dispersion, mean amplitude, std amplitude, sequence error, selection size
         if dist_method == 'isotropic':
             weights = np.array([2, 1, 0, 1, 1])
