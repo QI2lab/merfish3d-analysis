@@ -88,6 +88,8 @@ Acquisition and post-processing for qi2lab widefield MERFISH
       
 ## Installation
 
+Clone this repository and then install using `pip install .` or for interactive editing use `pip install -e .`.
+
 On MacOS, if you have issues building `deeds`, run:
 ```bash
 brew install llvm libomp
