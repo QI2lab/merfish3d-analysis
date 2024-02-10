@@ -9,6 +9,9 @@ Acquisition and post-processing for qi2lab widefield MERFISH
 
 
 ## qi2lab MERFISH zarr layout v0.1
+<details>
+<summary>file format</summary>
+  
 - /project_root
   - /calibrations.zarr
     - .zattrs
@@ -80,7 +83,8 @@ Acquisition and post-processing for qi2lab widefield MERFISH
       - tileNNNN.ome.zarr
   - /fused
     - fused_polyDT.ome.zarr
-      
+
+</details>
       
 ## Installation
 
