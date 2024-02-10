@@ -9,10 +9,8 @@ def on_close_callback():
     viewer.layers.clear()
     gc.collect()
 
-data_dir_path = Path('/mnt/opm3/20240124_OB_Full_MERFISH_UA_3_allrds/processed_v2')
-
-tile_id = 'tile0000'
-
+data_dir_path = Path('/mnt/opm3/20240202_ECL_IMG_GEL2/processed_v2')
+tile_id = 'tile0004'
 readout_dir_path = data_dir_path / Path('readouts')
 tile_dir_path = readout_dir_path / Path(tile_id)
 
@@ -42,11 +40,6 @@ for bit_id in bit_ids:
 
         dock_widget, plugin_widget = viewer.window.add_plugin_dock_widget("napari-spot-detection", "Spot detection")
 
-        plugin_widget.scan_chunk_size_deconv = 128
-        plugin_widget.scan_chunk_size_dog = 16
-        plugin_widget.scan_chunk_size_find_peaks = 128
-                
-
         plugin_widget.txt_ri.setText('1.51')
         plugin_widget.txt_lambda_em.setText(str(em_wvl*1000))
         plugin_widget.txt_dc.setText(str(np.round(voxel_zyx_um[1]*2,3)))
@@ -57,7 +50,8 @@ for bit_id in bit_ids:
         plugin_widget.path_save = path_localization_file
         plugin_widget.but_make_psf.click()
         plugin_widget.but_load_model.click()
-        plugin_widget.txt_deconv_iter.setText('20')
+        plugin_widget.txt_deconv_iter.setText('40')
+        plugin_widget.txt_deconv_tvtau.setText('.0001')
         plugin_widget.but_run_deconvolution.click()
         plugin_widget.cbx_dog_choice.setCurrentIndex(0)
         plugin_widget.but_dog.click()
@@ -73,7 +67,6 @@ for bit_id in bit_ids:
         gc.collect()
         
 import json
-
         
 def parse_localization_parameters(path_localization_params_file: Path):
     
@@ -136,14 +129,11 @@ def parse_localization_parameters(path_localization_params_file: Path):
 from spots3d.SPOTS3D import SPOTS3D
 from psfmodels import make_psf
 
-data_dir_path = Path('/mnt/opm3/20240119_OB_Full_MERFISH_UA_2_allrds/processed_v2')
+del readout_dir_path, tile_dir_path, bit_ids
 
 readout_dir_path = data_dir_path / Path('readouts')
-
 tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
-
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
-
 bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
 
 for bit_id in bit_ids:
@@ -200,7 +190,7 @@ for bit_id in bit_ids:
             
             spots3d.run_deconvolution()
 
-            spots3d.scan_chunk_size = 16
+            spots3d.scan_chunk_size = 8
             spots3d.run_DoG_filter()
             spots3d.scan_chunk_size = 128
             spots3d.run_find_candidates()
@@ -213,5 +203,73 @@ for bit_id in bit_ids:
         else:
             pass
         
-        
-print('finished.')
+print('finished spot localization.')
+print('start spot registration.')
+
+import SimpleITK as sitk
+import pandas as pd
+from wf_merfish.postprocess._registration import warp_coordinates
+
+del readout_dir_path, tile_ids, tile_dir_path, bit_ids
+
+polyDT_dir_path = data_dir_path / Path('polyDT')
+readout_dir_path = data_dir_path / Path('readouts')
+localization_dir_path = data_dir_path / Path('localizations')
+tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+tile_dir_path = readout_dir_path / Path(tile_ids[0])
+bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+
+for bit_id in bit_ids:
+    for tile_idx, tile_id in enumerate(tile_ids):
+        tile_dir_path = readout_dir_path / Path(tile_id)
+        bit_dir_path = tile_dir_path / Path(bit_id)
+        current_bit_channel = zarr.open(bit_dir_path,mode='r')      
+        r_idx = int(current_bit_channel.attrs['round'])
+        voxel_size_zyx_um = np.asarray(current_bit_channel.attrs['voxel_zyx_um'],dtype=np.float32)
+            
+        if r_idx > 0:        
+            polyDT_tile_round_path = polyDT_dir_path / Path(tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
+            current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
+            ref_image_sitk = sitk.GetImageFromArray(np.asarray(current_polyDT_channel['registered_data']).astype(np.float32))
+            final_shape = ref_image_sitk.GetSize()
+            del ref_image_sitk
+            gc.collect()
+            
+            rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
+            shift_xyz = [float(i) for i in rigid_xform_xyz_um]
+            xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
+            #inv_xyz_transform = xyx_transform.GetInverse()
+            
+            of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
+            of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
+                                                        isVector = True)
+            optical_flow_sitk = sitk.Resample(of_4x_sitk,final_shape)
+            displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+            del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
+            gc.collect()
+            
+            
+            files_to_modify = ['fitted_variables_localization_tile_coords.parquet',
+                               'localization_candidates_localization_tile_coords.parquet',
+                               'localized_spots_localization_tile_coords.parquet']
+            
+            files_to_save = ['fitted_variables_registered_tile_coords.parquet',
+                             'candidates_registered_tile_coords.parquet',
+                             'spots_registered_tile_coords.parquet']
+            
+            for file_idx, file_id in enumerate(files_to_modify):
+                file_save_id = files_to_save[file_idx]
+                localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_id)
+                registered_localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_save_id)
+                df_localization = pd.read_parquet(localization_tile_bit_path)
+
+                coords_tile_xyz = df_localization[['x', 'y', 'z']].to_numpy()
+                
+                registered_coords_xyz = warp_coordinates(coordinates = coords_tile_xyz, 
+                                                    tile_translation_transform = xyx_transform,
+                                                    voxel_size_zyx_um=voxel_size_zyx_um,
+                                                    displacement_field_transform = displacement_field)
+                df_localization['x'], df_localization['y'], df_localization['z'] = registered_coords_xyz[:, 0], registered_coords_xyz[:, 1], registered_coords_xyz[:, 2]
+                df_localization.to_parquet(registered_localization_tile_bit_path)        
+
+print('finished spot registration.')

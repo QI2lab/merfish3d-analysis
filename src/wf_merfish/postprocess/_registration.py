@@ -273,48 +273,55 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
 
     return transform, shift_xyz
 
-# def warp_coordinates(coordinates: List[Sequence[float]], 
-#                      tile_translation_transform: sitk.Transform, 
-#                      displacement_field_transform: Optional[sitk.Transform] = None,
-#                      stage_translation_transform: Optional[sitk.Transform] = None,
-#                      stage_refine_translation_transform: Optional[sitk.Transform] = None -> List[Sequence[float]]:
-#     """
-#     First apply a translation transform to the coordinates, then warp them using a given displacement field.
+def warp_coordinates(coordinates: NDArray, 
+                     tile_translation_transform: sitk.Transform,
+                     voxel_size_zyx_um: NDArray,
+                     displacement_field_transform: Optional[sitk.Transform] = None,
+                     stage_translation_transform: Optional[sitk.Transform] = None,
+                     stage_refine_translation_transform: Optional[sitk.Transform] = None) -> NDArray:
+    """
+    First apply a translation transform to the coordinates, then warp them using a given displacement field.
 
-#     Parameters
-#     ----------
-#     coordinates: List[Sequence[float]] 
-#         List of tuples representing the coordinates.
-#         MUST be in xyz order!
-#     translation_transform: sitk Translation transform
-#         simpleITK translation transform
-#     displacement_field_transform: sitk DisplacementField transform
-#         simpleITK displacement field transform
+    Parameters
+    ----------
+    coordinates: List[Sequence[float]] 
+        List of tuples representing the coordinates.
+        MUST be in xyz order!
+    voxel_size_zyx_um: NDArray
+        physical pixel spacing
+    translation_transform: sitk Translation transform
+        simpleITK translation transform
+    displacement_field_transform: sitk DisplacementField transform
+        simpleITK displacement field transform
         
-#     Returns
-#     -------
-#     warped_coordinates: List[Sequence[float]]
-#         List of tuples representing warped coordinates
-#         Returned in xyz order!
-#     """
+    Returns
+    -------
+    transformed_coordinates: NDArray
+        List of tuples representing warped coordinates
+        Returned in xyz order!
+    """
+    voxel_size_xyz_um = voxel_size_zyx_um[::-1]   
+    coords_list = [[coord / voxel_size_xyz_um[i] for i, coord in enumerate(point)] for point in coordinates]
     
-#     warped_coordinates = []
-#     for coord in coordinates:
-#         # Convert the coordinate to physical space
-#         physical_coord = displacement_field_transform.TransformIndexToPhysicalPoint(coord)
+    
+    transformed_coordinates = []
+    for coord in coords_list:
+        coord_floats = tuple(map(float, coord))
         
-#         # Apply the translation transform
-#         translated_physical_coord = translation_transform.TransformPoint(physical_coord)
+        # Apply the translation transform
+        translated_physical_coord = tile_translation_transform.TransformPoint(coord_floats)
         
-#         # Apply the displacement field transform
-#         if displacement_field_transform is not None:
-#             warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
+        # Apply the displacement field transform
+        if displacement_field_transform is not None:
+            warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
         
-#             warped_coordinates.append(warped_coord)
-#         else:
-#             warped_coordinates.append(translated_physical_coord)
+            transformed_coordinates.append(warped_coord)
+        else:
+            transformed_coordinates.append(translated_physical_coord)
+            
+    transformed_physical_coords = [[coord * voxel_size_xyz_um[i] for i, coord in enumerate(point)] for point in transformed_coordinates]
 
-#     return warped_coordinates
+    return np.array(transformed_physical_coords)
 
 def make_flow_vectors(field: Union[NDArray,List[NDArray]],
                       mask: NDArray = None) -> NDArray:

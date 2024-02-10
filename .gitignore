@@ -103,12 +103,13 @@ ENV/
 
 # IDE settings
 .vscode/
-test.csv
 *.pyc
 src/wf_merfish/test_postprocess.py
 src/wf_merfish/test_roundalignment.py
 src/wf_merfish/test_stitching.py
 hot_pixel_image.tif
-.csv
 src/wf_merfish/utils/__pycache__/_dataio.cpython-310.pyc
 src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
+*.csv
+src/wf_merfish/test_decoding.py
+src/wf_merfish/test_registration.py

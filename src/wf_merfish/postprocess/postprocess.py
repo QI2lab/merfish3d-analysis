@@ -434,74 +434,57 @@ def postprocess(correction_option: str,
 
         tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
 
-        psf = None
-
         for tile_idx, tile_id in enumerate(tile_ids):
             
-            if tile_idx == 0:
-                pass
-            else:
-                polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
-                polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
+            polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
+            polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
 
-                voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                                    dtype=np.float32)
+            voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                                dtype=np.float32)
 
-                scale = {'z': voxel_zyx_um[0],
-                        'y': np.round(voxel_zyx_um[1]*2,3),
-                        'x': np.round(voxel_zyx_um[2]*2,3)}
-                
-                tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                                    dtype=np.float32)
-                
-                if psf is None:
-                    psf = make_psf(z=33,
-                        nx=33,
-                        dxy=scale['z'],
-                        dz=scale['x'],
-                        NA=1.35,
-                        wvl=.520,
-                        ns=1.33,
-                        ni=1.51,
-                        ni0=1.51,
-                        model='vectorial')
+            scale = {'z': voxel_zyx_um[0],
+                    'y': np.round(voxel_zyx_um[1]*2,3),
+                    'x': np.round(voxel_zyx_um[2]*2,3)}
+            
+            tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                                dtype=np.float32)
+            
+            tile_grid_positions = {
+                'z': tile_position_zyx_um[0],
+                'y': tile_position_zyx_um[1],
+                'x': tile_position_zyx_um[2],
+            }
+            
+            overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
+                                                dtype=np.float32)
 
-                tile_grid_positions = {
-                    'z': tile_position_zyx_um[0],
-                    'y': tile_position_zyx_um[1],
-                    'x': tile_position_zyx_um[2],
-                }
-                
-                overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
-                                                    dtype=np.float32)
+            im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
+            
+            shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
+            translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
 
-                im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
-                
-                shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
-                translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
+            ngff_im = ngff_zarr.NgffImage(
+                    im_data,
+                    dims=('z', 'y', 'x'),
+                    scale=scale,
+                    translation=translation,
+                    )
+            
+            # These translations match the recorded stage position converted to pixels
+            
+            ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
 
-                ngff_im = ngff_zarr.NgffImage(
-                        im_data,
-                        dims=('z', 'y', 'x'),
-                        scale=scale,
-                        translation=translation,
-                        )
-                
-                # These translations match the recorded stage position converted to pixels
-                
-                ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
+            zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
 
-                zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
+            ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
 
-                ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
+            msim = ngff_utils.ngff_multiscales_to_msim(
+                        ngff_zarr.from_ngff_zarr(zarr_path),
+                        transform_key=io.METADATA_TRANSFORM_KEY)
 
-                msim = ngff_utils.ngff_multiscales_to_msim(
-                            ngff_zarr.from_ngff_zarr(zarr_path),
-                            transform_key=io.METADATA_TRANSFORM_KEY)
-
-                msims.append(msim)
-                
-                del polyDT_current_tile
+            msims.append(msim)
+            
+            del polyDT_current_tile
                 
         # fig, ax = vis_utils.plot_positions(
         #     msims,
@@ -537,7 +520,8 @@ def postprocess(correction_option: str,
         with dask.diagnostics.ProgressBar():
             fused = fusion.fuse(
                 sims[:],
-                transform_key='affine_registered'
+                transform_key='affine_registered',
+                output_chunksize=128
                 )
 
         with dask.diagnostics.ProgressBar():
@@ -546,7 +530,9 @@ def postprocess(correction_option: str,
                 fused,
                 transform_key='affine_registered')
 
-            fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,scale_factors=[])
+            fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,
+                                                              scale_factors=[],
+                                                              chunks=128)
 
             ngff_zarr.to_ngff_zarr(
                 stitched_output_path,

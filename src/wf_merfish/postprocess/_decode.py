@@ -2452,8 +2452,35 @@ def search_stochastic_combinations(
         results['record_decision'] = record_decision
         results['all_stats'] = stats
     return results
-    
 
+
+def filter_max_bcd_per_spot(max_bcd_per_spot, bcd_sequences, spots_combinations, spots_bcd, verbose=1):
+
+    # Initialize selection arrays
+    select_spots = np.full(len(spots_bcd), True)
+    select_bcds = np.full(len(bcd_sequences), True)
+    
+    # Identify spots exceeding the max_bcd_per_spot threshold
+    spots_to_filter = set(spot_id for spot_id, linked_barcodes in spots_bcd.items() if len(linked_barcodes) > max_bcd_per_spot)
+    
+    # Update select_bcds based on spots_to_filter
+    for bcd_index, spots in enumerate(spots_combinations):
+        if any(spot in spots_to_filter for spot in spots):
+            select_bcds[bcd_index] = False
+    
+    # Apply filters
+    bcd_sequences = np.array(bcd_sequences)[select_bcds]
+    spots_combinations = list(itertools.compress(spots_combinations, select_spots))
+    
+    # Remap spots_bcd if necessary
+    if spots_bcd is not None:
+        if verbose > 0:
+            print("Remapping spots --> barcodes dictionary")
+        new_spots_bcd = remap_spots_bcd(spots_bcd, select_spots, size=len(bcd_sequences))
+        return bcd_sequences, spots_combinations, new_spots_bcd
+    
+    return bcd_sequences, spots_combinations, spots_bcd
+    
 def optimize_spots(
     coords: pd.DataFrame,
     fit_vars: np.ndarray,
@@ -2669,23 +2696,12 @@ def optimize_spots(
         )
     n_bcd = len(bcd_sequences)
     
-    # # filter barcodes and spots when the latter have too many barcodes
-    # should we do it before or after prefilter_barcodes_error?
-    # if max_bcd_per_spot is not None and n_bcd > 0:
-    #     bcd_sequences, spots_combinations, stats, spots_bcd, _ = filter_max_bcd_per_spot(
-    #         max_bcd_per_spot,
-    #         bcd_sequences=bcd_sequences, 
-    #         spots_combinations=spots_combinations, 
-    #         spots_bcd=spots_bcd,
-    #         )
-    #     n_bcd = len(bcd_sequences)
-    
-    # compute barcodes errors and filter out those with too many errors (usually 2)
+        # compute barcodes errors and filter out those with too many errors (usually 2)
     if verbose > 0:
         print(f"Filtering barcodes with > {err_corr_dist} errors")
     codebook_keys, codebook_vals = dict_to_2D_array(codebook)
     codebook_vals = array_str_to_int(codebook_vals)
-
+    
     # print('before', bcd_sequences)
     # print('spots_bcd', spots_bcd)
     # print('spots_combinations', spots_combinations)
@@ -2703,6 +2719,21 @@ def optimize_spots(
     # print('spots_bcd', spots_bcd)
     # print('spots_combinations', spots_combinations)
     # print('after', bcd_sequences)
+    
+    # filter barcodes and spots when the latter have too many barcodes
+    # should we do it before or after prefilter_barcodes_error?
+    max_bcd_per_spot = 4
+    if verbose > 0:
+        print(f"Removing spots with more than {max_bcd_per_spot} possible barcodes")
+    if max_bcd_per_spot is not None and n_bcd > 0:
+        bcd_sequences, spots_combinations, spots_bcd = filter_max_bcd_per_spot(
+            max_bcd_per_spot,
+            bcd_sequences=bcd_sequences, 
+            spots_combinations=spots_combinations, 
+            spots_bcd=spots_bcd,
+            verbose=verbose
+            )
+        n_bcd = len(bcd_sequences)
 
 
     # assemble table, add statistics, including barcodes min error
@@ -3361,6 +3392,7 @@ def step_wise_optimize_decoding(
             dist_params=dist_params, 
             err_corr_dist=err_corr_dist,
             bcd_per_spot_params=multiplicity_params,
+            rescale_used_spots=False,
             codebook=codebook,
             weights=weights,
             history=history, 
