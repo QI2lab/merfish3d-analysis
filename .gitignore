@@ -107,6 +107,7 @@ ENV/
 src/wf_merfish/test_postprocess.py
 src/wf_merfish/test_roundalignment.py
 src/wf_merfish/test_stitching.py
+src/wf_merfish/test_adaptive_filter.py
 hot_pixel_image.tif
 src/wf_merfish/utils/__pycache__/_dataio.cpython-310.pyc
 src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
