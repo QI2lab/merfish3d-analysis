@@ -114,3 +114,4 @@ src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
 *.csv
 src/wf_merfish/test_decoding.py
 src/wf_merfish/test_registration.py
+src/wf_merfish/test_adaptive_filter.py

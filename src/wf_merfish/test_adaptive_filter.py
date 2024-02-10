@@ -15,7 +15,7 @@ bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
 
 physical_spacing=[.31,.088,.088]
 
-decode_results_path = localization_dir_path / Path(tile_ids[0]) / Path("decoded.parquet")
+decode_results_path = localization_dir_path / Path(tile_ids[0]) / Path("decoded_nomask.parquet")
 df_decoded = pd.read_parquet(decode_results_path)
 
 nB = 21
