@@ -115,3 +115,6 @@ src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
 src/wf_merfish/test_decoding.py
 src/wf_merfish/test_registration.py
 src/wf_merfish/test_adaptive_filter.py
+src/wf_merfish/test_sitk_transform.py
+src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
+src/wf_merfish/utils/__pycache__/_dataio.cpython-310.pyc

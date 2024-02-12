@@ -232,8 +232,6 @@ for bit_id in bit_ids:
             current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
             ref_image_sitk = sitk.GetImageFromArray(np.asarray(current_polyDT_channel['registered_data']).astype(np.float32))
             final_shape = ref_image_sitk.GetSize()
-            del ref_image_sitk
-            gc.collect()
             
             rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
             shift_xyz = [float(i) for i in rigid_xform_xyz_um]
@@ -243,7 +241,10 @@ for bit_id in bit_ids:
             of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
             of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
                                                         isVector = True)
-            optical_flow_sitk = sitk.Resample(of_4x_sitk,final_shape)
+            interpolator = sitk.sitkLinear
+            identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+            optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_image_sitk, identity_transform, interpolator,
+                                        0, of_4x_sitk.GetPixelID())
             displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
             del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
             gc.collect()

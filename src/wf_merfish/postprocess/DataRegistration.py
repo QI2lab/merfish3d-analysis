@@ -23,8 +23,7 @@ class DataRegistration:
                  dataset_path: Union[str, Path],
                  overwrite_registered: bool = False,
                  perform_optical_flow: bool = False,
-                 tile_idx: Optional[int] = None,
-                 psf: Optional[NDArray] = None):
+                 tile_idx: Optional[int] = None):
         """
         Retrieve and pre-process one tile from qi2lab 3D widefield zarr structure.
         Apply rigid and optical flow registration transformations if available.
@@ -38,7 +37,7 @@ class DataRegistration:
         """
 
         self._dataset_path = dataset_path
-        self._dataset = zarr.open_group(self._dataset_path)
+        self._polyDT_dir_path = dataset_path / Path("polyDT")
 
         if tile_idx is None:
             tile_idx = 0
@@ -50,10 +49,11 @@ class DataRegistration:
         self._rigid_xforms = None
         self._of_xforms = None
         self._has_registered_data = None
+        self._has_rigid_registrations = False
+        self._has_of_registrations = False
         self._compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
-        blosc.set_nthreads(6)
+        blosc.set_nthreads(12)
         self._overwrite_registered = overwrite_registered
-        self._psf = psf
 
     # -----------------------------------
     # property access for class variables
@@ -175,20 +175,23 @@ class DataRegistration:
         Parse dataset to discover number of tiles, number of rounds, and voxel size.
         """
 
-        polyDT_dir_path = self._dataset_path
-        self._tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
+        self._tile_ids = [entry.name for entry in self._polyDT_dir_path.iterdir() if entry.is_dir()]
         self._num_tiles = len(self._tile_ids)
         self._tile_id = self._tile_ids[self._tile_idx]
 
-        current_tile_dir_path = polyDT_dir_path / Path(self._tile_id)
+        current_tile_dir_path = self._polyDT_dir_path / Path(self._tile_id)
         self._round_ids = [entry.name.split('.')[0]  for entry in current_tile_dir_path.iterdir() if entry.is_dir()]
         round_id = self._round_ids[0]
         current_round_zarr_path = current_tile_dir_path / Path(round_id + ".zarr")
         current_round = zarr.open(current_round_zarr_path,mode='r')
 
         self._voxel_size = np.asarray(current_round.attrs['voxel_zyx_um'], dtype=np.float32)
+        
+        calibrations_dir_path = self._dataset_path / Path('calibrations.zarr')
+        calibrations_zarr = zarr.open(calibrations_dir_path,mode='r')
+        self._psfs = np.asarray(calibrations_zarr['psf_data'],dtype=np.uint16)
 
-        del current_round
+        del current_round, calibrations_zarr
         gc.collect()
 
     def load_raw_data(self):
@@ -205,9 +208,10 @@ class DataRegistration:
         stage_positions = []
         
         for round_id in self._round_ids:
-            current_round_zarr_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+            current_round_zarr_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_zarr_path,mode='r')
-            data_raw.append(np.asarray(current_round['raw_data'], dtype=np.uint16))
+            gain = float(current_round.attrs['gain'])
+            data_raw.append((np.asarray(current_round['raw_data'], dtype=np.float32)/gain).astype(np.uint16))
             stage_positions.append(np.asarray(current_round.attrs['stage_zyx_um'], dtype=np.float32))
 
         self._data_raw = np.stack(data_raw, axis=0)
@@ -215,7 +219,8 @@ class DataRegistration:
         del data_raw, stage_positions, current_round
         gc.collect()
 
-    def load_registered_data(self):
+    def load_registered_data(self,
+                             readouts=False):
         """
         If available, load registered data across rounds.
         """
@@ -225,20 +230,42 @@ class DataRegistration:
             return None
         
         data_registered = []
-        try:
-            for round_id in self._round_ids:
-                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
-                current_round = zarr.open(current_round_path,mode='r')
-                data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
-                        
-            self._data_registered = np.stack(data_registered,axis=0)
-            del data_registered, current_round
-            gc.collect()
-            self._has_registered_data = True
+        
+        if not(readouts):
+            try:
+                for round_id in self._round_ids:
+                    current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                    current_round = zarr.open(current_round_path,mode='r')
+                    data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
+                            
+                self._data_registered = np.stack(data_registered,axis=0)
+                del data_registered, current_round
+                gc.collect()
+                self._has_registered_data = True
 
-        except Exception:
-            warnings.warn('Generate registered data first.',UserWarning)
-            return None
+            except Exception:
+                warnings.warn('Generate registered data first.',UserWarning)
+                return None
+        else:
+            try:
+                readout_dir_path = self._dataset_path / Path('readouts')
+                tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+                tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
+                self._bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+                
+                for bit_id in self._bit_ids:
+                    tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
+                    bit_dir_path = tile_dir_path / Path(bit_id)
+                    current_bit = zarr.open(bit_dir_path,mode='r')
+                    data_registered.append(np.asarray(current_bit["registered_data"], dtype=np.uint16))
+                    
+                self._data_registered = np.stack(data_registered,axis=0)
+                del data_registered, current_round
+                gc.collect()
+                self._has_registered_data = True
+            except Exception:
+                warnings.warn('Generate registered data first.',UserWarning)
+                return None
  
     def generate_registrations(self):
         """
@@ -257,12 +284,12 @@ class DataRegistration:
         lib = getlib()
             
         ref_image_decon = richardson_lucy_nc(np.asarray(self._data_raw[0,:]),
-                                            psf=self._psf,
+                                            psf=self._psfs[0,:],
                                             numiterations=40,
                                             regularizationfactor=.001,
                                             lib=lib)
                 
-        current_round_path = self._dataset_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
+        current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
         current_round = zarr.open(current_round_path,mode='a')
         
         try:
@@ -283,7 +310,7 @@ class DataRegistration:
 
         for r_idx, round_id in enumerate(self._round_ids[1:]):
             r_idx = r_idx + 1
-            current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+            current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_path,mode='a')                
                 
             mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
@@ -394,8 +421,10 @@ class DataRegistration:
                 
                 of_4x_sitk = sitk.GetImageFromArray(of_xform_4x.transpose(1, 2, 3, 0).astype(np.float64),
                                                         isVector = True)
-                final_shape = mov_image_sitk.GetSize()
-                optical_flow_sitk = sitk.Resample(of_4x_sitk,final_shape)
+                interpolator = sitk.sitkLinear
+                identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+                optical_flow_sitk = sitk.Resample(of_4x_sitk, mov_image_sitk, identity_transform, interpolator,
+                                            0, of_4x_sitk.GetPixelID())
                 displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
                 del of_4x_sitk, of_xform_4x
                 gc.collect()
@@ -423,96 +452,101 @@ class DataRegistration:
         del ref_image_sitk
         gc.collect()
                 
-    def apply_registrations(self):
+    def apply_registration_to_bits(self):
         """
         Generate registered data and save to zarr.
         """
-        
+       
         if self._tile_idx is None:
             print('Set tile position first.')
             print('e.g. DataLoader.tile_idx = 0')
             return None
-        
-        if self._data_raw is None:
-            self.load_raw_data()
-        
+               
         if not(self._has_rigid_registrations):
             self.load_rigid_registrations()
             if not(self._has_rigid_registrations):
-                self.generate_registrations()
-                self.load_rigid_registrations()
+                raise Exception("Create rigid registrations first.")
 
         if self._perform_optical_flow and not(self._has_of_registrations):
             self.load_opticalflow_registrations()
             if not(self._has_of_registrations):
-                self.generate_registrations()
-                self.load_opticalflow_registrations()
+                raise Exception("Create vector field registrations first.")
+            
+
+        readout_dir_path = self._dataset_path / Path('readouts')
+        tile_dir_path = readout_dir_path / Path(self._tile_id)
+        bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
                 
         lib = getlib()
-  
-        for r_idx, round_id in enumerate(self._round_ids):
-            current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
-            current_round = zarr.open(current_round_path,mode='a')
+        
+        tile_dir_path = readout_dir_path / Path(self._tile_id)
+        
+        for bit_id in bit_ids:
+            bit_dir_path = tile_dir_path / Path(bit_id)
+            current_bit_channel = zarr.open(bit_dir_path,mode='a')      
+            r_idx = int(current_bit_channel.attrs['round'])
+            psf_idx = int(current_bit_channel.attrs['psf_idx'])
+            gain = float(current_bit_channel.attrs['gain'])
             
-            if r_idx == 0:
-                ref_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
-                                                     psf=self._psf,
-                                                     numiterations=100,
-                                                     regularizationfactor=.001,
-                                                     lib=lib)
-                data_registered = ref_image_decon.copy()
-                ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
-                del ref_image_decon
+            raw_data = np.asarray(current_bit_channel['raw_data']).astype(np.float32)/gain
+                        
+            decon_bit_image = richardson_lucy_nc(raw_data.astype(np.uint16),
+                                                psf=self._psfs[psf_idx,:],
+                                                numiterations=40,
+                                                regularizationfactor=.0001,
+                                                lib=lib)
+            
+            del raw_data
+            gc.collect()
+                
+            if r_idx > 0:        
+                polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
+                current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
                 gc.collect()
+                
+                rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
+                shift_xyz = [float(i) for i in rigid_xform_xyz_um]
+                xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
+                
+                of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
+                of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
+                                                            isVector = True)
+                interpolator = sitk.sitkLinear
+                identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+                optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_decon_bit_sitk, identity_transform, interpolator,
+                                            0, of_4x_sitk.GetPixelID())
+                displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+                del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
+                gc.collect()
+                
+                decon_bit_image_sitk = apply_transform(ref_decon_bit_sitk,
+                                                        sitk.GetImageFromArray(decon_bit_image.astype(np.float32)),
+                                                        xyx_transform)
+               # apply optical flow 
+                decon_bit_image_sitk = sitk.Resample(decon_bit_image_sitk,displacement_field)
+                data_registered = sitk.GetArrayFromImage(decon_bit_image_sitk).astype(np.uint16)
+                del decon_bit_image_sitk
+                gc.collect()
+                
             else:
-                mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
-                                                     psf=self._psf,
-                                                     numiterations=100,
-                                                     regularizationfactor=.001,
-                                                     lib=lib)
-                
-                mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
-                rigid_xform = self._rigid_xforms[(r_idx-1),:]
-                total_shift_xyz = [float(i) for i in rigid_xform]
-                final_transform = sitk.TranslationTransform(3, total_shift_xyz)
-
-                mov_translation_sitk = apply_transform(ref_image_sitk,
-                                                       mov_image_sitk,
-                                                       final_transform)
-                
-                del final_transform, mov_image_decon
-                gc.collect()
-
-                if self.perform_optical_flow:
-                    of_xform_4x = self._of_xforms[(r_idx-1),:]
-                    # prepare 4x downsample optical flow for sitk, upsample, and create transform
-                    of_4x_sitk = sitk.GetImageFromArray(of_xform_4x.transpose(1, 2, 3, 0).astype(np.float64),
-                                                        isVector = True)
-                    final_shape = mov_translation_sitk.GetSize()
-                    optical_flow_sitk = sitk.Resample(of_4x_sitk,final_shape)
-                    displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                    del of_4x_sitk, of_xform_4x
-                    gc.collect()
-                    
-                    # apply optical flow 
-                    mov_translation_sitk = sitk.Resample(mov_translation_sitk,displacement_field)
-
-                    del optical_flow_sitk, displacement_field
-                    gc.collect()
-
-                data_registered = sitk.GetArrayFromImage(mov_translation_sitk).astype(np.uint16)
-                del mov_translation_sitk
+                ref_decon_bit_sitk = sitk.GetImageFromArray(decon_bit_image.astype(np.float32))
+                data_registered = decon_bit_image.copy()
+            
+            del decon_bit_image
+            gc.collect()
 
             try:
-                data_reg_zarr = current_round.zeros('registered_data',
-                                                shape=data_registered.shape,
-                                                chunks=(1,data_registered.shape[1],data_registered.shape[2]),
-                                                compressor=self._compressor,
-                                                dtype=np.uint16)
+                data_reg_zarr = current_bit_channel.zeros('registered_data',
+                                                        shape=data_registered.shape,
+                                                        chunks=(1,data_registered.shape[1],data_registered.shape[2]),
+                                                        compressor=self._compressor,
+                                                        dtype=np.uint16)
             except Exception:
-                data_reg_zarr = current_round['registered_data']
+                data_reg_zarr = current_bit_channel['registered_data']
             
             data_reg_zarr[:] = data_registered
+            del data_registered
+            gc.collect()
             
         del lib
                 
@@ -531,7 +565,7 @@ class DataRegistration:
 
         try:
             for round_id in self._round_ids[1:]:
-                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
                 current_round = zarr.open(current_round_path,mode='r')
                 
                 rigid_xform.append(np.asarray(current_round.attrs['rigid_xform_xyz_um'],dtype=np.float32))
@@ -553,7 +587,7 @@ class DataRegistration:
 
         try:
             for round_id in self._round_ids[1:]:
-                current_round_path = self._dataset_path / Path(self._tile_id) / Path(round_id + ".zarr")
+                current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
                 current_round = zarr.open(current_round_path,mode='r')
                 
                 of_xform.append(np.asarray(current_round['of_xform_4x'],dtype=np.float32))
@@ -737,7 +771,8 @@ class DataRegistration:
     #     del ordered_data, dask_writer, self._data_registered
     #     gc.collect()
 
-    def _create_figure(self):
+    def _create_figure(self,
+                       readouts=False):
         """
         Generate napari figure for debugging
         """
@@ -752,7 +787,10 @@ class DataRegistration:
         app = QApplication.instance()
 
         app.lastWindowClosed.connect(on_close_callback)
-        viewer.window._qt_window.setWindowTitle(self._tile_ids[self._tile_idx] + ' alignment aross rounds')
+        if not(readouts):
+            viewer.window._qt_window.setWindowTitle(self._tile_ids[self._tile_idx] + ' alignment aross rounds')
+        else:
+            viewer.window._qt_window.setWindowTitle(self._tile_ids[self._tile_idx] + ' alignment aross bits')
         
         colormaps = [Colormap('cmap:white'),
                      Colormap('cmap:cyan'),
@@ -773,12 +811,21 @@ class DataRegistration:
                      Colormap('chrisluts:OPF_Orange'),
                      Colormap('cmap:magenta')]
         
-        for idx in range(len(self._round_ids)):
-            viewer.add_image(data=self._data_registered[idx],
-                             name=self._round_ids[idx],
-                             scale=self._voxel_size,
-                             blending='additive',
-                             colormap=colormaps[idx].to_napari(),
-                             contrast_limits=[200,10000])
+        if not(readouts):
+            for idx in range(len(self._round_ids)):
+                viewer.add_image(data=self._data_registered[idx],
+                                name=self._round_ids[idx],
+                                scale=self._voxel_size,
+                                blending='additive',
+                                colormap=colormaps[idx].to_napari(),
+                                contrast_limits=[200,10000])
+        else:
+            for idx in range(len(self._bit_ids)):
+                viewer.add_image(data=self._data_registered[idx],
+                                name=self._bit_ids[idx],
+                                scale=self._voxel_size,
+                                blending='additive',
+                                colormap=colormaps[idx].to_napari(),
+                                contrast_limits=[200,10000])
 
         napari.run()

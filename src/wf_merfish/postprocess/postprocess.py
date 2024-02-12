@@ -66,6 +66,8 @@ def postprocess(correction_option: str,
     axial_step = .310 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
     binning = 2
+    pixel_size = np.round(pixel_size*binning,3)
+    gain = 27
     num_r = df_metadata['num_r']
     num_tiles = df_metadata['num_xyz']
     chan_dpc1_active = df_metadata['dpc1_active']
@@ -193,19 +195,20 @@ def postprocess(correction_option: str,
     calibrations_zarr.attrs['experiment_order'] = bit_order_df.values.tolist()
 
     # helpful metadata needed by registration and decoding classes so they don't have to traverse nested zarr groups   
-    calibrations_zarr.attrs["num_rounds"] = num_r
-    calibrations_zarr.attrs["num_tiles"] = num_tiles
+    calibrations_zarr.attrs["num_rounds"] = int(num_r)
+    calibrations_zarr.attrs["num_tiles"] = int(num_tiles)
     calibrations_zarr.attrs["channels_in_data"] = channels_in_data
-    calibrations_zarr.attrs["tile_overlap"] = tile_overlap
-    calibrations_zarr.attrs["binning"] = 2
+    calibrations_zarr.attrs["tile_overlap"] = float(tile_overlap)
+    calibrations_zarr.attrs["binning"] = int(binning)
+    calibrations_zarr.attrs["gain"] = float(gain)
     
-    
+
     # generate and save PSFs
     channel_psfs = []
     for channel_id in channels_in_data:
         channel_psfs.append(make_psf(z=33,
                             nx=33,
-                            dxy=pixel_size*binning,
+                            dxy=pixel_size,
                             dz=axial_step,
                             NA=1.35,
                             wvl=em_wavelengths[channel_id],
@@ -341,12 +344,15 @@ def postprocess(correction_option: str,
                                 current_channel = polydT_round_zarr
                                 current_channel.attrs['bits'] = bit_order[r_idx,:].tolist()
                                 current_channel.attrs["tile_overlap"] = tile_overlap
+                                current_channel.attrs["psf_idx"] = int(0)
                             elif channel_id == 'F-Yellow':
                                 current_channel = yellow_bit_zarr
                                 current_channel.attrs['round'] = int(r_idx)
+                                current_channel.attrs["psf_idx"] = int(1)
                             elif channel_id == 'F-Red':
                                 current_channel = red_bit_zarr
                                 current_channel.attrs['round'] = int(r_idx)
+                                current_channel.attrs["psf_idx"] = int(2)
                                 
                             if shading_flag:
                                 raw_data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
@@ -362,6 +368,7 @@ def postprocess(correction_option: str,
                             current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                             current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
                             current_channel.attrs['excitation_um'] = float(ex_wvl)
+                            current_channel.attrs['gain'] = float(gain)
                             current_channel.attrs['emission_um'] = float(em_wvl)
                             current_channel.attrs['exposure_ms'] = float(exposure_ms)
                             current_channel.attrs['hotpixel'] = bool(hotpixel_flag)
@@ -395,17 +402,13 @@ def postprocess(correction_option: str,
         from wf_merfish.postprocess.DataRegistration import DataRegistration
 
         for tile_idx in range(num_tiles):
-            data_register_factory = DataRegistration(dataset_path=polyDT_output_dir_path,
-                                                        overwrite_registered=False,
-                                                        perform_optical_flow=run_optical_flow,
-                                                        tile_idx=tile_idx,
-                                                        psf=channel_psfs[0,:])
+            data_register_factory = DataRegistration(dataset_path=output_dir_path,
+                                                    overwrite_registered=False,
+                                                    perform_optical_flow=run_optical_flow,
+                                                    tile_idx=tile_idx)
 
             data_register_factory.generate_registrations()
-            # data_register_factory.load_rigid_registrations()
-            # if run_optical_flow:
-            #     data_register_factory.load_opticalflow_registrations()
-            # data_register_factory.apply_registrations()
+            data_register_factory.apply_registration_to_bits()
 
             progress_updates['PolyDT Tile'] = ((tile_idx+1) / num_tiles) * 100
             yield progress_updates
@@ -443,8 +446,8 @@ def postprocess(correction_option: str,
                                                 dtype=np.float32)
 
             scale = {'z': voxel_zyx_um[0],
-                    'y': np.round(voxel_zyx_um[1]*2,3),
-                    'x': np.round(voxel_zyx_um[2]*2,3)}
+                    'y': voxel_zyx_um[1],
+                    'x': voxel_zyx_um[2]}
             
             tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
                                                 dtype=np.float32)
@@ -508,8 +511,8 @@ def postprocess(correction_option: str,
 
         for imsim, msim in enumerate(msims):
             affine = np.array(msi_utils.get_transform_from_msim(msim, transform_key='affine_registered')[0])
-            polyDT_current__path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current__path,mode='a')
+            polyDT_current_path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
+            polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
             polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
             del polyDT_current_tile
 
@@ -523,25 +526,40 @@ def postprocess(correction_option: str,
                 transform_key='affine_registered',
                 output_chunksize=128
                 )
+            
+        stitched_output_zarr = zarr.open(stitched_output_path,mode='a')
+        current_stitched_data = stitched_output_zarr.zeros('fused_data',
+                                                    shape=(fused.shape[0],fused.shape[1],fused.shape[2]),
+                                                    chunks=(128,128,128),
+                                                    compressor=compressor,
+                                                    dtype=np.uint16)
+        
+        current_stitched_data[:] = fused
+        
+        del fused
+        gc.collect()
+        current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
+        
+        
 
-        with dask.diagnostics.ProgressBar():
+        # with dask.diagnostics.ProgressBar():
 
-            fused_ngff = ngff_utils.sim_to_ngff_image(
-                fused,
-                transform_key='affine_registered')
+        #     fused_ngff = ngff_utils.sim_to_ngff_image(
+        #         fused,
+        #         transform_key='affine_registered')
 
-            fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,
-                                                              scale_factors=[],
-                                                              chunks=128)
+        #     fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,
+        #                                                       scale_factors=[],
+        #                                                       chunks=128)
 
-            ngff_zarr.to_ngff_zarr(
-                stitched_output_path,
-                fused_ngff_multiscales,
-                )
+        #     ngff_zarr.to_ngff_zarr(
+        #         stitched_output_path,
+        #         fused_ngff_multiscales,
+        #         )
     
 if __name__ == '__main__':
     
-    data_path = Path('/mnt/opm3/20240104_ECL_control6_unamp')
+    data_path = Path('/mnt/opm3/')
     codebook_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
     exp_order_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
 

@@ -128,11 +128,11 @@ def create_gui():
             layout.extend([label, bar])
 
         # Add additional progress bars for specific options
-        if stitching_options.get('Register polyDT each tile across rounds'):
-            layout.extend([Label(value="PolyDT Tile", visible=True), 
+        if stitching_options.get('Register polyDT/readouts within tile'):
+            layout.extend([Label(value="Tile", visible=True), 
                         ProgressBar(value=0, max=100, visible=True)])
-        if stitching_options.get('Register polyDT all tiles first round'):
-            layout.extend([Label(value="PolyDT Round", visible=True), 
+        if stitching_options.get('Register polyDT across tiles'):
+            layout.extend([Label(value="Fusion", visible=True), 
                         ProgressBar(value=0, max=100, visible=True)])
 
         noise_map_path = noise_map_selector.value if validate_tiff_file(noise_map_selector.value) else None
