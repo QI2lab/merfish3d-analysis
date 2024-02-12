@@ -30,19 +30,19 @@ for bit_id in bit_ids:
 
         voxel_zyx_um = np.asarray(current_channel.attrs['voxel_zyx_um']).astype(np.float32)
         em_wvl = float(current_channel.attrs['emission_um'])
-        data = np.asarray(current_channel['raw_data']).astype(np.uint16)
+        data = np.asarray(current_channel['registered_data']).astype(np.uint16)
         viewer = napari.Viewer()
         app = QApplication.instance()
 
         app.lastWindowClosed.connect(on_close_callback)
-        viewer.window._qt_window.setWindowTitle(tile_id + '; ' + bit_id + '; round'+ str(current_channel.attrs['round']).zfill(2))
+        viewer.window._qt_window.setWindowTitle(tile_id + '; ' + bit_id + '; round'+ str(current_channel.attrs['round']+1).zfill(2))
         viewer.add_image(data)
 
         dock_widget, plugin_widget = viewer.window.add_plugin_dock_widget("napari-spot-detection", "Spot detection")
 
         plugin_widget.txt_ri.setText('1.51')
         plugin_widget.txt_lambda_em.setText(str(em_wvl*1000))
-        plugin_widget.txt_dc.setText(str(np.round(voxel_zyx_um[1]*2,3)))
+        plugin_widget.txt_dc.setText(str(np.round(voxel_zyx_um[1])))
         plugin_widget.txt_dstage.setText(str(voxel_zyx_um[0]))
         plugin_widget.chk_skewed.setChecked(True)
         plugin_widget.chk_skewed.setChecked(False)
@@ -52,8 +52,7 @@ for bit_id in bit_ids:
         plugin_widget.but_load_model.click()
         plugin_widget.txt_deconv_iter.setText('40')
         plugin_widget.txt_deconv_tvtau.setText('.0001')
-        plugin_widget.but_run_deconvolution.click()
-        plugin_widget.cbx_dog_choice.setCurrentIndex(0)
+        plugin_widget.cbx_dog_choice.setCurrentIndex(1)
         plugin_widget.but_dog.click()
         plugin_widget.cbx_find_peaks_source.setCurrentIndex(0)
         viewer.reset_view()
@@ -127,7 +126,6 @@ def parse_localization_parameters(path_localization_params_file: Path):
     return microscope_params, metadata, decon_params, DoG_filter_params, find_candidates_params, fit_candidate_spots_params, spot_filter_params, chained
         
 from spots3d.SPOTS3D import SPOTS3D
-from psfmodels import make_psf
 
 del readout_dir_path, tile_dir_path, bit_ids
 
@@ -136,6 +134,12 @@ tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
 bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
 
+calibrations_dir_path = data_dir_path / Path('calibrations.zarr')
+calibrations_zarr = zarr.open(calibrations_dir_path,mode='r')
+psfs =  np.asarray(calibrations_zarr['psf_data'],dtype=np.uint16)
+
+del calibrations_zarr
+
 for bit_id in bit_ids:
         
     path_localization_params_file = data_dir_path / Path('localizations') / Path(tile_ids[0]) / Path(bit_id).stem / Path ('localization_parameters.json')
@@ -143,18 +147,7 @@ for bit_id in bit_ids:
     microscope_params, metadata, decon_params, DoG_filter_params,\
         find_candidates_params, fit_candidate_spots_params, spot_filter_params,\
         chained = parse_localization_parameters(path_localization_params_file)
-        
-    psf = make_psf(z=9,
-            nx=15,
-            dxy=metadata['pixel_size'],
-            dz=metadata['scan_step'],
-            NA=1.35,
-            wvl=metadata['wvl'],
-            ns=1.33,
-            ni=1.51,
-            ni0=1.51,
-            model='vectorial')
-        
+                
     for tile_id in tile_ids:
         
         print(bit_id,tile_id)
@@ -171,10 +164,11 @@ for bit_id in bit_ids:
         
         if not(test_path.exists()):
             
-            data = np.asarray(current_channel['raw_data']).astype(np.uint16)
+            data = np.asarray(current_channel['registered_data']).astype(np.uint16)
+            psf_idx = int(current_channel.attrs['psf_idx'])
              
             spots3d = SPOTS3D(data=data,
-                            psf=psf,
+                            psf=psfs[psf_idx,:],
                             metadata=metadata,
                             microscope_params=microscope_params,
                             scan_chunk_size=128,
@@ -185,12 +179,9 @@ for bit_id in bit_ids:
                             spot_filter_params=spot_filter_params,
                             chained=chained)
                             
-            spots3d.dog_filter_source_data = 'decon'
+            spots3d.dog_filter_source_data = 'raw'
             spots3d.find_candidates_source_data = 'dog'
-            
-            spots3d.run_deconvolution()
 
-            spots3d.scan_chunk_size = 8
             spots3d.run_DoG_filter()
             spots3d.scan_chunk_size = 128
             spots3d.run_find_candidates()

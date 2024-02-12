@@ -211,7 +211,7 @@ class DataRegistration:
             current_round_zarr_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_zarr_path,mode='r')
             gain = float(current_round.attrs['gain'])
-            data_raw.append((np.asarray(current_round['raw_data'], dtype=np.float32)/gain).astype(np.uint16))
+            data_raw.append(np.asarray(current_round['raw_data']).astype(np.uint16))
             stage_positions.append(np.asarray(current_round.attrs['stage_zyx_um'], dtype=np.float32))
 
         self._data_raw = np.stack(data_raw, axis=0)
@@ -286,7 +286,7 @@ class DataRegistration:
         ref_image_decon = richardson_lucy_nc(np.asarray(self._data_raw[0,:]),
                                             psf=self._psfs[0,:],
                                             numiterations=40,
-                                            regularizationfactor=.001,
+                                            regularizationfactor=.0001,
                                             lib=lib)
                 
         current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
@@ -311,12 +311,13 @@ class DataRegistration:
         for r_idx, round_id in enumerate(self._round_ids[1:]):
             r_idx = r_idx + 1
             current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
-            current_round = zarr.open(current_round_path,mode='a')                
+            current_round = zarr.open(current_round_path,mode='a')
+            psf_idx = current_round.attrs["psf_idx"]
                 
             mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:],
-                                            psf=self._psf,
+                                            psf=self._psfs[psf_idx,:],
                                             numiterations=40,
-                                            regularizationfactor=.001,
+                                            regularizationfactor=.0001,
                                             lib=lib)
 
             mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
@@ -487,17 +488,12 @@ class DataRegistration:
             r_idx = int(current_bit_channel.attrs['round'])
             psf_idx = int(current_bit_channel.attrs['psf_idx'])
             gain = float(current_bit_channel.attrs['gain'])
-            
-            raw_data = np.asarray(current_bit_channel['raw_data']).astype(np.float32)/gain
                         
-            decon_bit_image = richardson_lucy_nc(raw_data.astype(np.uint16),
+            decon_bit_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']).astype(np.uint16),
                                                 psf=self._psfs[psf_idx,:],
                                                 numiterations=40,
                                                 regularizationfactor=.0001,
                                                 lib=lib)
-            
-            del raw_data
-            gc.collect()
                 
             if r_idx > 0:        
                 polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
