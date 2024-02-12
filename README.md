@@ -88,6 +88,11 @@ Acquisition and post-processing for qi2lab widefield MERFISH
       
 ## Installation
 
+First, install [spots3d](https://github.com/QI2lab/spots3d) and [napari-spot-localization](https://github.com/QI2lab/napari-spot-detection). Both repositories have installation instructions.
+
+Activate the environment that you created for spots3d and napari-spot-detection, clone this repository using
+```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
+
 On MacOS, if you have issues building `deeds`, run:
 ```bash
 brew install llvm libomp
