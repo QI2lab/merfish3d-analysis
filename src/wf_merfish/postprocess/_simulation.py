@@ -238,18 +238,23 @@ def build_rdn(coords, r, coords_ref=None, **kwargs):
     """
     
     tree = BallTree(coords, **kwargs)
-    if coords_ref is None:
-        ind = tree.query_radius(coords, r=r)
-    else:
-        ind = tree.query_radius(coords_ref, r=r)
-    # clean arrays of neighbors from self referencing neighbors
-    # and aggregate at the same time
     source_nodes = []
     target_nodes = []
-    for i, arr in enumerate(ind):
-        neigh = arr[arr != i]
-        source_nodes.append([i]*(neigh.size))
-        target_nodes.append(neigh)
+    if coords_ref is None:
+        ind = tree.query_radius(coords, r=r)
+        # clean arrays of neighbors from self referencing neighbors
+        # and aggregate at the same time
+        for i, arr in enumerate(ind):
+            neigh = arr[arr != i]
+            source_nodes.append([i]*(neigh.size))
+            target_nodes.append(neigh)
+    else:
+        ind = tree.query_radius(coords_ref, r=r)
+        # here no need to clean arrays of neighbors from 
+        # self referencing neighbors
+        for i, neigh in enumerate(ind):
+            source_nodes.append([i]*(neigh.size))
+            target_nodes.append(neigh)
     # flatten arrays of arrays
     source_nodes = np.fromiter(itertools.chain.from_iterable(source_nodes), int).reshape(-1,1)
     target_nodes = np.fromiter(itertools.chain.from_iterable(target_nodes), int).reshape(-1,1)
