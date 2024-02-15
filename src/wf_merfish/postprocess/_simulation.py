@@ -181,6 +181,252 @@ def generate_barcoded_spots(species, n_spots, tile_shape, codebook, noise=None, 
         return coords, true_coords
 
 
+def add_drift_per_round(coords, magnitudes, directions, random_mags=True, 
+                        col_rounds='rounds', col_coords=['z', 'y', 'x'],
+                        return_shifts=False):
+    """
+    Add a common shift to spots positions for each round.
+    
+    Parameters
+    ----------
+    coords : dataframe
+        Spots coordinates with z/y/x and rounds variables.
+    magnitudes : float or list or array
+        Length of displacement of spots per round.
+    directions : list(tuple) or list(None)
+        Directional constrains if tuple, or no constrain is None for each round.
+    random_mags : bool
+        If True, shifts magnitudes are drawn from a uniform distribution between
+        0 and the element of `magnitudes` of each round, else it is this element.
+    return_shifts : bool
+        If True, shifts for all rounds are returned.
+        
+    Returns
+    -------
+    coords_shifted : dataframe
+        Spots coordinates that have been shifted
+    """
+    
+    coords_shifted = coords.copy()
+    all_shifts = {}
+    
+    sorted_rounds = np.sort(coords[col_rounds].unique())        
+    for r_idx in sorted_rounds:
+        select = coords[col_rounds] == r_idx
+        data = coords.loc[select, col_coords].values
+        
+        if isinstance(magnitudes, (list, np.ndarray, dict)):
+            magnitude = magnitudes[r_idx]
+        else:
+            magnitude = magnitudes
+            
+        if isinstance(directions, (list, np.ndarray, dict)):
+            direction = directions[r_idx]
+        else:
+            direction = directions
+            
+        if isinstance(random_mags, (list, np.ndarray, dict)):
+            random_mag = random_mag[r_idx]
+        else:
+            random_mag = random_mags
+        
+        if magnitude == 0:
+            shift = np.zeros(3)
+        else:
+            if random_mag:
+                magnitude = 2 * (np.random.random() - 0.5) * magnitude
+                
+            if direction is None:
+                # generate random 3D vector
+                direction = np.random.random(3)
+            direction = direction / np.linalg.norm(direction)
+            
+            # make 3D vector to shift z, y, x coordinates
+            shift = magnitude * direction
+            
+            data += shift
+            coords_shifted.loc[select, col_coords] = data
+        
+        if return_shifts:
+            all_shifts[r_idx] = shift
+    
+    if return_shifts:
+        return coords_shifted, all_shifts
+    return coords_shifted
+
+
+def add_false_positives_per_round(coords, proportions, random_props=True, 
+                                  col_rounds='rounds', col_coords=['z', 'y', 'x']):
+    """
+    Add single spots for each round.
+    
+    Parameters
+    ----------
+    coords : dataframe
+        Spots coordinates with z/y/x and rounds variables.
+    proportions : float or list or array
+        Proportions of false positive spots added per round.
+    random_props : bool or list or array
+        If True, random_props are drawn from a uniform distribution between
+        0 and the element of `random_props` of each round, else it is this element.
+        
+    Returns
+    -------
+    coords_fp : dataframe
+        False positives spots coordinates.
+    """
+        
+    sorted_rounds = np.sort(coords[col_rounds].unique())
+    rounds = []
+    all_fp_coords = []
+    for r_idx in sorted_rounds:
+        select = coords[col_rounds] == r_idx
+        data = coords.loc[select, col_coords].values
+        
+        if isinstance(proportions, (list, np.ndarray, dict)):
+            proportion = proportions[r_idx]
+        else:
+            proportion = proportions
+            
+        if isinstance(random_props, (list, np.ndarray, dict)):
+            random_prop = random_props[r_idx]
+        else:
+            random_prop = random_props
+        
+        if proportion > 1:
+            n_fp = proportion
+        else:
+            if random_prop:
+                proportion = np.random.random() * proportion
+            n_fp = int(select.sum() * proportion)
+        
+        fp_coords = []
+        for i in range(3):
+            mini = data[:, i].min()
+            maxi = data[:, i].max()
+            diff = maxi - mini
+            position = mini + np.random.random(n_fp) * diff
+            fp_coords.append(position)
+        rounds.extend([r_idx] * n_fp)
+        fp_coords = np.vstack(fp_coords).T
+        all_fp_coords.append(fp_coords)
+    
+    all_fp_coords = np.vstack(all_fp_coords)
+    fp_coords = pd.DataFrame(data=all_fp_coords, columns=col_coords)
+    fp_coords[col_rounds] = rounds
+    
+    return fp_coords
+
+
+def update_simulated_coords_from_drift(coords, shifts, codebook, col_rounds='rounds', 
+                                       col_spec='species', col_coords=['z', 'y', 'x']):
+    """
+    Shift coordinates of 'true' molecules given the shifts applied to their
+    corresponding simulated spots at different rounds.
+    
+    Parameters
+    ----------
+    coords : dataframe
+        Spots coordinates with z/y/x, rounds and species.
+    shifts : ndarray
+        Shifts per round, of shape n_rounds x 3.
+    codebook : dict(str)
+        Sequences encoding species identites across rounds.
+        
+    Returns
+    -------
+    coords_shifted : dataframe
+        Spots coordinates that have been shifted
+    """
+    
+    coords_shifted = coords.copy()
+    
+    for spec in coords[col_spec].unique():
+        # get rounds in which the species appears
+        spec_code = codebook[spec]
+        spec_rounds = [idx for idx, var in enumerate(spec_code) if int(var) == 1]
+        # compute the mean shift across rounds
+        spec_shifts = np.vstack([shifts[round].reshape((1, -1)) for round in spec_rounds])
+        mean_shift = spec_shifts.mean(axis=0)
+        # apply mean shift to coordinates
+        select = coords_shifted[col_spec] == spec
+        coords_shifted.loc[select, col_coords] += mean_shift
+    return coords_shifted
+
+
+def add_false_negatives_per_round(coords, proportions, random_props=True, 
+                                  col_rounds='rounds', col_coords=['z', 'y', 'x'],
+                                  return_index=True):
+    """
+    Delete random single spots for each round.
+    
+    Parameters
+    ----------
+    coords : dataframe
+        Spots coordinates with z/y/x and rounds variables.
+    proportions : float or list or array
+        Proportions of false negatives (spots deleted), per round.
+    random_props : bool or list or array
+        If True, random_props are drawn from a uniform distribution between
+        0 and the element of `random_props` of each round, else it is this element.
+    return_index : bool
+        If True, the indices of kept spots are returned.
+        
+    Returns
+    -------
+    fn_coords : dataframe
+        Initial coordinates with some deleted lines.
+    
+    Example
+    -------
+    >>> coords = np.arange(4*4*3).reshape((4*4, 3))
+    >>> rounds = np.repeat([0, 1, 2, 3], 4)
+    >>> coords = pd.DataFrame(data=coords, columns=['z', 'y', 'x'])
+    >>> coords['rounds'] = rounds
+    >>> add_false_negatives_per_round(coords, proportions=0.5, 
+                                      random_props=False, return_index=False)
+    """
+        
+    sorted_rounds = np.sort(coords[col_rounds].unique())
+    rounds = []
+    all_fn_coords = []
+    for r_idx in sorted_rounds:
+        select = coords[col_rounds] == r_idx
+        data = coords.loc[select, :]
+        
+        if isinstance(proportions, (list, np.ndarray, dict)):
+            proportion = proportions[r_idx]
+        else:
+            proportion = proportions
+            
+        if isinstance(random_props, (list, np.ndarray, dict)):
+            random_prop = random_props[r_idx]
+        else:
+            random_prop = random_props
+        
+        if proportion > 1:
+            n_fn = proportion
+        else:
+            if random_prop:
+                proportion = np.random.random() * proportion
+            n_fn = int(select.sum() * proportion)
+        
+        select = np.full(len(data), True)
+        select[np.random.choice(range(len(select)), size=n_fn, replace=False)] = False
+        all_fn_coords.append(data.loc[select, :])
+    
+    if return_index:
+        fn_coords = pd.concat(all_fn_coords, axis=0, ignore_index=False)
+        index = fn_coords.index.values
+        fn_coords.index = np.arange(len(fn_coords))
+        return fn_coords, index
+    else:
+        fn_coords = pd.concat(all_fn_coords, axis=0, ignore_index=True)
+        return fn_coords
+
+
+# ------------ Inspect decoding ------------
+
 def remove_duplicate_pairs(pairs):
     """
     Remove redundant rows in a 2D array.
@@ -423,3 +669,104 @@ def make_linkage_stats(linkage, verbose=1, return_stats=True, as_dict=False):
         else:
             stats = n_TP, n_FP, n_FN, n_incorrect, accuracy
         return stats
+
+    
+def make_edges_contributors(
+    spots_coords,
+    decoded_coords,
+    barcodes_selection,
+    spots_combinations,
+    color_species=None,
+):
+    """
+    Gather data to show localized spots contributing to decoded molecules.
+
+    Parameters
+    ----------
+    spots_coords : ndarray
+        Coordinates of localized spots.
+    decoded_coords : ndarray
+        Coordinates of decoded spots.
+    barcodes_selection : ndarray
+        Boolean selector of accapted barcodes.
+    spots_combinations : List[List[int]]
+        List of lists representing the combinations of spots for each barcode.
+    
+    Return
+    ------
+    edges : list[ndarray]
+        List of pairs of coordinates.
+    edges_colors : list(str)
+        Colors of edges.
+    
+    Example
+    -------
+    >>> edges, edges_colors = make_edges_contributors(
+        decoded_coords,
+        optim_results['best_combi'], 
+        optim_results['spots_combinations'], 
+        colors_decoded)
+    """
+    
+    spots_combis = list(itertools.compress(spots_combinations, barcodes_selection))
+    edges = []
+    edges_colors = []
+    if color_species is None:
+        color_species = np.ones(shape=(len(decoded_coords), 4))
+    for bcd_id, bcd_coords in enumerate(decoded_coords.values):
+        for spot_id in spots_combis[bcd_id]:
+            edges.append(np.array([bcd_coords, spots_coords[spot_id]]))
+            edges_colors.append(color_species[bcd_id])
+    return edges, edges_colors
+
+
+def make_edges_linkage(
+    linkage,
+    true_coords,
+    decoded_coords,
+    col_coords=['z', 'y', 'x'],
+):
+    """
+    Gather data to display linked true and decoded species.
+
+    Parameters
+    ----------
+    linkage : dict
+        Arrays of ids of true positives (`perfect_matches`), incorrect matches ,  
+        false negatives (`no_match_true`) and false positives (`no_match_decoded`).
+    
+    Return
+    ------
+    edges : list[ndarray]
+        List of pairs of coordinates.
+    edges_colors : list(str)
+        Colors of edges.
+        
+
+    Example
+    -------
+    >>> edges, edges_colors = make_edges_linkage(
+        linkage,
+        true_coords,
+        decoded_coords)
+    """
+    
+    pairs_keys = ['perfect_matches', 'incorrect_matches']
+    # TODO: find a nice way to display unmatched spots
+    # solo_keys = ['no_match_true', 'no_match_decoded']
+    color_names = {
+        'perfect_matches': 'green', 
+        'incorrect_matches': 'red',
+    }
+    edges = []
+    edges_colors = []
+    # need to convert to arrays
+    tcoords = true_coords[col_coords].values
+    dcoords = decoded_coords[col_coords].values
+    for key in pairs_keys:
+        pairs_ids = linkage[key]
+        linkage_color = color_names[key]
+        for src, trg in pairs_ids:
+            edges.append(np.array([tcoords[src], dcoords[trg]]))
+            edges_colors.append(linkage_color)
+    return edges, edges_colors
