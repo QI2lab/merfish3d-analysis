@@ -18,8 +18,8 @@ def create_gui():
     correction_options = ComboBox(label="Correction Options", choices=["None", "Hotpixel correct", "Flatfield correct"], visible=False)
 
     # Other specific options (initially hidden)
-    other_options = [CheckBox(text='Register polyDT each tile across rounds', visible=False),
-                     CheckBox(text='Register polyDT all tiles first round', visible=False)]
+    other_options = [CheckBox(text='Register polyDT/readouts within tile', visible=False),
+                     CheckBox(text='Register polyDT across tiles', visible=False)]
 
     # Summary label (initially hidden)
     summary_label = Label(value="", visible=False)
@@ -37,6 +37,7 @@ def create_gui():
             csv_files = list(directory_path.glob('*.csv'))
             if csv_files:
                 codebook_selector.visible = True
+                codebook_selector.value = Path(directory_selector.value) / Path('codebook.csv')
                 summary_label.visible = False
             else:
                 summary_label.value = "No CSV file found in the directory."
@@ -46,6 +47,7 @@ def create_gui():
     def handle_codebook_change(event):
         if codebook_selector.value:
             bit_order_selector.visible = True
+            bit_order_selector.value = Path(directory_selector.value) / Path('bit_order.csv')
             summary_label.visible = False
 
     # Function to handle bit order file selection

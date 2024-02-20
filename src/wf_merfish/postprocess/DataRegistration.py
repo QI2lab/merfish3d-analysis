@@ -17,6 +17,9 @@ import SimpleITK as sitk
 from numcodecs import blosc
 from wf_merfish.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform, normalize_histograms
 from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
+import cupy as cp
+from cupy.typing import ArrayLike
+from cucim.skimage.filters import gaussian
 
 class DataRegistration:
     def __init__(self,
@@ -452,6 +455,27 @@ class DataRegistration:
         
         del ref_image_sitk
         gc.collect()
+        
+    @staticmethod
+    def _hp_filter(image,sigma):
+        
+        image_cp = cp.asarray(image)    
+        window_size = 3.0
+        
+        # Apply Gaussian blur using cucim
+        lowpass = gaussian(image_cp, sigma=sigma, mode='reflect', truncate=window_size)
+        
+        # Calculate the high-pass filter result
+        gauss_highpass = image_cp - lowpass
+        
+        # Set to zero where the low-pass image is greater than the original image
+        gauss_highpass[lowpass > image_cp] = 0
+        
+        del image_cp, lowpass
+        cp.get_default_memory_pool().free_all_blocks()
+        gc.collect()
+        
+        return cp.asnumpy(gauss_highpass).astype(np.uint16)
                 
     def apply_registration_to_bits(self):
         """
@@ -488,8 +512,11 @@ class DataRegistration:
             r_idx = int(current_bit_channel.attrs['round'])
             psf_idx = int(current_bit_channel.attrs['psf_idx'])
             gain = float(current_bit_channel.attrs['gain'])
+        
+            hp_image = self._hp_filter(current_bit_channel['raw_data'].astype(np.uint16),
+                                       sigma=(5,3,3))
                         
-            decon_bit_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']).astype(np.uint16),
+            decon_bit_image = richardson_lucy_nc(hp_image,
                                                 psf=self._psfs[psf_idx,:],
                                                 numiterations=40,
                                                 regularizationfactor=.0001,

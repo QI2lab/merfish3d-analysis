@@ -4,7 +4,7 @@ import gc
 
 readout = True
 
-data_dir_path = Path('/mnt/opm3/20240124_OB_Full_MERFISH_UA_3_allrds/processed_v2')
+data_dir_path = Path('/mnt/opm3/20240202_ECL_IMG_GEL2/processed_v2')
 polyDT_dir_path = data_dir_path / Path('polyDT')
 tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
 

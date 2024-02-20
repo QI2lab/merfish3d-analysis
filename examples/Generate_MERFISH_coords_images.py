@@ -49,7 +49,7 @@ add_fp = True      # add spots
 jitter = 0.05
 shift_amp = 0.2 
 prop_fn = 0.1
-prop_fp = 0.1
+prop_fp = .7
 
 # number of image simulations per condition
 # repeat_idxs = np.arange(10)
@@ -57,7 +57,7 @@ prop_fp = 0.1
 repeat_idxs = [0]
 
 # max number of species:
-n_species = 130
+n_species = 121
 
 # add noise to spot coordinates across rounds (old parameter)
 noise = [0, 0]
@@ -73,12 +73,12 @@ overwrite_images = False
 
 # ------ image simulation parameters ------
 
-na = 1.4
+na = 1.35
 ex_wavelength = 0.561
 em_wavelength = 0.58
 ni_design = 1.51
 ni_sample = 1.4
-max_photons = 500
+max_photons = 100
 
 conditions = {
     # 'light-sheet':{
@@ -89,10 +89,10 @@ conditions = {
     #     'gt_oversample': 5,
     # },
     # uncoment to make images for other microscopy setups:
-    'widefield-0.7':{
+    'widefield-0.31':{
         'type': 'widefield',
-        'dz': 0.7,
-        'dxy': 0.108,
+        'dz': 0.31,
+        'dxy': 0.088,
         'use_lightsheet': False,
         'gt_oversample': 5,
     },
@@ -143,7 +143,7 @@ def read_codebook(path_file):
 # ------ Make cell volume ------
 
 # scale = np.array([.115, .115, .115])
-scale = np.array([.7, 0.108, 0.108])
+scale = np.array([.31, 0.088, 0.088])
 
 if simu_object == 'cylinder':
     # FISH spots inside a 10 um diameter, 10 um height cylinder 
@@ -487,7 +487,7 @@ for n_spots in all_n_spots:
 if visualize_images:
     n_spots = 5
     repeat_id = 0
-    condi_name = 'widefield-0.7'
+    condi_name = 'widefield-0.31'
     condi = conditions[condi_name]
     dz = condi['dz']
     dxy = condi['dxy']

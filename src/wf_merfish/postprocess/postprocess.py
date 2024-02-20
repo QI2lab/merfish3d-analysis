@@ -54,9 +54,9 @@ def postprocess(correction_option: str,
     
     for option_name, is_selected in stitching_options.items():
         if is_selected:
-            if option_name == "Register polyDT each tile across rounds":
+            if option_name == "Register polyDT/readouts within tile":
                 round_registration_flag = True
-            elif option_name == "Register polyDT all tiles first round":
+            elif option_name == "Register polyDT across tiles":
                 tile_registration_flag = True
             
     # read metadata for this experiment
@@ -201,8 +201,9 @@ def postprocess(correction_option: str,
     calibrations_zarr.attrs["tile_overlap"] = float(tile_overlap)
     calibrations_zarr.attrs["binning"] = int(binning)
     calibrations_zarr.attrs["gain"] = float(gain)
+    calibrations_zarr.attrs["na"] = float(1.35)
+    calibrations_zarr.attrs["ri"] = float(1.51)
     
-
     # generate and save PSFs
     channel_psfs = []
     for channel_id in channels_in_data:
@@ -520,27 +521,28 @@ def postprocess(correction_option: str,
 
         stitched_output_path = stitched_dir_path / Path("round000_fused.zarr")
 
-        with dask.diagnostics.ProgressBar():
-            fused = fusion.fuse(
-                sims[:],
-                transform_key='affine_registered',
-                output_chunksize=128
-                )
+        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            with dask.diagnostics.ProgressBar():
+                fused = fusion.fuse(
+                    sims[:],
+                    transform_key='affine_registered',
+                    output_chunksize=512
+                    )
+            
+                fused.compute()
             
         stitched_output_zarr = zarr.open(stitched_output_path,mode='a')
         current_stitched_data = stitched_output_zarr.zeros('fused_data',
-                                                    shape=(fused.shape[0],fused.shape[1],fused.shape[2]),
-                                                    chunks=(128,128,128),
+                                                    shape=fused.shape,
+                                                    chunks=(1,1,1,512,512),
                                                     compressor=compressor,
                                                     dtype=np.uint16)
-        
-        current_stitched_data[:] = fused
+
+        current_stitched_data[:] = np.asarray(fused,dtype=np.uint16)
         
         del fused
         gc.collect()
         current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
-        
-        
 
         # with dask.diagnostics.ProgressBar():
 
