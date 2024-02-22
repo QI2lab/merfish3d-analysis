@@ -230,8 +230,8 @@ def postprocess(correction_option: str,
             "Round": 0,
             "Tile": 0,
             "Channel": 0,
-            "Round registration": 0,
-            "First round fusion": 0,
+            "PolyDT Tile": 0,
+            "PolyDT Round": 0,
         }
    
     # loop over all tiles.
@@ -418,146 +418,138 @@ def postprocess(correction_option: str,
 
     if tile_registration_flag:
         
-        import dask.diagnostics
-        import ngff_zarr
-        from multiview_stitcher import (
-            fusion,
-            io,
-            msi_utils,
-            ngff_utils,
-            registration,
-        )
-
-
-        polyDT_output_dir_path = output_dir_path / Path('polyDT')
-
-        msims = []
-
-        stitched_dir_path = output_dir_path / Path('stitched')
-        stitched_dir_path.mkdir(parents=True, exist_ok=True)
-
-        tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
-
-        for tile_idx, tile_id in enumerate(tile_ids):
-            
-            polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
-
-            voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                                dtype=np.float32)
-
-            scale = {'z': voxel_zyx_um[0],
-                    'y': voxel_zyx_um[1],
-                    'x': voxel_zyx_um[2]}
-            
-            tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                                dtype=np.float32)
-            
-            tile_grid_positions = {
-                'z': tile_position_zyx_um[0],
-                'y': tile_position_zyx_um[1],
-                'x': tile_position_zyx_um[2],
-            }
-            
-            overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
-                                                dtype=np.float32)
-
-            im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
-            
-            shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
-            translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
-
-            ngff_im = ngff_zarr.NgffImage(
-                    im_data,
-                    dims=('z', 'y', 'x'),
-                    scale=scale,
-                    translation=translation,
-                    )
-            
-            # These translations match the recorded stage position converted to pixels
-            
-            ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
-
-            zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
-
-            ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
-
-            msim = ngff_utils.ngff_multiscales_to_msim(
-                        ngff_zarr.from_ngff_zarr(zarr_path),
-                        transform_key=io.METADATA_TRANSFORM_KEY)
-
-            msims.append(msim)
-            
-            del polyDT_current_tile
-                
-        # fig, ax = vis_utils.plot_positions(
-        #     msims,
-        #     use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
-        #     transform_key='affine_metadata'
-        #     )
-
-        # plt.show()
-            
-        with dask.diagnostics.ProgressBar():
-
-            params = registration.register(
-                msims,
-                registration_binning={'z': 2, 'y': 4, 'x': 4},
-                reg_channel_index=0,
-                transform_key='affine_metadata',
+        
+        try:
+        
+            import dask.diagnostics
+            import ngff_zarr
+            from multiview_stitcher import (
+                fusion,
+                io,
+                msi_utils,
+                ngff_utils,
+                registration,
             )
             
-        for msim, param in zip(msims, params):
-            msi_utils.set_affine_transform(msim, param, transform_key='affine_registered', base_transform_key='affine_metadata')
+        except:
+            multiview_stither = False
 
-        for imsim, msim in enumerate(msims):
-            affine = np.array(msi_utils.get_transform_from_msim(msim, transform_key='affine_registered')[0])
-            polyDT_current_path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
-            polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
-            del polyDT_current_tile
 
-        sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+        if multiview_stither:
+            polyDT_output_dir_path = output_dir_path / Path('polyDT')
 
-        stitched_output_path = stitched_dir_path / Path("round000_fused.zarr")
+            msims = []
 
-        with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+            stitched_dir_path = output_dir_path / Path('stitched')
+            stitched_dir_path.mkdir(parents=True, exist_ok=True)
+
+            tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
+
+            for tile_idx, tile_id in enumerate(tile_ids):
+                
+                polyDT_current__path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
+                polyDT_current_tile = zarr.open(polyDT_current__path,mode='r')
+
+                voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                                    dtype=np.float32)
+
+                scale = {'z': voxel_zyx_um[0],
+                        'y': voxel_zyx_um[1],
+                        'x': voxel_zyx_um[2]}
+                
+                tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                                    dtype=np.float32)
+                
+                tile_grid_positions = {
+                    'z': tile_position_zyx_um[0],
+                    'y': tile_position_zyx_um[1],
+                    'x': tile_position_zyx_um[2],
+                }
+                
+                overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
+                                                    dtype=np.float32)
+
+                im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
+                
+                shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
+                translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
+
+                ngff_im = ngff_zarr.NgffImage(
+                        im_data,
+                        dims=('z', 'y', 'x'),
+                        scale=scale,
+                        translation=translation,
+                        )
+                
+                # These translations match the recorded stage position converted to pixels
+                
+                ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
+
+                zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
+
+                ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
+
+                msim = ngff_utils.ngff_multiscales_to_msim(
+                            ngff_zarr.from_ngff_zarr(zarr_path),
+                            transform_key=io.METADATA_TRANSFORM_KEY)
+
+                msims.append(msim)
+                
+                del polyDT_current_tile
+                    
+            # fig, ax = vis_utils.plot_positions(
+            #     msims,
+            #     use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
+            #     transform_key='affine_metadata'
+            #     )
+
+            # plt.show()
+                
             with dask.diagnostics.ProgressBar():
-                fused = fusion.fuse(
-                    sims[:],
-                    transform_key='affine_registered',
-                    output_chunksize=512
-                    )
+
+                params = registration.register(
+                    msims,
+                    registration_binning={'z': 2, 'y': 4, 'x': 4},
+                    reg_channel_index=0,
+                    transform_key='affine_metadata',
+                )
+                
+            for msim, param in zip(msims, params):
+                msi_utils.set_affine_transform(msim, param, transform_key='affine_registered', base_transform_key='affine_metadata')
+
+            for imsim, msim in enumerate(msims):
+                affine = np.array(msi_utils.get_transform_from_msim(msim, transform_key='affine_registered')[0])
+                polyDT_current_path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
+                polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
+                polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
+                del polyDT_current_tile
+
+            sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+
+            stitched_output_path = stitched_dir_path / Path("round000_fused.zarr")
+
+            with dask.config.set(**{'array.slicing.split_large_chunks': True}):
+                with dask.diagnostics.ProgressBar():
+                    fused = fusion.fuse(
+                        sims[:],
+                        transform_key='affine_registered',
+                        output_chunksize=512
+                        )
+                
+                    fused.compute()
+                
+            stitched_output_zarr = zarr.open(stitched_output_path,mode='a')
+            current_stitched_data = stitched_output_zarr.zeros('fused_data',
+                                                        shape=fused.shape,
+                                                        chunks=(1,1,1,512,512),
+                                                        compressor=compressor,
+                                                        dtype=np.uint16)
+
+            current_stitched_data[:] = np.asarray(fused,dtype=np.uint16)
             
-                fused.compute()
-            
-        stitched_output_zarr = zarr.open(stitched_output_path,mode='a')
-        current_stitched_data = stitched_output_zarr.zeros('fused_data',
-                                                    shape=fused.shape,
-                                                    chunks=(1,1,1,512,512),
-                                                    compressor=compressor,
-                                                    dtype=np.uint16)
-
-        current_stitched_data[:] = np.asarray(fused,dtype=np.uint16)
-        
-        del fused
-        gc.collect()
-        current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
-
-        # with dask.diagnostics.ProgressBar():
-
-        #     fused_ngff = ngff_utils.sim_to_ngff_image(
-        #         fused,
-        #         transform_key='affine_registered')
-
-        #     fused_ngff_multiscales = ngff_zarr.to_multiscales(fused_ngff,
-        #                                                       scale_factors=[],
-        #                                                       chunks=128)
-
-        #     ngff_zarr.to_ngff_zarr(
-        #         stitched_output_path,
-        #         fused_ngff_multiscales,
-        #         )
+            del fused
+            gc.collect()
+            current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
     
 if __name__ == '__main__':
     

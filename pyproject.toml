@@ -14,12 +14,11 @@ authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
 dynamic = ["version"]
-dependencies = ["numpy<1.25", "tifffile>=2022.7.28", "zarr", "numba<0.58", "pycromanager",
+dependencies = ["numpy", "tifffile, "zarr", "numba", "pycromanager",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
-                "tqdm", "magicgui[pyqt5]", "napari", "pandas<=1.6.0dev0",
-                "scikit-image<0.22.0a0", "acisimageio====4.14.0",
+                "tqdm", "magicgui[pyqt5]", "napari", "pandas",
+                "scikit-image",
                 "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field"]
-                "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main#egg=multiview-stitcher"]
 
 [tool.hatch.version]
 path = "src/wf_merfish/__init__.py"
@@ -38,6 +37,8 @@ test = ["pytest>=6.0"]
 gpu = ["cupy-cuda11x==12.3.0",
        'cucim ; platform_system != "Windows"',
        'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim ; platform_system != "Linux"']
+stitch = ["multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main#egg=multiview-stitcher",
+          "aicsimageio==4.14.0"]
 
 [project.urls]
 Source = "https://github.com/dpshepherd/wf-merfish"
