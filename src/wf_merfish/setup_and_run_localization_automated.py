@@ -9,8 +9,8 @@ def on_close_callback():
     viewer.layers.clear()
     gc.collect()
 
-data_dir_path = Path('/mnt/opm3/20240202_ECL_IMG_GEL2/processed_v2')
-tile_id = 'tile0004'
+data_dir_path = Path('/mnt/opm3/20240214_MouseBrain_UA_NewRO_RK/processed_v2')
+tile_id = 'tile0000'
 readout_dir_path = data_dir_path / Path('readouts')
 tile_dir_path = readout_dir_path / Path(tile_id)
 
@@ -52,6 +52,7 @@ for bit_id in bit_ids:
         plugin_widget.but_load_model.click()
         plugin_widget.txt_deconv_iter.setText('40')
         plugin_widget.txt_deconv_tvtau.setText('.0001')
+        plugin_widget.steps_performed['run_deconvolution'] = True
         plugin_widget.cbx_dog_choice.setCurrentIndex(1)
         plugin_widget.but_dog.click()
         plugin_widget.cbx_find_peaks_source.setCurrentIndex(0)
