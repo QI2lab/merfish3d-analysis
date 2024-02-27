@@ -7,8 +7,11 @@ from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
 from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
+import gc
+import cupy as cp
+from cucim.skimage.filters import gaussian
 
-data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0.2_prop_fn-0.1_prop_fp-0.7')
+data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0_prop_fn-0_prop_fp-0')
 
 codebook_path = data_dir_path / Path('codebook.csv')
 bit_order_path = data_dir_path / Path('bit_order.csv')
@@ -112,10 +115,26 @@ for r_idx in range(num_r):
     
     current_raw_data[:] = raw_data
     
+    image_cp = cp.asarray(raw_data)    
+    window_size = 2.0
+    
+    # Apply Gaussian blur using cucim
+    lowpass = gaussian(image_cp, sigma=(5,3,3), mode='reflect', truncate=window_size)
+    
+    # Calculate the high-pass filter result
+    gauss_highpass = image_cp - lowpass
+    
+    # Set to zero where the low-pass image is greater than the original image
+    gauss_highpass[lowpass > image_cp] = 0
+    
+    del image_cp, lowpass
+    cp.get_default_memory_pool().free_all_blocks()
+    gc.collect()
+            
     
     lib = getlib()
             
-    image_decon = richardson_lucy_nc(raw_data,
+    image_decon = richardson_lucy_nc(cp.asnumpy(gauss_highpass).astype(np.float32),
                                     psf=psf,
                                     numiterations=40,
                                     regularizationfactor=.00001,

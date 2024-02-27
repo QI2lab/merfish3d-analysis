@@ -43,9 +43,9 @@ simu_object = 'cylinder'
 # simu_object = 'tri-cylinder'  # 3 stacked cylinders
 
 add_jitter = False  # random independent shift for each spot
-add_shift = True   # random shift identical per round
-add_fn = True      # delete spots
-add_fp = True      # add spots
+add_shift = False   # random shift identical per round
+add_fn = False      # delete spots
+add_fp = False      # add spots
 jitter = 0.05
 shift_amp = 0.2 
 prop_fn = 0.1
@@ -78,7 +78,7 @@ ex_wavelength = 0.561
 em_wavelength = 0.58
 ni_design = 1.51
 ni_sample = 1.4
-max_photons = 100
+max_photons = 300
 
 conditions = {
     # 'light-sheet':{

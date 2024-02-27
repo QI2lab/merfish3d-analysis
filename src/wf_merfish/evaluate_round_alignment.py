@@ -4,9 +4,10 @@ import gc
 
 readout = True
 
-data_dir_path = Path('/mnt/opm3/20240202_ECL_IMG_GEL2/processed_v2')
+data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0.2_prop_fn-0.1_prop_fp-0.7/processed')
 polyDT_dir_path = data_dir_path / Path('polyDT')
 tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
+tile_ids = ['tile0000']
 
 for tile_idx, tile_id in enumerate(tile_ids):
     data_register_factory = DataRegistration(dataset_path=data_dir_path,

@@ -443,7 +443,8 @@ def postprocess(correction_option: str,
             stitched_dir_path = output_dir_path / Path('stitched')
             stitched_dir_path.mkdir(parents=True, exist_ok=True)
 
-            tile_ids = [entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()]
+            tile_ids = sorted([entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()],
+                              key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 
             for tile_idx, tile_id in enumerate(tile_ids):
                 

@@ -1,74 +1,65 @@
 from wf_merfish.postprocess.PixelDecoder import PixelDecoder
-from wf_merfish.postprocess.BarcodeFilter import BarcodeFilter
+#from wf_merfish.postprocess.BarcodeFilter import BarcodeFilter
 from pathlib import Path
 import napari
 
-data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0.2_prop_fn-0.1_prop_fp-0.7/processed')
+data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0_prop_fn-0_prop_fp-0/processed')
 
-# decode_factory = PixelDecoder(data_dir_path=data_dir_path)
-# decode_factory._load_bit_data()
-# decode_factory._load_filtered_images()
-# decode_factory._intialize_scale_factors()
+decode_factory = PixelDecoder(data_dir_path=data_dir_path)
+print(decode_factory._scale_factors)
+decode_factory._lp_filter()
+decode_factory._decode_pixels()
 
-# for i in range(5):
-#     decode_factory._decode_pixels()
-#     if i==0 and True:
-#         viewer = napari.Viewer()
-
-#         viewer.add_image(decode_factory._pixel_magnitudes,
-#                          scale=[.31,.088,.088],
-#                          name='magnitudes')
-
-#         viewer.add_image(decode_factory._l2_distances,
-#                          scale=[.31,.088,.088],
-#                          name='l2 distances')
-
-#         napari.run()
-#     if i==1:
-#         decode_factory._overwrite = True
-#     decode_factory._extract_refactors(extract_backgrounds=True)
-
-# decode_factory._overwrite = False
-# decode_factory._decode_pixels()
-
-# if True:
-#     viewer = napari.Viewer()
-
-#     viewer.add_image(decode_factory._pixel_magnitudes,
-#                     scale=[.31,.088,.088],
-#                     name='magnitudes')
-
-#     viewer.add_image(decode_factory._decoded_image,
-#                     scale=[.31,.088,.088],
-#                     name='decoded')
+if True:
+    viewer = napari.Viewer()
     
-#     viewer.add_image(decode_factory._l2_distances,
-#                     scale=[.31,.088,.088],
-#                     name='distances')
+    viewer.add_image(decode_factory._decoded_image,
+                        scale=[.31,.088,.088],
+                        name='decoded')
 
-#     napari.run()
+    viewer.add_image(decode_factory._magnitude_image,
+                        scale=[.31,.088,.088],
+                        name='magnitude')
+
+    viewer.add_image(decode_factory._distance_image,
+                        scale=[.31,.088,.088],
+                        name='distance')
+
+    napari.run()
 
 
-# decode_factory._extract_barcodes()
-# decode_factory._save_barcodes()
+decode_factory._extract_barcodes(minimum_area=4)
+decode_factory._save_barcodes()
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 optimizer = BarcodeFilter(data_dir_path)
-optimizer.print_entry_counts()
-optimizer.train_model()
-optimizer.find_optimal_threshold()
-df_filtered = optimizer.filter_dataframe()
-optimizer.print_entry_counts(df_filtered)
+#optimizer._find_threshold_wollman()
+optimizer.print_entry_counts(df=optimizer.full_df)
+# optimizer.train_model()
+# optimizer.find_optimal_threshold_v2()
+# df_filtered = optimizer.filter_dataframe_v2()
+# optimizer.print_entry_counts(df=df_filtered)
 
+# target = 'called_distance_cosine'
+# # Categorize each row based on whether ID starts with "Track" or "Song"
+# df_filtered['Category'] = np.where(df_filtered['gene_id'].str.startswith('Blank'), 'noncoding', 'coding')
 
-# Assuming df is your DataFrame
-x = df_filtered['area']
-y = df_filtered['min_dispersion']
+# # Plotting
+# fig, ax = plt.subplots()
 
-plt.hist2d(x, y, bins=10, cmap='Blues')
-plt.colorbar()  # Adds a colorbar to indicate the scale
-plt.xlabel('Area')
-plt.ylabel('Intensity')
-plt.title('2D Histogram of Area and Min Distance')
-plt.show()
+# # Colors for each category
+# colors = {'noncoding': 'blue', 'coding': 'orange'}
+
+# bin_edges = np.linspace(0.4, 0.5, 21)
+
+# # Group the DataFrame by category and plot each group
+# for category, group_data in df_filtered.groupby('Category'):
+#     ax.hist(group_data[target], label=category, color=colors[category], alpha=0.6, bins=bin_edges, edgecolor='black')
+
+# ax.legend()
+# plt.xlabel(target)
+# plt.ylabel('Frequency')
+# plt.title('Histogram of area Colored by gene_id category')
+# plt.show()

@@ -178,12 +178,14 @@ class DataRegistration:
         Parse dataset to discover number of tiles, number of rounds, and voxel size.
         """
 
-        self._tile_ids = [entry.name for entry in self._polyDT_dir_path.iterdir() if entry.is_dir()]
+        self._tile_ids = sorted([entry.name for entry in self._polyDT_dir_path.iterdir() if entry.is_dir()],
+                                key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
         self._num_tiles = len(self._tile_ids)
         self._tile_id = self._tile_ids[self._tile_idx]
 
         current_tile_dir_path = self._polyDT_dir_path / Path(self._tile_id)
-        self._round_ids = [entry.name.split('.')[0]  for entry in current_tile_dir_path.iterdir() if entry.is_dir()]
+        self._round_ids = sorted([entry.name.split('.')[0]  for entry in current_tile_dir_path.iterdir() if entry.is_dir()],
+                                 key=lambda x: int(x.split('round')[1].split('.zarr')[0]))
         round_id = self._round_ids[0]
         current_round_zarr_path = current_tile_dir_path / Path(round_id + ".zarr")
         current_round = zarr.open(current_round_zarr_path,mode='r')
@@ -252,9 +254,11 @@ class DataRegistration:
         else:
             try:
                 readout_dir_path = self._dataset_path / Path('readouts')
-                tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+                tile_ids = sorted([entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()],
+                                  key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
                 tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
-                self._bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+                self._bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                                       key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
                 
                 for bit_id in self._bit_ids:
                     tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
@@ -455,28 +459,7 @@ class DataRegistration:
         
         del ref_image_sitk
         gc.collect()
-        
-    @staticmethod
-    def _hp_filter(image,sigma):
-        
-        image_cp = cp.asarray(image)    
-        window_size = 3.0
-        
-        # Apply Gaussian blur using cucim
-        lowpass = gaussian(image_cp, sigma=sigma, mode='reflect', truncate=window_size)
-        
-        # Calculate the high-pass filter result
-        gauss_highpass = image_cp - lowpass
-        
-        # Set to zero where the low-pass image is greater than the original image
-        gauss_highpass[lowpass > image_cp] = 0
-        
-        del image_cp, lowpass
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
-        
-        return cp.asnumpy(gauss_highpass).astype(np.uint16)
-                
+                        
     def apply_registration_to_bits(self):
         """
         Generate registered data and save to zarr.
@@ -500,7 +483,8 @@ class DataRegistration:
 
         readout_dir_path = self._dataset_path / Path('readouts')
         tile_dir_path = readout_dir_path / Path(self._tile_id)
-        bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+        bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                         key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
                 
         lib = getlib()
         
@@ -512,16 +496,13 @@ class DataRegistration:
             r_idx = int(current_bit_channel.attrs['round'])
             psf_idx = int(current_bit_channel.attrs['psf_idx'])
             gain = float(current_bit_channel.attrs['gain'])
-        
-            hp_image = self._hp_filter(current_bit_channel['raw_data'].astype(np.uint16),
-                                       sigma=(5,3,3))
-                        
-            decon_bit_image = richardson_lucy_nc(hp_image,
+                                
+            decon_bit_image = richardson_lucy_nc(current_bit_channel['raw_data'].astype(np.uint16),
                                                 psf=self._psfs[psf_idx,:],
                                                 numiterations=40,
                                                 regularizationfactor=.0001,
                                                 lib=lib)
-                
+                            
             if r_idx > 0:        
                 polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
                 current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')

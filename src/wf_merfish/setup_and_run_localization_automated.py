@@ -14,7 +14,8 @@ tile_id = 'tile0000'
 readout_dir_path = data_dir_path / Path('readouts')
 tile_dir_path = readout_dir_path / Path(tile_id)
 
-bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                 key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
 for bit_id in bit_ids:
 
@@ -131,9 +132,11 @@ from spots3d.SPOTS3D import SPOTS3D
 del readout_dir_path, tile_dir_path, bit_ids
 
 readout_dir_path = data_dir_path / Path('readouts')
-tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+tile_ids = sorted([entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()],
+                  key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
-bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                 key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
 calibrations_dir_path = data_dir_path / Path('calibrations.zarr')
 calibrations_zarr = zarr.open(calibrations_dir_path,mode='r')
