@@ -190,9 +190,10 @@ for bit_id in bit_ids:
             spots3d.scan_chunk_size = 128
             spots3d.run_find_candidates()
             spots3d.run_fit_candidates()
-            spots3d.run_filter_spots(return_values=True)
-            spots3d.save_results(dir_localize=path_save_dir,
-                                base_name=base_name)
+            if not(spots3d.skip_filter_and_save): 
+                spots3d.run_filter_spots(return_values=True)
+                spots3d.save_results(dir_localize=path_save_dir,
+                                    base_name=base_name)
 
             del data, spots3d
         else:

@@ -34,9 +34,6 @@ sources = ["src"]
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]
 test = ["pytest>=6.0"]
-gpu = ["cupy-cuda11x==12.3.0",
-       'cucim ; platform_system != "Windows"',
-       'cucim @ git+https://github.com/rapidsai/cucim.git@v23.02.00#egg=cucim&subdirectory=python/cucim ; platform_system != "Linux"']
 stitch = ["multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main#egg=multiview-stitcher",
           "aicsimageio==4.14.0"]
 
