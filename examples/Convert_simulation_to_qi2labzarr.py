@@ -115,7 +115,7 @@ for r_idx in range(num_r):
 
     lib = getlib()
             
-    image_decon = richardson_lucy_nc(cp.asnumpy(gauss_highpass).astype(np.float32),
+    image_decon = richardson_lucy_nc(raw_data,
                                     psf=psf,
                                     numiterations=40,
                                     regularizationfactor=.00001,
