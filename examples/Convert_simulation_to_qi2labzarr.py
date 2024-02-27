@@ -9,7 +9,6 @@ import pandas as pd
 from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
 import gc
 import cupy as cp
-from cucim.skimage.filters import gaussian
 
 data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0_prop_fn-0_prop_fp-0')
 
@@ -20,7 +19,6 @@ tiff_files = data_dir_path.glob('*.tiff')
 for tiff_file in tiff_files:
     data = imread(tiff_file)
 data = np.swapaxes(data,0,1)
-
 
 readout_dir_path = data_dir_path / Path('processed') / Path('readouts')
 readout_dir_path.mkdir(parents=True, exist_ok=True)
@@ -114,27 +112,10 @@ for r_idx in range(num_r):
     current_channel.attrs['shading'] = bool(shading_flag)
     
     current_raw_data[:] = raw_data
-    
-    image_cp = cp.asarray(raw_data)    
-    window_size = 2.0
-    
-    # Apply Gaussian blur using cucim
-    lowpass = gaussian(image_cp, sigma=(5,3,3), mode='reflect', truncate=window_size)
-    
-    # Calculate the high-pass filter result
-    gauss_highpass = image_cp - lowpass
-    
-    # Set to zero where the low-pass image is greater than the original image
-    gauss_highpass[lowpass > image_cp] = 0
-    
-    del image_cp, lowpass
-    cp.get_default_memory_pool().free_all_blocks()
-    gc.collect()
-            
-    
+
     lib = getlib()
             
-    image_decon = richardson_lucy_nc(cp.asnumpy(gauss_highpass).astype(np.float32),
+    image_decon = richardson_lucy_nc(raw_data,
                                     psf=psf,
                                     numiterations=40,
                                     regularizationfactor=.00001,
