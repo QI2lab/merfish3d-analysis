@@ -7,7 +7,6 @@ from pathlib import Path
 import zarr
 import gc
 import cupy as cp
-from cupyx.scipy.spatial.distance import cdist
 from cupyx.scipy.ndimage import gaussian_filter
 from cucim.skimage.measure import label, regionprops
 from typing import Union, Optional, Sequence, Tuple
@@ -20,7 +19,8 @@ class PixelDecoder():
                  data_dir_path: Union[Path,str],
                  tile_idx: int = 0,
                  scale_factors: Optional[np.ndarray] = None,
-                 global_normalization_limits: Optional[Sequence[float]] = None):
+                 global_normalization_limits: Optional[Sequence[float]] = None,
+                 overwrite_normalization: bool = False):
 
         self._dataset_path = data_dir_path
         self._tile_idx = tile_idx
@@ -40,9 +40,9 @@ class PixelDecoder():
             if global_normalization_limits is not None:
                 self._global_normalization_factors(low_percentile_cut=global_normalization_limits[0],
                                                    high_percentile_cut=global_normalization_limits[1],
-                                                   overwrite=False)
+                                                   overwrite=overwrite_normalization)
             else:
-                self._global_normalization_factors(overwrite=False)
+                self._global_normalization_factors(overwrite=overwrite_normalization)
         
         self._load_bit_data()        
         self._codebook_style = 1        
@@ -76,10 +76,7 @@ class PixelDecoder():
         
     def _normalize_codebook(self, include_errors: bool = False):
         self._barcode_set = cp.asarray(self._codebook_matrix)
-        magnitudes = cp.sqrt(cp.sum(self._barcode_set**2, axis=0,keepdims=True))
-
-        # Avoid division by zero by ensuring magnitudes are not zero
-        magnitudes = cp.where(magnitudes == 0, 1, magnitudes)
+        magnitudes = cp.linalg.norm(self._barcode_set, axis=0, keepdims=True)
 
         if not include_errors:
             # Normalize directly using broadcasting
@@ -111,8 +108,8 @@ class PixelDecoder():
                                       overwrite: bool = False):
     
         try:
-            normalization_vector = cp.asarray(self._calibrations_zarr.attrs['global_normalization'])
-            background_vector = cp.asarray(self._calibrations_zarr.attrs['global_background'])
+            normalization_vector = cp.asarray(self._calibration_zarr.attrs['global_normalization'])
+            background_vector = cp.asarray(self._calibration_zarr.attrs['global_background'])
             data_not_found = False
         except:         
             data_not_found = True
@@ -123,7 +120,7 @@ class PixelDecoder():
                 random_tiles = sample(self._tile_ids,10)
             else:
                 random_tiles = self._tile_ids
-
+                
             normalization_vector = cp.ones(len(self._bit_ids),dtype=cp.float32)
             background_vector = cp.zeros(len(self._bit_ids),dtype=cp.float32)           
             for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bit',leave=True)):
@@ -141,20 +138,23 @@ class PixelDecoder():
                     gc.collect()
                     
                 all_images = np.array(all_images)
+
                     
                 low_pixels = []    
                 for tile_idx, tile_id in enumerate(tqdm(random_tiles,desc='background',leave=False)):
                     
                     current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32)
                     low_cutoff = cp.percentile(current_image, low_percentile_cut)
-                    low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))
-                                        
+                    low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))                                        
                     del current_image
                     cp.get_default_memory_pool().free_all_blocks()
-                    gc.collect()    
+                    gc.collect()
 
                 low_pixels = cp.concatenate(low_pixels,axis=0)
-                background_vector[bit_idx] = cp.median(low_pixels)
+                if low_pixels.shape[0]>0:
+                    background_vector[bit_idx] = cp.median(low_pixels)
+                else:
+                    background_vector[bit_idx] = 0
                 
                 del low_pixels
                 cp.get_default_memory_pool().free_all_blocks()
@@ -173,14 +173,17 @@ class PixelDecoder():
                     gc.collect()
                     
                 high_pixels = cp.concatenate(high_pixels,axis=0)
-                normalization_vector[bit_idx] = cp.median(high_pixels)
+                if high_pixels.shape[0]>0:
+                    normalization_vector[bit_idx] = cp.median(high_pixels)
+                else:
+                    normalization_vector[bit_idx] = 1
                     
                 del high_pixels
                 cp.get_default_memory_pool().free_all_blocks()
                 gc.collect()
                                                    
-            self._calibrations_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-            self._calibrations_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
+            self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
+            self._calibration_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
                       
         self._background_vector = background_vector
         self._normalization_vector = normalization_vector
@@ -207,9 +210,10 @@ class PixelDecoder():
     def _hp_filter(self,
                    sigma= (5,3,3)):
         
-        if isinstance(self._image_data, np.np.ndarray):
+        if isinstance(self._image_data, np.ndarray):
             image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
 
+        print('highpass filter')
         for i in tqdm(range(image_data_cp.shape[0]),desc='bit'):
             lowpass = gaussian_filter(image_data_cp[i,:,:,:], sigma=sigma)
             gauss_highpass = image_data_cp[i,:,:,:] - lowpass
@@ -223,16 +227,14 @@ class PixelDecoder():
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
         
-        return cp.asnumpy(gauss_highpass).astype(np.uint16)
-        
     def _lp_filter(self,
                    sigma = (2,1,1)):
         
         if self._filter_type is None:
-            if isinstance(self._image_data, np.np.ndarray):
+            if isinstance(self._image_data, np.ndarray):
                 image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
         else:
-            if isinstance(self._image_data_hp, np.np.ndarray):
+            if isinstance(self._image_data_hp, np.ndarray):
                 image_data_cp = cp.asarray(self._image_data_hp,dtype=cp.float32)
             
         print('lowpass filter')
@@ -251,12 +253,14 @@ class PixelDecoder():
                             background_vector : Union[np.ndarray,cp.ndarray],
                             normalization_vector: Union[np.ndarray,cp.ndarray]) -> cp.ndarray:
         
-        if isinstance(pixel_traces, np.np.ndarray):
+        if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        if isinstance(scale_factors, np.np.ndarray):
-            scale_factors = cp.asarray(scale_factors,dtype=cp.float32)
+        if isinstance(background_vector, np.ndarray):
+            background_vector = cp.asarray(background_vector,dtype=cp.float32)
+        if isinstance(normalization_vector, np.ndarray):
+            normalization_vector = cp.asarray(normalization_vector,dtype=cp.float32)
         
-        return (pixel_traces - background_vector)  / normalization_vector
+        return (pixel_traces - background_vector[:,cp.newaxis])  / normalization_vector[:,cp.newaxis]
     
     @staticmethod
     def _clip_pixel_traces(pixel_traces: Union[np.ndarray,cp.ndarray],
@@ -268,12 +272,12 @@ class PixelDecoder():
     @staticmethod
     def _normalize_pixel_traces(pixel_traces: Union[np.ndarray,cp.ndarray]) -> Tuple[cp.ndarray,cp.ndarray]:
   
-        if isinstance(pixel_traces, np.np.ndarray):
+        if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
         
         norms = cp.linalg.norm(pixel_traces, axis=0)
-        norms = cp.where(norms > 0, norms, 1)
-        normalized_traces = pixel_traces / norms[cp.newaxis, :, :, :]
+        norms = cp.where(norms == 0, 1, norms)
+        normalized_traces = pixel_traces / norms
         
         return normalized_traces, norms
     
@@ -281,14 +285,22 @@ class PixelDecoder():
     def _calculate_distances(pixel_traces: Union[np.ndarray,cp.ndarray],
                              codebook_matrix: Union[np.ndarray,cp.ndarray]) -> Tuple[cp.ndarray,cp.ndarray]:
   
-        if isinstance(pixel_traces, np.np.ndarray):
+        if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        if isinstance(codebook_matrix, np.np.ndarray):
+        if isinstance(codebook_matrix, np.ndarray):
             codebook_matrix = cp.asarray(codebook_matrix,dtype=cp.float32)
-                
-        distances = cdist(pixel_traces, codebook_matrix, metric='euclidean')
-        min_distances = cp.min(distances, axis=1)
-        min_indices = cp.argmin(distances, axis=1)
+        
+        # DPS note: cupy cdist seems broken, using custom implementation for now
+        
+        #distances = cdist(pixel_traces.T, codebook_matrix, metric='euclidean')
+        
+        pixel_traces_squared_norms = cp.sum(pixel_traces.T**2, axis=1).reshape(-1, 1)
+        codebook_matrix_squared_norms = cp.sum(codebook_matrix**2, axis=1).reshape(1, -1)
+        squared_dists = pixel_traces_squared_norms + codebook_matrix_squared_norms - 2 * cp.dot(pixel_traces.T, codebook_matrix.T)        
+        squared_dists = cp.sqrt(cp.maximum(squared_dists, 0)) / 2 # DPS note: why is distance threshold ~ 2x what is should be? Factor of 2 somewhere?
+        
+        min_distances = cp.min(squared_dists, axis=1)
+        min_indices = cp.argmin(squared_dists, axis=1)
         
         return min_distances, min_indices
  
@@ -296,9 +308,19 @@ class PixelDecoder():
                        distance_threshold: float = .5172,
                        magnitude_threshold: float = 1.0):
         
-        original_shape = self._image_data_lp.shape
-        pixel_traces = cp.asarray(self._image_data_lp).reshape(self._bit_count, -1).astype(cp.float32)
-        pixel_traces = self._scale_pixel_traces(pixel_traces,
+        
+        if self._filter_type == 'lp':
+            original_shape = self._image_data_lp.shape
+            scaled_pixel_traces = cp.asarray(self._image_data_lp).reshape(self._bit_count, -1).astype(cp.float32)
+        else:
+            if self._filter_type == 'hp':
+                original_shape = self._image_data_hp.shape
+                scaled_pixel_traces = cp.asarray(self._image_data_hp).reshape(self._bit_count, -1).astype(cp.float32)
+            else:
+                original_shape = self._image_data.shape
+                scaled_pixel_traces = cp.asarray(self._image_data).reshape(self._bit_count, -1).astype(cp.float32)
+        
+        scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
                                                 self._background_vector,
                                                 self._normalization_vector)
         scaled_pixel_traces = self._clip_pixel_traces(scaled_pixel_traces)
@@ -311,11 +333,11 @@ class PixelDecoder():
 
         decoded_trace = cp.full((distance_trace.shape[0],), -1, dtype=cp.int16)
         mask_trace = distance_trace < distance_threshold
-        decoded_trace[mask_trace] = codebook_index_trace[mask_trace,0].astype(cp.int16)
-        decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
-
+        decoded_trace[mask_trace] = codebook_index_trace[mask_trace].astype(cp.int16)
+        #decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+ 
         self._decoded_image = cp.asnumpy(cp.reshape(decoded_trace, original_shape[1:]))
-        self._magnitude_image = cp.asnumpy(cp.reshape(pixel_magnitude_trace[0,:], original_shape[1:]))
+        self._magnitude_image = cp.asnumpy(cp.reshape(pixel_magnitude_trace, original_shape[1:]))
         self._scaled_pixel_images = cp.asnumpy(cp.reshape(scaled_pixel_traces, original_shape))
         self._distance_image = cp.asnumpy(cp.reshape(distance_trace, original_shape[1:]))
         
@@ -323,6 +345,10 @@ class PixelDecoder():
         del decoded_trace, pixel_magnitude_trace, scaled_pixel_traces, distance_trace
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
+        
+#---------------------------------------------------------------------------------
+# Code below here not working yet - 2024/02/28 DPS
+#---------------------------------------------------------------------------------
         
     @staticmethod
     def _find_objects_cupy(label_image: cp.ndarray, 
