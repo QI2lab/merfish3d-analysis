@@ -1,3 +1,7 @@
+"""
+Perform pixel-based decoding for 2D/3D MERFISH data using GPU acceleration.
+"""
+
 import numpy as np
 from pathlib import Path
 import zarr
@@ -7,19 +11,16 @@ from cupyx.scipy.spatial.distance import cdist
 from cupyx.scipy.ndimage import gaussian_filter
 from cucim.skimage.measure import label, regionprops
 from typing import Union, Optional, Sequence, Tuple
-from numpy.typing import NDArray
-from cupy.typing import ArrayLike
 import pandas as pd
-
+from random import sample
 from tqdm import tqdm
-# from numba import jit, prange
-# from multiprocessing import Pool, cpu_count
 
 class PixelDecoder():
     def __init__(self,
                  data_dir_path: Union[Path,str],
                  tile_idx: int = 0,
-                 scale_factors: Optional[NDArray] = None):
+                 scale_factors: Optional[np.ndarray] = None,
+                 global_normalization_limits: Optional[Sequence[float]] = None):
 
         self._dataset_path = data_dir_path
         self._tile_idx = tile_idx
@@ -33,9 +34,15 @@ class PixelDecoder():
         self._bit_count = self._decoding_matrix.shape[1]
         
         if scale_factors is not None:
-            self._scale_factors = scale_factors
+            self._background_vector = scale_factors[:,0]
+            self._normalization_vector = scale_factors[:,1]
         else:
-            self._global_normalization_factors(overwrite=True)
+            if global_normalization_limits is not None:
+                self._global_normalization_factors(low_percentile_cut=global_normalization_limits[0],
+                                                   high_percentile_cut=global_normalization_limits[1],
+                                                   overwrite=False)
+            else:
+                self._global_normalization_factors(overwrite=False)
         
         self._load_bit_data()        
         self._codebook_style = 1        
@@ -99,60 +106,84 @@ class PixelDecoder():
             return cp.asnumpy(all_barcodes)
          
     def _global_normalization_factors(self,
-                                      per_image_percentile_cut: float = 99.9,
-                                      overwrite: bool = False):        
-        
-        normalization_vector = cp.ones(self._bit_count,dtype=cp.float32)
-        
-        if not(overwrite):
-            try:
-                self._scale_factors = cp.asarray(self._calibration_zarr.attrs['global_normalization'])
-            except:         
-                for bit_idx, bit_id in enumerate(self._bit_ids):
-                    pixels = []
-                    for tile_id in self._tile_ids:
-                        tile_dir_path = self._readout_dir_path / Path(tile_id)
-                        bit_dir_path = tile_dir_path / Path(bit_id)
-                        current_bit = zarr.open(bit_dir_path,mode='r')
-                        current_image = cp.asarray(current_bit["registered_data"], dtype=cp.uint16)
-                        cutoff = cp.percentile(current_image, per_image_percentile_cut)
-                        pixels.append(current_image[current_image > cutoff].flatten())
-                        del current_image
-                        cp.get_default_memory_pool().free_all_blocks()
-                        gc.collect()
-                    
-                    
-                    normalization_vector[bit_idx] = cp.median(cp.concatenate(pixels,axis=None).astype(cp.float32))
-                    
-                    del pixels
-                    cp.get_default_memory_pool().free_all_blocks()
-                    gc.collect()
-                
-                
-                self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-        else:           
-            for bit_idx, bit_id in enumerate(self._bit_ids):
-                pixels = []
-                for tile_id in self._tile_ids:
+                                      low_percentile_cut: float = 20.0,
+                                      high_percentile_cut: float = 99.995,
+                                      overwrite: bool = False):
+    
+        try:
+            normalization_vector = cp.asarray(self._calibrations_zarr.attrs['global_normalization'])
+            background_vector = cp.asarray(self._calibrations_zarr.attrs['global_background'])
+            data_not_found = False
+        except:         
+            data_not_found = True
+            
+        if data_not_found or overwrite:
+            
+            if len(self._tile_ids) > 10:
+                random_tiles = sample(self._tile_ids,10)
+            else:
+                random_tiles = self._tile_ids
+
+            normalization_vector = cp.ones(len(self._bit_ids),dtype=cp.float32)
+            background_vector = cp.zeros(len(self._bit_ids),dtype=cp.float32)           
+            for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bit',leave=True)):
+                all_images = []
+                for tile_id in tqdm(random_tiles,desc='loading tiles',leave=False):
                     tile_dir_path = self._readout_dir_path / Path(tile_id)
                     bit_dir_path = tile_dir_path / Path(bit_id)
                     current_bit = zarr.open(bit_dir_path,mode='r')
                     current_image = cp.asarray(current_bit["registered_data"], dtype=cp.uint16)
-                    cutoff = cp.percentile(current_image, per_image_percentile_cut)
-                    pixels.append(current_image[current_image > cutoff].flatten())
+                    current_image[current_image<100] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.uint16)
+                    current_image[current_image>65000] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.uint16)
+                    all_images.append(cp.asnumpy(current_image).astype(np.uint16))
                     del current_image
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
-                normalization_vector[bit_idx] = cp.median(cp.concatenate(pixels,axis=None).astype(cp.float32))
+                    
+                all_images = np.array(all_images)
+                    
+                low_pixels = []    
+                for tile_idx, tile_id in enumerate(tqdm(random_tiles,desc='background',leave=False)):
+                    
+                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32)
+                    low_cutoff = cp.percentile(current_image, low_percentile_cut)
+                    low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))
+                                        
+                    del current_image
+                    cp.get_default_memory_pool().free_all_blocks()
+                    gc.collect()    
+
+                low_pixels = cp.concatenate(low_pixels,axis=0)
+                background_vector[bit_idx] = cp.median(low_pixels)
                 
-                del pixels
+                del low_pixels
                 cp.get_default_memory_pool().free_all_blocks()
                 gc.collect()
-
-            self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
                 
-                
-        self._scale_factors = normalization_vector.copy()
+                high_pixels = []
+                for tile_idx, tile_id in enumerate(tqdm(random_tiles,desc='normalize',leave=False)):
+                    
+                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32) - background_vector[bit_idx]
+                    current_image[current_image<0] = 0
+                    high_cutoff = cp.percentile(current_image, high_percentile_cut)
+                    high_pixels.append(current_image[current_image > high_cutoff].flatten().astype(cp.float32))
+                    
+                    del current_image
+                    cp.get_default_memory_pool().free_all_blocks()
+                    gc.collect()
+                    
+                high_pixels = cp.concatenate(high_pixels,axis=0)
+                normalization_vector[bit_idx] = cp.median(high_pixels)
+                    
+                del high_pixels
+                cp.get_default_memory_pool().free_all_blocks()
+                gc.collect()
+                                                   
+            self._calibrations_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
+            self._calibrations_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
+                      
+        self._background_vector = background_vector
+        self._normalization_vector = normalization_vector
         
     def _load_bit_data(self):       
         print('loading raw data')
@@ -172,68 +203,17 @@ class PixelDecoder():
         
         del images, current_bit
         gc.collect()
-                
-    @staticmethod
-    def _scale_pixel_traces(pixel_traces: Union[NDArray,ArrayLike],
-                            scale_factors: Union[NDArray,ArrayLike]) -> ArrayLike:
         
-        if isinstance(pixel_traces, np.ndarray):
-            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        if isinstance(scale_factors, np.ndarray):
-            scale_factors = cp.asarray(scale_factors,dtype=cp.float32)
-        
-        return pixel_traces / scale_factors
-    
-    @staticmethod
-    def _clip_normalized_pixel_traces(pixel_traces: Union[NDArray,ArrayLike],
-                                      clip_lower: float = 0.0,
-                                      clip_upper: float = 1.0) -> ArrayLike:
-        
-        return cp.clip(pixel_traces,clip_lower,clip_upper,pixel_traces)
-    
-    @staticmethod
-    def _normalize_pixel_traces(pixel_traces: Union[NDArray,ArrayLike]) -> Tuple[ArrayLike,ArrayLike]:
-  
-        if isinstance(pixel_traces, np.ndarray):
-            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        
-        norms = cp.linalg.norm(pixel_traces, axis=0)
-        norms_safe = cp.where(norms > 0, norms, 1)
-        normalized_traces = pixel_traces / norms_safe[cp.newaxis, :, :, :]
-        
-        return normalized_traces, norms_safe
-    
-    @staticmethod
-    def _calculate_distances(pixel_traces: Union[NDArray,ArrayLike],
-                             codebook_matrix: Union[NDArray,ArrayLike]) -> Tuple[ArrayLike,ArrayLike]:
-  
-        if isinstance(pixel_traces, np.ndarray):
-            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        if isinstance(codebook_matrix, np.ndarray):
-            codebook_matrix = cp.asarray(codebook_matrix,dtype=cp.float32)
-                
-        distances = cdist(pixel_traces, codebook_matrix, metric='euclidean')
-        min_distances = cp.min(distances, axis=1)
-        min_indices = cp.argmin(distances, axis=1)
-        
-        return min_distances, min_indices
-
     def _hp_filter(self,
                    sigma= (5,3,3)):
         
-        if isinstance(self._image_data, np.ndarray):
+        if isinstance(self._image_data, np.np.ndarray):
             image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
 
         for i in tqdm(range(image_data_cp.shape[0]),desc='bit'):
-            # Apply Gaussian blur using cucim
             lowpass = gaussian_filter(image_data_cp[i,:,:,:], sigma=sigma)
-            
-            # Calculate the high-pass filter result
             gauss_highpass = image_data_cp[i,:,:,:] - lowpass
-            
-            # Set to zero where the low-pass image is greater than the original image
             gauss_highpass[lowpass > image_data_cp[i,:,:,:]] = 0
-            
             image_data_cp[i,:,:,:] = gauss_highpass
             
         self._filter_type = 'hp'   
@@ -249,10 +229,10 @@ class PixelDecoder():
                    sigma = (2,1,1)):
         
         if self._filter_type is None:
-            if isinstance(self._image_data, np.ndarray):
+            if isinstance(self._image_data, np.np.ndarray):
                 image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
         else:
-            if isinstance(self._image_data_hp, np.ndarray):
+            if isinstance(self._image_data_hp, np.np.ndarray):
                 image_data_cp = cp.asarray(self._image_data_hp,dtype=cp.float32)
             
         print('lowpass filter')
@@ -265,23 +245,63 @@ class PixelDecoder():
         del image_data_cp
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
-    
-    def _decode_pixels(self,
-                       codebook_style = 1,
-                       distance_threshold: float=.5172):
+                
+    @staticmethod
+    def _scale_pixel_traces(pixel_traces: Union[np.ndarray,cp.ndarray],
+                            background_vector : Union[np.ndarray,cp.ndarray],
+                            normalization_vector: Union[np.ndarray,cp.ndarray]) -> cp.ndarray:
         
-        # Ensure scale_factors and background_factors are cupy arrays and have the correct shape
-        scale_factors = cp.asarray(self._scale_factors.reshape(-1, 1),dtype = cp.float32)  # Reshape for broadcasting
+        if isinstance(pixel_traces, np.np.ndarray):
+            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
+        if isinstance(scale_factors, np.np.ndarray):
+            scale_factors = cp.asarray(scale_factors,dtype=cp.float32)
+        
+        return (pixel_traces - background_vector)  / normalization_vector
+    
+    @staticmethod
+    def _clip_pixel_traces(pixel_traces: Union[np.ndarray,cp.ndarray],
+                            clip_lower: float = 0.0,
+                            clip_upper: float = 1.0) -> cp.ndarray:
+        
+        return cp.clip(pixel_traces,clip_lower,clip_upper,pixel_traces)
+    
+    @staticmethod
+    def _normalize_pixel_traces(pixel_traces: Union[np.ndarray,cp.ndarray]) -> Tuple[cp.ndarray,cp.ndarray]:
+  
+        if isinstance(pixel_traces, np.np.ndarray):
+            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
+        
+        norms = cp.linalg.norm(pixel_traces, axis=0)
+        norms = cp.where(norms > 0, norms, 1)
+        normalized_traces = pixel_traces / norms[cp.newaxis, :, :, :]
+        
+        return normalized_traces, norms
+    
+    @staticmethod
+    def _calculate_distances(pixel_traces: Union[np.ndarray,cp.ndarray],
+                             codebook_matrix: Union[np.ndarray,cp.ndarray]) -> Tuple[cp.ndarray,cp.ndarray]:
+  
+        if isinstance(pixel_traces, np.np.ndarray):
+            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
+        if isinstance(codebook_matrix, np.np.ndarray):
+            codebook_matrix = cp.asarray(codebook_matrix,dtype=cp.float32)
+                
+        distances = cdist(pixel_traces, codebook_matrix, metric='euclidean')
+        min_distances = cp.min(distances, axis=1)
+        min_indices = cp.argmin(distances, axis=1)
+        
+        return min_distances, min_indices
+ 
+    def _decode_pixels(self,
+                       distance_threshold: float = .5172,
+                       magnitude_threshold: float = 1.0):
         
         original_shape = self._image_data_lp.shape
         pixel_traces = cp.asarray(self._image_data_lp).reshape(self._bit_count, -1).astype(cp.float32)
-        scaled_pixel_traces = self._scale_pixel_traces(pixel_traces,scale_factors)
-        
-        del pixel_traces
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
-        
-        scaled_pixel_traces = self._clip_normalized_pixel_traces(scaled_pixel_traces)
+        pixel_traces = self._scale_pixel_traces(pixel_traces,
+                                                self._background_vector,
+                                                self._normalization_vector)
+        scaled_pixel_traces = self._clip_pixel_traces(scaled_pixel_traces)
         normalized_pixel_traces, pixel_magnitude_trace = self._normalize_pixel_traces(scaled_pixel_traces)
         distance_trace, codebook_index_trace = self._calculate_distances(normalized_pixel_traces,self._codebook_matrix)
         
@@ -292,7 +312,7 @@ class PixelDecoder():
         decoded_trace = cp.full((distance_trace.shape[0],), -1, dtype=cp.int16)
         mask_trace = distance_trace < distance_threshold
         decoded_trace[mask_trace] = codebook_index_trace[mask_trace,0].astype(cp.int16)
-        #decoded_traces[pixel_magnitude_traces <= magnitude_threshold] = -1
+        decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
 
         self._decoded_image = cp.asnumpy(cp.reshape(decoded_trace, original_shape[1:]))
         self._magnitude_image = cp.asnumpy(cp.reshape(pixel_magnitude_trace[0,:], original_shape[1:]))
@@ -305,7 +325,7 @@ class PixelDecoder():
         gc.collect()
         
     @staticmethod
-    def _find_objects_cupy(label_image: ArrayLike, 
+    def _find_objects_cupy(label_image: cp.ndarray, 
                            max_label: int):
         ndim = label_image.ndim
         labels = cp.arange(1, max_label + 1)[:, None, None]
@@ -428,7 +448,7 @@ class PixelDecoder():
         cp.get_default_memory_pool().free_all_blocks()
         gc.collect()
         
-    def _save_barcodes(self):
+    def save_barcodes(self):
         
         readout_dir_path = self._dataset_path / Path('readouts')
         tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
@@ -438,223 +458,8 @@ class PixelDecoder():
         
         barcode_path = decoded_dir_path / Path(tile_ids[self._tile_idx]+'_decoded_features.csv')
         self._barcodes_df.to_csv(barcode_path)
-        
-    # def _extract_refactors(self,
-    #                        minimum_area: int = 4,
-    #                        maximum_area: int = 40,
-    #                        extract_backgrounds: Optional[bool] = False):
-        
-    #     if self._overwrite:
-    #         del self._scale_factors, self._background_factors, self._barcodes_seen
-    #         cp.get_default_memory_pool().free_all_blocks()
-    #         gc.collect()
-        
-    #     if extract_backgrounds:
-    #         background_refactors = self._extract_backgrounds()
-    #     else:
-    #         background_refactors = cp.zeros(self._bit_count)
-
-    #     sum_pixel_traces = cp.zeros((self._barcode_count, self._bit_count))
-    #     barcodes_seen = cp.zeros(self._barcode_count)
-
-    #     print('extract scaling factors')
-    #     for b in tqdm(range(self._barcode_count),desc='barcode',leave=False):
-    #         labeled_image = label(cp.asarray(self._decoded_image,dtype=cp.int16) == b,connectivity=3)
-    #         barcode_regions = [x for x in regionprops(labeled_image) if (x.area >= minimum_area and x.area < maximum_area)]
-    #         barcodes_seen[b] = len(barcode_regions)
-
-    #         for br in barcode_regions:
-    #             mean_pixel_traces = []
-    #             for coord in br.coords:
-    #                 z, y, x = map(int, coord)
-    #                 pixel_trace = cp.asarray(self._scaled_pixel_traces[:, z,y,x],dtype=cp.float32) * cp.asarray(self._pixel_magnitudes[z,y,x],dtype=cp.float32)
-    #                 mean_pixel_traces.append(pixel_trace)
-    #             mean_pixel_trace = cp.mean(cp.stack(mean_pixel_traces),axis=0)  - background_refactors 
-    #             norm_pixel_trace = mean_pixel_trace / cp.linalg.norm(mean_pixel_trace)
-    #             sum_pixel_traces[b, :] += norm_pixel_trace / barcodes_seen[b]
-                
-    #             del mean_pixel_trace, norm_pixel_trace
-
-    #     sum_pixel_traces[cp.asarray(self._decoding_matrix) == 0] = cp.nan
-    #     on_bit_intensity = cp.nanmean(sum_pixel_traces, axis=0)
-    #     refactors = on_bit_intensity / cp.mean(on_bit_intensity)
-
-    #     self._scale_factors = cp.asnumpy(cp.round(refactors,3))
-    #     self._background_factors = cp.asnumpy(background_refactors)
-    #     self._barcodes_seen = cp.asnumpy(barcodes_seen)
-
-    #     del refactors, background_refactors, barcodes_seen, sum_pixel_traces, on_bit_intensity
-    #     cp.get_default_memory_pool().free_all_blocks()
-    #     gc.collect()
-
-    # def _extract_backgrounds(self,
-    #                         minimum_area: int = 6,
-    #                         maximum_area: int = 60):
-        
-    #     sum_min_pixel_traces = cp.zeros((self._barcode_count, self._bit_count))
-    #     barcodes_seen = cp.zeros(self._barcode_count)
-
-    #     print('extract background factors')
-    #     for b in tqdm(range(self._barcode_count),desc='barcode',leave=False):
-    #         labeled_image = label(cp.asarray(self._decoded_image == b,dtype=cp.int16),connectivity=3)
-    #         barcode_regions = [x for x in regionprops(labeled_image) if (x.area >= minimum_area and x.area < maximum_area)]
-    #         barcodes_seen[b] = len(barcode_regions)
-
-    #         for br in barcode_regions:
-    #             # Initialize an empty list to store min pixel trace values for each coordinate
-    #             min_pixel_traces = []
-    #             for coord in br.coords:
-    #                 z, y, x = map(int, coord)
-    #                 pixel_trace = cp.asarray(self._scaled_pixel_traces[:, z, y, x], dtype=cp.float32) * cp.asarray(self._pixel_magnitudes[z, y, x], dtype=cp.float32)
-    #                 min_pixel_traces.append(pixel_trace)
-    #             # Convert list to CuPy array and calculate the minimum across all coordinates
-    #             min_pixel_trace = cp.min(cp.stack(min_pixel_traces), axis=0)
-    #             sum_min_pixel_traces[b, :] += min_pixel_trace
-
-    #         off_pixel_traces = sum_min_pixel_traces.copy()
-    #         off_pixel_traces[self._decoding_matrix > 0] = cp.nan
-    #         off_bit_intensity = cp.nansum(off_pixel_traces, axis=0) / cp.sum((cp.asarray(self._decoding_matrix) == 0) * barcodes_seen[:, None], axis=0)
-
-    #     del labeled_image, barcode_regions, off_pixel_traces
-    #     cp.get_default_memory_pool().free_all_blocks()
-    #     gc.collect()
-
-    #     return off_bit_intensity
+ 
     
-    def run_decoding(self,
-                     num_iterative_rounds: int = 10):
-        
-        self._load_bit_data()
+    def run_decoding(self):
 
-        self._overwrite = False
-        for i in range(num_iterative_rounds):
-            self._decode_pixels()
-            if i==0:
-                self._overwrite = True
-            self._extract_refactors()
-        self._overwrite = False
-        self._extract_barcodes(minimum_area=16)
-
-        return self._barcodes_df
-    
-    # def _extract_refactors_with_multiprocessing(self, minimum_area=8, maximum_area=30, extract_backgrounds=False):
-    # # Convert to NumPy arrays for multiprocessing and Numba processing
-    #     if not extract_backgrounds:
-    #         background_refactors_np = np.zeros(self._bit_count) 
-    #     else: 
-    #         np.asarray(self._extract_backgrounds_with_multiprocessing())
-
-    #     # Extract features in parallel
-    #     coords_list = extract_features_in_parallel(self._decoded_image, self._barcode_count, minimum_area, maximum_area)
-        
-    #     #filtered_coords_list = [coords for coords in coords_list if coords.size > 0]
-    #     # Compute mean pixel traces using Numba
-    #     sum_pixel_traces, barcodes_seen = compute_mean_pixel_traces(self._scaled_pixel_traces, 
-    #                                                                 self._pixel_magnitudes, 
-    #                                                                 coords_list, 
-    #                                                                 self._barcode_count, 
-    #                                                                 self._scaled_pixel_traces.shape[1], 
-    #                                                                 background_refactors_np)
-
-    #     # Calculate scaling factors
-    #     sum_pixel_traces[self._decoding_matrix == 0] = np.nan
-    #     on_bit_intensity = np.nanmean(sum_pixel_traces, axis=0)
-    #     refactors = on_bit_intensity / np.mean(on_bit_intensity)
-
-    #     self._scale_factors = np.round(refactors, 3)
-    #     self._background_factors = background_refactors_np
-    #     self._barcodes_seen = barcodes_seen
-    
-    
-    # # Integrated function that uses multiprocessing and Numba
-    # def _extract_backgrounds_with_multiprocessing(self, minimum_area=15, maximum_area=100):
-                
-    #     # Extract features in parallel
-    #     coords_list = extract_features_in_parallel(self._decoded_image, self._barcode_count, minimum_area, maximum_area)
-
-    #     # Compute min pixel traces using Numba
-    #     sum_min_pixel_traces, barcodes_seen = compute_min_pixel_traces(self._scaled_pixel_trace, 
-    #                                                                    self._pixel_magnitudes, 
-    #                                                                    coords_list, 
-    #                                                                    self._barcode_count, 
-    #                                                                    self._scaled_pixel_traces.shape[1])
-
-    #     # Calculate off_bit_intensity
-    #     off_pixel_traces = sum_min_pixel_traces.copy()
-    #     off_pixel_traces[self._decoding_matrix_np > 0] = np.nan
-    #     off_bit_intensity = np.nansum(off_pixel_traces, axis=0) / np.sum((self._decoding_matrix_np == 0) * barcodes_seen[:, None], axis=0)
-
-    #     return off_bit_intensity
-    
-    
-# # Function to be executed in parallel for each barcode
-# def process_barcode(args):
-#     decoded_image, barcode, minimum_area, maximum_area = args
-#     try:
-#         labeled_image = label(decoded_image == barcode, connectivity=decoded_image.ndim)
-#         barcode_regions = [x for x in regionprops(labeled_image) if minimum_area <= x.area < maximum_area]
-#         coords = [x.coords for x in barcode_regions]
-#         return barcode, coords
-#     except Exception as e:
-#         print(f"Error processing barcode {barcode}: {e}")
-#         return barcode, []
-
-# # Parallel feature extraction using multiprocessing
-# def extract_features_in_parallel(decoded_image, barcode_count, minimum_area, maximum_area):
-#     num_processes = min(cpu_count(), barcode_count)
-#     tasks = [(decoded_image, b, minimum_area, maximum_area) for b in range(barcode_count)]
-    
-#     with Pool(processes=num_processes) as pool:
-#         results = pool.map(process_barcode, tasks)
-    
-#     # Sort results by barcode to ensure correct order
-#     results.sort(key=lambda x: x[0])
-#     # Extract just the coordinates list in the correct order
-#     coords_list = [coords for _, coords in results]
-#     return coords_list
-
-# # Numba-accelerated function for processing pixel traces
-# @jit(nopython=True, parallel=True)
-# def compute_min_pixel_traces(scaled_pixel_traces, pixel_magnitudes, coords_list, barcode_count, bit_count):
-#     sum_min_pixel_traces = np.full((barcode_count, bit_count), np.nan)
-#     barcodes_seen = np.zeros(barcode_count)
-
-#     for b in prange(barcode_count):
-#         if len(coords_list[b]) == 0:
-#             continue
-        
-#         min_pixel_traces = []
-#         for coords in coords_list[b]:
-#             for coord in coords:
-#                 pixel_trace = scaled_pixel_traces[:, coord[0], coord[1], coord[2]] * pixel_magnitudes[coord[0], coord[1], coord[2]]
-#                 min_pixel_traces.append(pixel_trace)
-#         if min_pixel_traces:
-#             min_pixel_trace = np.min(np.stack(min_pixel_traces), axis=0)
-#             sum_min_pixel_traces[b, :] += min_pixel_trace
-#             barcodes_seen[b] = len(min_pixel_traces)
-
-#     return sum_min_pixel_traces, barcodes_seen
-
-# @jit(nopython=True, parallel=True)
-# def compute_mean_pixel_traces(scaled_pixel_traces, pixel_magnitudes, coords_list, barcode_count, bit_count, background_refactors):
-#     sum_pixel_traces = np.full((barcode_count, bit_count), np.nan)
-#     barcodes_seen = np.zeros(barcode_count)
-
-#     for b in prange(barcode_count):
-#         if coords_list[b].shape[0] == 0:  # Check if the list for the current barcode is empty
-#             continue  # Skip this barcode if there are no coordinates to process
-
-#         mean_pixel_traces = []
-#         for coords in coords_list[b]:
-#             for coord in coords:
-#                 pixel_trace = scaled_pixel_traces[:, coord[0], coord[1], coord[2]] * pixel_magnitudes[coord[0], coord[1], coord[2]]
-#                 mean_pixel_traces.append(pixel_trace)
-#         if mean_pixel_traces:
-#             mean_pixel_trace = np.mean(np.stack(mean_pixel_traces), axis=0) - background_refactors
-#             norm_pixel_trace = mean_pixel_trace / np.linalg.norm(mean_pixel_trace)
-#             sum_pixel_traces[b, :] += norm_pixel_trace
-#             barcodes_seen[b] = len(mean_pixel_traces)
-
-#     return sum_pixel_traces, barcodes_seen
-
-    
+        pass
