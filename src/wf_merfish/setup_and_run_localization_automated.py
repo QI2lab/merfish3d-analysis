@@ -4,6 +4,9 @@ import zarr
 import numpy as np
 import gc
 from qtpy.QtWidgets import QApplication
+import cupy as cp
+from tqdm import tqdm
+import random
 
 def on_close_callback():
     viewer.layers.clear()
@@ -11,27 +14,122 @@ def on_close_callback():
 
 data_dir_path = Path('/mnt/opm3/20240214_MouseBrain_UA_NewRO_RK/processed_v2')
 tile_id = 'tile0000'
+polyDT_dir_path = data_dir_path / Path('polyDT')
 readout_dir_path = data_dir_path / Path('readouts')
+tile_ids = sorted([entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()],
+                  key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
+calibrations_dir_path = data_dir_path / Path('calibrations.zarr')
+calibrations_zarr = zarr.open(calibrations_dir_path,mode='a')
 tile_dir_path = readout_dir_path / Path(tile_id)
+overwrite_normalization = False
+overwrite_params = False
+overwrite_localizations = True
 
 bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
                  key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
-for bit_id in bit_ids:
+
+def global_normalization_factors(low_percentile_cut: float = 20.0,
+                                 high_percentile_cut: float = 99.995,
+                                 overwrite: bool = False):
+    
+        try:
+            normalization_vector = cp.asarray(calibrations_zarr.attrs['global_normalization'])
+            background_vector = cp.asarray(calibrations_zarr.attrs['global_background'])
+            data_not_found = False
+        except:         
+            data_not_found = True
+            
+        if data_not_found or overwrite:
+            
+            if len(tile_ids) > 10:
+                random_tiles = random.sample(tile_ids,10)
+            else:
+                random_tiles = tile_ids
+
+            normalization_vector = cp.ones(len(bit_ids),dtype=cp.float32)
+            background_vector = cp.zeros(len(bit_ids),dtype=cp.float32)           
+            for bit_idx, bit_id in enumerate(tqdm(bit_ids,desc='bit',leave=True)):
+                all_images = []
+                for tile_id in tqdm(random_tiles,desc='loading tiles',leave=False):
+                    tile_dir_path = readout_dir_path / Path(tile_id)
+                    bit_dir_path = tile_dir_path / Path(bit_id)
+                    current_bit = zarr.open(bit_dir_path,mode='r')
+                    current_image = cp.asarray(current_bit["registered_data"], dtype=cp.uint16)
+                    current_image[current_image<100] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.uint16)
+                    current_image[current_image>65000] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.uint16)
+                    all_images.append(cp.asnumpy(current_image).astype(np.uint16))
+                    del current_image
+                    cp.get_default_memory_pool().free_all_blocks()
+                    gc.collect()
+                    
+                all_images = np.array(all_images)
+                    
+                low_pixels = []    
+                for tile_idx, tile_id in enumerate(tqdm(random_tiles,desc='background',leave=False)):
+                    
+                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32)
+                    low_cutoff = cp.percentile(current_image, low_percentile_cut)
+                    low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))
+                                        
+                    del current_image
+                    cp.get_default_memory_pool().free_all_blocks()
+                    gc.collect()    
+
+                low_pixels = cp.concatenate(low_pixels,axis=0)
+                background_vector[bit_idx] = cp.median(low_pixels)
+                
+                del low_pixels
+                cp.get_default_memory_pool().free_all_blocks()
+                gc.collect()
+                
+                high_pixels = []
+                for tile_idx, tile_id in enumerate(tqdm(random_tiles,desc='normalize',leave=False)):
+                    
+                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32) - background_vector[bit_idx]
+                    current_image[current_image<0] = 0
+                    high_cutoff = cp.percentile(current_image, high_percentile_cut)
+                    high_pixels.append(current_image[current_image > high_cutoff].flatten().astype(cp.float32))
+                    
+                    del current_image
+                    cp.get_default_memory_pool().free_all_blocks()
+                    gc.collect()
+                    
+                high_pixels = cp.concatenate(high_pixels,axis=0)
+                normalization_vector[bit_idx] = cp.median(high_pixels)
+                    
+                del high_pixels
+                cp.get_default_memory_pool().free_all_blocks()
+                gc.collect()
+                                                   
+            calibrations_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
+            calibrations_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
+                      
+        return cp.asnumpy(background_vector), cp.asnumpy(normalization_vector)
+    
+background_vector, normalization_vector = global_normalization_factors(overwrite=overwrite_normalization)
+print(background_vector,normalization_vector)
+
+for bit_idx, bit_id in enumerate(bit_ids):
 
     bit_dir_path = tile_dir_path / Path(bit_id)
     current_channel = zarr.open(bit_dir_path,mode='r')
-    
+            
     path_save_dir = data_dir_path / Path('localizations') / Path(tile_id) / Path(bit_id).stem
     path_save_dir.mkdir(parents=True, exist_ok=True) 
     path_localization_file = path_save_dir / Path ('localization_parameters.json')
-    
-    
-    if not(path_localization_file.exists()):
+        
+    if not(path_localization_file.exists()) or overwrite_params:
 
         voxel_zyx_um = np.asarray(current_channel.attrs['voxel_zyx_um']).astype(np.float32)
         em_wvl = float(current_channel.attrs['emission_um'])
         data = np.asarray(current_channel['registered_data']).astype(np.uint16)
+        
+        data[data<100] = np.median(data[data.shape[0]//2,:,:])
+        data[data>65000] = np.median(data[data.shape[0]//2,:,:])
+        data = (data - background_vector[bit_idx]) /normalization_vector[bit_idx]
+        data = np.clip(data,0,1)
+              
         viewer = napari.Viewer()
         app = QApplication.instance()
 
@@ -166,10 +264,16 @@ for bit_id in bit_ids:
         
         test_path = path_save_dir / Path ('localized_spots_localization_tile_coords.parquet')
         
-        if not(test_path.exists()):
+        if not(test_path.exists()) or overwrite_localizations:
             
             data = np.asarray(current_channel['registered_data']).astype(np.uint16)
+            data[data<100] = np.median(data[data.shape[0]//2,:,:])
+            data[data>65000] = np.median(data[data.shape[0]//2,:,:])
+            data = (data - background_vector[bit_idx]) /normalization_vector[bit_idx]
+            data = np.clip(data,0,1)
+            
             psf_idx = int(current_channel.attrs['psf_idx'])
+            find_candidates_params['threshold'] = .06
              
             spots3d = SPOTS3D(data=data,
                             psf=psfs[psf_idx,:],
@@ -182,12 +286,11 @@ for bit_id in bit_ids:
                             fit_candidate_spots_params=fit_candidate_spots_params,
                             spot_filter_params=spot_filter_params,
                             chained=chained)
-                            
+            
             spots3d.dog_filter_source_data = 'raw'
             spots3d.find_candidates_source_data = 'dog'
 
             spots3d.run_DoG_filter()
-            spots3d.scan_chunk_size = 128
             spots3d.run_find_candidates()
             spots3d.run_fit_candidates()
             if not(spots3d.skip_filter_and_save): 

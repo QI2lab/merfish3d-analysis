@@ -17,7 +17,7 @@ dynamic = ["version"]
 dependencies = ["numpy", "tifffile", "zarr", "numba", "pycromanager",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "magicgui[pyqt5]", "napari", "pandas",
-                "scikit-image",
+                "scikit-image", "pyarrow", "tbb",
                 "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field"]
 
 [tool.hatch.version]
