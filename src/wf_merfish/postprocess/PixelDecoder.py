@@ -210,18 +210,17 @@ class PixelDecoder():
     def _hp_filter(self,
                    sigma= (5,3,3)):
         
-        if isinstance(self._image_data, np.ndarray):
-            image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
-
+        self._image_data_hp = self._image_data.copy()
+        
         print('highpass filter')
-        for i in tqdm(range(image_data_cp.shape[0]),desc='bit'):
-            lowpass = gaussian_filter(image_data_cp[i,:,:,:], sigma=sigma)
-            gauss_highpass = image_data_cp[i,:,:,:] - lowpass
-            gauss_highpass[lowpass > image_data_cp[i,:,:,:]] = 0
-            image_data_cp[i,:,:,:] = gauss_highpass
+        for i in tqdm(range(self._image_data.shape[0]),desc='bit'):
+            image_data_cp = cp.asarray(self._image_data[i,:,:,:])
+            lowpass = gaussian_filter(image_data_cp, sigma=sigma)
+            gauss_highpass = image_data_cp - lowpass
+            gauss_highpass[lowpass > image_data_cp] = 0
+            self._image_data_hp[i,:,:,:] = cp.asnumpy(gauss_highpass).astype(np.float32)
             
         self._filter_type = 'hp'   
-        self._image_data_hp = cp.asnumpy(image_data_cp).astype(np.float32)
         
         del image_data_cp, lowpass, gauss_highpass
         cp.get_default_memory_pool().free_all_blocks()
@@ -230,19 +229,22 @@ class PixelDecoder():
     def _lp_filter(self,
                    sigma = (2,1,1)):
         
-        if self._filter_type is None:
-            if isinstance(self._image_data, np.ndarray):
-                image_data_cp = cp.asarray(self._image_data,dtype=cp.float32)
+        if self._filter_type == 'hp':
+            self._image_data_lp = self._image_data_hp.copy()
         else:
-            if isinstance(self._image_data_hp, np.ndarray):
-                image_data_cp = cp.asarray(self._image_data_hp,dtype=cp.float32)
-            
+            self._image_data_lp = self._image_data.copy()
+    
         print('lowpass filter')
-        for i in tqdm(range(image_data_cp.shape[0]),desc='bit'):
-            image_data_cp[i,:,:,:] = gaussian_filter(image_data_cp[i,:,:,:],sigma=sigma)
+        for i in tqdm(range(self._image_data_lp.shape[0]),desc='bit'):
+            
+            if self._filter_type == 'hp':
+                image_data_cp = cp.asarray(self._image_data_hp[i,:],dtype=cp.float32)
+            else:
+                image_data_cp = cp.asarray(self._image_data[i,:],dtype=cp.float32)
+            
+            self._image_data_lp[i,:,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=sigma)).astype(np.float32)
             
         self._filter_type = 'lp'
-        self._image_data_lp = cp.asnumpy(image_data_cp).astype(np.float32)
         
         del image_data_cp
         cp.get_default_memory_pool().free_all_blocks()
@@ -297,8 +299,7 @@ class PixelDecoder():
         pixel_traces_squared_norms = cp.sum(pixel_traces.T**2, axis=1).reshape(-1, 1)
         codebook_matrix_squared_norms = cp.sum(codebook_matrix**2, axis=1).reshape(1, -1)
         squared_dists = pixel_traces_squared_norms + codebook_matrix_squared_norms - 2 * cp.dot(pixel_traces.T, codebook_matrix.T)        
-        squared_dists = cp.sqrt(cp.maximum(squared_dists, 0)) / 2 # DPS note: why is distance threshold ~ 2x what is should be? Factor of 2 somewhere?
-        
+        squared_dists = cp.sqrt(cp.maximum(squared_dists, 0)) 
         min_distances = cp.min(squared_dists, axis=1)
         min_indices = cp.argmin(squared_dists, axis=1)
         
@@ -309,42 +310,50 @@ class PixelDecoder():
                        magnitude_threshold: float = 1.0):
         
         
-        if self._filter_type == 'lp':
-            original_shape = self._image_data_lp.shape
-            scaled_pixel_traces = cp.asarray(self._image_data_lp).reshape(self._bit_count, -1).astype(cp.float32)
-        else:
-            if self._filter_type == 'hp':
-                original_shape = self._image_data_hp.shape
-                scaled_pixel_traces = cp.asarray(self._image_data_hp).reshape(self._bit_count, -1).astype(cp.float32)
+        original_shape = self._image_data.shape
+        self._decoded_image = np.zeros((original_shape[1:]),dtype=np.int16)
+        self._magnitude_image = np.zeros((original_shape[1:]),dtype=np.float32)
+        self._scaled_pixel_images = np.zeros((original_shape),dtype=np.float32)
+        self._distance_image = np.zeros((original_shape[1:]),dtype=np.float32)
+        
+        print("decoding")        
+        for z_idx in tqdm(range(original_shape[1]),desc="z"):
+            
+            if self._filter_type == 'lp':
+                z_plane_shape = self._image_data_lp[:,z_idx,:].shape
+                scaled_pixel_traces = cp.asarray(self._image_data_lp[:,z_idx,:]).reshape(self._bit_count, -1).astype(cp.float32)
             else:
-                original_shape = self._image_data.shape
-                scaled_pixel_traces = cp.asarray(self._image_data).reshape(self._bit_count, -1).astype(cp.float32)
-        
-        scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
-                                                self._background_vector,
-                                                self._normalization_vector)
-        scaled_pixel_traces = self._clip_pixel_traces(scaled_pixel_traces)
-        normalized_pixel_traces, pixel_magnitude_trace = self._normalize_pixel_traces(scaled_pixel_traces)
-        distance_trace, codebook_index_trace = self._calculate_distances(normalized_pixel_traces,self._codebook_matrix)
-        
-        del normalized_pixel_traces
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
+                if self._filter_type == 'hp':
+                    z_plane_shape = self._image_data_hp[:,z_idx,:].shape
+                    scaled_pixel_traces = cp.asarray(self._image_data_hp[:,z_idx,:]).reshape(self._bit_count, -1).astype(cp.float32)
+                else:
+                    z_plane_shape = self._image_data[:,z_idx,:].shape
+                    scaled_pixel_traces = cp.asarray(self._image_data[:,z_idx,:]).reshape(self._bit_count, -1).astype(cp.float32)
+                
+            scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
+                                                    self._background_vector,
+                                                    self._normalization_vector)
+            scaled_pixel_traces = self._clip_pixel_traces(scaled_pixel_traces)
+            normalized_pixel_traces, pixel_magnitude_trace = self._normalize_pixel_traces(scaled_pixel_traces)
+            distance_trace, codebook_index_trace = self._calculate_distances(normalized_pixel_traces,self._codebook_matrix)
+            
+            del normalized_pixel_traces
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
 
-        decoded_trace = cp.full((distance_trace.shape[0],), -1, dtype=cp.int16)
-        mask_trace = distance_trace < distance_threshold
-        decoded_trace[mask_trace] = codebook_index_trace[mask_trace].astype(cp.int16)
-        #decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
- 
-        self._decoded_image = cp.asnumpy(cp.reshape(decoded_trace, original_shape[1:]))
-        self._magnitude_image = cp.asnumpy(cp.reshape(pixel_magnitude_trace, original_shape[1:]))
-        self._scaled_pixel_images = cp.asnumpy(cp.reshape(scaled_pixel_traces, original_shape))
-        self._distance_image = cp.asnumpy(cp.reshape(distance_trace, original_shape[1:]))
-        
-        self._decoded_image = cp.asnumpy(cp.reshape(decoded_trace, original_shape[1:]))
-        del decoded_trace, pixel_magnitude_trace, scaled_pixel_traces, distance_trace
-        cp.get_default_memory_pool().free_all_blocks()
-        gc.collect()
+            decoded_trace = cp.full((distance_trace.shape[0],), -1, dtype=cp.int16)
+            mask_trace = distance_trace < distance_threshold
+            decoded_trace[mask_trace] = codebook_index_trace[mask_trace].astype(cp.int16)
+            decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+    
+            self._decoded_image[z_idx,:] = cp.asnumpy(cp.reshape(decoded_trace, z_plane_shape[1:]))
+            self._magnitude_image[z_idx,:] = cp.asnumpy(cp.reshape(pixel_magnitude_trace, z_plane_shape[1:]))
+            self._scaled_pixel_images[:,z_idx,:] = cp.asnumpy(cp.reshape(scaled_pixel_traces, z_plane_shape))
+            self._distance_image[z_idx,:] = cp.asnumpy(cp.reshape(distance_trace, z_plane_shape[1:]))
+            
+            del decoded_trace, pixel_magnitude_trace, scaled_pixel_traces, distance_trace
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
         
 #---------------------------------------------------------------------------------
 # Code below here not working yet - 2024/02/28 DPS
