@@ -15,9 +15,11 @@ calibration_zarr = zarr.open(calibration_dir_path)
 df_codebook = pd.DataFrame(calibration_zarr.attrs['codebook'])
 print(df_codebook.head())
 localization_dir_path = data_dir_path / Path('localizations')
-tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+tile_ids = sorted([entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()],
+                  key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
-bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                 key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
 try:
     mask_path = polyDT_dir_path / Path(tile_ids[0]) / Path("round000_mask.tiff")

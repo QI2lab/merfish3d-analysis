@@ -15,9 +15,11 @@ calibration_dir_path = data_dir_path / Path("calibrations.zarr")
 polyDT_dir_path = data_dir_path / Path('polyDT')
 readout_dir_path = data_dir_path / Path('readouts')
 localization_dir_path = data_dir_path / Path('localizations')
-tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
+tile_ids = sorted([entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()],
+                  key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
-bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
+                 key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
 try:
     mask_path = polyDT_dir_path / Path(tile_ids[0]) / Path("round000_mask.tif")
@@ -143,7 +145,7 @@ radius_coef = 1.0
 # (z dispersion,) x/y dispersion, mean amplitude, std amplitude, sequence error, selection size
 # weights = np.array([1, 1, 1, 1, 0])
 weights = np.array([5, 5, 1, 1, 0])
-min_spot_sep = 0.75
+min_spot_sep = 0.25
 # min_spot_sep = np.array(localization_params[condi_name]['min_spot_sep'])
 dist_params = min_spot_sep * radius_coef
 
