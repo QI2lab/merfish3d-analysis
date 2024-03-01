@@ -260,6 +260,10 @@ class DataRegistration:
                 self._bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
                                        key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
                 
+                current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
+                current_round = zarr.open(current_round_path,mode='r')
+                data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
+                
                 for bit_id in self._bit_ids:
                     tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
                     bit_dir_path = tile_dir_path / Path(bit_id)
@@ -824,12 +828,15 @@ class DataRegistration:
                                 colormap=colormaps[idx].to_napari(),
                                 contrast_limits=[200,10000])
         else:
+            viewer.add_image(data=self._data_registered[0],
+                            name='polyDT',
+                            scale=self._voxel_size,
+                            blending='additive')
             for idx in range(len(self._bit_ids)):
-                viewer.add_image(data=self._data_registered[idx],
+                viewer.add_image(data=self._data_registered[idx+1],
                                 name=self._bit_ids[idx],
                                 scale=self._voxel_size,
                                 blending='additive',
-                                colormap=colormaps[idx].to_napari(),
-                                contrast_limits=[200,10000])
+                                colormap=colormaps[idx].to_napari())
 
         napari.run()
