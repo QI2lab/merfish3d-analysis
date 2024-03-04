@@ -2818,6 +2818,7 @@ def optimize_spots(
             codebook_keys, 
             codebook_vals, 
             max_err=err_corr_dist, 
+            dist_method=dist_method,
             verbose=verbose,
             )
     
