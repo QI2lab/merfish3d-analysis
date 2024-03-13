@@ -11,7 +11,7 @@ readout_dir_path = data_dir_path / Path('readouts')
 localization_dir_path = data_dir_path / Path('localizations')
 tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
 tile_dir_path = readout_dir_path / Path(tile_ids[0])
-bit_ids = [entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()]
+bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()])
 
 try:
     mask_path = polyDT_dir_path / Path(tile_ids[0]) / Path("round000_mask.tiff")
@@ -40,13 +40,13 @@ color_names = [
 ]
 
 
-file_id = 'candidates_registered_tile_coords.parquet'
+file_id = 'localization_candidates_localization_tile_coords.parquet'
 scale = [1,1,1]
 viewer = napari.Viewer()
 
 physical_spacing=[.31,.088,.088]
 
-for bit_id in bit_ids[2:]:
+for bit_id in bit_ids:
     registered_localization_tile_bit_path = localization_dir_path / Path(tile_ids[0]) / Path(bit_id).stem / Path(file_id)
     df_localization = pd.read_parquet(registered_localization_tile_bit_path)
     
@@ -88,10 +88,11 @@ for bit_id in bit_ids[2:]:
     # Add the points layer
     viewer.add_points(points, 
                       face_color=color_names[extracted_bit-1], 
+                      name=f'bit {extracted_bit-1}',
                       size=.5, 
                       scale=scale)
     
-    del df_localization, points
+    del points
 
 # Start the Napari GUI event loop
 napari.run()
