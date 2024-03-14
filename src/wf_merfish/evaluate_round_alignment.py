@@ -4,7 +4,8 @@ import gc
 
 readout = True
 
-data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0.2_prop_fn-0.1_prop_fp-0.7/processed')
+#data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0.2_prop_fn-0.1_prop_fp-0.7/processed')
+data_dir_path = Path('/mnt/opm3/20240214_MouseBrain_UA_NewRO_RK/processed_v2')
 polyDT_dir_path = data_dir_path / Path('polyDT')
 tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
 tile_ids = ['tile0000']

@@ -15,7 +15,7 @@ visualize_simulation = True
 visualize_decoded = True
 
 simu_objects = ['simple_simu', 'cylinder', 'tri-cylinder']
-simu_object = simu_objects[1]
+simu_object = simu_objects[0]
 
 try:
     # case of Python script
@@ -72,6 +72,7 @@ if simu_object == 'simple_simu':
         )
     simulated_coords.rename(columns={'rounds': 'bit_idx'}, inplace=True)
     true_coords.rename(columns={'rounds': 'bit_idx'}, inplace=True)
+    print(simulated_coords)
     
     dir_coords = dir_main / 'coordinates' / f'n_species-{len(species)}_n_spots-{n_spots}'
     dir_coords.mkdir(parents=True, exist_ok=True)

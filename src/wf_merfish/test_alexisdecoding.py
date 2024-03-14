@@ -136,7 +136,7 @@ df_candidates_within_mask['rescaled_amplitude'] = (df_candidates_within_mask['am
 
 
 coords = df_candidates_within_mask[['z', 'y', 'x']].to_numpy()
-fit_vars = df_candidates_within_mask[['rescaled_amplitude']].to_numpy().reshape(-1, 1)
+fit_vars = df_candidates_within_mask[['amplitude']].to_numpy().reshape(-1, 1)
 spot_ids = df_candidates_within_mask['spot_id'].to_numpy()
 spot_rounds = df_candidates_within_mask['bit'].to_numpy()
 
@@ -144,10 +144,11 @@ spot_rounds = df_candidates_within_mask['bit'].to_numpy()
 radius_coef = 1.0
 # (z dispersion,) x/y dispersion, mean amplitude, std amplitude, sequence error, selection size
 # weights = np.array([1, 1, 1, 1, 0])
-weights = np.array([5, 5, 1, 1, 0])
-min_spot_sep = 0.25
+weights = np.array([10, 10, 1, 20, 1, 0])
+min_spot_sep_xy = 0.250
+min_spot_sep_z = .900
 # min_spot_sep = np.array(localization_params[condi_name]['min_spot_sep'])
-dist_params = min_spot_sep * radius_coef
+dist_params = [min_spot_sep_z * radius_coef, min_spot_sep_xy * radius_coef]
 
 optim_results = decode.optimize_spots(
     coords=coords, 
@@ -157,17 +158,17 @@ optim_results = decode.optimize_spots(
     dist_params=dist_params, 
     codebook=codebook,
     weights=weights,
-    err_corr_dist=1,
+    err_corr_dist=0,
     max_positive_bits=16,
     max_bcd_per_spot=None,
     history=True, 
     return_extra=True,
     return_contribs=True,
-    rescale_used_spots=False,  # no iterations
-    trim_network=True,
+    rescale_used_spots=True,  # no iterations
+    trim_network=False,
     # propose_method='iter_bcd',
     propose_method='single_step',
-    verbose=1,
+    verbose=2,
     )
 
 

@@ -22,7 +22,7 @@ bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_di
                  key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
 
 try:
-    mask_path = polyDT_dir_path / Path(tile_ids[0]) / Path("round000_mask.tiff")
+    mask_path = polyDT_dir_path / Path(tile_ids[0]) / Path("round000_mask.tif")
     binary_mask = imread(mask_path)
     binary_mask[binary_mask>0]=1
 except:

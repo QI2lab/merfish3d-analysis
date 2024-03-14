@@ -673,7 +673,7 @@ class PixelDecoder():
                      lowpass_sigma: Sequence[float] = (2,1,1),
                      distance_threshold: float =.5172,
                      magnitude_threshold: float = 0.4,
-                     minimum_pixels: int = 11,
+                     minimum_pixels: int = 21,
                      skip_extraction: bool = False):
 
         self._load_bit_data()

@@ -1,14 +1,12 @@
 from pathlib import Path
 import zarr
 from numcodecs import blosc
-import time
 import numpy as np
 from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
 from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
-import gc
-import cupy as cp
+from spots3d import SPOTS3D
 
 data_dir_path = Path('/home/qi2lab/Documents/github/wf-merfish/examples/simulated_images/cylinder/images/jitter-0_shift_amp-0_prop_fn-0_prop_fp-0')
 
@@ -113,18 +111,27 @@ for r_idx in range(num_r):
     
     current_raw_data[:] = raw_data
 
-    lib = getlib()
+    spots_factory = SPOTS3D.SPOTS3D(data=raw_data,
+                                    psf=channel_psfs,
+                                    microscope_params={'na': 1.35,
+                                                        'ri': 1.51,
+                                                        'theta': 0},
+                                    metadata={'pixel_size' : pixel_size,
+                                            'scan_step' : axial_step,
+                                            'wvl': em_wvl},
+                                    decon_params={'iterations' : 40,
+                                                    'tv_tau' : .0001},
+                                    DoG_filter_params=None)
             
-    image_decon = richardson_lucy_nc(raw_data,
-                                    psf=psf,
-                                    numiterations=40,
-                                    regularizationfactor=.00001,
-                                    lib=lib)
+    spots_factory.run_deconvolution()
+    spots_factory.run_DoG_filter()
     
-    data_reg_zarr = current_channel.zeros('registered_data',
-                                        shape=image_decon.shape,
-                                        chunks=(1,image_decon.shape[1],image_decon.shape[2]),
+    dog_data = spots_factory.dog_data.astype(np.float32)
+    
+    data_reg_zarr = current_channel.zeros('registered_dog_data',
+                                        shape=dog_data.shape,
+                                        chunks=(1,dog_data.shape[1],dog_data.shape[2]),
                                         compressor=compressor,
-                                        dtype=np.uint16)
+                                        dtype=np.float32)
     
-    data_reg_zarr[:] = image_decon
+    data_reg_zarr[:] = dog_data
