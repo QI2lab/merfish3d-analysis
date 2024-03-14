@@ -32,10 +32,18 @@ for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
     del decode_factory
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
+
+decode_factory = PixelDecoder(dataset_path=dataset_path,
+                            global_normalization_limits = (80,99.95),
+                            overwrite_normalization=False)
     
 decode_factory.load_all_barcodes()
 decode_factory.filter_all_barcodes(fdr_target=.25)
 decode_factory.save_barcodes()
+
+del decode_factory
+gc.collect()
+cp.get_default_memory_pool().free_all_blocks()
     
 #     if False:
 #         import napari

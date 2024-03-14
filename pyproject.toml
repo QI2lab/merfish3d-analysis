@@ -17,7 +17,8 @@ dynamic = ["version"]
 dependencies = ["numpy", "tifffile", "zarr", "numba", "pycromanager",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "magicgui[pyqt5]", "napari", "pandas",
-                "scikit-image", "pyarrow", "tbb",
+                "scikit-image", "pyarrow", "tbb", 
+                "imbalanced-learn", "scikit-learn",
                 "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main#egg=multiview-stitcher",
                 "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field"]
 

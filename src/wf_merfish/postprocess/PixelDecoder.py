@@ -409,7 +409,7 @@ class PixelDecoder():
             
     def _extract_barcodes(self, 
                           minimum_pixels: int = 9,
-                          maximum_pixels: int = 100):
+                          maximum_pixels: int = 200):
         
         if self._verbose > 1:
             print('extract barcodes')
@@ -451,7 +451,9 @@ class PixelDecoder():
                                                   'area',
                                                   'centroid',
                                                   'intensity_mean',
-                                                  'intensity_max'])
+                                                  'intensity_max',
+                                                  'moments_normalized',
+                                                  'inertia_tensor_eigvals'])
             
             del labeled_image
             gc.collect()
@@ -582,10 +584,16 @@ class PixelDecoder():
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
         from sklearn.neural_network import MLPClassifier
-        from sklearn.metrics import classification_report, confusion_matrix
+        from sklearn.metrics import classification_report
+        from imblearn.over_sampling import SMOTE 
         
         self._df_barcodes_loaded['X'] = ~self._df_barcodes_loaded['gene_id'].str.startswith('Blank')
-        columns = ['X', 'area', 's-b_mean', 's-b_max', 'signal_mean', 'signal_max', 'bkd_mean', 'bkd_max', 'distance_mean', 'distance_max']
+        columns = ['X', 'area', 's-b_mean', 's-b_max', 'distance_mean',
+                   'moments_normalized-0-0-2', 'moments_normalized-0-0-3', 'moments_normalized-0-1-1',
+                   'moments_normalized-0-1-2', 'moments_normalized-0-1-3', 'moments_normalized-0-2-0',
+                   'moments_normalized-0-2-1', 'moments_normalized-0-2-3', 'moments_normalized-0-3-0',
+                   'moments_normalized-0-3-1', 'moments_normalized-0-3-2', 'moments_normalized-0-3-3',
+                   'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1', 'inertia_tensor_eigvals-2']
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
         df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
@@ -596,15 +604,20 @@ class PixelDecoder():
         X_train, X_test, y_train, y_test = train_test_split(x, y, test_size=0.4, random_state=42)
         
         if self._verbose > 1:
+            print('generating synthetic samples for class balance')
+        smote = SMOTE(random_state=42)
+        X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+        
+        if self._verbose > 1:
             print('scaling features')
         scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
+        X_train_scaled = scaler.fit_transform(X_train_resampled)
         X_test_scaled = scaler.transform(X_test)
         
         if self._verbose > 1:
             print('training classifier')
         mlp = MLPClassifier(solver='adam', max_iter=10000, random_state=42)
-        mlp.fit(X_train_scaled, y_train)
+        mlp.fit(X_train_scaled, y_train_resampled)
         predictions = mlp.predict(X_test_scaled)
         
         if self._verbose >1:
@@ -646,6 +659,10 @@ class PixelDecoder():
         self._df_filtered_barcodes['global_x'] = self._df_filtered_barcodes['x']
         self._df_filtered_barcodes['cell_id'] = -1
         self._barcodes_filtered = True
+        
+        if self._verbose > 1:
+            print(f"fdr : {fdr}")
+            print(f"retained barcodes: {len(self._df_filtered_barcodes)}")
        
         del df_above_threshold, full_data_scaled
         del mlp, predictions, X_train, X_test, y_test, y_train, X_train_scaled, X_test_scaled
