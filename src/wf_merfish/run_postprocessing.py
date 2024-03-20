@@ -19,7 +19,8 @@ def create_gui():
 
     # Other specific options (initially hidden)
     other_options = [CheckBox(text='Register polyDT/readouts within tile', visible=False),
-                     CheckBox(text='Register polyDT across tiles', visible=False)]
+                     CheckBox(text='Register polyDT across tiles', visible=False),
+                     CheckBox(text='Write polyDT tiffs',visible=False)]
 
     # Summary label (initially hidden)
     summary_label = Label(value="", visible=False)

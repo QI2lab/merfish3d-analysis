@@ -53,7 +53,7 @@ class DataRegistration:
         self._has_rigid_registrations = False
         self._has_of_registrations = False
         self._compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
-        blosc.set_nthreads(12)
+        blosc.set_nthreads(20)
         self._overwrite_registered = overwrite_registered
 
     # -----------------------------------
@@ -239,7 +239,7 @@ class DataRegistration:
                 for round_id in self._round_ids:
                     current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
                     current_round = zarr.open(current_round_path,mode='r')
-                    data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
+                    data_registered.append(np.asarray(current_round["registered_decon_data"], dtype=np.uint16))
                             
                 self._data_registered = np.stack(data_registered,axis=0)
                 del data_registered, current_round
@@ -260,13 +260,13 @@ class DataRegistration:
                 
                 current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
                 current_round = zarr.open(current_round_path,mode='r')
-                data_registered.append(np.asarray(current_round["registered_data"], dtype=np.uint16))
+                data_registered.append(np.asarray(current_round["registered_decon_data"], dtype=np.uint16))
                 
                 for bit_id in self._bit_ids:
                     tile_dir_path = readout_dir_path / Path(tile_ids[self._tile_idx])
                     bit_dir_path = tile_dir_path / Path(bit_id)
                     current_bit = zarr.open(bit_dir_path,mode='r')
-                    data_registered.append(np.asarray(current_bit["registered_data"], dtype=np.uint16))
+                    data_registered.append(np.asarray(current_bit["registered_decon_data"], dtype=np.uint16))
                     
                 self._data_registered = np.stack(data_registered,axis=0)
                 del data_registered, current_round
@@ -302,14 +302,21 @@ class DataRegistration:
         current_round = zarr.open(current_round_path,mode='a')
         
         try:
-            data_reg_zarr = current_round.zeros('registered_data',
+            data_decon_zarr = current_round.zeros('decon_data',
+                                            shape=ref_image_decon.shape,
+                                            chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
+                                            compressor=self._compressor,
+                                            dtype=np.uint16)
+            data_reg_zarr = current_round.zeros('registered_decon_data',
                                             shape=ref_image_decon.shape,
                                             chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
                                             compressor=self._compressor,
                                             dtype=np.uint16)
         except Exception:
-            data_reg_zarr = current_round['registered_data']
+            data_decon_zarr = current_round['decon_data']
+            data_reg_zarr = current_round['registered_decon_data']
         
+        data_decon_zarr[:] = ref_image_decon
         data_reg_zarr[:] = ref_image_decon
                     
         ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
@@ -331,7 +338,7 @@ class DataRegistration:
 
             mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                             
-            downsample_factor = 2
+            downsample_factor = 4
             if downsample_factor > 1:
                 ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
                 mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
@@ -354,11 +361,12 @@ class DataRegistration:
             del ref_ds_image_sitk
             gc.collect()
             
-            downsample_factor = 2
+            downsample_factor = 4
             if downsample_factor > 1:
                 ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
                 mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
             else:
+                ref_ds_image_sitk = ref_image_sitk
                 mov_ds_image_sitk = mov_image_sitk
                 
             _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
@@ -381,6 +389,7 @@ class DataRegistration:
                 ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
                 mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
             else:
+                ref_ds_image_sitk = ref_image_sitk
                 mov_ds_image_sitk = mov_image_sitk
                                 
             _, xyz_shift_4x = compute_rigid_transform(ref_ds_image_sitk, 
@@ -449,14 +458,21 @@ class DataRegistration:
                 data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.uint16)
                 
             try:
-                data_reg_zarr = current_round.zeros('registered_data',
+                data_decon_zarr = current_round.zeros('decon_data',
+                                                    shape=ref_image_decon.shape,
+                                                    chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
+                                                    compressor=self._compressor,
+                                                    dtype=np.uint16)
+                data_reg_zarr = current_round.zeros('registered_decon_data',
                                                 shape=data_registered.shape,
                                                 chunks=(1,data_registered.shape[1],data_registered.shape[2]),
                                                 compressor=self._compressor,
                                                 dtype=np.uint16)
             except Exception:
-                data_reg_zarr = current_round['registered_data']
+                data_decon_zarr = current_round['decon_data']
+                data_reg_zarr = current_round['registered_decon_data']
             
+            data_decon_zarr[:] = mov_image_decon
             data_reg_zarr[:] = data_registered
         
         del ref_image_sitk
@@ -490,6 +506,25 @@ class DataRegistration:
                 
         tile_dir_path = readout_dir_path / Path(self._tile_id)
         
+        round_list = []
+        for bit_id in bit_ids:
+            bit_dir_path = tile_dir_path / Path(bit_id)
+            current_bit_channel = zarr.open(bit_dir_path,mode='a')      
+            round_list.append(int(current_bit_channel.attrs['round']))
+            
+        round_list = np.array(round_list)
+        ref_idx = int(np.argwhere(round_list==0)[0])
+        print('found ref. index = ' + str(ref_idx))
+        
+        ref_bit_id = bit_ids[ref_idx]
+        bit_dir_path = tile_dir_path / Path(ref_bit_id)
+        reference_bit_channel = zarr.open(bit_dir_path,mode='a')      
+    
+        ref_dog_bit_sitk = sitk.GetImageFromArray(reference_bit_channel['raw_data'].astype(np.float32))
+            
+        del reference_bit_channel
+        gc.collect()
+        
         for bit_id in bit_ids:
             bit_dir_path = tile_dir_path / Path(bit_id)
             current_bit_channel = zarr.open(bit_dir_path,mode='a')      
@@ -514,12 +549,13 @@ class DataRegistration:
             spots_factory.run_deconvolution()
             spots_factory.run_DoG_filter()
             
+            decon_image = spots_factory.decon_data.copy().astype(np.uint16)
             dog_image = spots_factory.dog_data.copy().astype(np.float32)
             dog_image[dog_image<0.]=0.0
               
             del spots_factory
             gc.collect()
-       
+               
             if r_idx > 0:
                 polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
                 current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
@@ -528,44 +564,78 @@ class DataRegistration:
                 shift_xyz = [float(i) for i in rigid_xform_xyz_um]
                 xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
                 
-                of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
-                of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
-                                                            isVector = True)
-                interpolator = sitk.sitkLinear
-                identity_transform = sitk.Transform(3, sitk.sitkIdentity)
-                optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_dog_bit_sitk, identity_transform, interpolator,
-                                                  0, of_4x_sitk.GetPixelID())
-                displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
-                gc.collect()
+                if self._perform_optical_flow:
+                    of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
+                    of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
+                                                                isVector = True)
+                    interpolator = sitk.sitkLinear
+                    identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+                    optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_dog_bit_sitk, identity_transform, interpolator,
+                                                    0, of_4x_sitk.GetPixelID())
+                    displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+                    del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
+                    gc.collect()
+                    
+                decon_bit_image_sitk = apply_transform(ref_dog_bit_sitk,
+                                                     sitk.GetImageFromArray(decon_image),
+                                                     xyx_transform)
 
                 dog_bit_image_sitk = apply_transform(ref_dog_bit_sitk,
                                                      sitk.GetImageFromArray(dog_image),
                                                      xyx_transform)
-               # apply optical flow 
-                dog_bit_image_sitk = sitk.Resample(dog_bit_image_sitk,displacement_field)
-                data_registered = sitk.GetArrayFromImage(dog_bit_image_sitk).astype(np.float32)
-                del dog_bit_image_sitk
+                
+                if self._perform_optical_flow:
+
+                    decon_bit_image_sitk = sitk.Resample(decon_bit_image_sitk,displacement_field)
+                    dog_bit_image_sitk = sitk.Resample(dog_bit_image_sitk,displacement_field)
+                
+                data_decon_registered = sitk.GetArrayFromImage(decon_bit_image_sitk).astype(np.float32)
+                data_dog_registered = sitk.GetArrayFromImage(dog_bit_image_sitk).astype(np.float32)
+                del decon_bit_image_sitk, dog_bit_image_sitk
                 gc.collect()
                 
             else:
-                ref_dog_bit_sitk = sitk.GetImageFromArray(dog_image)
-                data_registered = dog_image.copy()
-                
-                del dog_image
+                data_decon_registered = decon_image.copy()
+                data_dog_registered = dog_image.copy()
                 gc.collect()
+                
+            data_decon = decon_image.copy()
+            data_dog = dog_image.copy()
+            
+            del decon_image, dog_image
             
             try:
-                data_reg_zarr = current_bit_channel.zeros('registered_dog_data',
-                                                        shape=data_registered.shape,
-                                                        chunks=(1,data_registered.shape[1],data_registered.shape[2]),
+                data_decon_zarr = current_bit_channel.zeros('decon_data',
+                                                        shape=data_decon.shape,
+                                                        chunks=(1,data_decon.shape[1],data_decon.shape[2]),
+                                                        compressor=self._compressor,
+                                                        dtype=np.uint16)
+                data_dog_zarr = current_bit_channel.zeros('dog_data',
+                                                        shape=data_dog.shape,
+                                                        chunks=(1,data_dog.shape[1],data_dog.shape[2]),
+                                                        compressor=self._compressor,
+                                                        dtype=np.float32)
+                data_decon_reg_zarr = current_bit_channel.zeros('registered_decon_data',
+                                                        shape=data_decon_registered.shape,
+                                                        chunks=(1,data_decon_registered.shape[1],data_decon_registered.shape[2]),
+                                                        compressor=self._compressor,
+                                                        dtype=np.uint16)
+                data_dog_reg_zarr = current_bit_channel.zeros('registered_dog_data',
+                                                        shape=data_dog_registered.shape,
+                                                        chunks=(1,data_dog_registered.shape[1],data_dog_registered.shape[2]),
                                                         compressor=self._compressor,
                                                         dtype=np.float32)
             except Exception:
-                data_reg_zarr = current_bit_channel['registered_dog_data']
-            
-            data_reg_zarr[:] = data_registered
-            del data_registered
+                data_decon_zarr = current_bit_channel['decon_data']
+                data_dog_zarr = current_bit_channel['dog_data']
+                data_decon_reg_zarr = current_bit_channel['registered_decon_data']
+                data_dog_reg_zarr = current_bit_channel['registered_dog_data']
+                
+            data_decon_zarr[:] = data_decon.astype(np.uint16)
+            data_dog_zarr[:] = data_dog
+            data_decon_reg_zarr[:] = data_decon_registered.astype(np.uint16)
+            data_dog_reg_zarr[:] = data_dog_registered
+            del data_dog_registered, data_decon_registered
             gc.collect()
 
     def load_rigid_registrations(self):
