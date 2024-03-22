@@ -434,7 +434,7 @@ def postprocess(correction_option: str,
         run_optical_flow = True
         from wf_merfish.postprocess.DataRegistration import DataRegistration
 
-        for tile_idx in range(18,num_tiles):
+        for tile_idx in range(num_tiles):
             data_register_factory = DataRegistration(dataset_path=output_dir_path,
                                                     overwrite_registered=False,
                                                     perform_optical_flow=run_optical_flow,
