@@ -1,6 +1,7 @@
 from magicgui.widgets import Container, FileEdit, CheckBox, ComboBox, ProgressBar, PushButton, Label
 from pathlib import Path
 from wf_merfish.postprocess.postprocess import postprocess
+from superqt.utils import thread_worker
 
 def create_gui():
     # Main GUI container
@@ -114,6 +115,12 @@ def create_gui():
     # Function to close the GUI
     def close_gui():
         layout.native.close()
+    
+    @thread_worker
+    def threaded_postprocess(stitching_options,noise_map_path,darkfield_path):
+        yield from postprocess(correction_options.value, stitching_options, directory_selector.value, 
+                                    codebook_selector.value, bit_order_selector.value,
+                                    noise_map_path, darkfield_path)
 
     # Start the task
     def start_task():
@@ -143,9 +150,7 @@ def create_gui():
         shading_path = shading_selector.value if validate_tiff_file(shading_selector.value) else None
 
         # Start the worker with additional arguments
-        worker = postprocess(correction_options.value, stitching_options, directory_selector.value, 
-                             codebook_selector.value, bit_order_selector.value,
-                             noise_map_path, darkfield_path, shading_path)
+        worker = threaded_postprocess(stitching_options,noise_map_path,darkfield_path)
         worker.yielded.connect(update_progress)
         worker.start()
 

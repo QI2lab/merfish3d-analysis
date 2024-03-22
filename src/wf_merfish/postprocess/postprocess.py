@@ -28,12 +28,9 @@ from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
 from typing import Dict, Generator, Optional
-from superqt.utils import thread_worker
 from tifffile import TiffWriter
 
-
 # parse experimental directory, load data, and process
-@thread_worker
 def postprocess(correction_option: str, 
                 stitching_options: Dict[str,bool], 
                 dataset_path: Path, 
@@ -409,7 +406,9 @@ def postprocess(correction_option: str,
                                                     metadata=metadata,
                                                     photometric='minisblack',
                                                     resolutionunit='CENTIMETER')
+                                        
                                 
+
                                 progress_updates['Channel'] = ((ch_idx-channels_idxs_in_data_tile[0]+1) / len(channels_idxs_in_data_tile)) * 100
                                 yield progress_updates
 
@@ -432,25 +431,30 @@ def postprocess(correction_option: str,
     yield progress_updates
                     
     if round_registration_flag:
-        run_optical_flow = False
+        run_optical_flow = True
         from wf_merfish.postprocess.DataRegistration import DataRegistration
 
-        for tile_idx in range(num_tiles):
+        for tile_idx in range(18,num_tiles):
             data_register_factory = DataRegistration(dataset_path=output_dir_path,
                                                     overwrite_registered=False,
                                                     perform_optical_flow=run_optical_flow,
                                                     tile_idx=tile_idx)
             data_register_factory.generate_registrations()
             data_register_factory.apply_registration_to_bits()
-
+            
             progress_updates['PolyDT Tile'] = ((tile_idx+1) / num_tiles) * 100
             yield progress_updates
 
             del data_register_factory
+            gc.collect()
             
     progress_updates['PolyDT Tile'] = 100
     yield progress_updates
 
+
+    # 2024.03.22
+    # DPS note: I think this entire section needs to be moved out of the thread_worker due
+    # to the way multiview-stitcher is now using Dask.
     if tile_registration_flag:
         
         multiview_stitcher = True
@@ -485,9 +489,11 @@ def postprocess(correction_option: str,
                               key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 
             for tile_idx, tile_id in enumerate(tile_ids):
+            
+                zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
                 
-                polyDT_current_path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
-                if not(polyDT_current_path.exists()):
+                if not(zarr_path.exists()):
+                    polyDT_current_path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
                     polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
 
                     voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
@@ -509,7 +515,7 @@ def postprocess(correction_option: str,
                     overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
                                                         dtype=np.float32)
 
-                    im_data = np.asarray(polyDT_current_tile['registered_data'],dtype=np.uint16)
+                    im_data = np.asarray(polyDT_current_tile['decon_data'],dtype=np.uint16)
                     
                     shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
                     translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
@@ -525,13 +531,9 @@ def postprocess(correction_option: str,
                     
                     ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
 
-                    zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
-
                     ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
                     
                     del polyDT_current_tile
-                else:
-                    zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
 
                 msim = ngff_utils.ngff_multiscales_to_msim(
                             ngff_zarr.from_ngff_zarr(zarr_path),
@@ -539,17 +541,21 @@ def postprocess(correction_option: str,
 
                 msims.append(msim)
                 
-                
-                progress_updates["PolyDT Round"] = ((tile_idx+1) / num_tiles) * 100
-                    
-            fig, ax = vis_utils.plot_positions(
-                msims,
-                use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
-                transform_key='affine_metadata'
-                )
 
-            plt.show()
-                
+                progress_updates["PolyDT Round"] = ((tile_idx+1) / num_tiles) * 100
+                yield progress_updates
+            
+            debug_tile_positions = False
+            if debug_tile_positions:
+                    
+                fig, ax = vis_utils.plot_positions(
+                    msims,
+                    use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
+                    transform_key='affine_metadata'
+                    )
+
+                plt.show()
+                    
             params = registration.register(
                 msims,
                 registration_binning={'z': 2, 'y': 4, 'x': 4},
@@ -594,6 +600,8 @@ def postprocess(correction_option: str,
             gc.collect()
             current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
     
+    return True
+
 if __name__ == '__main__':
     
     data_path = Path('/mnt/opm3/')
@@ -607,5 +615,3 @@ if __name__ == '__main__':
                         dataset_path=data_path,
                         codebook_path=codebook_path,
                         bit_order_path=exp_order_path)
-    
-    test.start()
