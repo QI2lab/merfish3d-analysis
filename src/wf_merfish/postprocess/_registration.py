@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 from typing import Union, List, Sequence, Tuple, Optional, Dict
 import SimpleITK as sitk
 import deeds
+import gc
 
 
 try:
@@ -180,8 +181,7 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
         elif projection == 'y':
             image1_np = np.squeeze(np.max(image1_np,axis=1))
             image2_np = np.squeeze(np.max(image2_np,axis=1))
-            
-            
+                
     if projection == 'search':
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
             image1_cp = cp.asarray(image1_np)
@@ -220,17 +220,16 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
                     image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[2]//6] = 1
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
                                                         moving_image=cp.asarray(image2_np),
-                                                        upsample_factor=10,
+                                                        upsample_factor=1,
                                                         reference_mask=mask,
                                                         return_error='always',
                                                         disambiguate=True)
             else:
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
                                                         moving_image=cp.asarray(image2_np),
-                                                        upsample_factor=10,
+                                                        upsample_factor=1,
                                                         return_error='always',
                                                         disambiguate=True)
-
             shift = cp.asnumpy(shift_cp)
         else:
             if use_mask:
@@ -239,14 +238,14 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
                     image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
                 shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
                                                         moving_image=image2_np,
-                                                        upsample_factor=10,
+                                                        upsample_factor=1,
                                                         reference_mask=mask,
                                                         return_error='always',
                                                         disambiguate=True)
             else:
                 shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
                                                         moving_image=image2_np,
-                                                        upsample_factor=10,
+                                                        upsample_factor=1,
                                                         return_error='always',
                                                         disambiguate=True)
     
@@ -270,6 +269,10 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
 
     # Create an affine transform with the shift from the cross-correlation
     transform = sitk.TranslationTransform(3, shift_xyz)
+    
+    del image1_np, image2_np
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
 
     return transform, shift_xyz
 

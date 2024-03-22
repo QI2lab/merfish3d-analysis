@@ -474,6 +474,9 @@ class DataRegistration:
             
             data_decon_zarr[:] = mov_image_decon
             data_reg_zarr[:] = data_registered
+            
+            del mov_image_decon, data_registered, mov_image_sitk
+            gc.collect()
         
         del ref_image_sitk
         gc.collect()
@@ -591,7 +594,7 @@ class DataRegistration:
                 
                 data_decon_registered = sitk.GetArrayFromImage(decon_bit_image_sitk).astype(np.float32)
                 data_dog_registered = sitk.GetArrayFromImage(dog_bit_image_sitk).astype(np.float32)
-                del decon_bit_image_sitk, dog_bit_image_sitk
+                del decon_bit_image_sitk, dog_bit_image_sitk, displacement_field
                 gc.collect()
                 
             else:
@@ -637,6 +640,9 @@ class DataRegistration:
             data_dog_reg_zarr[:] = data_dog_registered
             del data_dog_registered, data_decon_registered
             gc.collect()
+            
+        del data_decon, data_dog
+        gc.collect()
 
     def load_rigid_registrations(self):
         """
