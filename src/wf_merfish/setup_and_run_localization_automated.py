@@ -12,7 +12,7 @@ def on_close_callback():
     viewer.layers.clear()
     gc.collect()
 
-data_dir_path = Path('/mnt/opm3/20240214_MouseBrain_UA_NewRO_RK/processed_v2')
+data_dir_path = Path('/mnt/opm3/20240317_OB_MERFISH_7/processed_v2')
 tile_id = 'tile0000'
 polyDT_dir_path = data_dir_path / Path('polyDT')
 readout_dir_path = data_dir_path / Path('readouts')
@@ -23,7 +23,7 @@ calibrations_zarr = zarr.open(calibrations_dir_path,mode='a')
 tile_dir_path = readout_dir_path / Path(tile_id)
 overwrite_normalization = False
 overwrite_params = False
-overwrite_localizations = True
+overwrite_localizations = False
 
 bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
                  key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
@@ -108,7 +108,6 @@ def global_normalization_factors(low_percentile_cut: float = 20.0,
         return cp.asnumpy(background_vector), cp.asnumpy(normalization_vector)
     
 background_vector, normalization_vector = global_normalization_factors(overwrite=overwrite_normalization)
-print(background_vector,normalization_vector)
 
 for bit_idx, bit_id in enumerate(bit_ids):
 
@@ -123,7 +122,7 @@ for bit_idx, bit_id in enumerate(bit_ids):
 
         voxel_zyx_um = np.asarray(current_channel.attrs['voxel_zyx_um']).astype(np.float32)
         em_wvl = float(current_channel.attrs['emission_um'])
-        data = np.asarray(current_channel['registered_data']).astype(np.uint16)
+        data = np.asarray(current_channel['registered_dog_data']).astype(np.uint16)
         
         data[data<100] = np.median(data[data.shape[0]//2,:,:])
         data[data>65000] = np.median(data[data.shape[0]//2,:,:])
@@ -153,8 +152,8 @@ for bit_idx, bit_id in enumerate(bit_ids):
         plugin_widget.txt_deconv_tvtau.setText('.0001')
         plugin_widget.steps_performed['run_deconvolution'] = True
         plugin_widget.cbx_dog_choice.setCurrentIndex(1)
-        plugin_widget.but_dog.click()
-        plugin_widget.cbx_find_peaks_source.setCurrentIndex(0)
+        plugin_widget.steps_performed['apply_DoG'] = True
+        plugin_widget.cbx_find_peaks_source.setCurrentIndex(2)
         viewer.reset_view()
 
         napari.run()
@@ -216,8 +215,8 @@ def parse_localization_parameters(path_localization_params_file: Path):
                               'dist_boundary_xy_factor': float(detection_parameters['spot_filter_params']['dist_boundary_xy_factor'])}
         
             
-        chained = {'deconvolve' : True,
-                  'dog_filter' : True,
+        chained = {'deconvolve' : False,
+                  'dog_filter' : False,
                   'find_candidates' : True,
                   'merge_candidates' : True,
                   'localize' : True,
@@ -266,14 +265,13 @@ for bit_id in bit_ids:
         
         if not(test_path.exists()) or overwrite_localizations:
             
-            data = np.asarray(current_channel['registered_data']).astype(np.uint16)
+            data = np.asarray(current_channel['registered_dog_data']).astype(np.uint16)
             data[data<100] = np.median(data[data.shape[0]//2,:,:])
             data[data>65000] = np.median(data[data.shape[0]//2,:,:])
             data = (data - background_vector[bit_idx]) /normalization_vector[bit_idx]
             data = np.clip(data,0,1)
             
             psf_idx = int(current_channel.attrs['psf_idx'])
-            find_candidates_params['threshold'] = .06
              
             spots3d = SPOTS3D(data=data,
                             psf=psfs[psf_idx,:],
@@ -288,9 +286,9 @@ for bit_id in bit_ids:
                             chained=chained)
             
             spots3d.dog_filter_source_data = 'raw'
-            spots3d.find_candidates_source_data = 'dog'
+            spots3d.find_candidates_source_data = 'raw'
 
-            spots3d.run_DoG_filter()
+            #spots3d.run_DoG_filter()
             spots3d.run_find_candidates()
             spots3d.run_fit_candidates()
             if not(spots3d.skip_filter_and_save): 
@@ -320,56 +318,72 @@ print('finished spot localization.')
 
 # for bit_id in bit_ids:
 #     for tile_idx, tile_id in enumerate(tile_ids):
-#         tile_dir_path = readout_dir_path / Path(tile_id)
-#         bit_dir_path = tile_dir_path / Path(bit_id)
-#         current_bit_channel = zarr.open(bit_dir_path,mode='r')      
-#         r_idx = int(current_bit_channel.attrs['round'])
-#         voxel_size_zyx_um = np.asarray(current_bit_channel.attrs['voxel_zyx_um'],dtype=np.float32)
-            
-#         if r_idx > 0:        
-#             polyDT_tile_round_path = polyDT_dir_path / Path(tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
-#             current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
-#             ref_image_sitk = sitk.GetImageFromArray(np.asarray(current_polyDT_channel['registered_data']).astype(np.float32))
-#             final_shape = ref_image_sitk.GetSize()
-            
-#             rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
-#             shift_xyz = [float(i) for i in rigid_xform_xyz_um]
-#             xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
-#             #inv_xyz_transform = xyx_transform.GetInverse()
-            
-#             of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_4x'],dtype=np.float32)
-#             of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
-#                                                         isVector = True)
-#             interpolator = sitk.sitkLinear
-#             identity_transform = sitk.Transform(3, sitk.sitkIdentity)
-#             optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_image_sitk, identity_transform, interpolator,
-#                                         0, of_4x_sitk.GetPixelID())
-#             displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-#             del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
-#             gc.collect()
-            
-            
-#             files_to_modify = ['fitted_variables_localization_tile_coords.parquet',
-#                                'localization_candidates_localization_tile_coords.parquet',
-#                                'localized_spots_localization_tile_coords.parquet']
-            
-#             files_to_save = ['fitted_variables_registered_tile_coords.parquet',
-#                              'candidates_registered_tile_coords.parquet',
-#                              'spots_registered_tile_coords.parquet']
-            
-#             for file_idx, file_id in enumerate(files_to_modify):
-#                 file_save_id = files_to_save[file_idx]
-#                 localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_id)
-#                 registered_localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_save_id)
-#                 df_localization = pd.read_parquet(localization_tile_bit_path)
-
-#                 coords_tile_xyz = df_localization[['x', 'y', 'z']].to_numpy()
+#         if tile_idx < 15:
+#             print(bit_id,tile_id)
+#             tile_dir_path = readout_dir_path / Path(tile_id)
+#             bit_dir_path = tile_dir_path / Path(bit_id)
+#             current_bit_channel = zarr.open(bit_dir_path,mode='r')      
+#             r_idx = int(current_bit_channel.attrs['round'])
+#             voxel_size_zyx_um = np.asarray(current_bit_channel.attrs['voxel_zyx_um'],dtype=np.float32)
                 
-#                 registered_coords_xyz = warp_coordinates(coordinates = coords_tile_xyz, 
-#                                                     tile_translation_transform = xyx_transform,
-#                                                     voxel_size_zyx_um=voxel_size_zyx_um,
-#                                                     displacement_field_transform = displacement_field)
-#                 df_localization['x'], df_localization['y'], df_localization['z'] = registered_coords_xyz[:, 0], registered_coords_xyz[:, 1], registered_coords_xyz[:, 2]
-#                 df_localization.to_parquet(registered_localization_tile_bit_path)        
+#             if r_idx > 0:        
+#                 polyDT_tile_round_path = polyDT_dir_path / Path(tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
+#                 current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
+#                 ref_image_sitk = sitk.GetImageFromArray(np.asarray(current_polyDT_channel['registered_decon_data']).astype(np.float32))
+#                 final_shape = ref_image_sitk.GetSize()
+                
+#                 rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
+#                 shift_xyz = [float(i) for i in rigid_xform_xyz_um]
+#                 xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
+#                 #inv_xyz_transform = xyx_transform.GetInverse()
+                
+#                 of_xform_4x_xyz = np.asarray(current_polyDT_channel['of_xform_3x'],dtype=np.float32)
+#                 of_4x_sitk = sitk.GetImageFromArray(of_xform_4x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
+#                                                             isVector = True)
+#                 interpolator = sitk.sitkLinear
+#                 identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+#                 optical_flow_sitk = sitk.Resample(of_4x_sitk, ref_image_sitk, identity_transform, interpolator,
+#                                             0, of_4x_sitk.GetPixelID())
+#                 displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+#                 del rigid_xform_xyz_um, shift_xyz, of_xform_4x_xyz, of_4x_sitk, optical_flow_sitk
+#                 gc.collect()
+                
+                
+#                 files_to_modify = ['fitted_variables_localization_tile_coords.parquet',
+#                                 'localization_candidates_localization_tile_coords.parquet',
+#                                 'localized_spots_localization_tile_coords.parquet']
+                
+#                 files_to_save = ['fitted_variables_registered_tile_coords.parquet',
+#                                 'candidates_registered_tile_coords.parquet',
+#                                 'spots_registered_tile_coords.parquet']
+                
+#                 for file_idx, file_id in enumerate(files_to_modify):
+#                     file_save_id = files_to_save[file_idx]
+#                     localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_id)
+#                     registered_localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_save_id)
+#                     df_localization = pd.read_parquet(localization_tile_bit_path)
 
+#                     coords_tile_xyz = df_localization[['x', 'y', 'z']].to_numpy()
+                    
+#                     registered_coords_xyz = warp_coordinates(coordinates = coords_tile_xyz, 
+#                                                         tile_translation_transform = xyx_transform,
+#                                                         voxel_size_zyx_um=voxel_size_zyx_um,
+#                                                         displacement_field_transform = displacement_field)
+#                     df_localization['x'], df_localization['y'], df_localization['z'] = registered_coords_xyz[:, 0], registered_coords_xyz[:, 1], registered_coords_xyz[:, 2]
+#                     df_localization.to_parquet(registered_localization_tile_bit_path)   
+#             else:     
+#                 files_to_modify = ['fitted_variables_localization_tile_coords.parquet',
+#                                 'localization_candidates_localization_tile_coords.parquet',
+#                                 'localized_spots_localization_tile_coords.parquet']
+                
+#                 files_to_save = ['fitted_variables_registered_tile_coords.parquet',
+#                                 'candidates_registered_tile_coords.parquet',
+#                                 'spots_registered_tile_coords.parquet']
+                
+#                 for file_idx, file_id in enumerate(files_to_modify):
+#                     file_save_id = files_to_save[file_idx]
+#                     localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_id)
+#                     registered_localization_tile_bit_path = localization_dir_path / Path(tile_id) / Path(bit_id).stem / Path(file_save_id)
+#                     df_localization = pd.read_parquet(localization_tile_bit_path)
+#                     df_localization.to_parquet(registered_localization_tile_bit_path) 
 # print('finished spot registration.')
