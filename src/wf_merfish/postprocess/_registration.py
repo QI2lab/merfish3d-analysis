@@ -174,6 +174,8 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
     image1_np = sitk.GetArrayFromImage(image1)
     image2_np = sitk.GetArrayFromImage(image2)
     
+    orig_shape = image1_np.shape
+    
     if projection is not None:
         if projection == 'z':
             image1_np = np.squeeze(np.max(image1_np,axis=0))
@@ -215,37 +217,46 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
             if use_mask:
                 mask = cp.zeros_like(image1_np)
-                mask[:,
-                    image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6,
-                    image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[2]//6] = 1
+                if len(mask.shape) == 2:
+                    mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
+                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                else:
+                    mask[:,
+                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6,
+                        image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[2]//6] = 1
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
                                                         moving_image=cp.asarray(image2_np),
-                                                        upsample_factor=1,
+                                                        upsample_factor=10,
                                                         reference_mask=mask,
                                                         return_error='always',
                                                         disambiguate=True)
             else:
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
                                                         moving_image=cp.asarray(image2_np),
-                                                        upsample_factor=1,
+                                                        upsample_factor=10,
                                                         return_error='always',
                                                         disambiguate=True)
             shift = cp.asnumpy(shift_cp)
         else:
             if use_mask:
                 mask = np.zeros_like(image1_np)
-                mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
-                    image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                if len(mask.shape)==1:
+                    mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
+                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                else:
+                    mask[:,
+                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[0]//6,
+                        image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[1]//6] = 1
                 shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
                                                         moving_image=image2_np,
-                                                        upsample_factor=1,
+                                                        upsample_factor=10,
                                                         reference_mask=mask,
                                                         return_error='always',
                                                         disambiguate=True)
             else:
                 shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
                                                         moving_image=image2_np,
-                                                        upsample_factor=1,
+                                                        upsample_factor=10,
                                                         return_error='always',
                                                         disambiguate=True)
     

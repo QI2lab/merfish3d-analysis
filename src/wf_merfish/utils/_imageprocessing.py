@@ -40,8 +40,8 @@ def replace_hot_pixels(noise_map: NDArray, data: NDArray) -> NDArray:
 
     # threshold darkfield_image to generate bad pixel matrix
     hot_pixels = xp.squeeze(xp.asarray(noise_map))
-    hot_pixels[hot_pixels<=16] = 0
-    hot_pixels[hot_pixels>16] = 1
+    hot_pixels[hot_pixels<=375] = 0
+    hot_pixels[hot_pixels>375] = 1
     hot_pixels = hot_pixels.astype(xp.float32)
     inverted_hot_pixels = xp.ones_like(hot_pixels) - hot_pixels.copy()
     
