@@ -5,8 +5,35 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/wf-merfish.svg?color=green)](https://python.org)
 [![CI](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml/badge.svg)](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml)
 
-Acquisition and post-processing for qi2lab widefield MERFISH
+Acquisition and GPU accelerated post-processing for qi2lab MERFISH
 
+## Installation
+
+Create a python 3.10 environment using your favorite package manager, e.g.
+```mamba create -n wf-merfish python=3.10```
+
+Activate the environment and install the GPU dependencies.
+
+For Linux OS:
+```
+mamba activate wf-merfish
+mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.02 cuda-version=12.1 cudnn cutensor nccl onnx onnxruntime pytorch torchvision pytorch-cuda=12.1
+```
+
+For Windows:
+```
+mamba activate wf-merfish
+mamba install -c conda-forge -c nvidia -c pytorch cupy cuda-version=12.1 cudnn cutensor nccl onnx onnxruntime pytorch torchvision pytorch-cuda=12.1
+```
+
+Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
+
+On MacOS, if you have issues building `deeds`, run:
+```bash
+brew install llvm libomp
+echo 'export PATH="/opt/homebrew/Cellar/llvm/17.0.6_1/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
 
 ## qi2lab MERFISH zarr layout v0.1
 <details>
@@ -37,9 +64,10 @@ Acquisition and post-processing for qi2lab widefield MERFISH
           - <wavelengths> (excitation, emission)
           - <bit_linker>
           - <rigid_xyz_um> (rigid registration for round 0 alignment)
+        - <camera_data>
         - <raw_data>
         - <of_xyz_4x_downsample> (optical flow field)
-        - <registered_data> (deformable registration applied after rigid for round 0 alignment)
+        - <registered_decon_data> (deformable registration applied after rigid for round 0 alignment)
       - /roundNNNN.zarr
     - /tile001
     - ...
@@ -51,51 +79,29 @@ Acquisition and post-processing for qi2lab widefield MERFISH
           - <wavelengths_um> (excitation, emission)
           - <voxel_size_zyx_um>
           - <round_linker>
+        - <camera_data>
         - <raw_data>
+        - <registered_decon_data>
+        - <registered_ufish_data>
       - /bit01.zarr
       - ...
       - /bitNN.zarr
-  - /localizations
+  - /ufish_localizations
     - /tile0000
-      - /bit00
-        - localization_parameters.json
-        - raw_localization_results.parquet
-        - registered_localization_results.parquet
-      - /bit01
-      - ...
-      - /bitNN
+      - bit01.parquet
+      - bitNN.parquet
     - /tile0001
     - ....
     - /tileNNNN
   - /decoded
-    - /tile0000
-      - decoding_parameters.json
-      - tile_coord_decoding_results.parquet
-      - world_coord_decoding_results.parquet
-    - /tile0001
+    - tile0000_decoded_features.csv
     - ...
-    - /tileNNNN
-  - /stitching
-    - /polydT
-      - tile0000.ome.zarr
-      - tile0001.ome.zarr
-      - ....
-      - tileNNNN.ome.zarr
+    - tileNNNN_decod_features.csv
+    - all_tiles_filtered_decoded_features.parquet
   - /fused
-    - fused_polyDT.ome.zarr
+    - /fused.zarr
+      - <fused_iso_zyx>
 
 </details>
       
-## Installation
 
-First, install [spots3d](https://github.com/QI2lab/spots3d) and [napari-spot-localization](https://github.com/QI2lab/napari-spot-detection). Both repositories have installation instructions.
-
-Activate the environment that you created for spots3d and napari-spot-detection, clone this repository using
-```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
-
-On MacOS, if you have issues building `deeds`, run:
-```bash
-brew install llvm libomp
-echo 'export PATH="/opt/homebrew/Cellar/llvm/17.0.6_1/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-```
