@@ -2,13 +2,13 @@ from wf_merfish.postprocess.DataRegistration import DataRegistration
 from pathlib import Path
 import gc
 
-readout = True
+readout = False
 data_to_use = 'both'
 
-data_dir_path = Path('/mnt/opm3/20240405_mousebraintest_RK/processed_v2/')
+data_dir_path = Path('/mnt/opm3/20240416_BiFISH_cleared_singlecolor/processed_v2/')
 polyDT_dir_path = data_dir_path / Path('polyDT')
 tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
-tile_ids = ['tile0001']
+tile_ids = ['tile0000']
 
 for tile_idx, tile_id in enumerate(tile_ids):
     data_register_factory = DataRegistration(dataset_path=data_dir_path,

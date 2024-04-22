@@ -31,7 +31,7 @@ from localize_psf import camera
 from localize_psf.fit_psf import gridded_psf_model, get_psf_coords
 import psfmodels as psfm
 from tqdm import tqdm
-from wf_merfish.postprocess import _simulation as simulation
+from examples.alexis_archive import _simulation as simulation
 
 
 visualize_coords = False   # to check simulated coordinates

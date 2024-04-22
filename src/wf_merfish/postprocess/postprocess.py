@@ -677,9 +677,9 @@ if __name__ == '__main__':
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
 
     func = postprocess(correction_option='Hotpixel correct',
-                        processing_options={'Register and process tiles' : False,
+                        processing_options={'Register and process tiles' : True,
                                             'Write fused, downsampled polyDT tiff': True,
-                                            'Decode tiles': False,
+                                            'Decode tiles': True,
                                             'Write polyDT tiffs': False},
                         dataset_path=data_path,
                         noise_map_path=noise_map_path,

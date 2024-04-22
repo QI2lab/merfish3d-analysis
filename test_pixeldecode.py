@@ -28,7 +28,7 @@ for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
     decode_factory.run_decoding(lowpass_sigma=(3,1,1),
                                 distance_threshold=0.8,
                                 magnitude_threshold=.3,
-                                minimum_pixels=18,
+                                minimum_pixels=36,
                                 skip_extraction=False)
                                 
     if False and tile_idx == 0:
