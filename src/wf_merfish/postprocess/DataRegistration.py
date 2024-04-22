@@ -318,7 +318,7 @@ class DataRegistration:
         except:
             has_reg_decon_data = False
             
-        if not(has_reg_decon_data):
+        if not(has_reg_decon_data) or self._overwrite_registered:
             ref_image_decon = richardson_lucy_nc(np.asarray(self._data_raw[0,:].compute().astype(np.uint16)),
                                                 psf=self._psfs[0,:],
                                                 numiterations=40,
@@ -355,7 +355,7 @@ class DataRegistration:
             except:
                 has_reg_decon_data = False
             
-            if not(has_reg_decon_data):
+            if not(has_reg_decon_data) or self._overwrite_registered:
                 mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:].compute().astype(np.uint16),
                                                 psf=self._psfs[psf_idx,:],
                                                 numiterations=40,
@@ -364,51 +364,51 @@ class DataRegistration:
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
-                downsample_factor = 2
-                if downsample_factor > 1:
-                    ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
-                    mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
-                else:
-                    ref_ds_image_sitk = ref_image_sitk
-                    mov_ds_image_sitk = mov_image_sitk
+                # downsample_factor = 2
+                # if downsample_factor > 1:
+                #     ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                #     mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+                # else:
+                #     ref_ds_image_sitk = ref_image_sitk
+                #     mov_ds_image_sitk = mov_image_sitk
                     
-                _, initial_xy_shift = compute_rigid_transform(ref_ds_image_sitk, 
-                                                                mov_ds_image_sitk,
-                                                                use_mask=True,
-                                                                downsample_factor=downsample_factor,
-                                                                projection='z')
+                # _, initial_xy_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                #                                                 mov_ds_image_sitk,
+                #                                                 use_mask=True,
+                #                                                 downsample_factor=downsample_factor,
+                #                                                 projection='z')
                 
-                intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
+                # intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
 
-                mov_image_sitk = apply_transform(ref_image_sitk,
-                                                    mov_image_sitk,
-                                                    intial_xy_transform)
+                # mov_image_sitk = apply_transform(ref_image_sitk,
+                #                                     mov_image_sitk,
+                #                                     intial_xy_transform)
                 
-                del ref_ds_image_sitk
-                gc.collect()
+                # del ref_ds_image_sitk
+                # gc.collect()
                 
-                downsample_factor = 2
-                if downsample_factor > 1:
-                    ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
-                    mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
-                else:
-                    ref_ds_image_sitk = ref_image_sitk
-                    mov_ds_image_sitk = mov_image_sitk
+                # downsample_factor = 2
+                # if downsample_factor > 1:
+                #     ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                #     mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+                # else:
+                #     ref_ds_image_sitk = ref_image_sitk
+                #     mov_ds_image_sitk = mov_image_sitk
                     
-                _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
-                                                            mov_ds_image_sitk,
-                                                            use_mask=True,
-                                                            downsample_factor=downsample_factor,
-                                                            projection='search')
+                # _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                #                                             mov_ds_image_sitk,
+                #                                             use_mask=True,
+                #                                             downsample_factor=downsample_factor,
+                #                                             projection='search')
                 
-                intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
+                # intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
 
-                mov_image_sitk = apply_transform(ref_image_sitk,
-                                                mov_image_sitk,
-                                                intial_z_transform)
+                # mov_image_sitk = apply_transform(ref_image_sitk,
+                #                                 mov_image_sitk,
+                #                                 intial_z_transform)
                 
-                del ref_ds_image_sitk
-                gc.collect()
+                # del ref_ds_image_sitk
+                # gc.collect()
                 
                 downsample_factor = 4
                 if downsample_factor > 1:
@@ -425,7 +425,8 @@ class DataRegistration:
                                                             projection=None)
         
                 
-                final_xyz_shift = np.asarray(initial_xy_shift) + np.asarray(intial_z_shift) + np.asarray(xyz_shift_4x)                        
+                #final_xyz_shift = np.asarray(initial_xy_shift) + np.asarray(intial_z_shift) + np.asarray(xyz_shift_4x)                        
+                final_xyz_shift = np.asarray(xyz_shift_4x)
                 current_round.attrs["rigid_xform_xyz_um"] = final_xyz_shift.tolist()
                 
                 xyz_transform_4x = sitk.TranslationTransform(3, xyz_shift_4x)
@@ -565,11 +566,11 @@ class DataRegistration:
                 reg_decon_data_on_disk = False
                                 
         
-            if not(reg_decon_data_on_disk):
+            if not(reg_decon_data_on_disk) or self._overwrite_registered:
                 decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']),
                                                     psf=self._psfs[psf_idx,:],
                                                     numiterations=40,
-                                                    regularizationfactor=.0001,
+                                                    regularizationfactor=.001,
                                                     lib=self._lib)
 
                 if r_idx > 0:
@@ -641,7 +642,8 @@ class DataRegistration:
                     roi = image[int(z_min):int(z_max), int(y_min):int(y_max), int(x_min):int(x_max)]
                     return np.sum(roi)
                 
-                ufish_localization['sum_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=ufish_data, roi_dims=(roi_z, roi_y, roi_x))
+                ufish_localization['sum_prob_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=ufish_data, roi_dims=(roi_z, roi_y, roi_x))
+                ufish_localization['sum_decon_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=data_decon_registered, roi_dims=(roi_z, roi_y, roi_x))
                 ufish_localization['tile_idx'] = self._tile_idx
                 ufish_localization['bit_idx'] = bit_idx + 1
                 ufish_localization['tile_z_um'] = ufish_localization['z'] * self._voxel_size[0] + self._stage_positions[0,0]

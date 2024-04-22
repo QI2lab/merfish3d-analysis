@@ -228,13 +228,11 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
                                                         moving_image=cp.asarray(image2_np),
                                                         upsample_factor=10,
                                                         reference_mask=mask,
-                                                        return_error='always',
                                                         disambiguate=True)
             else:
                 shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
                                                         moving_image=cp.asarray(image2_np),
                                                         upsample_factor=10,
-                                                        return_error='always',
                                                         disambiguate=True)
             shift = cp.asnumpy(shift_cp)
         else:
@@ -251,13 +249,11 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
                                                         moving_image=image2_np,
                                                         upsample_factor=10,
                                                         reference_mask=mask,
-                                                        return_error='always',
                                                         disambiguate=True)
             else:
                 shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
                                                         moving_image=image2_np,
                                                         upsample_factor=10,
-                                                        return_error='always',
                                                         disambiguate=True)
     
         # Convert the shift to a list of doubles

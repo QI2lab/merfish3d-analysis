@@ -6,10 +6,13 @@ Microscope post-processing v1.1
 qi2lab LED scope MERFISH post-processing
 - Rewrites raw data in compressed Zarr in qi2lab MERFISH format
 - Corrects hot pixels or corrects illumination shading
-- Calculates registration across rounds for each tile
-- Calculates registartion for first round across all tiles
+- Calculates registration across rounds for each tile for decoding
+- Calculates registration across tiles for global coordinates
+- Calls RNA spots using U-FISH package
+- Decode spots on GPU 
 
 Change log:
+Shepherd 04/24 - fully automated processing and decoding
 Shepherd 01/24 - updates for qi2lab MERFISH file format v1.0
 Shepherd 09/23 - new LED widefield scope post-processing 
 '''
@@ -29,10 +32,11 @@ from tifffile import imread
 import pandas as pd
 from typing import Dict, Generator, Optional
 from tifffile import TiffWriter
+from tqdm import tqdm
 
 # parse experimental directory, load data, and process
 def postprocess(correction_option: str, 
-                stitching_options: Dict[str,bool], 
+                processing_options: Dict[str,bool], 
                 dataset_path: Path, 
                 codebook_path: Path, 
                 bit_order_path: Path,
@@ -40,22 +44,26 @@ def postprocess(correction_option: str,
                 darkfield_image_path: Optional[Path] = None,
                 shading_images_path: Optional[Path] = None) -> Generator[Dict[str, int], None, None]:
     
+    compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
+    write_camera_data = False
     hotpixel_flag = False
     shading_flag = False
     round_registration_flag = False
-    tile_registration_flag = False
+    decode_tiles = False
     write_polyDT_tiff = False
     if correction_option == "Hotpixel correct" and (noise_map_path is not None):
         hotpixel_flag = True
     elif correction_option == "Flatfield correct" and (noise_map_path is not None) and (darkfield_image_path is not None) and (shading_images_path is not None):
         shading_flag = True
     
-    for option_name, is_selected in stitching_options.items():
+    for option_name, is_selected in processing_options.items():
         if is_selected:
-            if option_name == "Register polyDT/readouts within tile":
+            if option_name == "Register and process tiles":
                 round_registration_flag = True
-            elif option_name == "Register polyDT across tiles":
-                tile_registration_flag = True
+            elif option_name == "Decode tiles":
+                decode_tiles = True
+            elif option_name == "Write fused, downsampled polyDT tiff":
+                write_fused_zarr = True
             elif option_name == "Write polyDT tiffs":
                 write_polyDT_tiff = True
             
@@ -128,8 +136,8 @@ def postprocess(correction_option: str,
         "Round": 0,
         "Tile": 0,
         "Channel": 0,
-        "PolyDT Tile": 0,
-        "PolyDT Round": 0,
+        "Register/Process": 0,
+        "Decode": 0,
     }
         
     
@@ -145,7 +153,6 @@ def postprocess(correction_option: str,
 
         calibrations_output_dir_path = output_dir_path / Path('calibrations.zarr')
         calibrations_output_dir_path.mkdir(parents=True, exist_ok=True)
-        compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
         calibrations_zarr = zarr.open(str(calibrations_output_dir_path), mode="a")
         
         blosc.set_nthreads(20)
@@ -316,7 +323,7 @@ def postprocess(correction_option: str,
                     polydT_round_zarr = zarr.open(str(polydT_round_dir_path), mode="a")
                     
 
-                    # yellow readout zarr store
+                    # # yellow readout zarr store
                     yellow_readout_round_idx = bit_order[r_idx,1]
                     yellow_bit_name = "bit"+str(yellow_readout_round_idx).zfill(2)
                     yellow_tile_dir_path = readout_output_dir_path / Path(tile_name)
@@ -367,16 +374,29 @@ def postprocess(correction_option: str,
                                     current_channel.attrs['round'] = int(r_idx)
                                     current_channel.attrs["psf_idx"] = int(2)
                                     
+                                if write_camera_data:
+                                    camera_data = raw_data.copy()
+                                
                                 if shading_flag:
                                     raw_data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
                                 elif not(shading_flag) and (hotpixel_flag):
                                     raw_data = replace_hot_pixels(noise_map,raw_data)
+                                    
+
+                                if write_camera_data:
+                                    current_camera_data = current_channel.zeros('camera_data',
+                                                                                shape=(camera_data.shape[0],camera_data.shape[1],camera_data.shape[2]),
+                                                                                chunks=(1,camera_data.shape[1],camera_data.shape[2]),
+                                                                                compressor=compressor,
+                                                                                dtype=np.uint16)
+                                    current_camera_data[:] = camera_data
 
                                 current_raw_data = current_channel.zeros('raw_data',
                                                                         shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
                                                                         chunks=(1,raw_data.shape[1],raw_data.shape[2]),
                                                                         compressor=compressor,
                                                                         dtype=np.uint16)
+                                
                                 
                                 current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                                 current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
@@ -386,7 +406,7 @@ def postprocess(correction_option: str,
                                 current_channel.attrs['exposure_ms'] = float(exposure_ms)
                                 current_channel.attrs['hotpixel'] = bool(hotpixel_flag)
                                 current_channel.attrs['shading'] = bool(shading_flag)
-                                
+
                                 current_raw_data[:] = raw_data
                                 
                                 if channel_id == 'F-Blue' and write_polyDT_tiff and r_idx == 0:
@@ -407,8 +427,6 @@ def postprocess(correction_option: str,
                                                     photometric='minisblack',
                                                     resolutionunit='CENTIMETER')
                                         
-                                
-
                                 progress_updates['Channel'] = ((ch_idx-channels_idxs_in_data_tile[0]+1) / len(channels_idxs_in_data_tile)) * 100
                                 yield progress_updates
 
@@ -436,182 +454,237 @@ def postprocess(correction_option: str,
 
         for tile_idx in range(num_tiles):
             data_register_factory = DataRegistration(dataset_path=output_dir_path,
-                                                    overwrite_registered=False,
+                                                    overwrite_registered=True,
                                                     perform_optical_flow=run_optical_flow,
                                                     tile_idx=tile_idx)
             data_register_factory.generate_registrations()
             data_register_factory.apply_registration_to_bits()
             
-            progress_updates['PolyDT Tile'] = ((tile_idx+1) / num_tiles) * 100
+            progress_updates['Register/Process'] = ((tile_idx+1) / num_tiles) * 100
             yield progress_updates
 
             del data_register_factory
             gc.collect()
             
-    progress_updates['PolyDT Tile'] = 100
+    progress_updates['Register/Process'] = 100
     yield progress_updates
+    
+    fuse_readouts = False
+    
+    from multiview_stitcher import spatial_image_utils as si_utils
+    from multiview_stitcher import msi_utils, vis_utils, fusion, registration
+    import dask.diagnostics
+    import dask.array as da
+    
+    fused_dir_path = output_dir_path / Path('fused')
+    fused_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    polyDT_dir_path = output_dir_path / Path('polyDT')
+    readout_dir_path = output_dir_path / Path('readouts')
 
+    tile_ids = sorted([entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()],
+                        key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 
-    # 2024.03.22
-    # DPS note: I think this entire section needs to be moved out of the thread_worker due
-    # to the way multiview-stitcher is now using Dask.
-    if tile_registration_flag:
-        
-        multiview_stitcher = True
-        
-        try:
-        
-            import dask.diagnostics
-            import ngff_zarr
-            from multiview_stitcher import (
-                fusion,
-                io,
-                msi_utils,
-                ngff_utils,
-                registration,
-                vis_utils
-            )
-            import matplotlib.pyplot as plt
+    msims = []
+    for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile')):
+    
+        polyDT_current_path = polyDT_dir_path / Path(tile_id) / Path("round000.zarr")
+        polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
+
+        voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                            dtype=np.float32)
+
+        scale = {'z': voxel_zyx_um[0],
+                'y': voxel_zyx_um[1],
+                'x': voxel_zyx_um[2]}
             
-        except:
-            multiview_stitcher = False
+        tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                            dtype=np.float32)
+        
+        tile_grid_positions = {
+            'z': tile_position_zyx_um[0],
+            'y': tile_position_zyx_um[1],
+            'x': tile_position_zyx_um[2],
+        }
 
-
-        if multiview_stitcher:
-            polyDT_output_dir_path = output_dir_path / Path('polyDT')
-
-            msims = []
-
-            stitched_dir_path = output_dir_path / Path('stitched')
-            stitched_dir_path.mkdir(parents=True, exist_ok=True)
-
-            tile_ids = sorted([entry.name for entry in polyDT_output_dir_path.iterdir() if entry.is_dir()],
-                              key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
-
-            for tile_idx, tile_id in enumerate(tile_ids):
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            im_data = []
+            im_data.append(da.from_array(polyDT_current_tile['registered_decon_data']))
             
-                zarr_path = stitched_dir_path / Path(tile_id + ".zarr")
-                
-                if not(zarr_path.exists()):
-                    polyDT_current_path = polyDT_output_dir_path / Path(tile_id) / Path("round000.zarr")
-                    polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
-
-                    voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                                        dtype=np.float32)
-
-                    scale = {'z': voxel_zyx_um[0],
-                            'y': voxel_zyx_um[1],
-                            'x': voxel_zyx_um[2]}
-                    
-                    tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                                        dtype=np.float32)
-                    
-                    tile_grid_positions = {
-                        'z': tile_position_zyx_um[0],
-                        'y': tile_position_zyx_um[1],
-                        'x': tile_position_zyx_um[2],
-                    }
-                    
-                    overlap = np.asarray(polyDT_current_tile.attrs['tile_overlap'],
-                                                        dtype=np.float32)
-
-                    im_data = np.asarray(polyDT_current_tile['decon_data'],dtype=np.uint16)
-                    
-                    shape = {dim: im_data.shape[idim] for idim, dim in enumerate(scale.keys())}
-                    translation = {dim: np.round((tile_grid_positions[dim]),2) for dim in scale}
-
-                    ngff_im = ngff_zarr.NgffImage(
-                            im_data,
-                            dims=('z', 'y', 'x'),
-                            scale=scale,
-                            translation=translation,
-                            )
-                    
-                    # These translations match the recorded stage position converted to pixels
-                    
-                    ngff_multiscales = ngff_zarr.to_multiscales(ngff_im)
-
-                    ngff_zarr.to_ngff_zarr(zarr_path, ngff_multiscales)
-                    
-                    del polyDT_current_tile
-
-                msim = ngff_utils.ngff_multiscales_to_msim(
-                            ngff_zarr.from_ngff_zarr(zarr_path),
-                            transform_key=io.METADATA_TRANSFORM_KEY)
-
-                msims.append(msim)
-                
-
-                progress_updates["PolyDT Round"] = ((tile_idx+1) / num_tiles) * 100
-                yield progress_updates
+            readout_current_tile_path = readout_dir_path / Path(tile_id)
+            bit_ids = sorted([entry.name for entry in readout_current_tile_path.iterdir() if entry.is_dir()],
+                                    key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
             
-            debug_tile_positions = False
-            if debug_tile_positions:
-                    
-                fig, ax = vis_utils.plot_positions(
-                    msims,
-                    use_positional_colors=True, # set to False for faster execution in case of more than 20 tiles/views
-                    transform_key='affine_metadata'
-                    )
+            for bit_id in bit_ids:
+                bit_current_tile = readout_current_tile_path / Path(bit_id)
+                bit_current_tile = zarr.open(bit_current_tile,mode='r')
+                im_data.append(da.from_array((bit_current_tile['registered_decon_data'])))
 
-                plt.show()
-                    
+            im_data = da.stack(im_data)
+            
+        if ~fuse_readouts:
+            im_data = im_data[0,:]
+            sim = si_utils.get_sim_from_array(da.expand_dims(im_data,axis=0),
+                                            dims=('c','z', 'y', 'x'),
+                                            scale=scale,
+                                            translation=tile_grid_positions,
+                                            transform_key='stage_metadata')
+        
+        else:
+            sim = si_utils.get_sim_from_array(im_data,
+                                            dims=('c', 'z', 'y', 'x'),
+                                            scale=scale,
+                                            translation=tile_grid_positions,
+                                            transform_key='stage_metadata')
+            
+        msim = msi_utils.get_msim_from_sim(sim,scale_factors=[])
+        msims.append(msim)
+        del im_data
+        gc.collect()
+            
+    with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+        with dask.diagnostics.ProgressBar():
             params = registration.register(
                 msims,
-                registration_binning={'z': 2, 'y': 4, 'x': 4},
                 reg_channel_index=0,
-                transform_key='affine_metadata',
+                transform_key='stage_metadata',
+                new_transform_key='translation_registered',
+                registration_binning={'z': 4, 'y': 4, 'x': 4},
+                pre_registration_pruning_method='otsu_threshold_on_overlap',
+                plot_summary=False,
             )
-                
-            for msim, param in zip(msims, params):
-                msi_utils.set_affine_transform(msim, param, transform_key='affine_registered', base_transform_key='affine_metadata')
+    
+    for tile_idx, param in enumerate(params):
+        polyDT_current_path = polyDT_dir_path / Path(tile_ids[tile_idx]) / Path("round000.zarr")
+        polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
+        translation_zyx_um = np.round(np.array(param).squeeze()[:-1, -1],3).tolist()
+        
+        polyDT_current_tile.attrs['translation_zyx_um'] = translation_zyx_um
+        del polyDT_current_tile
+        
+    if write_fused_zarr:
 
-            for imsim, msim in enumerate(msims):
-                affine = np.array(msi_utils.get_transform_from_msim(msim, transform_key='affine_registered')[0])
-                polyDT_current_path = polyDT_output_dir_path / Path(tile_ids[imsim]) / Path("round000.zarr")
-                polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
-                polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
-                del polyDT_current_tile
+        fused_output_path = fused_dir_path / Path("fused.zarr")
 
-            sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
+        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
 
-            stitched_output_path = stitched_dir_path / Path("round000_fused.zarr")
-
-            with dask.config.set(**{'array.slicing.split_large_chunks': True}):
-                with dask.diagnostics.ProgressBar():
-                    fused = fusion.fuse(
-                        sims[:],
-                        transform_key='affine_registered',
-                        output_chunksize=512
-                        )
-                
-                    fused.compute()
-                
-            stitched_output_zarr = zarr.open(stitched_output_path,mode='a')
-            current_stitched_data = stitched_output_zarr.zeros('fused_data',
-                                                        shape=fused.shape,
-                                                        chunks=(1,1,1,512,512),
-                                                        compressor=compressor,
-                                                        dtype=np.uint16)
-
-            current_stitched_data[:] = np.asarray(fused,dtype=np.uint16)
+            fused_sim = fusion.fuse(
+                [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in msims],
+                transform_key='translation_registered',
+                output_spacing={'z': voxel_zyx_um[0], 'y': voxel_zyx_um[1]*3.5, 'x': voxel_zyx_um[2]*3.5},
+                output_chunksize=512,
+                overlap_in_pixels=256,
+            )
             
-            del fused
+        fused_zarr = zarr.open(str(fused_output_path), mode="a")
+        
+        da_fused_data = da.squeeze(fused_sim.data)
+        
+        if fuse_readouts:
+            try:
+                fused_data = fused_zarr.zeros('fused_iso_zyx',
+                                            shape=(da_fused_data.shape[0],da_fused_data.shape[1],da_fused_data.shape[2],da_fused_data.shape[3]),
+                                            chunks=(1,1,256,256),
+                                            compressor=compressor,
+                                            dtype=np.uint16)
+            except:
+                fused_data = fused_zarr['fused_iso_zyx']
+        else:
+            try:
+                fused_data = fused_zarr.zeros('fused_iso_zyx',
+                                        shape=(da_fused_data.shape[0],da_fused_data.shape[1],da_fused_data.shape[2]),
+                                        chunks=(1,256,256),
+                                        compressor=compressor,
+                                        dtype=np.uint16)
+            except:
+                fused_data = fused_zarr['fused_iso_zyx']
+        
+        with dask.diagnostics.ProgressBar():
+            fused_data[:] = da_fused_data.compute(scheduler='single-threaded')
+            
+        fused_data.attrs['voxel_zyx_um'] = np.array([voxel_zyx_um[0], 
+                                                    voxel_zyx_um[1]*3.5, 
+                                                    voxel_zyx_um[2]*3.5]).tolist()
+        
+        del fused_sim
+        gc.collect()
+    
+    if decode_tiles:
+        
+        from wf_merfish.postprocess.PixelDecoder import PixelDecoder
+        import cupy as cp
+        
+        decode_factory = PixelDecoder(dataset_path=output_dir_path,
+                                      global_normalization_limits=[.1,80.0],
+                                      overwrite_normalization=True,
+                                      exp_type='3D',
+                                      merfish_bits=16)
+
+        tile_ids = decode_factory._tile_ids
+        
+        del decode_factory
+        gc.collect()
+        cp.get_default_memory_pool().free_all_blocks()
+        
+        for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
+    
+            decode_factory = PixelDecoder(dataset_path=output_dir_path,
+                                        global_normalization_limits=[.1,80.0],
+                                        overwrite_normalization=False,
+                                        tile_idx=tile_idx,
+                                        exp_type='3D',
+                                        merfish_bits=16)
+            decode_factory.run_decoding(lowpass_sigma=(3,1,1),
+                                        distance_threshold=0.8,
+                                        magnitude_threshold=.3,
+                                        minimum_pixels=27,
+                                        skip_extraction=False)
+            decode_factory.save_barcodes()
+            decode_factory.cleanup()
+            
+            del decode_factory
             gc.collect()
-            current_stitched_data.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
+            cp.get_default_memory_pool().free_all_blocks()
+            
+            progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
+            yield progress_updates
+            
+        decode_factory = PixelDecoder(dataset_path=output_dir_path,
+                                    global_normalization_limits=[.1,80.0],
+                                    overwrite_normalization=False,
+                                    exp_type='3D',
+                                    merfish_bits=16,
+                                    verbose=2)
+    
+        decode_factory.load_all_barcodes()
+        decode_factory.filter_all_barcodes(fdr_target=.05)
+        decode_factory.save_barcodes(format='parquet')
+
+        del decode_factory
+        gc.collect()
+        cp.get_default_memory_pool().free_all_blocks()
+        
+        progress_updates['Decode'] = 100
+        yield progress_updates
     
     return True
 
 if __name__ == '__main__':
     
-    data_path = Path('/mnt/opm3/')
-    codebook_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
-    exp_order_path = Path('/home/qi2lab/Documents/github/wf-merfish/exp_order.csv')
+    data_path = Path('/mnt/opm3/20240317_OB_MERFISH_7/')
+    exp_order_path = data_path / ('bit_order.csv')
+    codebook_path = data_path / ('codebook.csv')
+    noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
 
-    test = postprocess(selected_options={'Hotpixel correct': False,
-                                        'Flatfield correct': False,
-                                        'Register polyDT each tile across rounds': True,
-                                        'Register polyDT all tiles first round': True},
+    func = postprocess(correction_option='Hotpixel correct',
+                        processing_options={'Register and process tiles' : False,
+                                            'Write fused, downsampled polyDT tiff': True,
+                                            'Decode tiles': False,
+                                            'Write polyDT tiffs': False},
                         dataset_path=data_path,
+                        noise_map_path=noise_map_path,
                         codebook_path=codebook_path,
                         bit_order_path=exp_order_path)
+    
+    for val in func:
+        print(val)
