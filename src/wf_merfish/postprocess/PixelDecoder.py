@@ -19,6 +19,8 @@ from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
 from random import sample
 from tqdm import tqdm
+from shapely.geometry import Point
+import geopandas as gpd
 
 class PixelDecoder():
     def __init__(self,
@@ -301,7 +303,7 @@ class PixelDecoder():
                                        0))
             else:
                 current_mask = np.asarray(current_bit["registered_ufish_data"], dtype=np.float32)
-                images.append(np.where(current_mask > .05,
+                images.append(np.where(current_mask > .01,
                                        np.asarray(current_bit["registered_decon_data"], dtype=np.float32),
                                        0))
             self._em_wvl.append(current_bit.attrs['emission_um'])
@@ -309,26 +311,23 @@ class PixelDecoder():
         self._image_data = np.stack(images,axis=0)
         voxel_size_zyx_um = np.asarray(current_bit.attrs['voxel_zyx_um'],dtype=np.float32)
         self._pixel_size = voxel_size_zyx_um[1]
-        self._axial_step = voxel_size_zyx_um[0]
-        stage_zyx_um = np.asarray(current_bit.attrs['stage_zyx_um'],dtype=np.float32)
-        self._stage_z = stage_zyx_um[0]
-        self._stage_y = stage_zyx_um[1]
-        self._stage_x = stage_zyx_um[2]
+        self._axial_step = voxel_size_zyx_um[0]                
         
         polyDT_dir_path = self._dataset_path / Path('polyDT')
         polyDT_current_path = polyDT_dir_path / Path(self._tile_ids[self._tile_idx]) / Path("round000.zarr")
         polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
         try:
-            translation_zyx_um = np.asarray(polyDT_current_tile.attrs['translation_zyx_um'],
+            self._affine = np.asarray(polyDT_current_tile.attrs['affine_zyx_um'],
                                         dtype=np.float32)
-            self._translation_z = translation_zyx_um[0]
-            self._translation_y = translation_zyx_um[1]
-            self._translation_x = translation_zyx_um[2]
+            self._origin = np.asarray(polyDT_current_tile.attrs['origin_zyx_um'],
+                                        dtype=np.float32)
+            self._spacing = np.asarray(polyDT_current_tile.attrs['spacing_zyx_um'],
+                                        dtype=np.float32)
+            self._registration_available = True
+            
         except:
-            self._translation_z = 0.
-            self._translation_y = 0.
-            self._translation_x = 0.
-    
+           self._registration_available = False
+        
         del images, current_bit
         gc.collect()
                
@@ -476,6 +475,17 @@ class PixelDecoder():
             cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
             
+    @staticmethod
+    def _warp_pixel(pixel_space_point: np.ndarray,
+                    spacing: np.ndarray,
+                    origin: np.ndarray,
+                    affine: np.ndarray) -> np.ndarray:
+
+        physical_space_point = pixel_space_point * spacing + origin
+        registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
+        
+        return registered_space_point
+            
     def _extract_barcodes(self, 
                           minimum_pixels: int = 9,
                           maximum_pixels: int = 200):
@@ -549,12 +559,20 @@ class PixelDecoder():
                 if self._z_crop:
                     df_barcode['z'] = df_barcode['z'] + self._z_range[0]
                     
-                df_barcode['tile_z'] = df_barcode['z']*self._axial_step + self._stage_z 
-                df_barcode['tile_y'] = df_barcode['y']*self._pixel_size + self._stage_y
-                df_barcode['tile_x'] = df_barcode['x']*self._pixel_size + self._stage_x
-                df_barcode['global_z'] = df_barcode['tile_z'] + self._translation_z
-                df_barcode['global_y'] = df_barcode['tile_y'] + self._translation_y
-                df_barcode['global_x'] = df_barcode['tile_x'] + self._translation_x
+                df_barcode['tile_z'] = np.round(df_barcode['z'],0).astype(int)
+                df_barcode['tile_y'] = np.round(df_barcode['y'],0).astype(int)
+                df_barcode['tile_x'] = np.round(df_barcode['x'],0).astype(int)
+                if self._registration_available:
+                    pts = df_barcode[['z', 'y', 'x']].to_numpy()
+                    for pt_idx,pt in enumerate(pts):
+                        pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
+                                                    self._spacing,
+                                                    self._origin,
+                                                    self._affine)
+                        
+                    df_barcode['global_z'] = np.round(pts[:,0],2)
+                    df_barcode['global_y'] = np.round(pts[:,1],2)
+                    df_barcode['global_x'] = np.round(pts[:,2],2)
                 
                 df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
                 df_barcode.rename(columns={'intensity_mean-0': 'distance_mean'}, inplace=True)
@@ -645,9 +663,21 @@ class PixelDecoder():
                     if self._z_crop:
                         df_barcode['z'] = df_barcode['z'] + self._z_range[0]
                         
-                    df_barcode['tile_z'] = df_barcode['z']*self._axial_step + self._stage_z + self._translation_z
-                    df_barcode['tile_y'] = df_barcode['y']*self._pixel_size + self._stage_y + self._translation_y
-                    df_barcode['tile_x'] = df_barcode['x']*self._pixel_size + self._stage_x + self._translation_x
+                    df_barcode['tile_z'] = np.round(df_barcode['z'],0).astype(int)
+                    df_barcode['tile_y'] = np.round(df_barcode['y'],0).astype(int)
+                    df_barcode['tile_x'] = np.round(df_barcode['x'],0).astype(int)
+                    if self._registration_available:
+                        pts = df_barcode[['z', 'y', 'x']].to_numpy()
+                        for pt_idx,pt in enumerate(pts):
+                            pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
+                                                        self._spacing,
+                                                        self._origin,
+                                                        self._affine)
+                            
+                        df_barcode['global_z'] = np.round(pts[:,0],2)
+                        df_barcode['global_y'] = np.round(pts[:,1],2)
+                        df_barcode['global_x'] = np.round(pts[:,2],2)
+          
                     
                     df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
                     df_barcode.rename(columns={'intensity_mean-0': 'distance_mean'}, inplace=True)
@@ -721,6 +751,16 @@ class PixelDecoder():
             else:
                 self._df_filtered_barcodes.to_parquet(barcode_path)
                 
+    def save_all_barcodes_for_baysor(self):
+        
+        decoded_dir_path = self._dataset_path / Path('decoded')
+        decoded_dir_path.mkdir(exist_ok=True)
+        
+        if self._barcodes_filtered:
+            baysor_path = decoded_dir_path / Path('baysor_formatted_genes.csv')           
+            baysor_df = self._df_filtered_barcodes[['gene_id','global_z','global_y','global_x','cell_id']].copy()
+            baysor_df.to_csv(baysor_path)
+            
     def load_all_barcodes(self,
                           format: str = 'csv'):
         
@@ -870,6 +910,31 @@ class PixelDecoder():
             self._df_filtered_barcodes.drop('X', axis=1, inplace=True)
             self._barcodes_filtered = True
             
+    def assign_cells(self):
+        
+        try:
+            outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.geojson")
+            polygons_gdf = gpd.read_file(outlines_path)
+            has_cell_outlines = True
+        except:
+            has_cell_outlines = False
+       
+        if has_cell_outlines:
+            points_gdf = gpd.GeoDataFrame(self._df_filtered_barcodes, 
+                                          geometry=[Point(xy) for xy in zip(self._df_filtered_barcodes.global_y,
+                                                                            self._df_filtered_barcodes.global_x)])
+            if points_gdf.crs is None and polygons_gdf.crs is not None:
+                points_gdf.set_crs(polygons_gdf.crs, inplace=True)
+            elif points_gdf.crs != polygons_gdf.crs:
+                points_gdf = points_gdf.to_crs(polygons_gdf.crs)
+            joined_data = gpd.sjoin(points_gdf, polygons_gdf, how="left", predicate='within')
+            joined_data['index_right'] = joined_data['index_right'] + 1
+            joined_data['index_right'] = joined_data['index_right'].fillna(0).astype(int)
+            self._df_filtered_barcodes['cell_id'] = joined_data['index_right']
+
+        del points_gdf, polygons_gdf
+        gc.collect()
+
     def cleanup(self):
         
         if self._filter_type == 'lp':
