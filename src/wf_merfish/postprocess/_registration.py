@@ -13,7 +13,6 @@ import SimpleITK as sitk
 import deeds
 import gc
 
-
 try:
     import cupy as cp # type: ignore
     xp = cp

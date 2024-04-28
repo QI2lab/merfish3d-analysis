@@ -17,10 +17,9 @@ import pandas as pd
 import dask
 from dask.distributed import Client, wait
 import multiprocessing
-from wf_merfish.postprocess._decode import transform_bit_data, optimize_spots, decode_optimized_chunks
+from examples.alexis_archive._decode import transform_bit_data, optimize_spots, decode_optimized_chunks
 from wf_merfish.postprocess._registration import warp_coordinates
 from wf_merfish.postprocess.DataRegistration import DataRegistration
-from wf_merfish.postprocess.DataLocalization import DataLocalization
 from wf_merfish.utils._dataio import load_localizations
 import zarr
 
