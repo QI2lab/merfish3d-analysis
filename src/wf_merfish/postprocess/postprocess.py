@@ -1,27 +1,29 @@
 #!/usr/bin/env python
 '''
-qi2lab WF MERFISH / FISH processing
+qi2lab WF MERFISH / smFISH processing
 Microscope post-processing v0.1.2
 
 qi2lab LED scope MERFISH post-processing
-- Rewrites raw data in compressed Zarr in qi2lab MERFISH format
-- Corrects hot pixels or corrects illumination shading
-- Calculates registration across rounds for each tile for decoding
-- Calculates registration across tiles for global coordinates
-- Calls RNA spots using U-FISH package
-- Decode spots on GPU 
-    - TO DO: help user determine optimal normalization and decoding settings
+- Rewrite raw data in compressed Zarr in qi2lab MERFISH format
+- Correct hot pixels or corrects illumination shading
+- Calculate registration across rounds for each tile for decoding
+- Calculate registration across tiles for global coordinates
+- Mask all potential RNA spots using U-FISH package
 - Segment polyDT using Cellpose for guess at cell boundaries
-- Assigns RNA to cell guesses
-- Refine cell boundaries using Baysor
+- Decode MERFISH spots on GPU 
+    - TO DO: help user determine optimal normalization and decoding settings
+    - TO DO: Process smFISH bits if requested
+- Assign RNA to Cellpose cell outlines in global coordinate system
+- Refine cell boundaries using Baysor in global coordinate system
 - Create single-cell expression matrix (mtx format)
-    - TO DO: figure out how to write a SpatialData object
+    - TO DO: figure out how to write a SpatialData object in global coordinate system
 
 Change log:
-Shepherd 05/24 - added cellpose and baysor for segmentation and assignment
-Shepherd 04/24 - fully automated processing and decoding
-Shepherd 01/24 - updates for qi2lab MERFISH file format v1.0
-Shepherd 09/23 - new LED widefield scope post-processing 
+Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
+                 rework function for explicit flags and parameter dictionaries.
+Shepherd 04/24 - fully automated processing and decoding.
+Shepherd 01/24 - updates for qi2lab MERFISH file format v1.0.
+Shepherd 09/23 - new LED widefield scope post-processing.
 '''
 
 # imports
@@ -37,7 +39,7 @@ import time
 from psfmodels import make_psf
 from tifffile import imread
 import pandas as pd
-from typing import Generator, Optional, Sequence
+from typing import Generator, Optional
 from tifffile import TiffWriter
 from tqdm import tqdm
 
@@ -53,9 +55,12 @@ def postprocess(dataset_path: Path,
                 run_global_registration: bool =  True,
                 write_fused_zarr: bool = False,
                 run_cellpose: bool = True,
+                cellpose_parameters: dict = {'diam_mean': 30,
+                                              'flow_threshold': 0.0,
+                                              'normalization': [10,90]},
                 run_tile_decoding: bool =  True,
-                tile_decoding_parameters: dict = {'normalization': [10,80],
-                                                   'overwrite_normalization': True,
+                tile_decoding_parameters: dict = {'normalization': [.1,80],
+                                                   'calculate_normalization': True,
                                                    'exp_type': '3D',
                                                    'merfish_bits': 16,
                                                    'lowpass_sigma': (3,1,1),
@@ -64,8 +69,11 @@ def postprocess(dataset_path: Path,
                                                    'minimum_pixels': 27,
                                                    'fdr_target': .05},
                 run_baysor: bool = True,
+                baysor_parameters: dict = {'cell_size': 10,
+                                            'min_molecules_per_cell': 20,
+                                            'cellpose_prior_confidence': 0.5},
                 baysor_ignore_genes: bool = False,
-                genes_to_exclude: Optional[str] = None,
+                baysor_genes_to_exclude: Optional[str] = None,
                 noise_map_path: Optional[Path] = None,
                 darkfield_image_path: Optional[Path] = None,
                 shading_images_path: Optional[Path] = None) -> Generator[dict[str, int], None, None]:
@@ -597,12 +605,12 @@ def postprocess(dataset_path: Path,
             fused_zarr = zarr.open(str(fused_output_path), mode="a")
                 
         if write_fused_zarr:
-            fused_data = np.squeeze(fused.data)
+            fused_image = np.squeeze(fused.data)
             
             if fuse_readouts:
                 try:
                     fused_data = fused_zarr.zeros('fused_iso_zyx',
-                                                shape=(fused_data.shape[0],fused_data.shape[1],fused_data.shape[2],fused_data.shape[3]),
+                                                shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2],fused_image.shape[3]),
                                                 chunks=(1,1,256,256),
                                                 compressor=compressor,
                                                 dtype=np.uint16)
@@ -611,20 +619,20 @@ def postprocess(dataset_path: Path,
             else:
                 try:
                     fused_data = fused_zarr.zeros('fused_iso_zyx',
-                                            shape=(fused_data.shape[0],fused_data.shape[1],fused_data.shape[2]),
+                                            shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2]),
                                             chunks=(1,256,256),
                                             compressor=compressor,
                                             dtype=np.uint16)
                 except:
                     fused_data = fused_zarr['fused_iso_zyx']
             
-            fused_data[:] = fused
+            fused_data[:] = np.squeeze(fused_image)
                 
             fused_data.attrs['affine_zyx_um'] = affine.tolist()
             fused_data.attrs['origin_zyx_um'] = origin.tolist()
             fused_data.attrs['spacing_zyx_um'] = spacing.tolist()
             
-            del fused_sim
+            del fused_sim, fused_image
             gc.collect()
         
     if run_cellpose:
@@ -645,7 +653,9 @@ def postprocess(dataset_path: Path,
         
         channels = [[0,0]]
         
-        model = models.Cellpose(model_type='cyto3')
+        model = models.Cellpose(gpu=True,
+                                model_type='cyto3',
+                                diam_mean=cellpose_parameters['diam_mean'])
         
         if fuse_readouts:
             data_to_segment = np.max(np.squeeze(fused[0,:].data),axis=0)
@@ -654,9 +664,9 @@ def postprocess(dataset_path: Path,
 
         masks, _, _, _ = model.eval(data_to_segment,
                                     channels=channels,
-                                    flow_threshold=0.0,
+                                    flow_threshold=cellpose_parameters['flow_threshold'],
                                     normalize = {'normalize': True,
-                                                    'percentile': [10,90]})
+                                                    'percentile': cellpose_parameters['normalization']})
         
         segmentation_dir_path = output_dir_path / Path('segmentation')
         segmentation_dir_path.mkdir(parents=True, exist_ok=True)
@@ -706,7 +716,7 @@ def postprocess(dataset_path: Path,
         import cupy as cp
         
         global_normalization_limits = tile_decoding_parameters['normalization']
-        overwrite_normalization = tile_decoding_parameters['overwrite_normalization']
+        calculate_normalization = tile_decoding_parameters['calculate_normalization']
         exp_type = tile_decoding_parameters['exp_type']
         merfish_bits = tile_decoding_parameters['merfish_bits']
         lowpass_sigma = tile_decoding_parameters['lowpass_sigma']
@@ -717,7 +727,7 @@ def postprocess(dataset_path: Path,
             
         decode_factory = PixelDecoder(dataset_path=output_dir_path,
                                       global_normalization_limits=global_normalization_limits,
-                                      overwrite_normalization=overwrite_normalization,
+                                      overwrite_normalization=calculate_normalization,
                                       exp_type=exp_type,
                                       merfish_bits=merfish_bits)
 
@@ -771,17 +781,20 @@ def postprocess(dataset_path: Path,
         
     if run_baysor:
         import subprocess
-        import time
-        import geopandas as gpd
-        from shapely.geometry import Point, Polygon, mapping
-        import json
         
+        baysor_cell_size = baysor_parameters['cell_size']
+        baysor_min_molecules = baysor_parameters['min_molecules_per_cell']
+        baysor_cellpose_prior = baysor_parameters['cellpose_prior_confidence']
+                
         # construct baysor command
         julia_threading = "JULIA_NUM_THREADS=24 "
         baysor_path = Path('~/Documents/github/Baysor/bin/baysor/bin/./baysor')
-        baysor_options = r" run -p -x global_x -y global_y -g gene_id -s 10 --config.segmentation.iters 2000 --config.data.force_2d=true --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell 10 --prior-segmentation-confidence 0.5 "
+        baysor_options = r" run -p -x global_x -y global_y -g gene_id -s "+str(baysor_cell_size) +\
+            r" --config.segmentation.iters 2000 --config.data.force_2d=true"+\
+            r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
+            r" --prior-segmentation-confidence "+str(baysor_cellpose_prior)+r" "
         if baysor_ignore_genes:
-            baysor_genes_to_ignore = r"--config.data.exclude_genes='" + genes_to_exclude + "' "
+            baysor_genes_to_ignore = r"--config.data.exclude_genes='" + baysor_genes_to_exclude + "' "
             baysor_options = baysor_options + baysor_genes_to_ignore
         baysor_genes_path = output_dir_path / Path("decoded") / Path('baysor_formatted_genes.csv')
         baysor_output_path = output_dir_path / Path("segmentation") / Path('baysor')
@@ -793,78 +806,85 @@ def postprocess(dataset_path: Path,
         try:
             result = subprocess.run(command, shell=True, check=True)
             print("Command finished with return code:", result.returncode)
+            baysor_success = True
         except subprocess.CalledProcessError as e:
             print("Command failed with:", e)
+            baysor_success = False
         
-        if baysor_ignore_genes:
-            baysor_output_genes_path = baysor_genes_path
-        else:
-            baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
-        
-        baysor_outlines_path = baysor_output_path / Path("segmentation_polygons.json")
-        baysor_stats_path = baysor_output_path / Path("segmentation_cell_stats.csv")
-        baysor_genes_df = pd.read_csv(baysor_output_genes_path)
-        baysor_cell_stats_df = pd.read_csv(baysor_stats_path)
-
-        with open(baysor_outlines_path, 'r') as f:
-            geojson_data = json.load(f)
-
-        polygons = []
-        cells = []
-        for geom in geojson_data['geometries']:
-            coords = geom['coordinates'][0]
-            if coords[0] != coords[-1]:
-                coords.append(coords[0].copy()) 
-            if len(coords) >= 4:
-                polygon = Polygon(coords)
-                polygons.append(polygon)
-                cells.append(geom['cell']) 
-
-        corrected_geojson = gpd.GeoDataFrame({
-            'geometry': polygons,
-            'cell': cells
-        })
-
-        def extract_number(cell_value):
-            if pd.isna(cell_value):
-                return -1
-            elif isinstance(cell_value, str):
-                try:
-                    return int(cell_value.split('-')[-1])
-                except (ValueError, IndexError):
-                    return -1
-            else:
-                return -1
-
-        baysor_cell_stats_df['cell_number'] = baysor_cell_stats_df['cell'].apply(extract_number)
-        filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > 7.5) &\
-                                                (baysor_cell_stats_df['avg_confidence'] > 0.7) &\
-                                                (baysor_cell_stats_df['lifespan'] > 100)]
-        filtered_outlines_gdf = corrected_geojson[corrected_geojson['cell'].isin(filtered_cell_df['cell_number'])]
-
-        if baysor_ignore_genes:
-            points_gdf = gpd.GeoDataFrame(
-                baysor_genes_df,
-                geometry=gpd.points_from_xy(baysor_genes_df.global_x, baysor_genes_df.global_y)
-            )
-        else:
-            points_gdf = gpd.GeoDataFrame(
-                baysor_genes_df,
-                geometry=gpd.points_from_xy(baysor_genes_df.x, baysor_genes_df.y)
-            )
+        if baysor_success:
+            import geopandas as gpd
+            from shapely.geometry import Polygon
+            import json
             
-        if points_gdf.crs is None and filtered_outlines_gdf.crs is not None:
-            points_gdf.set_crs(filtered_outlines_gdf.crs, inplace=True)
-        elif points_gdf.crs != filtered_outlines_gdf.crs:
-            points_gdf = points_gdf.to_crs(filtered_outlines_gdf.crs)
+            if baysor_ignore_genes:
+                baysor_output_genes_path = baysor_genes_path
+            else:
+                baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
+            
+            baysor_outlines_path = baysor_output_path / Path("segmentation_polygons.json")
+            baysor_stats_path = baysor_output_path / Path("segmentation_cell_stats.csv")
+            baysor_genes_df = pd.read_csv(baysor_output_genes_path)
+            baysor_cell_stats_df = pd.read_csv(baysor_stats_path)
 
-        joined_data = gpd.sjoin(points_gdf, filtered_outlines_gdf, how="left", predicate='within')
-        joined_data.reset_index(inplace=True, drop=True)
-        joined_data['index_right'] = joined_data['index_right'].fillna(-1).astype(int) + 1
-        baysor_genes_df['baysor_cell_id'] = joined_data['index_right']
-        
-        baysor_filtered_genes_path = output_dir_path / Path("decoded") / Path("baysor_decoded.parquet")
-        baysor_genes_df.to_parquet(baysor_filtered_genes_path)
+            with open(baysor_outlines_path, 'r') as f:
+                geojson_data = json.load(f)
+
+            polygons = []
+            cells = []
+            for geom in geojson_data['geometries']:
+                coords = geom['coordinates'][0]
+                if coords[0] != coords[-1]:
+                    coords.append(coords[0].copy()) 
+                if len(coords) >= 4:
+                    polygon = Polygon(coords)
+                    polygons.append(polygon)
+                    cells.append(geom['cell']) 
+
+            corrected_geojson = gpd.GeoDataFrame({
+                'geometry': polygons,
+                'cell': cells
+            })
+
+            def extract_number(cell_value):
+                if pd.isna(cell_value):
+                    return -1
+                elif isinstance(cell_value, str):
+                    try:
+                        return int(cell_value.split('-')[-1])
+                    except (ValueError, IndexError):
+                        return -1
+                else:
+                    return -1
+
+            baysor_cell_stats_df['cell_number'] = baysor_cell_stats_df['cell'].apply(extract_number)
+            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > 7.5) &\
+                                                    (baysor_cell_stats_df['avg_confidence'] > 0.7) &\
+                                                    (baysor_cell_stats_df['lifespan'] > 100)]
+            filtered_outlines_gdf = corrected_geojson[corrected_geojson['cell'].isin(filtered_cell_df['cell_number'])]
+
+            if baysor_ignore_genes:
+                points_gdf = gpd.GeoDataFrame(
+                    baysor_genes_df,
+                    geometry=gpd.points_from_xy(baysor_genes_df.global_x, baysor_genes_df.global_y)
+                )
+            else:
+                points_gdf = gpd.GeoDataFrame(
+                    baysor_genes_df,
+                    geometry=gpd.points_from_xy(baysor_genes_df.x, baysor_genes_df.y)
+                )
+                
+            if points_gdf.crs is None and filtered_outlines_gdf.crs is not None:
+                points_gdf.set_crs(filtered_outlines_gdf.crs, inplace=True)
+            elif points_gdf.crs != filtered_outlines_gdf.crs:
+                points_gdf = points_gdf.to_crs(filtered_outlines_gdf.crs)
+
+            joined_data = gpd.sjoin(points_gdf, filtered_outlines_gdf, how="left", predicate='within')
+            joined_data.reset_index(inplace=True, drop=True)
+            joined_data['index_right'] = joined_data['index_right'].fillna(-1).astype(int) + 1
+            baysor_genes_df['baysor_cell_id'] = joined_data['index_right']
+            
+            baysor_filtered_genes_path = output_dir_path / Path("decoded") / Path("baysor_decoded.parquet")
+            baysor_genes_df.to_parquet(baysor_filtered_genes_path)
         
     return True
 
@@ -874,7 +894,14 @@ if __name__ == '__main__':
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
-    genes_to_exclude = "OR10C1, OR10G2, OR10H1, OR10H5, OR10Q1, OR10S1, OR10W1, OR11A1, OR12D1, OR13A1, OR13J1, OR1F1, OR1I1, OR1M1, OR2A1, OR2A14, OR2A20P, OR2A4, OR2A42, OR2A9P, OR2AT4, OR2B11, OR2C1, OR2C3, OR2F1, OR2H1, OR2H2, OR2L13, OR2S2, OR2T2, OR2T27, OR2T35, OR2T5, OR2T7, OR2Z1, OR3A2, OR3A3, OR3A4P, OR51D1, OR51E1, OR51E2, OR51G1, OR52I1, OR52I2, OR52K2, OR52L1, OR52W1, OR56B1, OR56B4, OR5AU1, OR5C1, OR6A2, OR6J1, OR6W1P, OR7A5, OR8A1, OR9Q1"
+    baysor_genes_to_exclude = "OR10C1, OR10G2, OR10H1, OR10H5, OR10Q1, OR10S1, OR10W1, OR11A1,\
+                            OR12D1, OR13A1, OR13J1, OR1F1, OR1I1, OR1M1, OR2A1, OR2A14,\
+                            OR2A20P, OR2A4, OR2A42, OR2A9P, OR2AT4, OR2B11, OR2C1, OR2C3,\
+                            OR2F1, OR2H1, OR2H2, OR2L13, OR2S2, OR2T2, OR2T27, OR2T35,\
+                            OR2T5, OR2T7, OR2Z1, OR3A2, OR3A3, OR3A4P, OR51D1, OR51E1,\
+                            OR51E2, OR51G1, OR52I1, OR52I2, OR52K2, OR52L1, OR52W1,\
+                            OR56B1, OR56B4, OR5AU1, OR5C1, OR6A2, OR6J1, OR6W1P, OR7A5,\
+                            OR8A1, OR9Q1, Blank*"
 
     func = postprocess(dataset_path = dataset_path, 
                        codebook_path = codebook_path,
@@ -887,9 +914,12 @@ if __name__ == '__main__':
                        run_global_registration =  True,
                        write_fused_zarr = True,
                        run_cellpose = True,
+                       cellpose_parameters = {'diam_mean': 30,
+                                              'flow_threshold': 0.0,
+                                              'normalization': [10,90]},
                        run_tile_decoding =  True,
-                       tile_decoding_parameters = {'normalization': [10,80],
-                                                   'overwrite_normalization': True,
+                       tile_decoding_parameters = {'normalization': [.1,80],
+                                                   'calculate_normalization': True,
                                                    'exp_type': '3D',
                                                    'merfish_bits': 16,
                                                    'lowpass_sigma': (3,1,1),
@@ -897,10 +927,15 @@ if __name__ == '__main__':
                                                    'magnitude_threshold': 0.3,
                                                    'minimum_pixels': 27,
                                                    'fdr_target': .05},
+                       # smfish_parameters = {'bits': [17,18],
+                       #                      'threshold': -1}
                        run_baysor= True,
+                       baysor_parameters = {'cell_size': 10,
+                                            'min_molecules_per_cell': 20,
+                                            'cellpose_prior_confidence': 0.5},
                        baysor_ignore_genes = True,
-                       genes_to_exclude = genes_to_exclude,
+                       baysor_genes_to_exclude = baysor_genes_to_exclude,
                        noise_map_path = noise_map_path)
     
     for val in func:
-        print(val)
+        temp_val = val
