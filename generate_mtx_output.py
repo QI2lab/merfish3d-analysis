@@ -25,21 +25,28 @@ def main():
 
     try:
         transcripts_df = pd.read_parquet(args.baysor,
-                                         usecols=["gene",
+                                         columns=["gene",
                                                  "baysor_cell_id",
                                                  "assignment_confidence"])
         format = 0 # all genes used in baysor
     except:
-        transcripts_df = pd.read_parque(args.baysor,
-                                        usecols=["gene_id",
+        try:
+            transcripts_df = pd.read_parquet(args.baysor,
+                                        columns=["gene_id",
                                                  "baysor_cell_id"])
-        transcripts_df["assignment_confidence"] = 1.0 # no baysor confidence due to clustering on subset
-        format = 1 # some genes excluded in baysor
+            transcripts_df["assignment_confidence"] = 1.0 # no baysor confidence due to clustering on subset
+            format = 1 # some genes excluded in baysor
+        except:
+            transcripts_df = pd.read_csv(args.baysor,
+                                        usecols=["gene_id",
+                                                 "cell_id"])
+            transcripts_df["assignment_confidence"] = 1.0 # no baysor confidence due to clustering on subset
+            format = 2 # cellpose segementations
 
     # Find distinct set of features.
     if format == 0:
         features = np.unique(transcripts_df["gene"])
-    elif format == 1:
+    elif format == 1 or format == 2:
         features = np.unique(transcripts_df["gene_id"])
         
     # Create lookup dictionary
@@ -48,7 +55,11 @@ def main():
         feature_to_index[str(val)] = index
         
     # If you want to find unique values
-    cells = np.unique(transcripts_df["baysor_cell_id"])
+    if format == 0 or format == 1:
+        cells = np.unique(transcripts_df["baysor_cell_id"])
+    else:
+        cells = np.unique(transcripts_df["cell_id"])
+
 
     # Create a cells x features data frame, initialized with 0
     matrix = pd.DataFrame(0, index=range(len(features)), columns=cells, dtype=np.int32)
@@ -60,11 +71,14 @@ def main():
 
         if format == 0:
             feature = str(row['gene'])
-        elif format == 1:
+        elif format == 1 or format == 2:
             feature = str(row['gene_id'])
             
         try:
-            cell = int(row['baysor_cell_id'])
+            if format == 0 or format == 1:
+                cell = int(row['baysor_cell_id'])
+            else:
+                cell = int(row['cell_id'])
         except:
             cell = 0
         conf = row['assignment_confidence']

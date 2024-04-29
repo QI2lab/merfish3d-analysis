@@ -653,10 +653,9 @@ def postprocess(dataset_path: Path,
         
         channels = [[0,0]]
         
-        model = models.Cellpose(gpu=True,
-                                model_type='cyto3',
-                                diam_mean=cellpose_parameters['diam_mean'])
-        
+        model = models.Cellpose(gpu=True,model_type='cyto3')
+        model.diam_mean = diam_mean=cellpose_parameters['diam_mean']
+                                
         if fuse_readouts:
             data_to_segment = np.max(np.squeeze(fused[0,:].data),axis=0)
         else:
@@ -666,7 +665,7 @@ def postprocess(dataset_path: Path,
                                     channels=channels,
                                     flow_threshold=cellpose_parameters['flow_threshold'],
                                     normalize = {'normalize': True,
-                                                    'percentile': cellpose_parameters['normalization']})
+                                                 'percentile': cellpose_parameters['normalization']})
         
         segmentation_dir_path = output_dir_path / Path('segmentation')
         segmentation_dir_path.mkdir(parents=True, exist_ok=True)
