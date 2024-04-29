@@ -55,6 +55,7 @@ def postprocess(dataset_path: Path,
                 run_tile_registration: bool = True,
                 write_polyDT_tiff: bool = False,
                 run_global_registration: bool =  True,
+                global_registration_parameters: dict = {'parallel_fusion': False},
                 write_fused_zarr: bool = False,
                 run_cellpose: bool = True,
                 cellpose_parameters: dict = {'diam_mean_pixels': 30,
@@ -603,7 +604,10 @@ def postprocess(dataset_path: Path,
         spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
         
         with dask.diagnostics.ProgressBar():
-            fused = fused_sim.compute(scheduler='single-threaded')
+            if global_registration_parameters['parallel_fusion']:
+                fused = fused_sim.compute()
+            else:
+                fused = fused_sim.compute(scheduler='single-threaded')
         
         if write_fused_zarr or run_cellpose:
             fused_output_path = fused_dir_path / Path("fused.zarr")
@@ -786,13 +790,14 @@ def postprocess(dataset_path: Path,
     if run_baysor:
         import subprocess
         
+        baysor_path = Path(baysor_parameters['baysor_path'])
+        baysor_num_threads = baysor_parameters['num_threads']
         baysor_cell_size = baysor_parameters['cell_size_microns']
         baysor_min_molecules = baysor_parameters['min_molecules_per_cell']
         baysor_cellpose_prior = baysor_parameters['cellpose_prior_confidence']
                 
         # construct baysor command
-        julia_threading = "JULIA_NUM_THREADS=24 "
-        baysor_path = Path('~/Documents/github/Baysor/bin/baysor/bin/./baysor')
+        julia_threading = "JULIA_NUM_THREADS="+str(baysor_num_threads)+ " "
         baysor_options = r" run -p -x global_x -y global_y -g gene_id -s "+str(baysor_cell_size) +\
             r" --config.segmentation.iters 2000 --config.data.force_2d=true"+\
             r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
@@ -918,6 +923,7 @@ if __name__ == '__main__':
                        run_tile_registration = False,
                        write_polyDT_tiff = False,
                        run_global_registration =  True,
+                       global_registration_parameters = {'parallel_fusion': False}, # for qi2lab network drive, must be false to do Dask issue
                        write_fused_zarr = True,
                        run_cellpose = True,
                        cellpose_parameters = {'diam_mean_pixels': 30,
@@ -936,7 +942,9 @@ if __name__ == '__main__':
                        # smfish_parameters = {'bits': [17,18],
                        #                      'threshold': -1}
                        run_baysor= True,
-                       baysor_parameters = {'cell_size_microns': 10,
+                       baysor_parameters = {'baysor_path' : r"~/Documents/github/Baysor/bin/baysor/bin/./baysor",
+                                            'num_threads': 24,
+                                            'cell_size_microns': 10,
                                             'min_molecules_per_cell': 20,
                                             'cellpose_prior_confidence': 0.5},
                        baysor_ignore_genes = True,
