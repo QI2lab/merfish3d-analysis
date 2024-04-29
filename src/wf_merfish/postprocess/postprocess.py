@@ -17,6 +17,8 @@ qi2lab LED scope MERFISH post-processing
 - Refine cell boundaries using Baysor in global coordinate system
 - Create single-cell expression matrix (mtx format)
     - TO DO: figure out how to write a SpatialData object in global coordinate system
+    - TO DO: add flag to make mtx inside of separate script
+- TO DO: write all run parameters to .json with date/timestamp for tracking
 
 Change log:
 Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
@@ -55,7 +57,7 @@ def postprocess(dataset_path: Path,
                 run_global_registration: bool =  True,
                 write_fused_zarr: bool = False,
                 run_cellpose: bool = True,
-                cellpose_parameters: dict = {'diam_mean': 30,
+                cellpose_parameters: dict = {'diam_mean_pixels': 30,
                                               'flow_threshold': 0.0,
                                               'normalization': [10,90]},
                 run_tile_decoding: bool =  True,
@@ -69,12 +71,12 @@ def postprocess(dataset_path: Path,
                                                    'minimum_pixels': 27,
                                                    'fdr_target': .05},
                 run_baysor: bool = True,
-                baysor_parameters: dict = {'cell_size': 10,
+                baysor_parameters: dict = {'cell_size_microns': 10,
                                             'min_molecules_per_cell': 20,
                                             'cellpose_prior_confidence': 0.5},
                 baysor_ignore_genes: bool = False,
                 baysor_genes_to_exclude: Optional[str] = None,
-                baysor_filtering_parameters: dict = {'cell_area' : 7.5,
+                baysor_filtering_parameters: dict = {'cell_area_microns' : 7.5,
                                                     'confidence' : 0.7,
                                                     'lifespan' : 100},
                 noise_map_path: Optional[Path] = None,
@@ -657,7 +659,7 @@ def postprocess(dataset_path: Path,
         channels = [[0,0]]
         
         model = models.Cellpose(gpu=True,model_type='cyto3')
-        model.diam_mean = diam_mean=cellpose_parameters['diam_mean']
+        model.diam_mean = diam_mean=cellpose_parameters['diam_mean_pixels']
                                 
         if fuse_readouts:
             data_to_segment = np.max(np.squeeze(fused[0,:].data),axis=0)
@@ -784,7 +786,7 @@ def postprocess(dataset_path: Path,
     if run_baysor:
         import subprocess
         
-        baysor_cell_size = baysor_parameters['cell_size']
+        baysor_cell_size = baysor_parameters['cell_size_microns']
         baysor_min_molecules = baysor_parameters['min_molecules_per_cell']
         baysor_cellpose_prior = baysor_parameters['cellpose_prior_confidence']
                 
@@ -859,7 +861,7 @@ def postprocess(dataset_path: Path,
                     return -1
 
             baysor_cell_stats_df['cell_number'] = baysor_cell_stats_df['cell'].apply(extract_number)
-            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > baysor_filtering_parameters['cell_area']) &\
+            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > baysor_filtering_parameters['cell_area_microns']) &\
                                                     (baysor_cell_stats_df['avg_confidence'] > baysor_filtering_parameters['confidence']) &\
                                                     (baysor_cell_stats_df['lifespan'] > baysor_filtering_parameters['lifespan'])]
             filtered_outlines_gdf = corrected_geojson[corrected_geojson['cell'].isin(filtered_cell_df['cell_number'])]
@@ -892,6 +894,8 @@ def postprocess(dataset_path: Path,
 
 if __name__ == '__main__':
     
+    
+    # example run setup for human olfactory bulb 
     dataset_path = Path('/mnt/opm3/20240317_OB_MERFISH_7/')
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
@@ -916,7 +920,7 @@ if __name__ == '__main__':
                        run_global_registration =  True,
                        write_fused_zarr = True,
                        run_cellpose = True,
-                       cellpose_parameters = {'diam_mean': 30,
+                       cellpose_parameters = {'diam_mean_pixels': 30,
                                               'flow_threshold': 0.0,
                                               'normalization': [10,90]},
                        run_tile_decoding =  True,
@@ -932,12 +936,12 @@ if __name__ == '__main__':
                        # smfish_parameters = {'bits': [17,18],
                        #                      'threshold': -1}
                        run_baysor= True,
-                       baysor_parameters = {'cell_size': 10,
+                       baysor_parameters = {'cell_size_microns': 10,
                                             'min_molecules_per_cell': 20,
                                             'cellpose_prior_confidence': 0.5},
                        baysor_ignore_genes = True,
                        baysor_genes_to_exclude = baysor_genes_to_exclude,
-                       baysor_filtering_parameters = {'cell_area' : 7.5,
+                       baysor_filtering_parameters = {'cell_area_microns' : 7.5,
                                                       'confidence' : 0.7,
                                                       'lifespan' : 100},
                        noise_map_path = noise_map_path)
