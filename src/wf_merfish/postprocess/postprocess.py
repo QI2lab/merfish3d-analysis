@@ -74,6 +74,9 @@ def postprocess(dataset_path: Path,
                                             'cellpose_prior_confidence': 0.5},
                 baysor_ignore_genes: bool = False,
                 baysor_genes_to_exclude: Optional[str] = None,
+                baysor_filtering_parameters: dict = {'cell_area' : 7.5,
+                                                    'confidence' : 0.7,
+                                                    'lifespan' : 100},
                 noise_map_path: Optional[Path] = None,
                 darkfield_image_path: Optional[Path] = None,
                 shading_images_path: Optional[Path] = None) -> Generator[dict[str, int], None, None]:
@@ -856,9 +859,9 @@ def postprocess(dataset_path: Path,
                     return -1
 
             baysor_cell_stats_df['cell_number'] = baysor_cell_stats_df['cell'].apply(extract_number)
-            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > 7.5) &\
-                                                    (baysor_cell_stats_df['avg_confidence'] > 0.7) &\
-                                                    (baysor_cell_stats_df['lifespan'] > 100)]
+            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > baysor_filtering_parameters['cell_area']) &\
+                                                    (baysor_cell_stats_df['avg_confidence'] > baysor_filtering_parameters['confidence']) &\
+                                                    (baysor_cell_stats_df['lifespan'] > baysor_filtering_parameters['lifespan'])]
             filtered_outlines_gdf = corrected_geojson[corrected_geojson['cell'].isin(filtered_cell_df['cell_number'])]
 
             if baysor_ignore_genes:
@@ -934,6 +937,9 @@ if __name__ == '__main__':
                                             'cellpose_prior_confidence': 0.5},
                        baysor_ignore_genes = True,
                        baysor_genes_to_exclude = baysor_genes_to_exclude,
+                       baysor_filtering_parameters = {'cell_area' : 7.5,
+                                                      'confidence' : 0.7,
+                                                      'lifespan' : 100},
                        noise_map_path = noise_map_path)
     
     for val in func:
