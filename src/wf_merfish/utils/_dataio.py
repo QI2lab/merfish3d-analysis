@@ -15,6 +15,10 @@ import numpy as np
 from pathlib import Path
 from pycromanager import Dataset
 from datetime import datetime
+import scipy.sparse as sparse
+import scipy.io as sio
+import subprocess
+import csv
 
 def read_metadatafile(fname: Union[str,Path]) -> Dict:
     """
@@ -145,3 +149,69 @@ def return_data_dask(dataset: Dataset,
 
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def create_mtx(baysor_output_path: Path, 
+               output_dir_path: Path, 
+               confidence_cutoff: float = 0.7, 
+               rep_int:int = 100000):
+
+    try:
+        baysor_path = Path(baysor_output_path)
+        if not baysor_path.exists():
+            raise FileNotFoundError(f"The specified Baysor output ({baysor_path}) does not exist!")
+    except FileNotFoundError as e:
+        print(e)
+        return
+
+    # Create a unique directory if the specified directory exists
+    if output_dir_path.exists():
+        output_dir_path = Path(f"{output_dir_path}/{time_stamp()}")
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        transcripts_df = pd.read_parquet(baysor_path, columns=["gene", "baysor_cell_id", "assignment_confidence"])
+        format = 0  # all genes used in baysor
+    except:
+        try:
+            transcripts_df = pd.read_parquet(baysor_path, columns=["gene_id", "baysor_cell_id"])
+            transcripts_df["assignment_confidence"] = 1.0  # no baysor confidence due to clustering on subset
+            format = 1  # some genes excluded in baysor
+        except:
+            transcripts_df = pd.read_csv(baysor_path, usecols=["gene_id", "cell_id"])
+            transcripts_df["assignment_confidence"] = 1.0  # no baysor confidence due to clustering on subset
+            format = 2  # cellpose segmentations
+
+    features = np.unique(transcripts_df["gene" if format == 0 else "gene_id"])
+    feature_to_index = {str(val): index for index, val in enumerate(features)}
+    cell_column = "baysor_cell_id" if format in [0, 1] else "cell_id"
+    cells = np.unique(transcripts_df[cell_column])
+    matrix = pd.DataFrame(0, index=range(len(features)), columns=cells, dtype=np.int32)
+
+    for index, row in transcripts_df.iterrows():
+        if index % rep_int == 0:
+            print(f"{index} transcripts processed.")
+
+        feature = row['gene' if format == 0 else 'gene_id']
+        cell = row[cell_column]
+        conf = row['assignment_confidence']
+        if conf < confidence_cutoff:
+            continue
+        if cell:
+            matrix.at[feature_to_index[feature], cell] += 1
+
+    write_sparse_mtx(output_dir_path, matrix, cells, features)
+
+def write_sparse_mtx(output_dir_path, matrix, cells, features):
+
+    sparse_mat = sparse.coo_matrix(matrix.values)
+    sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
+    write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
+    write_tsv(output_dir_path / "features.tsv", [[str(f), str(f), "Blank Codeword" if str(f).startswith("Blank") else "Gene Expression"] for f in features])
+    subprocess.run(f"gzip -f {str(output_dir_path)}/*", shell=True)
+
+def write_tsv(filename, data):
+    with open(filename, 'w', newline='') as tsvfile:
+        writer = csv.writer(tsvfile, delimiter='\t', lineterminator='\n')
+        for item in data:
+            writer.writerow([item] if isinstance(item, str) else item)

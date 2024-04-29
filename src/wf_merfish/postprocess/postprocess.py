@@ -17,8 +17,8 @@ qi2lab LED scope MERFISH post-processing
 - Refine cell boundaries using Baysor in global coordinate system
 - Create single-cell expression matrix (mtx format)
     - TO DO: figure out how to write a SpatialData object in global coordinate system
-    - TO DO: add flag to make mtx inside of separate script
 - TO DO: write all run parameters to .json with date/timestamp for tracking
+- TO DO: docstrings and comments
 
 Change log:
 Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
@@ -80,6 +80,8 @@ def postprocess(dataset_path: Path,
                 baysor_filtering_parameters: dict = {'cell_area_microns' : 7.5,
                                                     'confidence' : 0.7,
                                                     'lifespan' : 100},
+                run_mtx_creation: bool = True,
+                mtx_creation_parameters: dict = {'confidence_cutoff' : 0.7},
                 noise_map_path: Optional[Path] = None,
                 darkfield_image_path: Optional[Path] = None,
                 shading_images_path: Optional[Path] = None) -> Generator[dict[str, int], None, None]:
@@ -894,7 +896,14 @@ def postprocess(dataset_path: Path,
             
             baysor_filtered_genes_path = output_dir_path / Path("decoded") / Path("baysor_decoded.parquet")
             baysor_genes_df.to_parquet(baysor_filtered_genes_path)
+            
+    if run_mtx_creation:
+        from src.wf_merfish.utils._dataio import create_mtx
         
+        create_mtx(baysor_filtered_genes_path,
+                   output_dir_path / Path('mtx_output'),
+                   mtx_creation_parameters['confidence_cutoff'])
+                   
     return True
 
 if __name__ == '__main__':
@@ -923,7 +932,7 @@ if __name__ == '__main__':
                        run_tile_registration = False,
                        write_polyDT_tiff = False,
                        run_global_registration =  True,
-                       global_registration_parameters = {'parallel_fusion': False}, # for qi2lab network drive, must be false to do Dask issue
+                       global_registration_parameters = {'parallel_fusion': False}, # for qi2lab network drive, must be false due to Dask issue
                        write_fused_zarr = True,
                        run_cellpose = True,
                        cellpose_parameters = {'diam_mean_pixels': 30,
@@ -950,8 +959,10 @@ if __name__ == '__main__':
                        baysor_ignore_genes = True,
                        baysor_genes_to_exclude = baysor_genes_to_exclude,
                        baysor_filtering_parameters = {'cell_area_microns' : 7.5,
-                                                      'confidence' : 0.7,
+                                                      'confidence_cutoff' : 0.7,
                                                       'lifespan' : 100},
+                       run_mtx_creation = True,
+                       mtx_creation_parameters = {'confidence_cutoff' : 0.7},
                        noise_map_path = noise_map_path)
     
     for val in func:
