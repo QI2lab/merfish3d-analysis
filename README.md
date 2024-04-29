@@ -28,11 +28,6 @@ mamba install -c conda-forge -c nvidia -c pytorch cupy cuda-version=12.1 cudnn c
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-On MacOS, if you have issues building `deeds`, run:
-```bash
-brew install llvm libomp
-echo 'export PATH="/opt/homebrew/Cellar/llvm/17.0.6_1/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
 ```
 
 ## qi2lab MERFISH zarr layout v0.1
