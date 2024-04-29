@@ -28,8 +28,6 @@ mamba install -c conda-forge -c nvidia -c pytorch cupy cuda-version=12.1 cudnn c
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-```
-
 ## qi2lab MERFISH zarr layout v0.1
 <details>
 <summary>file format</summary>
