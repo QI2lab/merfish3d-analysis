@@ -55,7 +55,8 @@ def postprocess(dataset_path: Path,
                 run_tile_registration: bool = True,
                 write_polyDT_tiff: bool = False,
                 run_global_registration: bool =  True,
-                global_registration_parameters: dict = {'parallel_fusion': False},
+                global_registration_parameters: dict = {'data_to_fuse': 'all',
+                                                        'parallel_fusion': False},
                 write_fused_zarr: bool = False,
                 run_cellpose: bool = True,
                 cellpose_parameters: dict = {'diam_mean_pixels': 30,
@@ -492,8 +493,11 @@ def postprocess(dataset_path: Path,
     yield progress_updates
     
     if run_global_registration:
-        fuse_readouts = False        
-        
+        if global_registration_parameters['data_to_fuse'] == 'all':
+            fuse_readouts = True
+        else:
+            fuse_readouts = False    
+                
         from multiview_stitcher import spatial_image_utils as si_utils
         from multiview_stitcher import msi_utils, fusion, registration
         import dask.diagnostics
@@ -541,25 +545,30 @@ def postprocess(dataset_path: Path,
                 for bit_id in bit_ids:
                     bit_current_tile = readout_current_tile_path / Path(bit_id)
                     bit_current_tile = zarr.open(bit_current_tile,mode='r')
-                    im_data.append(da.from_array((bit_current_tile['registered_decon_data'])))
+                    temp = da.where(da.from_array(bit_current_tile["registered_ufish_data"], meta=np.array([], dtype=np.float32)) > 0.01, 
+                                    da.from_array(bit_current_tile["registered_decon_data"], meta=np.array([], dtype=np.float32)), 
+                                    0.)
+                    im_data.append(temp)
+                    del temp
+                    gc.collect()
 
                 im_data = da.stack(im_data)
                 
-            if ~fuse_readouts:
+            if fuse_readouts:
+                with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                    sim = si_utils.get_sim_from_array(im_data,
+                                                    dims=('c', 'z', 'y', 'x'),
+                                                    scale=scale,
+                                                    translation=tile_grid_positions,
+                                                    transform_key='stage_metadata')            
+            else:
                 im_data = im_data[0,:]
                 sim = si_utils.get_sim_from_array(da.expand_dims(im_data,axis=0),
                                                 dims=('c','z', 'y', 'x'),
                                                 scale=scale,
                                                 translation=tile_grid_positions,
                                                 transform_key='stage_metadata')
-            
-            else:
-                sim = si_utils.get_sim_from_array(im_data,
-                                                dims=('c', 'z', 'y', 'x'),
-                                                scale=scale,
-                                                translation=tile_grid_positions,
-                                                transform_key='stage_metadata')
-                
+   
             msim = msi_utils.get_msim_from_sim(sim,scale_factors=[])
             msims.append(msim)
             del im_data
@@ -620,24 +629,24 @@ def postprocess(dataset_path: Path,
             
             if fuse_readouts:
                 try:
-                    fused_data = fused_zarr.zeros('fused_iso_zyx',
+                    fused_data = fused_zarr.zeros('fused_all_iso_zyx',
                                                 shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2],fused_image.shape[3]),
                                                 chunks=(1,1,256,256),
                                                 compressor=compressor,
                                                 dtype=np.uint16)
                 except:
-                    fused_data = fused_zarr['fused_iso_zyx']
+                    fused_data = fused_zarr['fused_all_iso_zyx']
             else:
                 try:
-                    fused_data = fused_zarr.zeros('fused_iso_zyx',
+                    fused_data = fused_zarr.zeros('fused_polyDT_iso_zyx',
                                             shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2]),
                                             chunks=(1,256,256),
                                             compressor=compressor,
                                             dtype=np.uint16)
                 except:
-                    fused_data = fused_zarr['fused_iso_zyx']
+                    fused_data = fused_zarr['fused_polyDT_iso_zyx']
             
-            fused_data[:] = np.squeeze(fused_image)
+            fused_data[:] = fused_image
                 
             fused_data.attrs['affine_zyx_um'] = affine.tolist()
             fused_data.attrs['origin_zyx_um'] = origin.tolist()
@@ -665,12 +674,15 @@ def postprocess(dataset_path: Path,
         channels = [[0,0]]
         
         model = models.Cellpose(gpu=True,model_type='cyto3')
-        model.diam_mean = diam_mean=cellpose_parameters['diam_mean_pixels']
-                                
+        model.diam_mean = cellpose_parameters['diam_mean_pixels']
+        
         if fuse_readouts:
-            data_to_segment = np.max(np.squeeze(fused[0,:].data),axis=0)
+            from scipy.ndimage import gaussian_filter
+            rna_mask = gaussian_filter(np.squeeze(np.max(fused.data[1:,:],axis=0)),sigma=3)
+            polyDT_data = np.squeeze(np.max(np.squeeze(fused.data[0,:]),axis=0))
+            data_to_segment = np.where(rna_mask > 1000,polyDT_data,0)
         else:
-            data_to_segment = np.max(np.squeeze(fused.data),axis=0)
+            data_to_segment = np.max(np.squeeze(fused.data[0,:]),axis=0)
 
         masks, _, _, _ = model.eval(data_to_segment,
                                     channels=channels,
@@ -686,14 +698,24 @@ def postprocess(dataset_path: Path,
         masks_output_path = cellpose_dir_path / Path("cellpose.zarr")
         masks_zarr = zarr.open(str(masks_output_path), mode="a")
         
-        try:
-            masks_data = masks_zarr.zeros('masks_iso_zyx',
-                                    shape=(masks.shape[0],masks.shape[1]),
-                                    chunks=(256,256),
-                                    compressor=compressor,
-                                    dtype=np.uint16)
-        except:
-            masks_data = masks_zarr['masks_iso_zyx']
+        if fuse_readouts:
+            try:
+                masks_data = masks_zarr.zeros('masks_all_iso_zyx',
+                                        shape=(masks.shape[0],masks.shape[1]),
+                                        chunks=(256,256),
+                                        compressor=compressor,
+                                        dtype=np.uint16)
+            except:
+                masks_data = masks_zarr['masks_all_iso_zyx']
+        else:
+            try:
+                masks_data = masks_zarr.zeros('masks_polyDT_iso_zyx',
+                                        shape=(masks.shape[0],masks.shape[1]),
+                                        chunks=(256,256),
+                                        compressor=compressor,
+                                        dtype=np.uint16)
+            except:
+                masks_data = masks_zarr['masks_polyDT_iso_zyx']
 
         masks_data[:] = masks
         masks_data.attrs['affine_zyx_um'] = affine.tolist()
@@ -932,13 +954,14 @@ if __name__ == '__main__':
                        run_tile_registration = False,
                        write_polyDT_tiff = False,
                        run_global_registration =  True,
-                       global_registration_parameters = {'parallel_fusion': False}, # for qi2lab network drive, must be false due to Dask issue
+                       global_registration_parameters = {'data_to_fuse': 'all',
+                                                         'parallel_fusion': False}, # for qi2lab network drive, must be false due to Dask issue
                        write_fused_zarr = True,
                        run_cellpose = True,
                        cellpose_parameters = {'diam_mean_pixels': 30,
                                               'flow_threshold': 0.0,
                                               'normalization': [10,90]},
-                       run_tile_decoding =  True,
+                       run_tile_decoding =  False,
                        tile_decoding_parameters = {'normalization': [.1,80],
                                                    'calculate_normalization': True,
                                                    'exp_type': '3D',
@@ -950,18 +973,18 @@ if __name__ == '__main__':
                                                    'fdr_target': .05},
                        # smfish_parameters = {'bits': [17,18],
                        #                      'threshold': -1}
-                       run_baysor= True,
+                       run_baysor= False,
                        baysor_parameters = {'baysor_path' : r"~/Documents/github/Baysor/bin/baysor/bin/./baysor",
                                             'num_threads': 24,
                                             'cell_size_microns': 10,
                                             'min_molecules_per_cell': 20,
                                             'cellpose_prior_confidence': 0.5},
-                       baysor_ignore_genes = True,
+                       baysor_ignore_genes = False,
                        baysor_genes_to_exclude = baysor_genes_to_exclude,
                        baysor_filtering_parameters = {'cell_area_microns' : 7.5,
                                                       'confidence_cutoff' : 0.7,
                                                       'lifespan' : 100},
-                       run_mtx_creation = True,
+                       run_mtx_creation = False,
                        mtx_creation_parameters = {'confidence_cutoff' : 0.7},
                        noise_map_path = noise_map_path)
     
