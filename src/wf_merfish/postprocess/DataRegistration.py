@@ -953,7 +953,7 @@ class DataRegistration:
                 blending='additive')
             if data_to_display == 'ufish' or data_to_display == 'decon':
                 for idx in range(len(self._bit_ids)):
-                    viewer.add_image(data=self._data_registered[idx],
+                    viewer.add_image(data=self._data_registered[idx+1],
                                     name=self._bit_ids[idx]+'_'+data_to_display,
                                     scale=self._voxel_size,
                                     blending='additive',
