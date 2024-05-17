@@ -322,11 +322,13 @@ class PixelDecoder():
             self._origin = np.asarray(polyDT_current_tile.attrs['origin_zyx_um'],
                                         dtype=np.float32)
             self._spacing = np.asarray(polyDT_current_tile.attrs['spacing_zyx_um'],
-                                        dtype=np.float32)
-            self._registration_available = True
-            
+                                        dtype=np.float32)           
         except:
-           self._registration_available = False
+            self._affine = np.eye(4)
+            self._origin = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                        dtype=np.float32)
+            self._spacing = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                        dtype=np.float32)  
         
         del images, current_bit
         gc.collect()
@@ -562,17 +564,16 @@ class PixelDecoder():
                 df_barcode['tile_z'] = np.round(df_barcode['z'],0).astype(int)
                 df_barcode['tile_y'] = np.round(df_barcode['y'],0).astype(int)
                 df_barcode['tile_x'] = np.round(df_barcode['x'],0).astype(int)
-                if self._registration_available:
-                    pts = df_barcode[['z', 'y', 'x']].to_numpy()
-                    for pt_idx,pt in enumerate(pts):
-                        pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
-                                                    self._spacing,
-                                                    self._origin,
-                                                    self._affine)
-                        
-                    df_barcode['global_z'] = np.round(pts[:,0],2)
-                    df_barcode['global_y'] = np.round(pts[:,1],2)
-                    df_barcode['global_x'] = np.round(pts[:,2],2)
+                pts = df_barcode[['z', 'y', 'x']].to_numpy()
+                for pt_idx,pt in enumerate(pts):
+                    pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
+                                                self._spacing,
+                                                self._origin,
+                                                self._affine)
+                    
+                df_barcode['global_z'] = np.round(pts[:,0],2)
+                df_barcode['global_y'] = np.round(pts[:,1],2)
+                df_barcode['global_x'] = np.round(pts[:,2],2)
                 
                 df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
                 df_barcode.rename(columns={'intensity_mean-0': 'distance_mean'}, inplace=True)
@@ -666,17 +667,17 @@ class PixelDecoder():
                     df_barcode['tile_z'] = np.round(df_barcode['z'],0).astype(int)
                     df_barcode['tile_y'] = np.round(df_barcode['y'],0).astype(int)
                     df_barcode['tile_x'] = np.round(df_barcode['x'],0).astype(int)
-                    if self._registration_available:
-                        pts = df_barcode[['z', 'y', 'x']].to_numpy()
-                        for pt_idx,pt in enumerate(pts):
-                            pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
-                                                        self._spacing,
-                                                        self._origin,
-                                                        self._affine)
-                            
-                        df_barcode['global_z'] = np.round(pts[:,0],2)
-                        df_barcode['global_y'] = np.round(pts[:,1],2)
-                        df_barcode['global_x'] = np.round(pts[:,2],2)
+
+                    pts = df_barcode[['z', 'y', 'x']].to_numpy()
+                    for pt_idx,pt in enumerate(pts):
+                        pts[pt_idx,:] = self._warp_pixel(pts[pt_idx,:].copy(),
+                                                    self._spacing,
+                                                    self._origin,
+                                                    self._affine)
+                        
+                    df_barcode['global_z'] = np.round(pts[:,0],2)
+                    df_barcode['global_y'] = np.round(pts[:,1],2)
+                    df_barcode['global_x'] = np.round(pts[:,2],2)
           
                     
                     df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
@@ -932,8 +933,8 @@ class PixelDecoder():
             joined_data['index_right'] = joined_data['index_right'].fillna(0).astype(int)
             self._df_filtered_barcodes['cell_id'] = joined_data['index_right']
 
-        del points_gdf, polygons_gdf
-        gc.collect()
+            del points_gdf, polygons_gdf
+            gc.collect()
 
     def cleanup(self):
         

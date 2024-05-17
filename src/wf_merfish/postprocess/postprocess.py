@@ -501,254 +501,280 @@ def postprocess(dataset_path: Path,
     yield progress_updates
     
     if run_global_registration:
-        if global_registration_parameters['data_to_fuse'] == 'all':
-            fuse_readouts = True
-        else:
-            fuse_readouts = False    
-                
-        from multiview_stitcher import spatial_image_utils as si_utils
-        from multiview_stitcher import msi_utils, fusion, registration
-        import dask.diagnostics
-        import dask.array as da
-        
-        fused_dir_path = output_dir_path / Path('fused')
-        fused_dir_path.mkdir(parents=True, exist_ok=True)
-        
-        polyDT_dir_path = output_dir_path / Path('polyDT')
-        readout_dir_path = output_dir_path / Path('readouts')
-
-        tile_ids = sorted([entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()],
-                            key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
-
-        msims = []
-        for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile')):
-        
-            polyDT_current_path = polyDT_dir_path / Path(tile_id) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
-
-            voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                                dtype=np.float32)
-
-            scale = {'z': voxel_zyx_um[0],
-                    'y': voxel_zyx_um[1],
-                    'x': voxel_zyx_um[2]}
-                
-            tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                                dtype=np.float32)
+        try:
+            if global_registration_parameters['data_to_fuse'] == 'all':
+                fuse_readouts = True
+            else:
+                fuse_readouts = False    
+                    
+            from multiview_stitcher import spatial_image_utils as si_utils
+            from multiview_stitcher import msi_utils, fusion, registration
+            import dask.diagnostics
+            import dask.array as da
             
-            tile_grid_positions = {
-                'z': tile_position_zyx_um[0],
-                'y': tile_position_zyx_um[1],
-                'x': tile_position_zyx_um[2],
-            }
+            fused_dir_path = output_dir_path / Path('fused')
+            fused_dir_path.mkdir(parents=True, exist_ok=True)
+            
+            polyDT_dir_path = output_dir_path / Path('polyDT')
+            readout_dir_path = output_dir_path / Path('readouts')
 
-            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-                im_data = []
-                im_data.append(da.from_array(polyDT_current_tile['registered_decon_data']))
-                
-                readout_current_tile_path = readout_dir_path / Path(tile_id)
-                bit_ids = sorted([entry.name for entry in readout_current_tile_path.iterdir() if entry.is_dir()],
-                                        key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
-                
-                for bit_id in bit_ids:
-                    bit_current_tile = readout_current_tile_path / Path(bit_id)
-                    bit_current_tile = zarr.open(bit_current_tile,mode='r')
-                    temp = da.where(da.from_array(bit_current_tile["registered_ufish_data"], meta=np.array([], dtype=np.float32)) > 0.01, 
-                                    da.from_array(bit_current_tile["registered_decon_data"], meta=np.array([], dtype=np.float32)), 
-                                    0.)
-                    im_data.append(temp)
-                    del temp
-                    gc.collect()
+            tile_ids = sorted([entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()],
+                                key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
 
-                im_data = da.stack(im_data)
+            msims = []
+            for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile')):
+            
+                polyDT_current_path = polyDT_dir_path / Path(tile_id) / Path("round000.zarr")
+                polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
+
+                voxel_zyx_um = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
+                                                    dtype=np.float32)
+
+                scale = {'z': voxel_zyx_um[0],
+                        'y': voxel_zyx_um[1],
+                        'x': voxel_zyx_um[2]}
+                    
+                tile_position_zyx_um = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
+                                                    dtype=np.float32)
                 
-            if fuse_readouts:
+                tile_grid_positions = {
+                    'z': tile_position_zyx_um[0],
+                    'y': tile_position_zyx_um[1],
+                    'x': tile_position_zyx_um[2],
+                }
+
                 with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-                    sim = si_utils.get_sim_from_array(im_data,
-                                                    dims=('c', 'z', 'y', 'x'),
+                    im_data = []
+                    im_data.append(da.from_array(polyDT_current_tile['registered_decon_data']))
+                    
+                    readout_current_tile_path = readout_dir_path / Path(tile_id)
+                    bit_ids = sorted([entry.name for entry in readout_current_tile_path.iterdir() if entry.is_dir()],
+                                            key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))
+                    
+                    for bit_id in bit_ids:
+                        bit_current_tile = readout_current_tile_path / Path(bit_id)
+                        bit_current_tile = zarr.open(bit_current_tile,mode='r')
+                        temp = da.where(da.from_array(bit_current_tile["registered_ufish_data"], meta=np.array([], dtype=np.float32)) > 0.01, 
+                                        da.from_array(bit_current_tile["registered_decon_data"], meta=np.array([], dtype=np.float32)), 
+                                        0.)
+                        im_data.append(temp)
+                        del temp
+                        gc.collect()
+
+                    im_data = da.stack(im_data)
+                    
+                if fuse_readouts:
+                    with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                        sim = si_utils.get_sim_from_array(im_data,
+                                                        dims=('c', 'z', 'y', 'x'),
+                                                        scale=scale,
+                                                        translation=tile_grid_positions,
+                                                        transform_key='stage_metadata')            
+                else:
+                    im_data = im_data[0,:]
+                    sim = si_utils.get_sim_from_array(da.expand_dims(im_data,axis=0),
+                                                    dims=('c','z', 'y', 'x'),
                                                     scale=scale,
                                                     translation=tile_grid_positions,
-                                                    transform_key='stage_metadata')            
-            else:
-                im_data = im_data[0,:]
-                sim = si_utils.get_sim_from_array(da.expand_dims(im_data,axis=0),
-                                                dims=('c','z', 'y', 'x'),
-                                                scale=scale,
-                                                translation=tile_grid_positions,
-                                                transform_key='stage_metadata')
-   
-            msim = msi_utils.get_msim_from_sim(sim,scale_factors=[])
-            msims.append(msim)
-            del im_data
-            gc.collect()
-                
-        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-            with dask.diagnostics.ProgressBar():
-                params = registration.register(
-                    msims,
-                    reg_channel_index=0,
-                    transform_key='stage_metadata',
-                    new_transform_key='translation_registered',
-                    registration_binning={'z': 4, 'y': 4, 'x': 4},
-                    pre_registration_pruning_method='otsu_threshold_on_overlap',
-                    plot_summary=False,
-                )
-        
-        for tile_idx, msim in enumerate(msims):
-            polyDT_current_path = polyDT_dir_path / Path(tile_ids[tile_idx]) / Path("round000.zarr")
-            polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
-            
-            affine = msi_utils.get_transform_from_msim(msim, transform_key='translation_registered').data.squeeze()
-            origin = si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim), asarray=True)
-            spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(msim), asarray=True)
+                                                    transform_key='stage_metadata')
+    
+                msim = msi_utils.get_msim_from_sim(sim,scale_factors=[])
+                msims.append(msim)
+                del im_data
+                gc.collect()
                     
-            polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
-            polyDT_current_tile.attrs['origin_zyx_um'] = origin.tolist()
-            polyDT_current_tile.attrs['spacing_zyx_um'] = spacing.tolist()
-            del polyDT_current_tile, affine, origin, spacing
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+                with dask.diagnostics.ProgressBar():
+                    params = registration.register(
+                        msims,
+                        reg_channel_index=0,
+                        transform_key='stage_metadata',
+                        new_transform_key='translation_registered',
+                        registration_binning={'z': 4, 'y': 4, 'x': 4},
+                        groupwise_resolution_method='shortest_paths',
+                        pre_registration_pruning_method='shortest_paths_overlap_weighted',
+                        plot_summary=False,
+                    )
             
-        with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-
-            fused_sim = fusion.fuse(
-                [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in msims],
-                transform_key='translation_registered',
-                output_spacing={'z': voxel_zyx_um[0], 'y': voxel_zyx_um[1]*3.5, 'x': voxel_zyx_um[2]*3.5},
-                output_chunksize=512,
-                overlap_in_pixels=256,
-            )
-            
-        fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
-        affine = msi_utils.get_transform_from_msim(fused_msim, transform_key='translation_registered').data.squeeze()
-        origin = si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
-        spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
-        
-        with dask.diagnostics.ProgressBar():
-            if global_registration_parameters['parallel_fusion']:
-                fused = fused_sim.compute()
-            else:
-                fused = fused_sim.compute(scheduler='single-threaded')
-        
-        if write_fused_zarr or run_cellpose:
-            fused_output_path = fused_dir_path / Path("fused.zarr")
-            fused_zarr = zarr.open(str(fused_output_path), mode="a")
+            for tile_idx, msim in enumerate(msims):
+                polyDT_current_path = polyDT_dir_path / Path(tile_ids[tile_idx]) / Path("round000.zarr")
+                polyDT_current_tile = zarr.open(polyDT_current_path,mode='a')
                 
-        if write_fused_zarr:
-            fused_image = np.squeeze(fused.data)
+                affine = msi_utils.get_transform_from_msim(msim, transform_key='translation_registered').data.squeeze()
+                origin = si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(msim), asarray=True)
+                spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(msim), asarray=True)
+                        
+                polyDT_current_tile.attrs['affine_zyx_um'] = affine.tolist()
+                polyDT_current_tile.attrs['origin_zyx_um'] = origin.tolist()
+                polyDT_current_tile.attrs['spacing_zyx_um'] = spacing.tolist()
+                del polyDT_current_tile, affine, origin, spacing
+                
+            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+
+                fused_sim = fusion.fuse(
+                    [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in msims],
+                    transform_key='translation_registered',
+                    output_spacing={'z': voxel_zyx_um[0], 'y': voxel_zyx_um[1]*3.5, 'x': voxel_zyx_um[2]*3.5},
+                    output_chunksize=512,
+                    overlap_in_pixels=256,
+                )
+                
+            fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
+            affine = msi_utils.get_transform_from_msim(fused_msim, transform_key='translation_registered').data.squeeze()
+            origin = si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
+            spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
+            
+            with dask.diagnostics.ProgressBar():
+                if global_registration_parameters['parallel_fusion']:
+                    fused = fused_sim.compute()
+                else:
+                    fused = fused_sim.compute(scheduler='single-threaded')
+            
+            if write_fused_zarr or run_cellpose:
+                fused_output_path = fused_dir_path / Path("fused.zarr")
+                fused_zarr = zarr.open(str(fused_output_path), mode="a")
+                    
+            if write_fused_zarr:
+                fused_image = np.squeeze(fused.data)
+                
+                if fuse_readouts:
+                    try:
+                        fused_data = fused_zarr.zeros('fused_all_iso_zyx',
+                                                    shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2],fused_image.shape[3]),
+                                                    chunks=(1,1,256,256),
+                                                    compressor=compressor,
+                                                    dtype=np.uint16)
+                    except:
+                        fused_data = fused_zarr['fused_all_iso_zyx']
+                else:
+                    try:
+                        fused_data = fused_zarr.zeros('fused_polyDT_iso_zyx',
+                                                shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2]),
+                                                chunks=(1,256,256),
+                                                compressor=compressor,
+                                                dtype=np.uint16)
+                    except:
+                        fused_data = fused_zarr['fused_polyDT_iso_zyx']
+                
+                fused_data[:] = fused_image
+                
+                    
+                fused_data.attrs['affine_zyx_um'] = affine.tolist()
+                fused_data.attrs['origin_zyx_um'] = origin.tolist()
+                fused_data.attrs['spacing_zyx_um'] = spacing.tolist()
+                
+                del fused_sim, fused_image
+                gc.collect()
+                no_fused_on_disk = False
+            no_fused_in_mem = False
+        except:
+            no_fused_in_mem = True
+            no_fused_on_disk = True
+        
+    if run_cellpose:
+        try:
+            test_shape = fused_image.shape
+            no_fused_in_mem = False
+        except:
+            no_fused_in_mem = True
+        if no_fused_in_mem:
+            try:
+                fused_dir_path = output_dir_path / Path('fused')
+                fused_output_path = fused_dir_path / Path("fused.zarr")
+                fused_zarr = zarr.open(fused_output_path,mode='r')
+                fused_image = fused_zarr[:]
+                no_fused_on_disk = False
+            except:
+                no_fused_on_disk = True
+        
+        if no_fused_in_mem and no_fused_on_disk:
+            print('No fused image, cannot run Cellpose.')
+        else:  
+            from cellpose import models
+            from cellpose.utils import outlines_list
+            from shapely.geometry import Polygon
+            import geopandas as gpd
+            
+            def warp_pixels(pixel_space_point: np.ndarray,
+                        spacing: np.ndarray,
+                        origin: np.ndarray,
+                        affine: np.ndarray) -> np.ndarray:
+
+                physical_space_point = pixel_space_point * spacing + origin
+                registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
+                
+                return registered_space_point
+            
+            channels = [[0,0]]
+            
+            model = models.Cellpose(gpu=True,model_type='cyto3')
+            model.diam_mean = cellpose_parameters['diam_mean_pixels']
+            
+            if fuse_readouts:
+                from scipy.ndimage import gaussian_filter
+                rna_mask = gaussian_filter(np.squeeze(np.max(fused.data[1:,:],axis=0)),sigma=3)
+                polyDT_data = np.squeeze(np.max(np.squeeze(fused.data[0,:]),axis=0))
+                data_to_segment = np.where(rna_mask > 1000,polyDT_data,0)
+            else:
+                data_to_segment = np.max(np.squeeze(fused.data[0,:]),axis=0)
+
+            masks, _, _, _ = model.eval(data_to_segment,
+                                        channels=channels,
+                                        flow_threshold=cellpose_parameters['flow_threshold'],
+                                        normalize = {'normalize': True,
+                                                    'percentile': cellpose_parameters['normalization']})
+            
+            segmentation_dir_path = output_dir_path / Path('segmentation')
+            segmentation_dir_path.mkdir(parents=True, exist_ok=True)
+            cellpose_dir_path = segmentation_dir_path / Path('cellpose')
+            cellpose_dir_path.mkdir(parents=True, exist_ok=True)
+            
+            masks_output_path = cellpose_dir_path / Path("cellpose.zarr")
+            masks_zarr = zarr.open(str(masks_output_path), mode="a")
             
             if fuse_readouts:
                 try:
-                    fused_data = fused_zarr.zeros('fused_all_iso_zyx',
-                                                shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2],fused_image.shape[3]),
-                                                chunks=(1,1,256,256),
-                                                compressor=compressor,
-                                                dtype=np.uint16)
-                except:
-                    fused_data = fused_zarr['fused_all_iso_zyx']
-            else:
-                try:
-                    fused_data = fused_zarr.zeros('fused_polyDT_iso_zyx',
-                                            shape=(fused_image.shape[0],fused_image.shape[1],fused_image.shape[2]),
-                                            chunks=(1,256,256),
+                    masks_data = masks_zarr.zeros('masks_all_iso_zyx',
+                                            shape=(masks.shape[0],masks.shape[1]),
+                                            chunks=(256,256),
                                             compressor=compressor,
                                             dtype=np.uint16)
                 except:
-                    fused_data = fused_zarr['fused_polyDT_iso_zyx']
+                    masks_data = masks_zarr['masks_all_iso_zyx']
+            else:
+                try:
+                    masks_data = masks_zarr.zeros('masks_polyDT_iso_zyx',
+                                            shape=(masks.shape[0],masks.shape[1]),
+                                            chunks=(256,256),
+                                            compressor=compressor,
+                                            dtype=np.uint16)
+                except:
+                    masks_data = masks_zarr['masks_polyDT_iso_zyx']
+
+            masks_data[:] = masks
+            masks_data.attrs['affine_zyx_um'] = affine.tolist()
+            masks_data.attrs['origin_zyx_um'] = origin.tolist()
+            masks_data.attrs['spacing_zyx_um'] = spacing.tolist()
             
-            fused_data[:] = fused_image
-                
-            fused_data.attrs['affine_zyx_um'] = affine.tolist()
-            fused_data.attrs['origin_zyx_um'] = origin.tolist()
-            fused_data.attrs['spacing_zyx_um'] = spacing.tolist()
+            outlines = outlines_list(masks)
+            n_outlines = len(outlines)
+            for outline_idx in range(n_outlines):
+                n_pts = len(outlines[outline_idx])
+                for pt_idx in range(n_pts):
+                    pt_fakez= [0,
+                            outlines[outline_idx][pt_idx][0],
+                            outlines[outline_idx][pt_idx][1]]
+                    warp_pt_fakez = warp_pixels(pt_fakez,spacing,origin,affine)
+                    outlines[outline_idx][pt_idx][0]=warp_pt_fakez[1]
+                    outlines[outline_idx][pt_idx][1]=warp_pt_fakez[2]
+
+            polygons = [Polygon(outline.reshape(-1, 2)) for outline in outlines if len(outline) >= 3]
+            masks_gdf = gpd.GeoDataFrame(geometry=polygons)
+            masks_json_path = cellpose_dir_path / Path('cell_outlines.geojson')
+            masks_gdf.to_file(masks_json_path, driver='GeoJSON')
             
-            del fused_sim, fused_image
-            gc.collect()
-        
-    if run_cellpose:
-        from cellpose import models
-        from cellpose.utils import outlines_list
-        from shapely.geometry import Polygon
-        import geopandas as gpd
-        
-        def warp_pixels(pixel_space_point: np.ndarray,
-                    spacing: np.ndarray,
-                    origin: np.ndarray,
-                    affine: np.ndarray) -> np.ndarray:
-
-            physical_space_point = pixel_space_point * spacing + origin
-            registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
-            
-            return registered_space_point
-        
-        channels = [[0,0]]
-        
-        model = models.Cellpose(gpu=True,model_type='cyto3')
-        model.diam_mean = cellpose_parameters['diam_mean_pixels']
-        
-        if fuse_readouts:
-            from scipy.ndimage import gaussian_filter
-            rna_mask = gaussian_filter(np.squeeze(np.max(fused.data[1:,:],axis=0)),sigma=3)
-            polyDT_data = np.squeeze(np.max(np.squeeze(fused.data[0,:]),axis=0))
-            data_to_segment = np.where(rna_mask > 1000,polyDT_data,0)
-        else:
-            data_to_segment = np.max(np.squeeze(fused.data[0,:]),axis=0)
-
-        masks, _, _, _ = model.eval(data_to_segment,
-                                    channels=channels,
-                                    flow_threshold=cellpose_parameters['flow_threshold'],
-                                    normalize = {'normalize': True,
-                                                 'percentile': cellpose_parameters['normalization']})
-        
-        segmentation_dir_path = output_dir_path / Path('segmentation')
-        segmentation_dir_path.mkdir(parents=True, exist_ok=True)
-        cellpose_dir_path = segmentation_dir_path / Path('cellpose')
-        cellpose_dir_path.mkdir(parents=True, exist_ok=True)
-        
-        masks_output_path = cellpose_dir_path / Path("cellpose.zarr")
-        masks_zarr = zarr.open(str(masks_output_path), mode="a")
-        
-        if fuse_readouts:
-            try:
-                masks_data = masks_zarr.zeros('masks_all_iso_zyx',
-                                        shape=(masks.shape[0],masks.shape[1]),
-                                        chunks=(256,256),
-                                        compressor=compressor,
-                                        dtype=np.uint16)
-            except:
-                masks_data = masks_zarr['masks_all_iso_zyx']
-        else:
-            try:
-                masks_data = masks_zarr.zeros('masks_polyDT_iso_zyx',
-                                        shape=(masks.shape[0],masks.shape[1]),
-                                        chunks=(256,256),
-                                        compressor=compressor,
-                                        dtype=np.uint16)
-            except:
-                masks_data = masks_zarr['masks_polyDT_iso_zyx']
-
-        masks_data[:] = masks
-        masks_data.attrs['affine_zyx_um'] = affine.tolist()
-        masks_data.attrs['origin_zyx_um'] = origin.tolist()
-        masks_data.attrs['spacing_zyx_um'] = spacing.tolist()
-        
-        outlines = outlines_list(masks)
-        n_outlines = len(outlines)
-        for outline_idx in range(n_outlines):
-            n_pts = len(outlines[outline_idx])
-            for pt_idx in range(n_pts):
-                pt_fakez= [0,
-                           outlines[outline_idx][pt_idx][0],
-                           outlines[outline_idx][pt_idx][1]]
-                warp_pt_fakez = warp_pixels(pt_fakez,spacing,origin,affine)
-                outlines[outline_idx][pt_idx][0]=warp_pt_fakez[1]
-                outlines[outline_idx][pt_idx][1]=warp_pt_fakez[2]
-
-        polygons = [Polygon(outline.reshape(-1, 2)) for outline in outlines if len(outline) >= 3]
-        masks_gdf = gpd.GeoDataFrame(geometry=polygons)
-        masks_json_path = cellpose_dir_path / Path('cell_outlines.geojson')
-        masks_gdf.to_file(masks_json_path, driver='GeoJSON')
-        
-        del masks, outlines, masks_gdf
-        del affine, origin, spacing
+            del masks, outlines, masks_gdf
+            del affine, origin, spacing
             
     if run_tile_decoding:
         
