@@ -778,7 +778,6 @@ class PixelDecoder():
 
         self._df_barcodes_loaded = pd.concat(tile_data)
         
-        
     @staticmethod
     def calculate_fdr(df, 
                       threshold,
@@ -874,7 +873,7 @@ class PixelDecoder():
             for threshold in np.arange(0, 1, 0.1):  # Coarse step: 0.1
                 fdr = self.calculate_fdr(self._df_barcodes_loaded, 
                                         threshold,
-                                        21,
+                                        21, # TO DO: FIX
                                         self._barcode_count,
                                         self._verbose)
                 if fdr <= fdr_target:
@@ -910,8 +909,7 @@ class PixelDecoder():
             self._df_filtered_barcodes['cell_id'] = -1
             self._df_filtered_barcodes.drop('X', axis=1, inplace=True)
             self._barcodes_filtered = True
-            
-            
+             
     @staticmethod
     def _load_microjson(filepath):
         with open(filepath, 'r') as f:
@@ -925,9 +923,8 @@ class PixelDecoder():
         return outlines
                        
     def assign_cells(self):
-        
         try:
-            outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.geojson")
+            outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.json")
             cell_outlines = self._load_microjson(outlines_path)
             has_cell_outlines = True
         except:

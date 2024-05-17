@@ -17,6 +17,7 @@ def warp_pixels_noz(pixel_space_point: np.ndarray,
     return registered_space_point_noz
 
 def extract_outlines(label_image):
+    
     outlines_list = masks_to_outlines(label_image)
     outlines = {}
     
@@ -30,6 +31,7 @@ def create_microjson(outlines,
                     spacing: np.ndarray,
                     origin: np.ndarray,
                     affine: np.ndarray):
+    
     features = []
     for cell_id, contour in outlines.items():
         transformed_coords = [warp_pixels_noz(point, spacing, origin, affine).tolist() for point in contour]
@@ -53,6 +55,7 @@ def create_microjson(outlines,
         ],
         "features": features
     }
+    
     return microjson
 
 def calculate_centroids(outlines,
@@ -63,6 +66,6 @@ def calculate_centroids(outlines,
     for cell_id, contour in outlines.items():
         centroid = np.mean(contour, axis=0)
         global_centroid = warp_pixels_noz(centroid,spacing,origin,affine)
-        centroids.append({"cell_id": cell_id, "centroid_y": centroid[0], "centroid_x": centroid[1]})
+        centroids.append({"cell_id": cell_id, "centroid_y": global_centroid[0], "centroid_x": global_centroid[1]})
     
     return pd.DataFrame(centroids)
