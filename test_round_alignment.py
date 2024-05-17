@@ -2,10 +2,10 @@ from wf_merfish.postprocess.DataRegistration import DataRegistration
 from pathlib import Path
 import gc
 
-readout = False # options are 'false' for all rounds polyDT or 'true' for 1st round polyDT + all readout bits
-data_to_use = 'both' # options are 'ufish', 'decon', or 'both' for ufish and deconvolved data
+readout = True # options are 'false' for all rounds polyDT or 'true' for 1st round polyDT + all readout bits
+data_to_use = 'both' # options are 'ufish', 'decon', or 'predict' for ufish, deconvolved, or ufish*deconvolved data
 
-data_dir_path = Path('/mnt/opm3/20240416_BiFISH_cleared_singlecolor/processed_v2/')
+data_dir_path = Path('/mnt/opm3/20240416_BiFISH_cleared_singlecolor/processed_v2')
 polyDT_dir_path = data_dir_path / Path('polyDT')
 tile_ids = [entry.name for entry in polyDT_dir_path.iterdir() if entry.is_dir()]
 

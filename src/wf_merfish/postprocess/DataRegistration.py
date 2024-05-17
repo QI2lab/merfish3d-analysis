@@ -953,7 +953,7 @@ class DataRegistration:
                 blending='additive')
             if data_to_display == 'ufish' or data_to_display == 'decon':
                 for idx in range(len(self._bit_ids)):
-                    viewer.add_image(data=self._data_registered[idx],
+                    viewer.add_image(data=self._data_registered[idx+1],
                                     name=self._bit_ids[idx]+'_'+data_to_display,
                                     scale=self._voxel_size,
                                     blending='additive',
@@ -961,14 +961,10 @@ class DataRegistration:
             else:
                 data_idx = 1
                 for idx in range(len(self._bit_ids)):
-                    viewer.add_image(data=self._data_registered[data_idx],
-                                    name=self._bit_ids[idx]+'_ufish',
-                                    scale=self._voxel_size,
-                                    blending='additive',
-                                    colormap=colormaps[idx].to_napari())
+                    ufish_prediction = np.where(self._data_registered[data_idx]>.01,1,0)
                     data_idx = data_idx + 1
-                    viewer.add_image(data=self._data_registered[data_idx],
-                                    name=self._bit_ids[idx]+'_decon',
+                    viewer.add_image(data=ufish_prediction * self._data_registered[data_idx],
+                                    name=self._bit_ids[idx]+'_predict',
                                     scale=self._voxel_size,
                                     blending='additive',
                                     colormap=colormaps[idx].to_napari())
