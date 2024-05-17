@@ -3,7 +3,7 @@ from pathlib import Path
 import gc
 
 readout = True # options are 'false' for all rounds polyDT or 'true' for 1st round polyDT + all readout bits
-data_to_use = 'both' # options are 'ufish', 'decon', or 'predict' for ufish, deconvolved, or ufish*deconvolved data
+data_to_use = 'predict' # options are 'ufish', 'decon', or 'predict' for ufish, deconvolved, or ufish*deconvolved data
 
 data_dir_path = Path('/mnt/opm3/20240416_BiFISH_cleared_singlecolor/processed_v2')
 polyDT_dir_path = data_dir_path / Path('polyDT')
@@ -16,7 +16,7 @@ for tile_idx, tile_id in enumerate(tile_ids):
                                                 tile_idx=tile_idx)
     
     data_register_factory.load_registered_data(readouts=readout, data_to_read=data_to_use)
-    data_register_factory._create_figure(readouts=readout, data_to_display=data_to_use)
+    data_register_factory.create_figure(readouts=readout, data_to_display=data_to_use)
     
     del data_register_factory
     gc.collect()

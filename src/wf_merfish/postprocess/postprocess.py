@@ -49,6 +49,7 @@ from tqdm import tqdm
 def postprocess(dataset_path: Path, 
                 codebook_path: Path, 
                 bit_order_path: Path,
+                camera: str = 'flir',
                 write_raw_camera_data: bool = False,
                 run_hotpixel_correction: bool = True,
                 run_shading_correction: bool = False,
@@ -93,12 +94,19 @@ def postprocess(dataset_path: Path,
     # read metadata for this experiment
     df_metadata = read_metadatafile(dataset_path / Path('scan_metadata.csv'))
     root_name = df_metadata['root_name']
-    pixel_size = 2.4 / (60 * (165/180)) #TO DO: fix to load from file.
-    axial_step = .310 #TO DO: fix to load from file.
+    if camera == 'flir':
+        pixel_size = 2.4 / (60 * (165/180))
+        binning = 2
+        gain = 27
+    elif camera == 'bsi':
+        pixel_size = 6.5 / (60 * (165/180))
+        binning = 1
+        gain = 1
+    
+    axial_step = .315 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
-    binning = 2
+    
     pixel_size = np.round(pixel_size*binning,3)
-    gain = 27
     num_r = df_metadata['num_r']
     num_tiles = df_metadata['num_xyz']
     chan_dpc1_active = df_metadata['dpc1_active']

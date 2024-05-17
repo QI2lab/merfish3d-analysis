@@ -364,51 +364,51 @@ class DataRegistration:
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
-                # downsample_factor = 2
-                # if downsample_factor > 1:
-                #     ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
-                #     mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
-                # else:
-                #     ref_ds_image_sitk = ref_image_sitk
-                #     mov_ds_image_sitk = mov_image_sitk
+                downsample_factor = 2
+                if downsample_factor > 1:
+                    ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                    mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+                else:
+                    ref_ds_image_sitk = ref_image_sitk
+                    mov_ds_image_sitk = mov_image_sitk
                     
-                # _, initial_xy_shift = compute_rigid_transform(ref_ds_image_sitk, 
-                #                                                 mov_ds_image_sitk,
-                #                                                 use_mask=True,
-                #                                                 downsample_factor=downsample_factor,
-                #                                                 projection='z')
+                _, initial_xy_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                                                                mov_ds_image_sitk,
+                                                                use_mask=True,
+                                                                downsample_factor=downsample_factor,
+                                                                projection='z')
                 
-                # intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
+                intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
 
-                # mov_image_sitk = apply_transform(ref_image_sitk,
-                #                                     mov_image_sitk,
-                #                                     intial_xy_transform)
+                mov_image_sitk = apply_transform(ref_image_sitk,
+                                                    mov_image_sitk,
+                                                    intial_xy_transform)
                 
-                # del ref_ds_image_sitk
-                # gc.collect()
+                del ref_ds_image_sitk
+                gc.collect()
                 
-                # downsample_factor = 2
-                # if downsample_factor > 1:
-                #     ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
-                #     mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
-                # else:
-                #     ref_ds_image_sitk = ref_image_sitk
-                #     mov_ds_image_sitk = mov_image_sitk
+                downsample_factor = 2
+                if downsample_factor > 1:
+                    ref_ds_image_sitk = downsample_image(ref_image_sitk, downsample_factor)
+                    mov_ds_image_sitk = downsample_image(mov_image_sitk, downsample_factor)
+                else:
+                    ref_ds_image_sitk = ref_image_sitk
+                    mov_ds_image_sitk = mov_image_sitk
                     
-                # _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
-                #                                             mov_ds_image_sitk,
-                #                                             use_mask=True,
-                #                                             downsample_factor=downsample_factor,
-                #                                             projection='search')
+                _, intial_z_shift = compute_rigid_transform(ref_ds_image_sitk, 
+                                                            mov_ds_image_sitk,
+                                                            use_mask=True,
+                                                            downsample_factor=downsample_factor,
+                                                            projection='search')
                 
-                # intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
+                intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
 
-                # mov_image_sitk = apply_transform(ref_image_sitk,
-                #                                 mov_image_sitk,
-                #                                 intial_z_transform)
+                mov_image_sitk = apply_transform(ref_image_sitk,
+                                                mov_image_sitk,
+                                                intial_z_transform)
                 
-                # del ref_ds_image_sitk
-                # gc.collect()
+                del ref_ds_image_sitk
+                gc.collect()
                 
                 downsample_factor = 4
                 if downsample_factor > 1:
@@ -425,9 +425,9 @@ class DataRegistration:
                                                             projection=None)
         
                 
-                #final_xyz_shift = np.asarray(initial_xy_shift) + np.asarray(intial_z_shift) + np.asarray(xyz_shift_4x)                        
-                final_xyz_shift = np.asarray(xyz_shift_4x)
-                current_round.attrs["rigid_xform_xyz_um"] = final_xyz_shift.tolist()
+                final_xyz_shift = np.asarray(initial_xy_shift) + np.asarray(intial_z_shift) + np.asarray(xyz_shift_4x)                        
+                # final_xyz_shift = np.asarray(xyz_shift_4x)
+                current_round.attrs["rigid_xform_xyz_px"] = final_xyz_shift.tolist()
                 
                 xyz_transform_4x = sitk.TranslationTransform(3, xyz_shift_4x)
                 mov_image_sitk = apply_transform(ref_image_sitk,
@@ -450,29 +450,29 @@ class DataRegistration:
                     del ref_ds_image_sitk, mov_ds_image_sitk
                     gc.collect()
                     
-                    of_xform_3x = compute_optical_flow(ref_ds_image,mov_ds_image)
+                    of_xform_3x_px = compute_optical_flow(ref_ds_image,mov_ds_image)
                     del ref_ds_image, mov_ds_image
                     gc.collect()
 
                     try:
-                        of_xform_zarr = current_round.zeros('of_xform_3x',
-                                                        shape=of_xform_3x.shape,
-                                                        chunks=(1,1,of_xform_3x.shape[2],of_xform_3x.shape[3]),
+                        of_xform_zarr = current_round.zeros('of_xform_3x_px',
+                                                        shape=of_xform_3x_px.shape,
+                                                        chunks=(1,1,of_xform_3x_px.shape[2],of_xform_3x_px.shape[3]),
                                                         compressor=self._compressor,
                                                         dtype=np.float32)
                     except Exception:
-                        of_xform_zarr = current_round['of_xform_3x']
+                        of_xform_zarr = current_round['of_xform_3x_px']
                     
-                    of_xform_zarr[:] = of_xform_3x
+                    of_xform_zarr[:] = of_xform_3x_px
                     
-                    of_3x_sitk = sitk.GetImageFromArray(of_xform_3x.transpose(1, 2, 3, 0).astype(np.float64),
+                    of_3x_sitk = sitk.GetImageFromArray(of_xform_3x_px.transpose(1, 2, 3, 0).astype(np.float64),
                                                             isVector = True)
                     interpolator = sitk.sitkLinear
                     identity_transform = sitk.Transform(3, sitk.sitkIdentity)
                     optical_flow_sitk = sitk.Resample(of_3x_sitk, mov_image_sitk, identity_transform, interpolator,
                                                 0, of_3x_sitk.GetPixelID())
                     displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                    del of_3x_sitk, of_xform_3x
+                    del of_3x_sitk, of_xform_3x_px
                     gc.collect()
                     
                     # apply optical flow 
@@ -577,20 +577,20 @@ class DataRegistration:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
                     current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
                     
-                    rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_um'],dtype=np.float32)
+                    rigid_xform_xyz_um = np.asarray(current_polyDT_channel.attrs['rigid_xform_xyz_px'],dtype=np.float32)
                     shift_xyz = [float(i) for i in rigid_xform_xyz_um]
                     xyx_transform = sitk.TranslationTransform(3, shift_xyz)           
                     
                     if self._perform_optical_flow:
-                        of_xform_3x_xyz = np.asarray(current_polyDT_channel['of_xform_3x'],dtype=np.float32)
-                        of_3x_sitk = sitk.GetImageFromArray(of_xform_3x_xyz.transpose(1, 2, 3, 0).astype(np.float64),
+                        of_xform_3x_px_xyz = np.asarray(current_polyDT_channel['of_xform_3x_px'],dtype=np.float32)
+                        of_3x_sitk = sitk.GetImageFromArray(of_xform_3x_px_xyz.transpose(1, 2, 3, 0).astype(np.float64),
                                                                     isVector = True)
                         interpolator = sitk.sitkLinear
                         identity_transform = sitk.Transform(3, sitk.sitkIdentity)
                         optical_flow_sitk = sitk.Resample(of_3x_sitk, ref_bit_sitk, identity_transform, interpolator,
                                                         0, of_3x_sitk.GetPixelID())
                         displacement_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                        del rigid_xform_xyz_um, shift_xyz, of_xform_3x_xyz, of_3x_sitk, optical_flow_sitk
+                        del rigid_xform_xyz_um, shift_xyz, of_xform_3x_px_xyz, of_3x_sitk, optical_flow_sitk
                         gc.collect()
                         
                     decon_bit_image_sitk = apply_transform(ref_bit_sitk,
@@ -646,9 +646,9 @@ class DataRegistration:
                 ufish_localization['sum_decon_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=data_decon_registered, roi_dims=(roi_z, roi_y, roi_x))
                 ufish_localization['tile_idx'] = self._tile_idx
                 ufish_localization['bit_idx'] = bit_idx + 1
-                ufish_localization['tile_z_um'] = ufish_localization['z'] * self._voxel_size[0] + self._stage_positions[0,0]
-                ufish_localization['tile_y_um'] = ufish_localization['y'] * self._voxel_size[1] + self._stage_positions[0,1]
-                ufish_localization['tile_x_um'] = ufish_localization['x'] * self._voxel_size[2] + self._stage_positions[0,2]
+                ufish_localization['tile_z_px'] = ufish_localization['z'] 
+                ufish_localization['tile_y_px'] = ufish_localization['y'] 
+                ufish_localization['tile_x_px'] = ufish_localization['x'] 
                 
                 localization_parquet_dir_path = localization_output_dir_path / Path(self._tile_id) 
                 localization_parquet_dir_path.mkdir(parents=True, exist_ok=True)
@@ -694,7 +694,7 @@ class DataRegistration:
                 current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
                 current_round = zarr.open(current_round_path,mode='r')
                 
-                rigid_xform.append(np.asarray(current_round.attrs['rigid_xform_xyz_um'],dtype=np.float32))
+                rigid_xform.append(np.asarray(current_round.attrs['rigid_xform_xyz_px'],dtype=np.float32))
             self._rigid_xforms = np.stack(rigid_xform,axis=0)
             self._has_rigid_registrations = True
             del rigid_xform
@@ -716,7 +716,7 @@ class DataRegistration:
                 current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
                 current_round = zarr.open(current_round_path,mode='r')
                 
-                of_xform.append(np.asarray(current_round['of_xform_3x'],dtype=np.float32))
+                of_xform.append(np.asarray(current_round['of_xform_3x_px'],dtype=np.float32))
                 self._of_xforms = np.stack(of_xform,axis=0)
             self._has_of_registrations = True
             del of_xform
@@ -725,181 +725,9 @@ class DataRegistration:
             self._of_xforms = None
             self._has_of_registrations = False
 
-    # def export_tiled_tiffs(self,
-    #                        tile_size: int = 425,
-    #                        z_downsample: int = 2):
-    #     """
-    #     Export all RNA rounds, in codebook order, as small tiffs
-    #     """
-        
-    #     import tifffile
-    #     from skimage.transform import downscale_local_mean
-    #     from functools import partial
-    #     import json
-
-    #     def write_tiled_tiffs(data_tile,
-    #                           z_downsample: int,
-    #                           stage_position: Sequence[float],
-    #                           output_path: Union[str,Path],
-    #                           block_info: dict = None):
-    #         """
-    #         Function to process and write tiff tiles and associated metadata.
-
-    #         Parameters
-    #         ----------
-    #         data_tile: np.ndarray
-    #             tile from map_overlap
-    #         z_dowsample: int
-    #             z downsampling factor
-    #         stage_position: Sequene[float]
-    #             zyx stage positions
-    #         output_path: Union[str,Path]
-    #             where to place the image
-    #         block_info: dict
-    #             block metadata from map_overlap
-
-    #         Returns
-    #         -------
-    #         temp: np.ndarray
-    #             fake image to make sure somethign is
-    #             returned to map_overlap.
-    #             TO DO: improve handling this so the code doesn't error
-    #         """
-            
-    #         # helpful diagnostic code for checking tile metadata
-    #         # print("========================")
-    #         # print(block_info[0]['array-location'])
-    #         # print(block_info[0]['chunk-location'])
-    #         # print("========================")
-
-    #         x_min = block_info[0]['array-location'][3][0] 
-    #         x_max = block_info[0]['array-location'][3][1]
-    #         y_min = block_info[0]['array-location'][2][0]
-    #         y_max = block_info[0]['array-location'][2][1]
-    #         z_min = block_info[0]['array-location'][1][0]
-    #         z_max = block_info[0]['array-location'][1][1]
-
-    #         x = block_info[0]['chunk-location'][3]
-    #         y = block_info[0]['chunk-location'][2]
-    #         z = block_info[0]['chunk-location'][1]
-
-    #         stage_x = np.round(float(stage_position[0] + .115*(x_max-x_min)/2),2)
-    #         stage_y = np.round(float(stage_position[1] + .115*(y_max-y_min)/2),2)
-    #         stage_z = np.round(float(stage_position[2] + .230),2)
-
-    #         downsample = downscale_local_mean(data_tile,(1,z_downsample,1,1),cval=0.0).astype(np.uint16)
-    #         file_path = output_path / Path('subtile_x'+str(x).zfill(4)+'_y'+str(y).zfill(4)+'.tiff')
-    #         metadata_path_json = output_path / Path('subtile_x'+str(x).zfill(4)+'_y'+str(y).zfill(4)+'.json')
-    #         metadata_path_txt = output_path / Path('subtile_x'+str(x).zfill(4)+'_y'+str(y).zfill(4)+'.txt')
-    #         tile_metadata = {'subtile_id': 'subtile_x'+str(x).zfill(4)+'_y'+str(y).zfill(4)+'.tiff',
-    #                          'start_x_pixel': x_min,
-    #                          'end_x_pixel': x_max,
-    #                          'start_y_pixel': y_min,
-    #                          'end_y_pixel': y_max,
-    #                          'start_z_pixel': z_min+1,
-    #                          'end_z_pixel': z_max,
-    #                         'stage_x': stage_x,
-    #                         'stage_y': stage_y,
-    #                         'stage_z': stage_z}
-            
-    #         tifffile.imwrite(output_path/file_path,
-    #                          downsample[:,1:,:,:])
-            
-    #         with metadata_path_json.open('w') as f:
-    #             json.dump(tile_metadata,f)
-
-    #         df = pd.DataFrame(tile_metadata, index=[0]).T
-    #         df.to_csv(metadata_path_txt, sep='\t', header=False)
-
-    #         return np.array([1,1,1,1],dtype=np.uint8)
-        
-    #     # setup paths, metadata, codebook
-    #     path_parts = self._dataset_path.parts
-    #     tile_path = Path('x'+str(self._tile_coordinates[0]).zfill(3)\
-    #                      +'_y'+str(self._tile_coordinates[1]).zfill(3)\
-    #                      +'_z'+str(self._tile_coordinates[2]).zfill(3))
-    #     output_path = Path(path_parts[0]) / Path(path_parts[1]) / Path(path_parts[2]) / Path("tiled_tiffs") / tile_path
-    #     output_path.mkdir(parents=True, exist_ok=True)
-    #     data_path = output_path / Path("data")
-    #     data_path.mkdir(parents=True, exist_ok=True)
-    #     metadata_path = output_path
-    #     codebook_path_json = metadata_path / Path('codebook.json')
-    #     codebook_path_txt = metadata_path / Path('codebook.txt')
-    #     metadata_path_json = metadata_path / Path('exp_metadata.json')
-    #     metadata_path_txt = metadata_path / Path('exp_metadata.txt')
-
-    #     # generate registered data
-    #     self.generate_registered_data()
-                     
-    #     # determine number of blocks in scan direction for tile size
-    #     y_crop_index_max = (self.data_registered.shape[2]-1) // 425 * 425
-
-    #     # reorder registered data in codebook order
-    #     ordered_data = da.zeros((16,
-    #                              self.data_registered.shape[1],
-    #                              y_crop_index_max,
-    #                              self.data_registered.shape[3]),
-    #                             dtype=self.data_registered.dtype)
-    #     idx = 0
-    #     for key in self.exp_order:
-    #         ordered_data[key-1,:] = self.data_registered[idx,:,0:y_crop_index_max,:]
-    #         idx += 1
-            
-    #     ordered_data = da.rechunk(ordered_data,chunks=(-1,-1,tile_size,tile_size))
-
-    #     exp_metadata = {'exp_name': str(output_path.parts[1]),
-    #                     'tile_position_x': int(self.tile_coordinates['x']),
-    #                     'tile_position_y': int(self.tile_coordinates['y']),
-    #                     'tile_position_z': int(self.tile_coordinates['z']),
-    #                     'tile_size_xy_pixel': int(tile_size),
-    #                     'y_crop_begin_pixel': 0,
-    #                     'y_crop_end_pixel':  int(y_crop_index_max),
-    #                     'codebook_name': str(codebook_path.name),
-    #                     'na': float(1.35),
-    #                     'pixel_size_xy_um': float(0.115),
-    #                     'pixel_size_z_um': float(0.115*z_downsample),
-    #                     'slab_height_above_coverslip_um' : float(30.0*self.tile_coordinates['z']),
-    #                     'deskewed': True,
-    #                     'registered': True,
-    #                     'deconvolved': False,
-    #                     'DoG_filter': False}
-
-    #     # write codebook and metadata
-    #     with codebook_path_json.open('w') as f:
-    #         json.dump(self.codebook,f)
-
-    #     with metadata_path_json.open('w') as f:
-    #         json.dump(exp_metadata,f)
-
-    #     tile_loader._codebook.to_csv(codebook_path_txt,sep='\t',header=False,index=False)
-
-    #     df = pd.DataFrame(exp_metadata, index=[0]).T
-    #     df.to_csv(metadata_path_txt, sep='\t', header=False)
-
-    #     # call map_blocks (or map_overlap) with requested tile_size, z downsampling, and tile overlap
-    #     tile_writer_da = partial(write_tiled_tiffs,
-    #                              z_downsample=z_downsample,
-    #                              stage_position=self._stage_positions[0],
-    #                              output_path=data_path)
-    #     dask_writer = da.map_blocks(tile_writer_da,
-    #                                 ordered_data,
-    #                                 meta=np.array((), dtype=np.uint8))
-        
-    #     # use try to catch map_block dimension issue
-    #     print('Generating tiled tiffs')
-    #     print('----------------------')
-    #     try:
-    #         with TqdmCallback(desc="Subtiles"):
-    #             dask_writer.compute(num_workers=8)
-    #     except:
-    #         pass
-
-    #     del ordered_data, dask_writer, self._data_registered
-    #     gc.collect()
-
-    def _create_figure(self,
-                       readouts: Optional[bool] = False,
-                       data_to_display: Optional[str] = 'ufish'):
+    def create_figure(self,
+                      readouts: Optional[bool] = False,
+                      data_to_display: Optional[str] = 'ufish'):
         """
         Generate napari figure for debugging
         """
@@ -944,8 +772,7 @@ class DataRegistration:
                                 name=self._round_ids[idx],
                                 scale=self._voxel_size,
                                 blending='additive',
-                                colormap=colormaps[idx].to_napari(),
-                                contrast_limits=[200,10000])
+                                colormap=colormaps[idx].to_napari())
         else:
             viewer.add_image(data=self._data_registered[0],
                 name='polyDT',
