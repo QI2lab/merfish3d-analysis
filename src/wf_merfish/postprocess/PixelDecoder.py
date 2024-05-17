@@ -20,7 +20,6 @@ import pandas as pd
 from random import sample
 from tqdm import tqdm
 from shapely.geometry import Point, Polygon
-from microjson import MicroJSON
 import json
 
 class PixelDecoder():
@@ -917,23 +916,19 @@ class PixelDecoder():
     def _load_microjson(filepath):
         with open(filepath, 'r') as f:
             data = json.load(f)
-        return MicroJSON.from_dict(data)
-            
-    @staticmethod
-    def _extract_outlines_from_microjson(microjson):
         outlines = {}
-        for feature in microjson.features:
-            cell_id = feature.properties['cell_id']
-            coordinates = feature.geometry.coordinates[0]
-            outlines[cell_id] = np.array(coordinates)[:, ::-1]  # Convert back to yx
+        
+        for feature in data['features']:
+            cell_id = feature['properties']['cell_id']
+            coordinates = feature['geometry']['coordinates'][0]
+            outlines[cell_id] = np.array(coordinates)
         return outlines
-            
+                       
     def assign_cells(self):
         
         try:
             outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.geojson")
-            microjson_outlines = self._load_microjson(outlines_path)
-            cell_outlines = self._extract_outlines_from_microjson(microjson_outlines)
+            cell_outlines = self._load_microjson(outlines_path)
             has_cell_outlines = True
         except:
             has_cell_outlines = False

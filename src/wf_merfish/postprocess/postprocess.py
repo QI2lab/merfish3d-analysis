@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 '''
 qi2lab WF MERFISH / smFISH processing
-Microscope post-processing v0.1.2
+Microscope post-processing v0.1.3
 
 qi2lab LED scope MERFISH post-processing
 - Rewrite raw data in compressed Zarr in qi2lab MERFISH format
@@ -21,6 +21,7 @@ qi2lab LED scope MERFISH post-processing
 - TO DO: docstrings and comments
 
 Change log:
+Shepherd 05/24 - rework for different stitching and cell outline strategy
 Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
                  rework function for explicit flags and parameter dictionaries.
 Shepherd 04/24 - fully automated processing and decoding.
@@ -691,20 +692,8 @@ def postprocess(dataset_path: Path,
             print('No fused image, cannot run Cellpose.')
         else:  
             from cellpose import models
-            from cellpose.utils import outlines_list
-            from shapely.geometry import Polygon
-            import geopandas as gpd
-            
-            def warp_pixels(pixel_space_point: np.ndarray,
-                        spacing: np.ndarray,
-                        origin: np.ndarray,
-                        affine: np.ndarray) -> np.ndarray:
-
-                physical_space_point = pixel_space_point * spacing + origin
-                registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
-                
-                return registered_space_point
-            
+            from wf_merfish.utils._outlinesprocessing import extract_outlines, create_microjson, calculate_centroids
+                       
             channels = [[0,0]]
             
             model = models.Cellpose(gpu=True,model_type='cyto3')
@@ -756,24 +745,24 @@ def postprocess(dataset_path: Path,
             masks_data.attrs['origin_zyx_um'] = origin.tolist()
             masks_data.attrs['spacing_zyx_um'] = spacing.tolist()
             
-            outlines = outlines_list(masks)
-            n_outlines = len(outlines)
-            for outline_idx in range(n_outlines):
-                n_pts = len(outlines[outline_idx])
-                for pt_idx in range(n_pts):
-                    pt_fakez= [0,
-                            outlines[outline_idx][pt_idx][0],
-                            outlines[outline_idx][pt_idx][1]]
-                    warp_pt_fakez = warp_pixels(pt_fakez,spacing,origin,affine)
-                    outlines[outline_idx][pt_idx][0]=warp_pt_fakez[1]
-                    outlines[outline_idx][pt_idx][1]=warp_pt_fakez[2]
-
-            polygons = [Polygon(outline.reshape(-1, 2)) for outline in outlines if len(outline) >= 3]
-            masks_gdf = gpd.GeoDataFrame(geometry=polygons)
-            masks_json_path = cellpose_dir_path / Path('cell_outlines.geojson')
-            masks_gdf.to_file(masks_json_path, driver='GeoJSON')
+            cell_outlines_px = extract_outlines(masks)
+            cell_outlines_microjson = create_microjson(cell_outlines_px,
+                                                       spacing,
+                                                       origin,
+                                                       affine)
+            cell_centroids = calculate_centroids(cell_outlines_px,
+                                                 spacing,
+                                                 origin,
+                                                 affine)
             
-            del masks, outlines, masks_gdf
+            masks_json_path = cellpose_dir_path / Path('cell_outlines.json')
+            with open(masks_json_path, "w") as f:
+                f.write(cell_outlines_microjson.json(indent=2))
+                
+            mask_centroids_path = cellpose_dir_path / Path('cell_centroids.parquet')
+            cell_centroids.to_parquet(mask_centroids_path)
+                
+            del masks
             del affine, origin, spacing
             
     if run_tile_decoding:
@@ -879,7 +868,6 @@ def postprocess(dataset_path: Path,
             baysor_success = False
         
         if baysor_success:
-            import geopandas as gpd
             from shapely.geometry import Polygon
             import json
             
@@ -892,73 +880,15 @@ def postprocess(dataset_path: Path,
             baysor_stats_path = baysor_output_path / Path("segmentation_cell_stats.csv")
             baysor_genes_df = pd.read_csv(baysor_output_genes_path)
             baysor_cell_stats_df = pd.read_csv(baysor_stats_path)
-
-            with open(baysor_outlines_path, 'r') as f:
-                geojson_data = json.load(f)
-
-            polygons = []
-            cells = []
-            for geom in geojson_data['geometries']:
-                coords = geom['coordinates'][0]
-                if coords[0] != coords[-1]:
-                    coords.append(coords[0].copy()) 
-                if len(coords) >= 4:
-                    polygon = Polygon(coords)
-                    polygons.append(polygon)
-                    cells.append(geom['cell']) 
-
-            corrected_geojson = gpd.GeoDataFrame({
-                'geometry': polygons,
-                'cell': cells
-            })
-
-            def extract_number(cell_value):
-                if pd.isna(cell_value):
-                    return -1
-                elif isinstance(cell_value, str):
-                    try:
-                        return int(cell_value.split('-')[-1])
-                    except (ValueError, IndexError):
-                        return -1
-                else:
-                    return -1
-
-            baysor_cell_stats_df['cell_number'] = baysor_cell_stats_df['cell'].apply(extract_number)
-            filtered_cell_df = baysor_cell_stats_df[(baysor_cell_stats_df['area'] > baysor_filtering_parameters['cell_area_microns']) &\
-                                                    (baysor_cell_stats_df['avg_confidence'] > baysor_filtering_parameters['confidence']) &\
-                                                    (baysor_cell_stats_df['lifespan'] > baysor_filtering_parameters['lifespan'])]
-            filtered_outlines_gdf = corrected_geojson[corrected_geojson['cell'].isin(filtered_cell_df['cell_number'])]
-
-            if baysor_ignore_genes:
-                points_gdf = gpd.GeoDataFrame(
-                    baysor_genes_df,
-                    geometry=gpd.points_from_xy(baysor_genes_df.global_x, baysor_genes_df.global_y)
-                )
-            else:
-                points_gdf = gpd.GeoDataFrame(
-                    baysor_genes_df,
-                    geometry=gpd.points_from_xy(baysor_genes_df.x, baysor_genes_df.y)
-                )
-                
-            if points_gdf.crs is None and filtered_outlines_gdf.crs is not None:
-                points_gdf.set_crs(filtered_outlines_gdf.crs, inplace=True)
-            elif points_gdf.crs != filtered_outlines_gdf.crs:
-                points_gdf = points_gdf.to_crs(filtered_outlines_gdf.crs)
-
-            joined_data = gpd.sjoin(points_gdf, filtered_outlines_gdf, how="left", predicate='within')
-            joined_data.reset_index(inplace=True, drop=True)
-            joined_data['index_right'] = joined_data['index_right'].fillna(-1).astype(int) + 1
-            baysor_genes_df['baysor_cell_id'] = joined_data['index_right']
             
-            baysor_filtered_genes_path = output_dir_path / Path("decoded") / Path("baysor_decoded.parquet")
-            baysor_genes_df.to_parquet(baysor_filtered_genes_path)
+            # NEED TO REWRITE FOR MICROJSON
             
-    if run_mtx_creation:
-        from src.wf_merfish.utils._dataio import create_mtx
+    # if run_mtx_creation:
+    #     from src.wf_merfish.utils._dataio import create_mtx
         
-        create_mtx(baysor_filtered_genes_path,
-                   output_dir_path / Path('mtx_output'),
-                   mtx_creation_parameters['confidence_cutoff'])
+    #     create_mtx(baysor_filtered_genes_path,
+    #                output_dir_path / Path('mtx_output'),
+    #                mtx_creation_parameters['confidence_cutoff'])
                    
     return True
 
