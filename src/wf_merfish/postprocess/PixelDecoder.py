@@ -19,8 +19,9 @@ from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
 from random import sample
 from tqdm import tqdm
-from shapely.geometry import Point
-import geopandas as gpd
+from shapely.geometry import Point, Polygon
+from microjson import MicroJSON
+import json
 
 class PixelDecoder():
     def __init__(self,
@@ -911,31 +912,43 @@ class PixelDecoder():
             self._df_filtered_barcodes.drop('X', axis=1, inplace=True)
             self._barcodes_filtered = True
             
+            
+    @staticmethod
+    def _load_microjson(filepath):
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+        return MicroJSON.from_dict(data)
+            
+    @staticmethod
+    def _extract_outlines_from_microjson(microjson):
+        outlines = {}
+        for feature in microjson.features:
+            cell_id = feature.properties['cell_id']
+            coordinates = feature.geometry.coordinates[0]
+            outlines[cell_id] = np.array(coordinates)[:, ::-1]  # Convert back to yx
+        return outlines
+            
     def assign_cells(self):
         
         try:
             outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.geojson")
-            polygons_gdf = gpd.read_file(outlines_path)
+            microjson_outlines = self._load_microjson(outlines_path)
+            cell_outlines = self._extract_outlines_from_microjson(microjson_outlines)
             has_cell_outlines = True
         except:
             has_cell_outlines = False
        
         if has_cell_outlines:
-            points_gdf = gpd.GeoDataFrame(self._df_filtered_barcodes, 
-                                          geometry=[Point(xy) for xy in zip(self._df_filtered_barcodes.global_y,
-                                                                            self._df_filtered_barcodes.global_x)])
-            if points_gdf.crs is None and polygons_gdf.crs is not None:
-                points_gdf.set_crs(polygons_gdf.crs, inplace=True)
-            elif points_gdf.crs != polygons_gdf.crs:
-                points_gdf = points_gdf.to_crs(polygons_gdf.crs)
-            joined_data = gpd.sjoin(points_gdf, polygons_gdf, how="left", predicate='within')
-            joined_data['index_right'] = joined_data['index_right'] + 1
-            joined_data['index_right'] = joined_data['index_right'].fillna(0).astype(int)
-            self._df_filtered_barcodes['cell_id'] = joined_data['index_right']
-
-            del points_gdf, polygons_gdf
-            gc.collect()
-
+            outline_polygons = {cell_id: Polygon(outline) for cell_id, outline in cell_outlines.items()}
+            def check_point(row):
+                point = Point(row['global_y'], row['global_x'])
+                for cell_id, polygon in outline_polygons.items():
+                    if polygon.contains(point):
+                        return cell_id
+                return -1
+            
+            self._df_filtered_barcodes['cell_id'] = self._df_filtered_barcodes.apply(check_point, axis=1)
+        
     def cleanup(self):
         
         if self._filter_type == 'lp':

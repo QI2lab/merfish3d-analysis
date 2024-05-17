@@ -982,6 +982,7 @@ if __name__ == '__main__':
     func = postprocess(dataset_path = dataset_path, 
                        codebook_path = codebook_path,
                        bit_order_path = bit_order_path,
+                       camera = 'flir',
                        write_raw_camera_data = False,
                        run_hotpixel_correction = True,
                        run_shading_correction = False,
