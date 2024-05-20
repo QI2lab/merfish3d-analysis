@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from cellpose.utils import masks_to_outlines
+from cellpose.utils import masks_to_outlines, outlines_list
 
 def warp_pixels_noz(pixel_space_point: np.ndarray,
             spacing: np.ndarray,
@@ -18,14 +18,7 @@ def warp_pixels_noz(pixel_space_point: np.ndarray,
 
 def extract_outlines(label_image):
     
-    outlines_list = masks_to_outlines(label_image)
-    outlines = {}
-    
-    for i, outline in enumerate(outlines_list):
-        cell_id = i + 1  # Assign a unique identifier starting from 1
-        outlines[cell_id] = outline
-    
-    return outlines
+    return outlines_list(label_image)
 
 def create_microjson(outlines,
                     spacing: np.ndarray,
@@ -33,7 +26,8 @@ def create_microjson(outlines,
                     affine: np.ndarray):
     
     features = []
-    for cell_id, contour in outlines.items():
+    cell_id = 0
+    for contour in outlines:
         transformed_coords = [warp_pixels_noz(point, spacing, origin, affine).tolist() for point in contour]
         feature = {
             "type": "Feature",
@@ -46,6 +40,7 @@ def create_microjson(outlines,
             }
         }
         features.append(feature)
+        cell_id = cell_id + 1
     
     microjson = {
         "type": "FeatureCollection",
@@ -63,9 +58,15 @@ def calculate_centroids(outlines,
                         origin: np.ndarray,
                         affine: np.ndarray):
     centroids = []
-    for cell_id, contour in outlines.items():
-        centroid = np.mean(contour, axis=0)
+    cell_id = 0
+    for contour in outlines:
+        x_coords = contour[:, 1]
+        y_coords = contour[:, 0]
+        centroid_x = np.mean(x_coords)
+        centroid_y = np.mean(y_coords)
+        centroid = [centroid_y,centroid_x]
         global_centroid = warp_pixels_noz(centroid,spacing,origin,affine)
         centroids.append({"cell_id": cell_id, "centroid_y": global_centroid[0], "centroid_x": global_centroid[1]})
+        cell_id = cell_id + 1
     
     return pd.DataFrame(centroids)

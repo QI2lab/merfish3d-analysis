@@ -281,6 +281,7 @@ class PixelDecoder():
         self._background_vector = background_vector
         self._normalization_vector = normalization_vector
         
+        
     def _load_bit_data(self):   
         if self._verbose > 1:    
             print('load raw data')
@@ -809,7 +810,6 @@ class PixelDecoder():
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
         from sklearn.neural_network import MLPClassifier
-        #from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import classification_report
         from imblearn.over_sampling import SMOTE 
         
