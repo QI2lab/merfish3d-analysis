@@ -15,12 +15,12 @@ for tile_id in tile_ids:
 df = pd.concat(temp_df, ignore_index=True)
 
 # Generate thresholds
-min_intensity = df['sum_pixels'].min()
-max_intensity = df['sum_pixels'].max()
-thresholds = np.linspace(min_intensity, max_intensity, 1000)
+min_intensity = df['sum_decon_pixels'].min()
+max_intensity = df['sum_decon_pixels'].max()
+thresholds = np.linspace(min_intensity, max_intensity, 10000)
 
 # Calculate number of features retained for each threshold
-feature_counts = [len(df[df['sum_pixels'] > threshold]) for threshold in thresholds]
+feature_counts = [len(df[df['sum_decon_pixels'] > threshold]) for threshold in thresholds]
 
 # Plotting
 fig, ax = plt.subplots()
@@ -49,7 +49,7 @@ button = Button(axbutton, 'Accept')
 # Update function
 def update(val):
     threshold = sthresh.val
-    retained = len(df[df['sum_pixels'] > threshold])
+    retained = len(df[df['sum_decon_pixels'] > threshold])
     vline.set_xdata(threshold)
     text.set_text(f'Threshold: {threshold:.2f}, Retained: {retained}')
     fig.canvas.draw_idle()
@@ -68,4 +68,4 @@ button.on_clicked(accept)
 plt.show()
 
 # After closing the plot, filter the dataframe based on the accepted threshold
-filtered_df = df[df['sum_pixels'] > accepted_threshold]
+filtered_df = df[df['sum_decon_pixels'] > accepted_threshold]

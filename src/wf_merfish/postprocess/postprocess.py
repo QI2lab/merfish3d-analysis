@@ -901,18 +901,19 @@ if __name__ == '__main__':
     
     
     # example run setup for human olfactory bulb 
-    dataset_path = Path('/mnt/data/qi2lab/20240317_OB_MERFISH_7/')
+    dataset_path = Path('/mnt/data/bartelle/20240228_ECL_Cont0_F_PL024')
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
-    baysor_genes_to_exclude = "OR10C1, OR10G2, OR10H1, OR10H5, OR10Q1, OR10S1, OR10W1, OR11A1,\
-                            OR12D1, OR13A1, OR13J1, OR1F1, OR1I1, OR1M1, OR2A1, OR2A14,\
-                            OR2A20P, OR2A4, OR2A42, OR2A9P, OR2AT4, OR2B11, OR2C1, OR2C3,\
-                            OR2F1, OR2H1, OR2H2, OR2L13, OR2S2, OR2T2, OR2T27, OR2T35,\
-                            OR2T5, OR2T7, OR2Z1, OR3A2, OR3A3, OR3A4P, OR51D1, OR51E1,\
-                            OR51E2, OR51G1, OR52I1, OR52I2, OR52K2, OR52L1, OR52W1,\
-                            OR56B1, OR56B4, OR5AU1, OR5C1, OR6A2, OR6J1, OR6W1P, OR7A5,\
-                            OR8A1, OR9Q1, Blank*"
+    # baysor_genes_to_exclude = "OR10C1, OR10G2, OR10H1, OR10H5, OR10Q1, OR10S1, OR10W1, OR11A1,\
+    #                         OR12D1, OR13A1, OR13J1, OR1F1, OR1I1, OR1M1, OR2A1, OR2A14,\
+    #                         OR2A20P, OR2A4, OR2A42, OR2A9P, OR2AT4, OR2B11, OR2C1, OR2C3,\
+    #                         OR2F1, OR2H1, OR2H2, OR2L13, OR2S2, OR2T2, OR2T27, OR2T35,\
+    #                         OR2T5, OR2T7, OR2Z1, OR3A2, OR3A3, OR3A4P, OR51D1, OR51E1,\
+    #                         OR51E2, OR51G1, OR52I1, OR52I2, OR52K2, OR52L1, OR52W1,\
+    #                         OR56B1, OR56B4, OR5AU1, OR5C1, OR6A2, OR6J1, OR6W1P, OR7A5,\
+    #                         OR8A1, OR9Q1, Blank*"
+    baysor_genes_to_exclude = None
 
     func = postprocess(dataset_path = dataset_path, 
                        codebook_path = codebook_path,
@@ -921,9 +922,9 @@ if __name__ == '__main__':
                        write_raw_camera_data = False,
                        run_hotpixel_correction = True,
                        run_shading_correction = False,
-                       run_tile_registration = False,
+                       run_tile_registration = True,
                        write_polyDT_tiff = False,
-                       run_global_registration =  False,
+                       run_global_registration =  True,
                        global_registration_parameters = {'data_to_fuse': 'all',
                                                          'parallel_fusion': True}, # for qi2lab network drive, must be false due to Dask issue
                        write_fused_zarr = True,
@@ -933,7 +934,7 @@ if __name__ == '__main__':
                                               'normalization': [10,90]},
                        run_tile_decoding =  True,
                        tile_decoding_parameters = {'normalization': [.1,80],
-                                                   'calculate_normalization': True,
+                                                   'calculate_normalization': False,
                                                    'exp_type': '3D',
                                                    'merfish_bits': 16,
                                                    'lowpass_sigma': (3,1,1),

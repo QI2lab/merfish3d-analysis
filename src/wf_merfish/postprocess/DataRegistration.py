@@ -18,6 +18,7 @@ import SimpleITK as sitk
 from numcodecs import blosc
 from wf_merfish.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform
 from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
+from clij2fft.richardson_lucy_dask import richardson_lucy_dask
 import pandas as pd
 from ufish.api import UFish
 import dask.array as da
@@ -61,6 +62,7 @@ class DataRegistration:
         blosc.set_nthreads(20)
         self._overwrite_registered = overwrite_registered
         self._lib = getlib()
+        self._RL_mem_limit = 20
 
     # -----------------------------------
     # property access for class variables
@@ -319,11 +321,11 @@ class DataRegistration:
             has_reg_decon_data = False
             
         if not(has_reg_decon_data) or self._overwrite_registered:
-            ref_image_decon = richardson_lucy_nc(np.asarray(self._data_raw[0,:].compute().astype(np.uint16)),
+            ref_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[0,:].compute().astype(np.uint16)),
                                                 psf=self._psfs[0,:],
                                                 numiterations=40,
                                                 regularizationfactor=.0001,
-                                                lib=self._lib)
+                                                mem_to_use=self._RL_mem_limit)
                 
             try:
                 data_reg_zarr = current_round.zeros('registered_decon_data',
@@ -356,11 +358,11 @@ class DataRegistration:
                 has_reg_decon_data = False
             
             if not(has_reg_decon_data) or self._overwrite_registered:
-                mov_image_decon = richardson_lucy_nc(self._data_raw[r_idx,:].compute().astype(np.uint16),
-                                                psf=self._psfs[psf_idx,:],
-                                                numiterations=40,
-                                                regularizationfactor=.0001,
-                                                lib=self._lib)
+                mov_image_decon = richardson_lucy_dask(self._data_raw[r_idx,:].compute().astype(np.uint16),
+                                                        psf=self._psfs[psf_idx,:],
+                                                        numiterations=40,
+                                                        regularizationfactor=.0001,
+                                                mem_to_use=self._RL_mem_limit)
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
@@ -567,11 +569,11 @@ class DataRegistration:
                                 
         
             if not(reg_decon_data_on_disk) or self._overwrite_registered:
-                decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']),
+                decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['raw_data']),
                                                     psf=self._psfs[psf_idx,:],
                                                     numiterations=40,
                                                     regularizationfactor=.001,
-                                                    lib=self._lib)
+                                                mem_to_use=self._RL_mem_limit)
 
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
