@@ -62,7 +62,7 @@ class DataRegistration:
         blosc.set_nthreads(20)
         self._overwrite_registered = overwrite_registered
         self._lib = getlib()
-        self._RL_mem_limit = 20
+        self._RL_mem_limit = 16
 
     # -----------------------------------
     # property access for class variables
