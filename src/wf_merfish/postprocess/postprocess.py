@@ -658,9 +658,8 @@ def postprocess(dataset_path: Path,
             fused_data_zarr.attrs['affine_zyx_um'] = affine.tolist()
             fused_data_zarr.attrs['origin_zyx_um'] = origin.tolist()
             fused_data_zarr.attrs['spacing_zyx_um'] = spacing.tolist()
-            fused_image = np.squeeze(np.array(fused_data_zarr,dtype=np.uint16)) 
             
-            del fused_sim, fused_image, fused_msim
+            del fused_sim, fused_msim, fused_zarr, fused_data_zarr
             gc.collect()
             no_fused_on_disk = False
             no_fused_in_mem = False
