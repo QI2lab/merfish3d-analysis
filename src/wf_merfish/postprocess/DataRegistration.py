@@ -422,7 +422,7 @@ class DataRegistration:
                                     
                 _, xyz_shift_4x = compute_rigid_transform(ref_ds_image_sitk, 
                                                             mov_ds_image_sitk,
-                                                            use_mask=False,
+                                                            use_mask=True,
                                                             downsample_factor=downsample_factor,
                                                             projection=None)
         
