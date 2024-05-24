@@ -3,6 +3,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 from pathlib import Path
+import matplotlib.style as mplstyle
+
+# Apply the styles before any plotting commands
+mplstyle.use(['dark_background', 'ggplot', 'fast'])
 
 data_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
 ufish_path = data_path / 'processed_v2' / 'ufish_localizations'
@@ -29,6 +33,15 @@ for bit_file_path, bit_id in file_info:
     # Calculate number of features retained for each threshold
     feature_counts = [len(df[(df['sum_decon_pixels'] > threshold) & (df['sum_decon_pixels'] < max_intensity)]) for threshold in thresholds]
 
+    # Pre-calculate the histogram
+    hist_bins = np.linspace(min_intensity, max_intensity, 100)
+    n, bins = np.histogram(df['sum_decon_pixels'], bins=hist_bins)
+    hist_max_value = bins[np.argmax(n)]
+    
+    # Set initial thresholds
+    init_lower_threshold = hist_max_value
+    init_upper_threshold = 0.75 * max_intensity
+
     # Plotting
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))
     plt.subplots_adjust(left=0.1, bottom=0.25, right=0.9, wspace=0.3)
@@ -37,11 +50,7 @@ for bit_file_path, bit_id in file_info:
     l, = ax1.plot(thresholds, feature_counts, lw=2)
     ax1.set_xlabel('Intensity Threshold')
     ax1.set_ylabel('Number of Features Retained')
-    ax1.set_title('Feature Retention vs. Intensity Threshold; '+str(bit_id))
-
-    # Initial thresholds
-    init_lower_threshold = min_intensity
-    init_upper_threshold = max_intensity
+    ax1.set_title('Feature Retention vs. Intensity Threshold; ' + str(bit_id))
 
     # Vertical lines and text on the first plot
     vline_lower = ax1.axvline(x=init_lower_threshold, color='r', linestyle='--')
@@ -49,18 +58,17 @@ for bit_file_path, bit_id in file_info:
     text = ax1.text(0.05, 0.95, f'Lower Threshold: {init_lower_threshold:.2f}, Upper Threshold: {init_upper_threshold:.2f}, Retained: {feature_counts[0]}', transform=ax1.transAxes)
 
     # Second plot: Histogram of Intensities with semilog-y scale
-    hist_bins = np.linspace(min_intensity, max_intensity, 100)
     n, bins, patches = ax2.hist(df['sum_decon_pixels'], bins=hist_bins, alpha=0.75, edgecolor='black')
     ax2.set_yscale('log')
     ax2.set_xlabel('Intensity')
     ax2.set_ylabel('Frequency (log scale)')
-    ax2.set_title('Histogram of Intensities; '+str(bit_id))
+    ax2.set_title('Histogram of Intensities; ' + str(bit_id))
 
     # Vertical lines on the histogram plot
     vline_hist_lower = ax2.axvline(x=init_lower_threshold, color='r', linestyle='--')
     vline_hist_upper = ax2.axvline(x=init_upper_threshold, color='b', linestyle='--')
 
-    # Third plot: Scatter plot of [tile_z, tile_x] colored by ['sum_decon_pixels']
+    # Third plot: Scatter plot of [tile_y, tile_x] colored by ['sum_decon_pixels']
     scatter = ax3.scatter(df['tile_y_px'], df['tile_x_px'], c=df['sum_decon_pixels'], cmap='viridis', s=1)
     ax3.set_xlabel('Tile Y')
     ax3.set_ylabel('Tile X')
