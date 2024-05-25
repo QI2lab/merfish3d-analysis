@@ -4,11 +4,13 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 from pathlib import Path
 import matplotlib.style as mplstyle
-
-# Apply the styles before any plotting commands
 mplstyle.use(['dark_background', 'ggplot', 'fast'])
 
+# modify this line
 data_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
+
+
+# don't modify below here
 ufish_path = data_path / 'processed_v2' / 'ufish_localizations'
 tile_ids = sorted([entry.name for entry in ufish_path.iterdir() if entry.is_dir()])
 
@@ -39,8 +41,8 @@ for bit_file_path, bit_id in file_info:
     hist_max_value = bins[np.argmax(n)]
     
     # Set initial thresholds
-    init_lower_threshold = hist_max_value
-    init_upper_threshold = 0.75 * max_intensity
+    init_lower_threshold = 1.1 * min_intensity
+    init_upper_threshold = 0.5 * max_intensity
 
     # Plotting
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))

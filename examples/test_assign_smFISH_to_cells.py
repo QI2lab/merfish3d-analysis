@@ -8,8 +8,11 @@ import json
 from concurrent.futures import ProcessPoolExecutor
 import rtree
 
-# Load the necessary data
+# modify this line
 root_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
+
+
+# don't modify 
 dataset_path = root_path / Path('processed_v2')
 calibration_dir_path = dataset_path / Path("calibrations.zarr")
 calibration_zarr = zarr.open(calibration_dir_path, mode='a')
@@ -114,3 +117,10 @@ def process_bit_file(bit_file_info):
 # Process all bit files in parallel
 with ProcessPoolExecutor() as executor:
     results = list(executor.map(process_bit_file, file_info))
+    
+# TO DO:
+# 1. double check outlines vs masks
+# 2. sane defaults for thresholds. Re-run to not lose spots
+# 3. add mtx creation at end of smFISH pipeline
+# 4. rerun cellpose without RNA masks (add flag)
+# 5. normalization (?) for histogram display
