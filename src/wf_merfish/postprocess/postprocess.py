@@ -636,7 +636,13 @@ def postprocess(dataset_path: Path,
             else:
                 group = 'fused_polyDT_iso_zyx'
             
-            with dask.config.set(temporary_directory='/mnt/data/tmp'):
+            with dask.config.set(
+                {"temporary_directory" : r"/mnt/data/tmp",
+                 "distributed.scheduler.active-memory-manager.measure": "managed",
+                 "distributed.worker.memory.rebalance.measure": "managed",
+                 "distributed.worker.memory.spill": "false",
+                 "distributed.worker.memory.pause:": "false",
+                 "distributed.worker.memory.terminate:": "false"}):
                 with dask.diagnostics.ProgressBar():
                     if global_registration_parameters['parallel_fusion']:
                         fused_sim.data.to_zarr(
@@ -644,7 +650,7 @@ def postprocess(dataset_path: Path,
                             component=group,
                             compressor=compressor,
                             compute=False
-                        ).compute(scheduler='threads', num_workers=8)
+                        ).compute(num_workers=8)
                     else:
                         fused_sim.data.to_zarr(
                             url=fused_output_path,
@@ -900,7 +906,7 @@ if __name__ == '__main__':
     
     
     # example run setup for human olfactory bulb 
-    dataset_path = Path('/mnt/data/bartelle/20240228_ECL_Cont0_F_PL024')
+    dataset_path = Path('/mnt/data/qi2lab/20240317_OB_MERFISH_7')
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
@@ -921,15 +927,15 @@ if __name__ == '__main__':
                        write_raw_camera_data = False,
                        run_hotpixel_correction = True,
                        run_shading_correction = False,
-                       run_tile_registration = True,
+                       run_tile_registration = False,
                        write_polyDT_tiff = False,
                        run_global_registration =  True,
                        global_registration_parameters = {'data_to_fuse': 'all',
                                                          'parallel_fusion': True}, # for qi2lab network drive, must be false due to Dask issue
                        write_fused_zarr = True,
-                       run_cellpose = False,
+                       run_cellpose = True,
                        cellpose_parameters = {'diam_mean_pixels': 30,
-                                              'flow_threshold': 0.4,
+                                              'flow_threshold': 0.1,
                                               'normalization': [10,90]},
                        run_tile_decoding =  True,
                        tile_decoding_parameters = {'normalization': [.1,80],
