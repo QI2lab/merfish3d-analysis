@@ -7,9 +7,9 @@ import matplotlib.style as mplstyle
 mplstyle.use(['dark_background', 'ggplot', 'fast'])
 
 # modify this line
-data_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
+data_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart_practice')
 
-
+# -------------------------------------------------------------------------
 # don't modify below here
 ufish_path = data_path / 'processed_v2' / 'ufish_localizations'
 tile_ids = sorted([entry.name for entry in ufish_path.iterdir() if entry.is_dir()])
@@ -103,6 +103,15 @@ for bit_file_path, bit_id in file_info:
         
         scatter.set_offsets(np.c_[filtered_df['tile_y_px'], filtered_df['tile_x_px']])
         scatter.set_array(filtered_df['sum_decon_pixels'])
+        
+        # Redraw only the updated parts
+        ax1.draw_artist(vline_lower)
+        ax1.draw_artist(vline_upper)
+        ax1.draw_artist(text)
+        ax2.draw_artist(vline_hist_lower)
+        ax2.draw_artist(vline_hist_upper)
+        ax3.draw_artist(scatter)
+        
         fig.canvas.draw_idle()
 
     sthresh_lower.on_changed(update)

@@ -715,8 +715,13 @@ def postprocess(dataset_path: Path,
                 rna_mask = gaussian_filter(np.squeeze(np.max(np.squeeze(np.max(fused_image[1:,:],axis=0)),axis=0)),sigma=3)
                 polyDT_data = np.squeeze(np.max(np.squeeze(fused_image[0,:]),axis=0))
                 data_to_segment = np.where(rna_mask > 1000,polyDT_data,0)
+                del rna_mask, polyDT_data
+                gc.collect()
             else:
                 data_to_segment = np.max(np.squeeze(fused_image[0,:]),axis=0)
+                
+            del fused_image
+            gc.collect()
                 
             masks, _, _, _ = model.eval(data_to_segment,
                                         channels=channels,
@@ -773,7 +778,7 @@ def postprocess(dataset_path: Path,
             mask_centroids_path = cellpose_dir_path / Path('cell_centroids.parquet')
             cell_centroids.to_parquet(mask_centroids_path)
                 
-            del masks
+            del masks, data_to_segment
             del affine, origin, spacing
             
     if run_tile_decoding:
@@ -791,40 +796,40 @@ def postprocess(dataset_path: Path,
         minimum_pixels = tile_decoding_parameters['minimum_pixels']
         fdr_target = tile_decoding_parameters['fdr_target']
             
-        decode_factory = PixelDecoder(dataset_path=output_dir_path,
-                                      global_normalization_limits=global_normalization_limits,
-                                      overwrite_normalization=calculate_normalization,
-                                      exp_type=exp_type,
-                                      merfish_bits=merfish_bits)
+        # decode_factory = PixelDecoder(dataset_path=output_dir_path,
+        #                               global_normalization_limits=global_normalization_limits,
+        #                               overwrite_normalization=calculate_normalization,
+        #                               exp_type=exp_type,
+        #                               merfish_bits=merfish_bits)
 
-        tile_ids = decode_factory._tile_ids
+        # tile_ids = decode_factory._tile_ids
         
-        del decode_factory
-        gc.collect()
-        cp.get_default_memory_pool().free_all_blocks()
+        # del decode_factory
+        # gc.collect()
+        # cp.get_default_memory_pool().free_all_blocks()
         
-        for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
+        # for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
     
-            decode_factory = PixelDecoder(dataset_path=output_dir_path,
-                                        global_normalization_limits=global_normalization_limits,
-                                        overwrite_normalization=False,
-                                        tile_idx=tile_idx,
-                                        exp_type=exp_type,
-                                        merfish_bits=merfish_bits)
-            decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
-                                        distance_threshold=distance_threshold,
-                                        magnitude_threshold=magnitude_threshold,
-                                        minimum_pixels=minimum_pixels,
-                                        skip_extraction=False)
-            decode_factory.save_barcodes()
-            decode_factory.cleanup()
+        #     decode_factory = PixelDecoder(dataset_path=output_dir_path,
+        #                                 global_normalization_limits=global_normalization_limits,
+        #                                 overwrite_normalization=False,
+        #                                 tile_idx=tile_idx,
+        #                                 exp_type=exp_type,
+        #                                 merfish_bits=merfish_bits)
+        #     decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
+        #                                 distance_threshold=distance_threshold,
+        #                                 magnitude_threshold=magnitude_threshold,
+        #                                 minimum_pixels=minimum_pixels,
+        #                                 skip_extraction=False)
+        #     decode_factory.save_barcodes()
+        #     decode_factory.cleanup()
             
-            del decode_factory
-            gc.collect()
-            cp.get_default_memory_pool().free_all_blocks()
+        #     del decode_factory
+        #     gc.collect()
+        #     cp.get_default_memory_pool().free_all_blocks()
             
-            progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
-            yield progress_updates
+        #     progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
+        #     yield progress_updates
                         
         decode_factory = PixelDecoder(dataset_path=output_dir_path,
                                     global_normalization_limits=global_normalization_limits,
@@ -929,13 +934,13 @@ if __name__ == '__main__':
                        run_shading_correction = False,
                        run_tile_registration = False,
                        write_polyDT_tiff = False,
-                       run_global_registration =  True,
+                       run_global_registration =  False,
                        global_registration_parameters = {'data_to_fuse': 'all',
                                                          'parallel_fusion': True}, # for qi2lab network drive, must be false due to Dask issue
-                       write_fused_zarr = True,
-                       run_cellpose = True,
+                       write_fused_zarr = False,
+                       run_cellpose = False,
                        cellpose_parameters = {'diam_mean_pixels': 30,
-                                              'flow_threshold': 0.1,
+                                              'flow_threshold': 0.8,
                                               'normalization': [10,90]},
                        run_tile_decoding =  True,
                        tile_decoding_parameters = {'normalization': [.1,80],

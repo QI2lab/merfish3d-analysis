@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 import napari
 
-root_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
+root_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart_practice')
 dataset_path = root_path / Path('processed_v2')
 
 def load_microjson(filepath):

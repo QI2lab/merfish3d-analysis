@@ -9,7 +9,7 @@ from concurrent.futures import ProcessPoolExecutor
 import rtree
 
 # modify this line
-root_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart')
+root_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart_practice')
 
 
 # don't modify 

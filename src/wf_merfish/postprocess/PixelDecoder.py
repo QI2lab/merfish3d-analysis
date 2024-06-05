@@ -21,6 +21,7 @@ from random import sample
 from tqdm import tqdm
 from shapely.geometry import Point, Polygon
 import json
+import rtree
 
 class PixelDecoder():
     def __init__(self,
@@ -884,7 +885,7 @@ class PixelDecoder():
             for threshold in np.arange(coarse_threshold-0.1, coarse_threshold+0.1, 0.01):
                 fdr = self.calculate_fdr(self._df_barcodes_loaded, 
                                         threshold,
-                                        21,
+                                        5,
                                         self._barcode_count,
                                         self._verbose)
                 if fdr <= fdr_target:
@@ -892,7 +893,7 @@ class PixelDecoder():
                     break
                 
             df_above_threshold = self._df_barcodes_loaded[self._df_barcodes_loaded['predicted_probability'] > fine_threshold]
-            self._df_filtered_barcodes = df_above_threshold[['tile_idx', 'gene_id', 'tile_z', 'tile_y', 'tile_x',]].copy()
+            self._df_filtered_barcodes = df_above_threshold[['tile_idx', 'gene_id', 'global_z', 'global_y', 'global_x',]].copy()
             self._df_filtered_barcodes['cell_id'] = -1
             self._barcodes_filtered = True
             
@@ -932,14 +933,18 @@ class PixelDecoder():
        
         if has_cell_outlines:
             outline_polygons = {cell_id: Polygon(outline) for cell_id, outline in cell_outlines.items()}
+            rtree_index = rtree.index.Index()
+
+            for cell_id, polygon in outline_polygons.items():
+                rtree_index.insert(cell_id, polygon.bounds)
+
             def check_point(row):
                 point = Point(row['global_y'], row['global_x'])
-                for cell_id, polygon in outline_polygons.items():
-                    if polygon.contains(point):
-                        return cell_id
-                return -1
+                possible_cells = [cell_id for cell_id in rtree_index.intersection(point.bounds) if outline_polygons[cell_id].contains(point)]
+                return possible_cells[0] if possible_cells else -1
             
             self._df_filtered_barcodes['cell_id'] = self._df_filtered_barcodes.apply(check_point, axis=1)
+            
         
     def cleanup(self):
         
