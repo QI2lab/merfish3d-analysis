@@ -578,17 +578,17 @@ class DataRegistration:
         
             if not(reg_decon_data_on_disk) or self._overwrite_registered:
                 try:
-                    decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['corrected_data']),
+                    decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['corrected_data']),
                                                         psf=self._psfs[psf_idx,:],
                                                         numiterations=500,
                                                         regularizationfactor=1e-3,
-                                                        lib=self._lib)
+                                                        mem_to_use=self._RL_mem_limit)
                 except:
-                    decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']),
+                    decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['raw_data']),
                                                         psf=self._psfs[psf_idx,:],
                                                         numiterations=500,
                                                         regularizationfactor=1e-3,
-                                                        lib=self._lib)
+                                                        mem_to_use=self._RL_mem_limit)
                     
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
