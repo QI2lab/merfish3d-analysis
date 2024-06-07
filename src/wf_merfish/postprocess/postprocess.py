@@ -31,9 +31,9 @@ Shepherd 09/23 - new LED widefield scope post-processing.
 
 # imports
 # FIX pycromanager logging issue
-import pycromanager.logging  # trigger the "bad" `logging.basicConfig` call
-import logging
-logging.getLogger().handlers = []  # delete the erroneously-created handler
+# import pycromanager.logging  # trigger the "bad" `logging.basicConfig` call
+# import logging
+# logging.getLogger().handlers = []  # delete the erroneously-created handler
 
 import numpy as np
 from pathlib import Path
@@ -181,7 +181,6 @@ def postprocess(dataset_path: Path,
         "Register/Process": 0,
         "Decode": 0,
     }
-        
     
     if not(qi2lab_exists):
         output_dir_path.mkdir(parents=True, exist_ok=True)
@@ -291,7 +290,7 @@ def postprocess(dataset_path: Path,
                                             shape=(channel_psfs.shape[0],channel_psfs.shape[1],channel_psfs.shape[2],channel_psfs.shape[3]),
                                             chunks=(1,1,channel_psfs.shape[2],channel_psfs.shape[3]),
                                             compressor=compressor,
-                                            dtype=np.uint16)
+                                            dtype=np.float32)
         psf_data[:] = channel_psfs
     
         # loop over all tiles.
@@ -425,7 +424,8 @@ def postprocess(dataset_path: Path,
                                     offset = np.median(noise_map)
                                     
                                 corrected_data = (data.astype(np.float32)-offset)
-                                corrected_data = (corrected_data * float(e_per_ADU)).astype(np.uint16)
+                                corrected_data[corrected_data<0]=0
+                                corrected_data = (corrected_data * float(e_per_ADU))
                                 
                                 corrected_data = replace_hot_pixels(np.max(corrected_data,axis=0),
                                                                     corrected_data,
@@ -443,7 +443,7 @@ def postprocess(dataset_path: Path,
                                                                                 shape=(corrected_data.shape[0],corrected_data.shape[1],corrected_data.shape[2]),
                                                                                 chunks=(1,corrected_data.shape[1],corrected_data.shape[2]),
                                                                                 compressor=compressor,
-                                                                                dtype=np.float32)
+                                                                                dtype=np.uint16)
                                 
                                 current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                                 current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
