@@ -221,7 +221,10 @@ class DataRegistration:
         for round_id in self._round_ids:
             current_round_zarr_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_zarr_path,mode='r')
-            data_raw.append(da.from_array(current_round['corrected_data']))
+            try:
+                data_raw.append(da.from_array(current_round['corrected_data']))
+            except:
+                data_raw.append(da.from_array(current_round['raw_data']))
             stage_positions.append(np.asarray(current_round.attrs['stage_zyx_um'], dtype=np.float32))
 
         self._data_raw = da.stack(data_raw, axis=0)
