@@ -221,7 +221,7 @@ class DataRegistration:
         for round_id in self._round_ids:
             current_round_zarr_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_zarr_path,mode='r')
-            data_raw.append(da.from_array(current_round['raw_data']))
+            data_raw.append(da.from_array(current_round['corrected_data']))
             stage_positions.append(np.asarray(current_round.attrs['stage_zyx_um'], dtype=np.float32))
 
         self._data_raw = da.stack(data_raw, axis=0)
@@ -323,8 +323,8 @@ class DataRegistration:
         if not(has_reg_decon_data) or self._overwrite_registered:
             ref_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[0,:].compute().astype(np.uint16)),
                                                 psf=self._psfs[0,:],
-                                                numiterations=40,
-                                                regularizationfactor=.0001,
+                                                numiterations=500,
+                                                regularizationfactor=1e-4,
                                                 mem_to_use=self._RL_mem_limit)
                 
             try:
@@ -360,8 +360,8 @@ class DataRegistration:
             if not(has_reg_decon_data) or self._overwrite_registered:
                 mov_image_decon = richardson_lucy_dask(self._data_raw[r_idx,:].compute().astype(np.uint16),
                                                         psf=self._psfs[psf_idx,:],
-                                                        numiterations=40,
-                                                        regularizationfactor=.0001,
+                                                        numiterations=500,
+                                                        regularizationfactor=1e-5,
                                                 mem_to_use=self._RL_mem_limit)
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
