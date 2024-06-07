@@ -565,8 +565,6 @@ class DataRegistration:
             current_bit_channel = zarr.open(bit_dir_path,mode='a')      
             r_idx = int(current_bit_channel.attrs['round'])
             psf_idx = int(current_bit_channel.attrs['psf_idx'])
-            gain = float(current_bit_channel.attrs['gain'])
-            em_wvl = float(current_bit_channel.attrs['emission_um'])
             
             try:
                 data_decon_zarr = current_bit_channel['registered_decon_data']
