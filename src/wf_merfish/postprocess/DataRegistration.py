@@ -30,7 +30,8 @@ class DataRegistration:
                  dataset_path: Union[str, Path],
                  overwrite_registered: bool = False,
                  perform_optical_flow: bool = False,
-                 tile_idx: Optional[int] = None):
+                 tile_idx: Optional[int] = None,
+                 RL_mem_limit: Optional[float] = 16):
         """
         Retrieve and pre-process one tile from qi2lab 3D widefield zarr structure.
         Apply rigid and optical flow registration transformations if available.
@@ -61,8 +62,7 @@ class DataRegistration:
         self._compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
         blosc.set_nthreads(20)
         self._overwrite_registered = overwrite_registered
-        self._lib = getlib()
-        self._RL_mem_limit = 16
+        self._RL_mem_limit = RL_mem_limit
 
     # -----------------------------------
     # property access for class variables
@@ -200,7 +200,7 @@ class DataRegistration:
         
         calibrations_dir_path = self._dataset_path / Path('calibrations.zarr')
         calibrations_zarr = zarr.open(calibrations_dir_path,mode='r')
-        self._psfs = np.asarray(calibrations_zarr['psf_data'],dtype=np.uint16)
+        self._psfs = np.asarray(calibrations_zarr['psf_data'],dtype=np.float32)
 
         del current_round, calibrations_zarr
         gc.collect()
@@ -322,21 +322,20 @@ class DataRegistration:
                 has_reg_decon_data = True
         except:
             has_reg_decon_data = False
-            
+                       
         if not(has_reg_decon_data) or self._overwrite_registered:
-            ref_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[0,:].compute().astype(np.uint16)),
-                                                psf=self._psfs[0,:],
-                                                numiterations=500,
-                                                regularizationfactor=1e-4,
-                                                mem_to_use=self._RL_mem_limit)
-                
+            ref_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[0,:].compute()).astype(np.uint16),
+                                                    psf=self._psfs[0,:],
+                                                    numiterations=200,
+                                                    regularizationfactor=1e-2,
+                                                    mem_to_use=self._RL_mem_limit)               
             try:
                 data_reg_zarr = current_round.zeros('registered_decon_data',
                                                 shape=ref_image_decon.shape,
                                                 chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
                                                 compressor=self._compressor,
                                                 dtype=np.uint16)
-                data_reg_zarr[:] = ref_image_decon
+                data_reg_zarr[:] = ref_image_decon.astype(np.uint16)
             except Exception:
                 data_reg_zarr = current_round['registered_decon_data']
                 data_reg_zarr[:] = ref_image_decon
@@ -361,11 +360,11 @@ class DataRegistration:
                 has_reg_decon_data = False
             
             if not(has_reg_decon_data) or self._overwrite_registered:
-                mov_image_decon = richardson_lucy_dask(self._data_raw[r_idx,:].compute().astype(np.uint16),
+                mov_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[r_idx,:].compute()),
                                                         psf=self._psfs[psf_idx,:],
-                                                        numiterations=500,
-                                                        regularizationfactor=1e-5,
-                                                mem_to_use=self._RL_mem_limit)
+                                                        numiterations=200,
+                                                        regularizationfactor=1e-2,
+                                                        mem_to_use=self._RL_mem_limit)
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
@@ -482,11 +481,14 @@ class DataRegistration:
                     
                     # apply optical flow 
                     mov_image_sitk = sitk.Resample(mov_image_sitk,displacement_field)
-                    data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.uint16)
 
+                    data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.float32)
+                    data_registered[data_registered<0.]=0
+                    data_registered = data_registered.astype(np.uint16)
                     del optical_flow_sitk, displacement_field
                     gc.collect()
                 else:
+                    data_registered[data_registered<0]=0
                     data_registered = sitk.GetArrayFromImage(mov_image_sitk).astype(np.uint16)
                     
                 try:
@@ -550,7 +552,10 @@ class DataRegistration:
         bit_dir_path = tile_dir_path / Path(ref_bit_id)
         reference_bit_channel = zarr.open(bit_dir_path,mode='a')      
     
-        ref_bit_sitk = sitk.GetImageFromArray(reference_bit_channel['raw_data'].astype(np.float32))
+        try:
+            ref_bit_sitk = sitk.GetImageFromArray(reference_bit_channel['corrected_data'].astype(np.float32))
+        except:
+            ref_bit_sitk = sitk.GetImageFromArray(reference_bit_channel['raw_data'].astype(np.float32))
             
         del reference_bit_channel
         gc.collect()
@@ -572,12 +577,19 @@ class DataRegistration:
                                 
         
             if not(reg_decon_data_on_disk) or self._overwrite_registered:
-                decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['raw_data']),
-                                                    psf=self._psfs[psf_idx,:],
-                                                    numiterations=40,
-                                                    regularizationfactor=.001,
-                                                mem_to_use=self._RL_mem_limit)
-
+                try:
+                    decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['corrected_data']),
+                                                        psf=self._psfs[psf_idx,:],
+                                                        numiterations=500,
+                                                        regularizationfactor=1e-3,
+                                                        lib=self._lib)
+                except:
+                    decon_image = richardson_lucy_nc(np.asarray(current_bit_channel['raw_data']),
+                                                        psf=self._psfs[psf_idx,:],
+                                                        numiterations=500,
+                                                        regularizationfactor=1e-3,
+                                                        lib=self._lib)
+                    
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
                     current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
