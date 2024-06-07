@@ -718,7 +718,7 @@ def postprocess(dataset_path: Path,
                 del rna_mask, polyDT_data
                 gc.collect()
             else:
-                data_to_segment = np.max(np.squeeze(fused_image[0,:]),axis=0)
+                data_to_segment = np.squeeze(np.max(fused_image,axis=0))
                 
             del fused_image
             gc.collect()
