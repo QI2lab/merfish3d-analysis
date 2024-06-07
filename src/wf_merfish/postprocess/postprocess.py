@@ -30,8 +30,11 @@ Shepherd 09/23 - new LED widefield scope post-processing.
 '''
 
 # imports
+# FIX pycromanager logging issue
+import pycromanager.logging  # trigger the "bad" `logging.basicConfig` call
 import logging
-logging.basicConfig(level=logging.WARNING)
+logging.getLogger().handlers = []  # delete the erroneously-created handler
+
 import numpy as np
 from pathlib import Path
 from pycromanager import Dataset
@@ -105,11 +108,11 @@ def postprocess(dataset_path: Path,
     if camera == 'flir':
         pixel_size = 2.4 / (60 * (165/180))
         binning = 2
-        gain = 27
+        e_per_ADU = .03 # from calibration done by Peter and Jeff
     elif camera == 'bsi':
         pixel_size = 6.5 / (60 * (165/180))
         binning = 1
-        gain = 1
+        e_per_ADU = 1 # assumes 11-bit sensitity mode
     
     axial_step = .315 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
@@ -265,7 +268,7 @@ def postprocess(dataset_path: Path,
         calibrations_zarr.attrs["channels_in_data"] = channels_in_data
         calibrations_zarr.attrs["tile_overlap"] = float(tile_overlap)
         calibrations_zarr.attrs["binning"] = int(binning)
-        calibrations_zarr.attrs["gain"] = float(gain)
+        calibrations_zarr.attrs["e_per_ADU"] = float(e_per_ADU)
         calibrations_zarr.attrs["na"] = float(1.35)
         calibrations_zarr.attrs["ri"] = float(1.51)
         
@@ -412,41 +415,46 @@ def postprocess(dataset_path: Path,
                                     current_channel = red_bit_zarr
                                     current_channel.attrs['round'] = int(r_idx)
                                     current_channel.attrs["psf_idx"] = int(2)
-                                    
-                                if write_raw_camera_data:
-                                    camera_data = raw_data.copy()
-                                
+                                                                    
+                                offset = 0
                                 if run_shading_correction:
-                                    raw_data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
+                                    data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
+                                    offset = np.median(noise_map)
                                 elif not(run_shading_correction) and (run_hotpixel_correction):
-                                    raw_data = replace_hot_pixels(noise_map,raw_data)
+                                    data = replace_hot_pixels(noise_map,raw_data)
+                                    offset = np.median(noise_map)
                                     
-
+                                corrected_data = (data.astype(np.float32)-offset)
+                                corrected_data = (corrected_data * float(e_per_ADU)).astype(np.uint16)
+                                
+                                corrected_data = replace_hot_pixels(np.max(corrected_data,axis=0),
+                                                                    corrected_data,
+                                                                    threshold=1000)
+                                    
                                 if write_raw_camera_data:
                                     current_camera_data = current_channel.zeros('camera_data',
-                                                                                shape=(camera_data.shape[0],camera_data.shape[1],camera_data.shape[2]),
-                                                                                chunks=(1,camera_data.shape[1],camera_data.shape[2]),
+                                                                                shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
+                                                                                chunks=(1,raw_data.shape[1],raw_data.shape[2]),
                                                                                 compressor=compressor,
                                                                                 dtype=np.uint16)
-                                    current_camera_data[:] = camera_data
-
-                                current_raw_data = current_channel.zeros('raw_data',
-                                                                        shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
-                                                                        chunks=(1,raw_data.shape[1],raw_data.shape[2]),
-                                                                        compressor=compressor,
-                                                                        dtype=np.uint16)
-                                
+                                    current_camera_data[:] = raw_data
+                                    
+                                current_corrected_data = current_channel.zeros('corrected_data',
+                                                                                shape=(corrected_data.shape[0],corrected_data.shape[1],corrected_data.shape[2]),
+                                                                                chunks=(1,corrected_data.shape[1],corrected_data.shape[2]),
+                                                                                compressor=compressor,
+                                                                                dtype=np.float32)
                                 
                                 current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                                 current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
                                 current_channel.attrs['excitation_um'] = float(ex_wvl)
-                                current_channel.attrs['gain'] = float(gain)
+                                current_channel.attrs['e_per_ADU'] = float(e_per_ADU)
                                 current_channel.attrs['emission_um'] = float(em_wvl)
                                 current_channel.attrs['exposure_ms'] = float(exposure_ms)
                                 current_channel.attrs['hotpixel'] = bool(run_hotpixel_correction)
                                 current_channel.attrs['shading'] = bool(run_shading_correction)
 
-                                current_raw_data[:] = raw_data
+                                current_corrected_data[:] = corrected_data
                                 
                                 if channel_id == 'F-Blue' and write_polyDT_tiff and r_idx == 0:
                                     with TiffWriter(tiff_file_path, bigtiff=False) as tif:
@@ -460,7 +468,7 @@ def postprocess(dataset_path: Path,
                                                     'PhysicalSizeZUnit': 'µm',
                                                     'Channel': {'Name': 'polyDT'},
                                                     }
-                                        tif.write(raw_data,
+                                        tif.write(corrected_data,
                                                     resolution=(1e4 / pixel_size, 1e4 / pixel_size),
                                                     metadata=metadata,
                                                     photometric='minisblack',
@@ -796,40 +804,40 @@ def postprocess(dataset_path: Path,
         minimum_pixels = tile_decoding_parameters['minimum_pixels']
         fdr_target = tile_decoding_parameters['fdr_target']
             
-        # decode_factory = PixelDecoder(dataset_path=output_dir_path,
-        #                               global_normalization_limits=global_normalization_limits,
-        #                               overwrite_normalization=calculate_normalization,
-        #                               exp_type=exp_type,
-        #                               merfish_bits=merfish_bits)
+        decode_factory = PixelDecoder(dataset_path=output_dir_path,
+                                      global_normalization_limits=global_normalization_limits,
+                                      overwrite_normalization=calculate_normalization,
+                                      exp_type=exp_type,
+                                      merfish_bits=merfish_bits)
 
-        # tile_ids = decode_factory._tile_ids
+        tile_ids = decode_factory._tile_ids
         
-        # del decode_factory
-        # gc.collect()
-        # cp.get_default_memory_pool().free_all_blocks()
+        del decode_factory
+        gc.collect()
+        cp.get_default_memory_pool().free_all_blocks()
         
-        # for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
+        for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
     
-        #     decode_factory = PixelDecoder(dataset_path=output_dir_path,
-        #                                 global_normalization_limits=global_normalization_limits,
-        #                                 overwrite_normalization=False,
-        #                                 tile_idx=tile_idx,
-        #                                 exp_type=exp_type,
-        #                                 merfish_bits=merfish_bits)
-        #     decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
-        #                                 distance_threshold=distance_threshold,
-        #                                 magnitude_threshold=magnitude_threshold,
-        #                                 minimum_pixels=minimum_pixels,
-        #                                 skip_extraction=False)
-        #     decode_factory.save_barcodes()
-        #     decode_factory.cleanup()
+            decode_factory = PixelDecoder(dataset_path=output_dir_path,
+                                        global_normalization_limits=global_normalization_limits,
+                                        overwrite_normalization=False,
+                                        tile_idx=tile_idx,
+                                        exp_type=exp_type,
+                                        merfish_bits=merfish_bits)
+            decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
+                                        distance_threshold=distance_threshold,
+                                        magnitude_threshold=magnitude_threshold,
+                                        minimum_pixels=minimum_pixels,
+                                        skip_extraction=False)
+            decode_factory.save_barcodes()
+            decode_factory.cleanup()
             
-        #     del decode_factory
-        #     gc.collect()
-        #     cp.get_default_memory_pool().free_all_blocks()
+            del decode_factory
+            gc.collect()
+            cp.get_default_memory_pool().free_all_blocks()
             
-        #     progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
-        #     yield progress_updates
+            progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
+            yield progress_updates
                         
         decode_factory = PixelDecoder(dataset_path=output_dir_path,
                                     global_normalization_limits=global_normalization_limits,
