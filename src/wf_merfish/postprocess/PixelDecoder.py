@@ -89,7 +89,7 @@ class PixelDecoder():
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
-        self._barcode_count = self._decoding_matrix.shape[0]
+        self._barcode_count = self._decoding_matrix.shape[0] - self._blank_count
         self._bit_count = self._decoding_matrix.shape[1]
         
         if scale_factors is not None:
@@ -133,6 +133,12 @@ class PixelDecoder():
 
         self._df_codebook = pd.DataFrame(self._calibration_zarr.attrs['codebook'])
         self._df_codebook.fillna(0, inplace=True)
+        column_to_check = 1
+        if not self._df_codebook[column_to_check].apply(lambda x: isinstance(x, int)).all():
+            self._df_codebook.drop(columns=[column_to_check], inplace=True)
+            
+        self._blank_count = self._df_codebook['gene_id'].str.lower().str.startswith('blank').sum()
+        
         if not(self._include_blanks):
             self._df_codebook.drop(self._df_codebook[self._df_codebook['gene_id'].str.startswith('Blank')].index, inplace=True)
 
@@ -874,7 +880,7 @@ class PixelDecoder():
             for threshold in np.arange(0, 1, 0.1):  # Coarse step: 0.1
                 fdr = self.calculate_fdr(self._df_barcodes_loaded, 
                                         threshold,
-                                        21, # TO DO: FIX
+                                        self._blank_count, # TO DO: FIX
                                         self._barcode_count,
                                         self._verbose)
                 if fdr <= fdr_target:
@@ -885,7 +891,7 @@ class PixelDecoder():
             for threshold in np.arange(coarse_threshold-0.1, coarse_threshold+0.1, 0.01):
                 fdr = self.calculate_fdr(self._df_barcodes_loaded, 
                                         threshold,
-                                        5,
+                                        self._blank_count,
                                         self._barcode_count,
                                         self._verbose)
                 if fdr <= fdr_target:
