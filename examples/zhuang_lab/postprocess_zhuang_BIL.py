@@ -95,7 +95,7 @@ def postprocess_zhuang_BIL(dataset_path: Path):
     tile_overlap = 0.2
     binning = 1
     pixel_size = extract_pixel_size(microscope_param_path)
-    gain = 1
+    e_per_ADU = .52
     num_r = 19
     num_bits = len(em_wavelengths)
     num_merfish_bits = num_bits - 2
@@ -123,7 +123,7 @@ def postprocess_zhuang_BIL(dataset_path: Path):
 
     # create output directory
     output_dir_path_base = dataset_path
-    output_dir_path = output_dir_path_base / 'qi2lab_merfish'
+    output_dir_path = output_dir_path_base / 'qi2lab_merfish_v2'
     
     qi2lab_exists = True
     # check if qi2lab zarr structure exists
@@ -186,7 +186,7 @@ def postprocess_zhuang_BIL(dataset_path: Path):
         calibrations_zarr.attrs["channels_in_data"] = channels_in_data
         calibrations_zarr.attrs["tile_overlap"] = float(tile_overlap)
         calibrations_zarr.attrs["binning"] = int(binning)
-        calibrations_zarr.attrs["gain"] = float(gain)
+        calibrations_zarr.attrs["e_per_ADU"] = float(e_per_ADU)
         calibrations_zarr.attrs["na"] = float(1.4)
         calibrations_zarr.attrs["ri"] = float(1.51)
             
@@ -240,21 +240,37 @@ def postprocess_zhuang_BIL(dataset_path: Path):
                     em_wvl = np.round(em_wavelengths[bit_idx],3)
                     exposure_ms = 100.
                                 
-                    current_raw_data = current_channel.zeros('registered_data',
+                    current_raw_data = current_channel.zeros('corrected_data',
                                                             shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
                                                             chunks=(1,raw_data.shape[1],raw_data.shape[2]),
                                                             compressor=compressor,
                                                             dtype=np.uint16)
                     
-                    current_channel.attrs['stage_yx_um'] = np.array([stage_y,stage_x]).tolist()
+                    current_channel.attrs['stage_zyx_um'] = np.array([0,stage_y,stage_x]).tolist()
                     current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
                     current_channel.attrs['excitation_um'] = float(ex_wvl)
-                    current_channel.attrs['gain'] = float(gain)
+                    current_channel.attrs['e_per_ADU'] = float(e_per_ADU)
                     current_channel.attrs['emission_um'] = float(em_wvl)
                     current_channel.attrs['exposure_ms'] = float(exposure_ms)
                     current_channel.attrs['bit_name'] = channel_name_list[bit_idx]
                                     
-                    current_raw_data[:] = raw_data
+                    current_raw_data[:] = raw_data / e_per_ADU
+                    
+                    current_raw_data = current_channel.zeros('registered_decon_data',
+                                                            shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
+                                                            chunks=(1,raw_data.shape[1],raw_data.shape[2]),
+                                                            compressor=compressor,
+                                                            dtype=np.uint16)
+                    
+                    current_channel.attrs['stage_zyx_um'] = np.array([0,stage_y,stage_x]).tolist()
+                    current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
+                    current_channel.attrs['excitation_um'] = float(ex_wvl)
+                    current_channel.attrs['e_per_ADU'] = float(e_per_ADU)
+                    current_channel.attrs['emission_um'] = float(em_wvl)
+                    current_channel.attrs['exposure_ms'] = float(exposure_ms)
+                    current_channel.attrs['bit_name'] = channel_name_list[bit_idx]
+                                    
+                    current_raw_data[:] = raw_data / e_per_ADU
                     
                     if fish_data:
                         ufish_data = np.zeros((raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
