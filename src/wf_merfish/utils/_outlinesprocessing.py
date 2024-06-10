@@ -28,7 +28,7 @@ def create_microjson(outlines,
     features = []
     cell_id = 0
     for contour in outlines:
-        transformed_coords = [warp_pixels_noz(point, spacing, origin, affine).tolist() for point in contour]
+        transformed_coords = [warp_pixels_noz(point[::-1], spacing, origin, affine).tolist() for point in contour]
         feature = {
             "type": "Feature",
             "geometry": {
