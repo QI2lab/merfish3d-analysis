@@ -578,14 +578,14 @@ class DataRegistration:
                 try:
                     decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['corrected_data']),
                                                         psf=self._psfs[psf_idx,:],
-                                                        numiterations=500,
-                                                        regularizationfactor=1e-3,
+                                                        numiterations=200,
+                                                        regularizationfactor=1e-8,
                                                         mem_to_use=self._RL_mem_limit)
                 except:
                     decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['raw_data']),
                                                         psf=self._psfs[psf_idx,:],
-                                                        numiterations=500,
-                                                        regularizationfactor=1e-3,
+                                                        numiterations=200,
+                                                        regularizationfactor=1e-8,
                                                         mem_to_use=self._RL_mem_limit)
                     
                 if r_idx > 0:
