@@ -256,21 +256,13 @@ def postprocess_zhuang_BIL(dataset_path: Path):
                                     
                     current_raw_data[:] = raw_data / e_per_ADU
                     
-                    current_raw_data = current_channel.zeros('registered_decon_data',
+                    current_decon_data = current_channel.zeros('registered_decon_data',
                                                             shape=(raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
                                                             chunks=(1,raw_data.shape[1],raw_data.shape[2]),
                                                             compressor=compressor,
                                                             dtype=np.uint16)
-                    
-                    current_channel.attrs['stage_zyx_um'] = np.array([0,stage_y,stage_x]).tolist()
-                    current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
-                    current_channel.attrs['excitation_um'] = float(ex_wvl)
-                    current_channel.attrs['e_per_ADU'] = float(e_per_ADU)
-                    current_channel.attrs['emission_um'] = float(em_wvl)
-                    current_channel.attrs['exposure_ms'] = float(exposure_ms)
-                    current_channel.attrs['bit_name'] = channel_name_list[bit_idx]
-                                    
-                    current_raw_data[:] = raw_data / e_per_ADU
+                                                        
+                    current_decon_data[:] = raw_data / e_per_ADU
                     
                     if fish_data:
                         ufish_data = np.zeros((raw_data.shape[0],raw_data.shape[1],raw_data.shape[2]),
