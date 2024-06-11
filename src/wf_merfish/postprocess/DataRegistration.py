@@ -576,18 +576,16 @@ class DataRegistration:
         
             if not(reg_decon_data_on_disk) or self._overwrite_registered:
                 try:
-                    decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['corrected_data']),
-                                                        psf=self._psfs[psf_idx,:],
-                                                        numiterations=200,
-                                                        regularizationfactor=1e-8,
-                                                        mem_to_use=self._RL_mem_limit)
+                    corrected_image = np.asarray(current_bit_channel['corrected_data'])
                 except:
-                    decon_image = richardson_lucy_dask(np.asarray(current_bit_channel['raw_data']),
-                                                        psf=self._psfs[psf_idx,:],
-                                                        numiterations=200,
-                                                        regularizationfactor=1e-8,
-                                                        mem_to_use=self._RL_mem_limit)
+                    corrected_image = np.asarray(current_bit_channel['raw_data'])
                     
+                decon_image = richardson_lucy_dask(corrected_image,
+                                    psf=self._psfs[psf_idx,:],
+                                    numiterations=200,
+                                    regularizationfactor=1e-8,
+                                    mem_to_use=self._RL_mem_limit)
+
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')
                     current_polyDT_channel = zarr.open(polyDT_tile_round_path,mode='r')
@@ -608,24 +606,31 @@ class DataRegistration:
                         del rigid_xform_xyz_um, shift_xyz, of_xform_3x_px_xyz, of_3x_sitk, optical_flow_sitk
                         gc.collect()
                         
+                    corrected_bit_image_sitk = apply_transform(ref_bit_sitk,
+                                                        sitk.GetImageFromArray(corrected_image),
+                                                        xyx_transform)
+                        
                     decon_bit_image_sitk = apply_transform(ref_bit_sitk,
                                                         sitk.GetImageFromArray(decon_image),
                                                         xyx_transform)
                     
                     if self._perform_optical_flow:
 
+                        corrected_bit_image_sitk = sitk.Resample(corrected_bit_image_sitk,displacement_field)  
                         decon_bit_image_sitk = sitk.Resample(decon_bit_image_sitk,displacement_field)                        
                         del displacement_field
                     
+                    data_corrected_registered = sitk.GetArrayFromImage(corrected_bit_image_sitk).astype(np.float32)
                     data_decon_registered = sitk.GetArrayFromImage(decon_bit_image_sitk).astype(np.float32)
-                    del decon_bit_image_sitk
+                    del corrected_bit_image_sitk, decon_bit_image_sitk
                     gc.collect()
                     
                 else:
+                    data_corrected_registered = corrected_image.copy()
                     data_decon_registered = decon_image.copy()
                     gc.collect()
                 
-                del decon_image
+                del corrected_image, decon_image
                 
                 ufish = UFish(device='cuda')
                 ufish.load_weights_from_internet()
@@ -659,6 +664,7 @@ class DataRegistration:
                 
                 ufish_localization['sum_prob_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=ufish_data, roi_dims=(roi_z, roi_y, roi_x))
                 ufish_localization['sum_decon_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=data_decon_registered, roi_dims=(roi_z, roi_y, roi_x))
+                ufish_localization['sum_corrected_pixels'] = ufish_localization.apply(sum_pixels_in_roi, axis=1, image=data_corrected_registered, roi_dims=(roi_z, roi_y, roi_x))
                 ufish_localization['tile_idx'] = self._tile_idx
                 ufish_localization['bit_idx'] = bit_idx + 1
                 ufish_localization['tile_z_px'] = ufish_localization['z'] 
@@ -671,6 +677,11 @@ class DataRegistration:
                 ufish_localization.to_parquet(localization_parquet_path)
                 
                 try:
+                    data_corrected_reg_zarr = current_bit_channel.zeros('registered_corrected_data',
+                                                            shape=data_corrected_registered.shape,
+                                                            chunks=(1,data_corrected_registered.shape[1],data_corrected_registered.shape[2]),
+                                                            compressor=self._compressor,
+                                                            dtype=np.uint16)
                     data_decon_reg_zarr = current_bit_channel.zeros('registered_decon_data',
                                                             shape=data_decon_registered.shape,
                                                             chunks=(1,data_decon_registered.shape[1],data_decon_registered.shape[2]),
@@ -683,12 +694,16 @@ class DataRegistration:
                                                             dtype=np.float32)
                     
                 except Exception:
+                    data_corrected_reg_zarr = current_bit_channel['registered_corrected_data']
                     data_decon_reg_zarr = current_bit_channel['registered_decon_data']
                     ufish_reg_zarr = current_bit_channel['registered_ufish_data']
 
+                data_corrected_registered[data_corrected_registered<0]=0
+                data_decon_registered[data_decon_registered<0]=0
+                data_corrected_reg_zarr[:] = data_corrected_registered.astype(np.uint16)
                 data_decon_reg_zarr[:] = data_decon_registered.astype(np.uint16)
                 ufish_reg_zarr[:] = ufish_data.astype(np.float32)
-                del data_decon_registered, ufish_data, ufish_localization
+                del data_corrected_registered, data_decon_registered, ufish_data, ufish_localization
                 gc.collect()
 
     def load_rigid_registrations(self):

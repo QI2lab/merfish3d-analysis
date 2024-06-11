@@ -61,6 +61,7 @@ def postprocess(dataset_path: Path,
                 run_hotpixel_correction: bool = True,
                 run_shading_correction: bool = False,
                 run_tile_registration: bool = True,
+                overwrite_registration: bool = False,
                 write_polyDT_tiff: bool = False,
                 run_global_registration: bool =  True,
                 global_registration_parameters: dict = {'data_to_fuse': 'all',
@@ -501,7 +502,7 @@ def postprocess(dataset_path: Path,
 
         for tile_idx in range(num_tiles):
             data_register_factory = DataRegistration(dataset_path=output_dir_path,
-                                                    overwrite_registered=False,
+                                                    overwrite_registered=overwrite_registration,
                                                     perform_optical_flow=run_optical_flow,
                                                     tile_idx=tile_idx)
             data_register_factory.generate_registrations()
