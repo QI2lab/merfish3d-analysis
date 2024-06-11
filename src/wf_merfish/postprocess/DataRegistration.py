@@ -284,7 +284,7 @@ class DataRegistration:
                         data_registered.append(np.asarray(current_bit["registered_ufish_data"], dtype=np.float32))
                     elif data_to_read == 'decon':
                         data_registered.append(np.asarray(current_bit["registered_decon_data"], dtype=np.uint16))
-                    elif data_to_read == 'both':
+                    elif data_to_read == 'predict':
                         data_registered.append(np.asarray(current_bit["registered_ufish_data"], dtype=np.float32))
                         data_registered.append(np.asarray(current_bit["registered_decon_data"], dtype=np.float32))
                     
