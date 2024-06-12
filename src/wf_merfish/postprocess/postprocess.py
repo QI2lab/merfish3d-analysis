@@ -275,16 +275,18 @@ def postprocess(dataset_path: Path,
         # generate and save PSFs
         channel_psfs = []
         for channel_id in channels_in_data:
-            channel_psfs.append(make_psf(z=33,
-                                nx=33,
-                                dxy=pixel_size,
-                                dz=axial_step,
-                                NA=1.35,
-                                wvl=em_wavelengths[channel_id],
-                                ns=1.33,
-                                ni=1.51,
-                                ni0=1.51,
-                                model='vectorial'))
+            psf = make_psf(z=33,
+                        nx=33,
+                        dxy=pixel_size,
+                        dz=axial_step,
+                        NA=1.35,
+                        wvl=em_wavelengths[channel_id],
+                        ns=1.33,
+                        ni=1.51,
+                        ni0=1.51,
+                        model='vectorial')
+            psf = psf / np.sum(psf,axis=(0,1,2))
+            channel_psfs.append(psf)
         channel_psfs = np.array(channel_psfs)
 
         psf_data = calibrations_zarr.zeros('psf_data',
