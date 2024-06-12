@@ -6,8 +6,12 @@ from pathlib import Path
 import matplotlib.style as mplstyle
 mplstyle.use(['dark_background', 'ggplot', 'fast'])
 
-# modify this line
-data_path = Path('/mnt/data/bartelle/20240423_ECL_24CryoA_2_PL025_restart_practice')
+# modify these line
+data_path = Path('/mnt/data/bartelle/20240425_ECL_48CryoB_1_PL025') # should be top level path for dataset
+data_to_use = 'sum_corrected_pixels' # options: 'sum_corrected_pixels' or 'sum_decon_pixels'
+# 'sum_corrected_pixels' uses spot intensities from the camera after offset and gain correction
+# 'sum_decon_pixels' uses spot intensities after deconvolution
+# 'sum_corrected_pixels' is only available on datasets generated with v0.1.4 or later.
 
 # -------------------------------------------------------------------------
 # don't modify below here
@@ -28,16 +32,16 @@ for bit_file_path, bit_id in file_info:
     df = pd.concat(temp_df, ignore_index=True)
 
     # Generate thresholds
-    min_intensity = df['sum_decon_pixels'].min()
-    max_intensity = df['sum_decon_pixels'].max()
+    min_intensity = df[data_to_use].min()
+    max_intensity = df[data_to_use].max()
     thresholds = np.linspace(min_intensity, max_intensity, 10000)
 
     # Calculate number of features retained for each threshold
-    feature_counts = [len(df[(df['sum_decon_pixels'] > threshold) & (df['sum_decon_pixels'] < max_intensity)]) for threshold in thresholds]
+    feature_counts = [len(df[(df[data_to_use] > threshold) & (df[data_to_use] < max_intensity)]) for threshold in thresholds]
 
     # Pre-calculate the histogram
     hist_bins = np.linspace(min_intensity, max_intensity, 100)
-    n, bins = np.histogram(df['sum_decon_pixels'], bins=hist_bins)
+    n, bins = np.histogram(df[data_to_use], bins=hist_bins)
     hist_max_value = bins[np.argmax(n)]
     
     # Set initial thresholds
@@ -71,7 +75,7 @@ for bit_file_path, bit_id in file_info:
     vline_hist_upper = ax2.axvline(x=init_upper_threshold, color='b', linestyle='--')
 
     # Third plot: Scatter plot of [tile_y, tile_x] colored by ['sum_decon_pixels']
-    scatter = ax3.scatter(df['tile_y_px'], df['tile_x_px'], c=df['sum_decon_pixels'], cmap='viridis', s=1)
+    scatter = ax3.scatter(df['tile_y_px'], df['tile_x_px'], c=df[data_to_use], cmap='viridis', s=1)
     ax3.set_xlabel('Tile Y')
     ax3.set_ylabel('Tile X')
     ax3.set_title('Tile Coordinates with Intensity Colormap')
@@ -93,16 +97,16 @@ for bit_file_path, bit_id in file_info:
     def update(val):
         lower_threshold = sthresh_lower.val
         upper_threshold = sthresh_upper.val
-        retained = len(df[(df['sum_decon_pixels'] > lower_threshold) & (df['sum_decon_pixels'] < upper_threshold)])
+        retained = len(df[(df[data_to_use] > lower_threshold) & (df[data_to_use] < upper_threshold)])
         vline_lower.set_xdata(lower_threshold)
         vline_upper.set_xdata(upper_threshold)
         vline_hist_lower.set_xdata(lower_threshold)
         vline_hist_upper.set_xdata(upper_threshold)
         text.set_text(f'Lower Threshold: {lower_threshold:.2f}, Upper Threshold: {upper_threshold:.2f}, Retained: {retained}')
-        filtered_df = df[(df['sum_decon_pixels'] > lower_threshold) & (df['sum_decon_pixels'] < upper_threshold)]
+        filtered_df = df[(df[data_to_use] > lower_threshold) & (df[data_to_use] < upper_threshold)]
         
         scatter.set_offsets(np.c_[filtered_df['tile_y_px'], filtered_df['tile_x_px']])
-        scatter.set_array(filtered_df['sum_decon_pixels'])
+        scatter.set_array(filtered_df[data_to_use])
         
         # Redraw only the updated parts
         ax1.draw_artist(vline_lower)
@@ -132,6 +136,6 @@ for bit_file_path, bit_id in file_info:
     
     for tile_id in tile_ids:
         tile_df = pd.read_parquet(ufish_path / tile_id / Path(bit_file_path))
-        tile_df['use_spot'] = np.where((tile_df['sum_decon_pixels'] > accepted_lower_threshold) & (tile_df['sum_decon_pixels'] < accepted_upper_threshold), 1, 0)                      
+        tile_df['use_spot'] = np.where((tile_df[data_to_use] > accepted_lower_threshold) & (tile_df[data_to_use] < accepted_upper_threshold), 1, 0)                      
         tile_df.to_parquet(ufish_path / tile_id / Path(bit_file_path))
         del tile_df
