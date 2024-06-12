@@ -105,6 +105,7 @@ ENV/
 # IDE settings
 .vscode/
 *.pyc
+jobs/
 examples/simulated_images
 src/wf_merfish/test_postprocess.py
 src/wf_merfish/test_roundalignment.py
