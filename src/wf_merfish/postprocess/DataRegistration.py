@@ -313,14 +313,10 @@ class DataRegistration:
         current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
         current_round = zarr.open(current_round_path,mode='a')
         
-        try:
-            data_reg_zarr = current_round['registered_decon_data']
-            ref_image_decon = np.asarray(data_reg_zarr,dtype=np.uint16)
-            if np.mean(ref_image_decon) == 0.0:
-                has_reg_decon_data = False
-            else:
-                has_reg_decon_data = True
-        except:
+        test_path = current_round_path / Path('registered_decon_data') / Path('.zarray')
+        if test_path.exists():
+            has_reg_decon_data = True
+        else:
             has_reg_decon_data = False
                        
         if not(has_reg_decon_data) or self._overwrite_registered:
@@ -350,13 +346,12 @@ class DataRegistration:
             current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(round_id + ".zarr")
             current_round = zarr.open(current_round_path,mode='a')
             psf_idx = current_round.attrs["psf_idx"]
+                        
             
-            try:
-                data_reg_zarr = current_round['registered_decon_data']
-                mov_image_decon = np.asarray(data_reg_zarr,dtype=np.uint16)
-                test = mov_image_decon[0:1,0:1,0:1]
+            test_path = current_round_path / Path('registered_decon_data') / Path('.zarray')
+            if test_path.exists():
                 has_reg_decon_data = True
-            except:
+            else:
                 has_reg_decon_data = False
             
             if not(has_reg_decon_data) or self._overwrite_registered:
@@ -566,15 +561,19 @@ class DataRegistration:
             r_idx = int(current_bit_channel.attrs['round'])
             psf_idx = int(current_bit_channel.attrs['psf_idx'])
             
-            try:
-                data_decon_zarr = current_bit_channel['registered_decon_data']
-                decon_image = np.asarray(data_decon_zarr,dtype=np.uint16)   
+            test_path = bit_dir_path / Path('registered_corrected_data') / Path('.zarray')
+            if test_path.exists():
+                reg_corrected_data_on_disk = True
+            else:
+                reg_corrected_data_on_disk = False
+            
+            test_path = bit_dir_path / Path('registered_decon_data') / Path('.zarray')
+            if test_path.exists():
                 reg_decon_data_on_disk = True 
-            except:
-                reg_decon_data_on_disk = False
-                                
+            else:
+                reg_decon_data_on_disk = False               
         
-            if not(reg_decon_data_on_disk) or self._overwrite_registered:
+            if not(reg_decon_data_on_disk) or not(reg_corrected_data_on_disk) or self._overwrite_registered:
                 try:
                     corrected_image = np.asarray(current_bit_channel['corrected_data'])
                 except:
@@ -682,20 +681,25 @@ class DataRegistration:
                                                             chunks=(1,data_corrected_registered.shape[1],data_corrected_registered.shape[2]),
                                                             compressor=self._compressor,
                                                             dtype=np.uint16)
+                except Exception:
+                    data_corrected_reg_zarr = current_bit_channel['registered_corrected_data']
+                    
+                try:
                     data_decon_reg_zarr = current_bit_channel.zeros('registered_decon_data',
                                                             shape=data_decon_registered.shape,
                                                             chunks=(1,data_decon_registered.shape[1],data_decon_registered.shape[2]),
                                                             compressor=self._compressor,
                                                             dtype=np.uint16)
+                except Exception:
+                    data_decon_reg_zarr = current_bit_channel['registered_decon_data']
+                    
+                try:
                     ufish_reg_zarr = current_bit_channel.zeros('registered_ufish_data',
                                                             shape=ufish_data.shape,
                                                             chunks=(1,ufish_data.shape[1],ufish_data.shape[2]),
                                                             compressor=self._compressor,
                                                             dtype=np.float32)
-                    
                 except Exception:
-                    data_corrected_reg_zarr = current_bit_channel['registered_corrected_data']
-                    data_decon_reg_zarr = current_bit_channel['registered_decon_data']
                     ufish_reg_zarr = current_bit_channel['registered_ufish_data']
 
                 data_corrected_registered[data_corrected_registered<0]=0
