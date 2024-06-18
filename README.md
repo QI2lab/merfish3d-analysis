@@ -47,7 +47,7 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
           - <spacing_zyx_um> (spacing scale transform for world coordinate warping)
         - <camera_data> (optional: raw camera data)
         - <corrected_data> (hot pixel, offset, and gain corrected data)
-        - <registered_decon_data> (deconvolved data, note this is the same as the corrected data for the first round)
+        - <registered_decon_data> (deconvolved data)
       - /round0001.zarr
         - .zattrs
           - <stage_zyx_um> (z,y,x in microns)
@@ -72,6 +72,7 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
           - <round_linker> (what polyDT round is bit corresponds to)
         - <camera_data> (optional: raw camera data)
         - <corrected_data> (hot pixel, offset, and gain corrected data)
+        - <registered_corrected_data> (corrected, then rigid and defromable registration applied to warp back to round 0)
         - <registered_decon_data> (deconvolved, then rigid and deformable registration applied to warp back to round 0)
         - <registered_ufish_data> (ufish prediction applied to registered_decon_data)
       - /bit01.zarr
@@ -87,7 +88,7 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
   - /decoded
     - tile0000_decoded_features.csv
     - ...
-    - tileNNNN_decod_features.csv
+    - tileNNNN_decoded_features.csv
     - all_tiles_filtered_decoded_features.parquet
   - /fused
     - /fused.zarr
@@ -95,10 +96,10 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
         - <fused_iso_all_zyx> (polyDT and readouts deconvolved, registered data fused at isotropic voxel spacing)
         - <fused_iso_polyDT_zyx> (polyDT deconvolved, registered data fused at isotropic voxel spacing)
   - /segmentation
-    - cell_centroids.parquet (yx centroid for each cell in cellpose mask prediction)
-    - cell_outlines.json (yx polygons for each cell in cellpose mask prediction)
+    - cell_centroids.parquet (yx centroid for each cell in maximum Z projection of cellpose mask prediction)
+    - cell_outlines.json (yx polygons for each cell in maximum Z projection of cellpose mask prediction)
     - /cellpose.zarr
-      - <masks_iso_zyx> (cellpose masks generated from maximum projection data choice in fused.zarr)
+      - <masks_iso_zyx> (cellpose masks generated from maximum Z projection data in fused.zarr)
 
 </details>
       
