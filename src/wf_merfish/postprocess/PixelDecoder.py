@@ -137,10 +137,10 @@ class PixelDecoder():
         if not self._df_codebook[column_to_check].apply(lambda x: isinstance(x, int)).all():
             self._df_codebook.drop(columns=[column_to_check], inplace=True)
             
-        self._blank_count = self._df_codebook['gene_id'].str.lower().str.startswith('blank').sum()
+        self._blank_count = self._df_codebook[0].str.lower().str.startswith('blank').sum()
         
         if not(self._include_blanks):
-            self._df_codebook.drop(self._df_codebook[self._df_codebook['gene_id'].str.startswith('Blank')].index, inplace=True)
+            self._df_codebook.drop(self._df_codebook[self._df_codebook[0].str.startswith('Blank')].index, inplace=True)
 
         self._codebook_matrix = self._df_codebook.iloc[:, 1:].to_numpy().astype(int)
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
