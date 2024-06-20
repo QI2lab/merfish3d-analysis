@@ -29,18 +29,12 @@ Shepherd 01/24 - updates for qi2lab MERFISH file format v1.0.
 Shepherd 09/23 - new LED widefield scope post-processing.
 '''
 
-# imports
-# FIX pycromanager logging issue
-# import pycromanager.logging  # trigger the "bad" `logging.basicConfig` call
-# import logging
-# logging.getLogger().handlers = []  # delete the erroneously-created handler
-
 import numpy as np
 from pathlib import Path
-from pycromanager import Dataset
+from ndstorage import Dataset
 import gc
 from itertools import compress
-from wf_merfish.utils._dataio import return_data_dask, read_metadatafile
+from wf_merfish.utils._dataio import return_data_dask, read_metadatafile, resave_baysor_output
 import zarr
 from numcodecs import blosc
 import time
@@ -826,7 +820,8 @@ def postprocess(dataset_path: Path,
                                         overwrite_normalization=False,
                                         tile_idx=tile_idx,
                                         exp_type=exp_type,
-                                        merfish_bits=merfish_bits)
+                                        merfish_bits=merfish_bits,
+                                        verbose=2)
             decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
                                         distance_threshold=distance_threshold,
                                         magnitude_threshold=magnitude_threshold,
@@ -846,10 +841,12 @@ def postprocess(dataset_path: Path,
                                     global_normalization_limits=global_normalization_limits,
                                     overwrite_normalization=False,
                                     exp_type=exp_type,
-                                    merfish_bits=merfish_bits)
+                                    merfish_bits=merfish_bits,
+                                    verbose=2)
     
         decode_factory.load_all_barcodes()
         decode_factory.filter_all_barcodes(fdr_target=fdr_target)
+        decode_factory.remove_duplicates_in_tile_overlap(radius=1.0)
         decode_factory.assign_cells()
         decode_factory.save_barcodes(format='parquet')
         decode_factory.save_all_barcodes_for_baysor()
@@ -872,8 +869,8 @@ def postprocess(dataset_path: Path,
                 
         # construct baysor command
         julia_threading = "JULIA_NUM_THREADS="+str(baysor_num_threads)+ " "
-        baysor_options = r" run -p -x global_x -y global_y -g gene_id -s "+str(baysor_cell_size) +\
-            r" --config.segmentation.iters 2000 --config.data.force_2d=true"+\
+        baysor_options = r" run -p -x global_x -y global_y -z global_z -g gene_id -s "+str(baysor_cell_size) +\
+            r" --config.segmentation.iters 250 --config.data.force_2d=false"+\
             r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
             r" --prior-segmentation-confidence "+str(baysor_cellpose_prior)+r" "
         if baysor_ignore_genes:
@@ -882,7 +879,7 @@ def postprocess(dataset_path: Path,
         baysor_genes_path = output_dir_path / Path("decoded") / Path('baysor_formatted_genes.csv')
         baysor_output_path = output_dir_path / Path("segmentation") / Path('baysor')
         baysor_output_path.mkdir(exist_ok=True, parents=True)
-        
+               
         command = julia_threading + str(baysor_path) + baysor_options + "-o " +\
             str(baysor_output_path) + " " + str(baysor_genes_path) + " :cell_id"
                     
@@ -895,26 +892,30 @@ def postprocess(dataset_path: Path,
             baysor_success = False
         
         if baysor_success:
-            from shapely.geometry import Polygon
             
-            if baysor_ignore_genes:
-                baysor_output_genes_path = baysor_genes_path
-            else:
-                baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
+            baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
+            baysor_filtered_output_genes_path = baysor_output_path / Path("baysor_filtered_genes.parquet")
+                
+            resave_baysor_output(baysor_output_genes_path,
+                                 baysor_filtered_output_genes_path)
             
-            baysor_outlines_path = baysor_output_path / Path("segmentation_polygons.json")
-            baysor_stats_path = baysor_output_path / Path("segmentation_cell_stats.csv")
-            baysor_genes_df = pd.read_csv(baysor_output_genes_path)
-            baysor_cell_stats_df = pd.read_csv(baysor_stats_path)
+    else:
+        baysor_output_path = output_dir_path / Path("segmentation") / Path('baysor')
+        baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
+        baysor_filtered_output_genes_path = baysor_output_path / Path("baysor_filtered_genes.parquet")
+        if not(baysor_filtered_output_genes_path.exists()):
+            resave_baysor_output(baysor_output_genes_path,
+                                baysor_filtered_output_genes_path)
+            baysor_output_genes_path = baysor_filtered_output_genes_path
+        elif not(baysor_output_genes_path.exists()):
+            baysor_output_genes_path = output_dir_path / Path("decoded") / Path('baysor_formatted_genes.csv')
             
-            # NEED TO REWRITE FOR MICROJSON
-            
-    # if run_mtx_creation:
-    #     from src.wf_merfish.utils._dataio import create_mtx
+    if run_mtx_creation:
+        from wf_merfish.utils._dataio import create_mtx
         
-    #     create_mtx(baysor_filtered_genes_path,
-    #                output_dir_path / Path('mtx_output'),
-    #                mtx_creation_parameters['confidence_cutoff'])
+        create_mtx(baysor_output_genes_path,
+                   output_dir_path / Path('mtx_output'),
+                   mtx_creation_parameters['confidence_cutoff'])
                    
     return True
 
