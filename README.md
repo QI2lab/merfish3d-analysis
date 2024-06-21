@@ -5,7 +5,7 @@
 [![Python Version](https://img.shields.io/pypi/pyversions/wf-merfish.svg?color=green)](https://python.org)
 [![CI](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml/badge.svg)](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml)
 
-Acquisition and GPU accelerated post-processing for qi2lab MERFISH. This package currently requires Linux due to RAPIDS.AI package availabilty. Windows support is planned as possible
+GPU accelerated post-processing for qi2lab 3D MERFISH. This package currently Linux only due to RAPIDS.AI package availabilty.
 
 ## Installation
 
@@ -14,7 +14,6 @@ Create a python 3.10 environment using your favorite package manager, e.g.
 
 Activate the environment and install the GPU dependencies.
 
-For Linux OS:
 ```
 mamba activate wf-merfish
 mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.02 pylibraft cuda-version=12.1 cudnn cutensor nccl onnx onnxruntime pytorch torchvision pytorch-cuda=12.1
@@ -96,10 +95,15 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
         - <fused_iso_all_zyx> (polyDT and readouts deconvolved, registered data fused at isotropic voxel spacing)
         - <fused_iso_polyDT_zyx> (polyDT deconvolved, registered data fused at isotropic voxel spacing)
   - /segmentation
-    - cell_centroids.parquet (yx centroid for each cell in maximum Z projection of cellpose mask prediction)
-    - cell_outlines.json (yx polygons for each cell in maximum Z projection of cellpose mask prediction)
-    - /cellpose.zarr
-      - <masks_iso_zyx> (cellpose masks generated from maximum Z projection data in fused.zarr)
+    - /cellpose
+      - cell_centroids.parquet (yx centroid for each cell in maximum Z projection of cellpose mask prediction)
+      - cell_outlines.json (yx polygons for each cell in maximum Z projection of cellpose mask prediction)
+      - /cellpose.zarr
+        - <masks_iso_zyx> (cellpose masks generated from maximum Z projection data in fused.zarr)
+    - /baysor
+      - baysor_filtered_genes.parquet (gene ID, global zyx position, cell assignment, and confidence for all tiles)
+      - segmentation_polygons.json (yx polygons for each cell determined by Baysor. GeoJSON format.)
+      - diagnostic outputs (see Baysor repository for explanations)
 
 </details>
       
