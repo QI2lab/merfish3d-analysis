@@ -820,8 +820,7 @@ def postprocess(dataset_path: Path,
                                         overwrite_normalization=False,
                                         tile_idx=tile_idx,
                                         exp_type=exp_type,
-                                        merfish_bits=merfish_bits,
-                                        verbose=2)
+                                        merfish_bits=merfish_bits)
             decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
                                         distance_threshold=distance_threshold,
                                         magnitude_threshold=magnitude_threshold,
@@ -841,12 +840,12 @@ def postprocess(dataset_path: Path,
                                     global_normalization_limits=global_normalization_limits,
                                     overwrite_normalization=False,
                                     exp_type=exp_type,
-                                    merfish_bits=merfish_bits,
-                                    verbose=2)
+                                    merfish_bits=merfish_bits)
     
         decode_factory.load_all_barcodes()
         decode_factory.filter_all_barcodes(fdr_target=fdr_target)
-        decode_factory.remove_duplicates_in_tile_overlap(radius=1.0)
+        decode_factory.remove_duplicates_in_tile_overlap(radius=.75)
+        decode_factory.remove_duplicates_in_tile_overlap(radius=.5)
         decode_factory.assign_cells()
         decode_factory.save_barcodes(format='parquet')
         decode_factory.save_all_barcodes_for_baysor()
@@ -898,21 +897,24 @@ def postprocess(dataset_path: Path,
                 
             resave_baysor_output(baysor_output_genes_path,
                                  baysor_filtered_output_genes_path)
+            baysor_output_genes_path = baysor_filtered_output_genes_path
             
     else:
         baysor_output_path = output_dir_path / Path("segmentation") / Path('baysor')
         baysor_output_genes_path = baysor_output_path / Path("segmentation.csv")
         baysor_filtered_output_genes_path = baysor_output_path / Path("baysor_filtered_genes.parquet")
-        if not(baysor_filtered_output_genes_path.exists()):
-            resave_baysor_output(baysor_output_genes_path,
-                                baysor_filtered_output_genes_path)
-            baysor_output_genes_path = baysor_filtered_output_genes_path
-        elif not(baysor_output_genes_path.exists()):
+        if not(baysor_output_genes_path.exists()):
             baysor_output_genes_path = output_dir_path / Path("decoded") / Path('baysor_formatted_genes.csv')
-            
+        else:
+            if not(baysor_filtered_output_genes_path.exists()):
+                resave_baysor_output(baysor_output_genes_path,
+                                    baysor_filtered_output_genes_path)
+            else:
+                baysor_output_genes_path = baysor_filtered_output_genes_path
+
     if run_mtx_creation:
         from wf_merfish.utils._dataio import create_mtx
-        
+        print(baysor_output_genes_path)
         create_mtx(baysor_output_genes_path,
                    output_dir_path / Path('mtx_output'),
                    mtx_creation_parameters['confidence_cutoff'])

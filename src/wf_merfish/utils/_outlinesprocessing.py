@@ -56,7 +56,7 @@ def create_microjson(outlines,
 def calculate_centroids(outlines,
                         spacing: np.ndarray,
                         origin: np.ndarray,
-                        affine: np.ndarray):
+                        affine: np.ndarray) -> pd.DataFrame:
     centroids = []
     cell_id = 0
     for contour in outlines:
@@ -70,3 +70,16 @@ def calculate_centroids(outlines,
         cell_id = cell_id + 1
     
     return pd.DataFrame(centroids)
+
+# def filter_baysor_outlines_by_area(outlines,
+#                                    cell_stats: pd.DataFrame,
+#                                    area_threshold: list[float]):
+    
+#     filtered_geometries = []
+#     for geometry in outlines:
+#         if geometry['type'] == 'Polygon':
+#             area = calculate_area(geometry['coordinates'][0])
+#             if area_threshold[0] <= area <= area_threshold[1]:
+#                 filtered_geometries.append(geometry)
+                
+#     return filtered_geometries

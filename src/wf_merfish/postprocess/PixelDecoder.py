@@ -22,6 +22,7 @@ from tqdm import tqdm
 from shapely.geometry import Point, Polygon
 import json
 import rtree
+from scipy.spatial import cKDTree
 
 class PixelDecoder():
     def __init__(self,
@@ -502,7 +503,7 @@ class PixelDecoder():
         
         if self._verbose > 1:
             print('extract barcodes')
-        elif self._verbose >= 1:
+        if self._verbose >= 1:
             iterable_barcode = tqdm(range(self._barcode_count), desc='barcode', leave=False)
         else:
             iterable_barcode = range(self._barcode_count)
@@ -768,6 +769,7 @@ class PixelDecoder():
         if self._barcodes_filtered:
             baysor_path = decoded_dir_path / Path('baysor_formatted_genes.csv')           
             baysor_df = self._df_filtered_barcodes[['gene_id','global_z','global_y','global_x','cell_id']].copy()
+            baysor_df['cell_id'] = baysor_df['cell_id'] + 1
             baysor_df.to_csv(baysor_path)
             
     def load_all_barcodes(self,
@@ -951,7 +953,37 @@ class PixelDecoder():
             
             self._df_filtered_barcodes['cell_id'] = self._df_filtered_barcodes.apply(check_point, axis=1)
             
+    def remove_duplicates_in_tile_overlap(self, radius: float = 1.0):
+        # Ensure the DataFrame's index is aligned
+        self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
         
+        coords = self._df_filtered_barcodes[['global_z', 'global_y', 'global_x']].values
+        tile_idxs = self._df_filtered_barcodes['tile_idx'].values
+        
+        tree = cKDTree(coords)
+        pairs = tree.query_pairs(radius)
+        
+        rows_to_drop = set()
+        distances = []
+        for i, j in pairs:
+            if tile_idxs[i] != tile_idxs[j]:
+                if self._df_filtered_barcodes.loc[i, 'distance_mean'] <= self._df_filtered_barcodes.loc[j, 'distance_mean']:
+                    rows_to_drop.add(j)
+                    distances.append(self._df_filtered_barcodes.loc[j, 'distance_mean'])
+                else:
+                    rows_to_drop.add(i)
+                    distances.append(self._df_filtered_barcodes.loc[i, 'distance_mean'])
+        
+        self._df_filtered_barcodes.drop(rows_to_drop, inplace=True)
+        self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
+        
+        avg_distance = np.mean(distances) if distances else 0
+        dropped_count = len(rows_to_drop)
+        
+        if self._verbose == 2:
+            print('Average distance metric of dropped points: ' + str(avg_distance))
+            print('Dropped points: ' + str(dropped_count))
+            
     def cleanup(self):
         
         if self._filter_type == 'lp':
