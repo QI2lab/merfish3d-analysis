@@ -178,7 +178,7 @@ class PixelDecoder():
                                       low_percentile_cut: float = 20.0,
                                       high_percentile_cut: float = 99.995,
                                       camera_background: int = 10,
-                                      hot_pixel_threshold: int = 65000,
+                                      hot_pixel_threshold: int = 5000,
                                       overwrite: bool = False):
     
         try:
@@ -190,8 +190,8 @@ class PixelDecoder():
             
         if data_not_found or overwrite:
             
-            if len(self._tile_ids) > 8:
-                random_tiles = sample(self._tile_ids,8)
+            if len(self._tile_ids) > 20:
+                random_tiles = sample(self._tile_ids,20)
             else:
                 random_tiles = self._tile_ids
                 
@@ -216,10 +216,10 @@ class PixelDecoder():
                     tile_dir_path = self._readout_dir_path / Path(tile_id)
                     bit_dir_path = tile_dir_path / Path(bit_id)
                     current_bit = zarr.open(bit_dir_path,mode='r')
-                    current_image = cp.where(cp.asarray(current_bit["registered_ufish_data"], dtype=cp.float32) > 0.01, 
+                    current_image = cp.where(cp.asarray(current_bit["registered_ufish_data"], dtype=cp.float32) > 0.1, 
                                              cp.asarray(current_bit["registered_decon_data"], dtype=cp.float32), 
                                              0.)
-                    current_image[current_image<camera_background] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
+                    #current_image[current_image<camera_background] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
                     current_image[current_image>hot_pixel_threshold] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
                     if self._z_crop:
                         all_images.append(cp.asnumpy(current_image[self._z_range[0]:self._z_range[1],:]).astype(np.float32))
@@ -307,12 +307,12 @@ class PixelDecoder():
             current_bit = zarr.open(bit_dir_path,mode='r')
             if self._z_crop:
                 current_mask = np.asarray(current_bit["registered_ufish_data"][self._z_range[0]:self._z_range[1],:], dtype=np.float32)
-                images.append(np.where(current_mask > .01, 
+                images.append(np.where(current_mask > .1, 
                                        np.asarray(current_bit["registered_decon_data"][self._z_range[0]:self._z_range[1],:], dtype=np.float32),
                                        0))
             else:
                 current_mask = np.asarray(current_bit["registered_ufish_data"], dtype=np.float32)
-                images.append(np.where(current_mask > .01,
+                images.append(np.where(current_mask > .1,
                                        np.asarray(current_bit["registered_decon_data"], dtype=np.float32),
                                        0))
             self._em_wvl.append(current_bit.attrs['emission_um'])
@@ -358,12 +358,18 @@ class PixelDecoder():
         for i in iterable_lp:
             if self._is_3D:
                 image_data_cp = cp.asarray(self._image_data[i,:],dtype=cp.float32)
+                max_image_data = cp.asnumpy(cp.max(image_data_cp,axis=(0,1,2))).astype(np.float32)
                 self._image_data_lp[i,:,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=sigma)).astype(np.float32)
+                max_image_data_lp = np.max(self._image_data_lp[i,:,:,:],axis=(0,1,2))
+                self._image_data_lp[i,:,:,:] = self._image_data_lp[i,:,:,:] * (max_image_data/max_image_data_lp)
             else:
                 for z_idx in range(self._image_data.shape[1]):
                     image_data_cp = cp.asarray(self._image_data[i,z_idx,:],dtype=cp.float32)
+                    max_image_data = cp.asnumpy(cp.max(image_data_cp,axis=(0,1))).astype(np.float32)
                     self._image_data_lp[i,z_idx,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=(sigma[1],sigma[2]))).astype(np.float32)
-            
+                    max_image_data_lp = np.max(self._image_data_lp[i,z_idx,:,:],axis=(0,1))
+                    self._image_data_lp[i,z_idx,:,:] = self._image_data_lp[i,z_idx,:,:] * (max_image_data/max_image_data_lp)
+                    
         self._filter_type = 'lp'
         
         del image_data_cp
@@ -839,7 +845,7 @@ class PixelDecoder():
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1']
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
-        
+                
         if (len(df_false)>0):
             
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
