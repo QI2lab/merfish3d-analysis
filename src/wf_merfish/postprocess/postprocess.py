@@ -504,10 +504,15 @@ def postprocess(dataset_path: Path,
         from wf_merfish.postprocess.DataRegistration import DataRegistration
 
         for tile_idx in range(num_tiles):
+            if camera=='flir':
+                RL_mem_limit = 16
+            elif camera=='bsi':
+                RL_mem_limit = 8
             data_register_factory = DataRegistration(dataset_path=output_dir_path,
                                                     overwrite_registered=overwrite_registration,
                                                     perform_optical_flow=run_optical_flow,
-                                                    tile_idx=tile_idx)
+                                                    tile_idx=tile_idx,
+                                                    RL_mem_limit=RL_mem_limit)
             data_register_factory.generate_registrations()
             data_register_factory.apply_registration_to_bits()
             
