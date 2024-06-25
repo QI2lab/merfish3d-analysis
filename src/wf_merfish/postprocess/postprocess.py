@@ -108,6 +108,7 @@ def postprocess(dataset_path: Path,
         pixel_size = 6.5 / (60 * (165/180))
         binning = 1
         e_per_ADU = 1 # assumes 11-bit sensitity mode
+        bsi_offset = 100
     
     axial_step = .315 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
@@ -419,14 +420,20 @@ def postprocess(dataset_path: Path,
                                 elif not(run_shading_correction) and (run_hotpixel_correction):
                                     data = replace_hot_pixels(noise_map,raw_data)
                                     offset = np.median(noise_map)
+                                elif camera=='bsi':
+                                    data = raw_data.copy()
+                                    offset = bsi_offset
+                                    del raw_data
+                                    gc.collect()
                                     
                                 corrected_data = (data.astype(np.float32)-offset)
                                 corrected_data[corrected_data<0]=0
                                 corrected_data = (corrected_data * float(e_per_ADU))
                                 
-                                corrected_data = replace_hot_pixels(np.max(corrected_data,axis=0),
-                                                                    corrected_data,
-                                                                    threshold=1000)
+                                if camera=='flir' and (run_hotpixel_correction):
+                                    corrected_data = replace_hot_pixels(np.max(corrected_data,axis=0),
+                                                                        corrected_data,
+                                                                        threshold=1000)
                                     
                                 if write_raw_camera_data:
                                     current_camera_data = current_channel.zeros('camera_data',
@@ -914,7 +921,6 @@ def postprocess(dataset_path: Path,
 
     if run_mtx_creation:
         from wf_merfish.utils._dataio import create_mtx
-        print(baysor_output_genes_path)
         create_mtx(baysor_output_genes_path,
                    output_dir_path / Path('mtx_output'),
                    mtx_creation_parameters['confidence_cutoff'])
@@ -925,7 +931,7 @@ if __name__ == '__main__':
     
     
     # example run setup for human olfactory bulb 
-    dataset_path = Path('/mnt/data/qi2lab/20240317_OB_MERFISH_7')
+    dataset_path = Path('/mnt/data/qi2lab/20240622_mousebrain_FArhb')
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
