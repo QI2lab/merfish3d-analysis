@@ -510,9 +510,9 @@ class PixelDecoder():
         if self._verbose > 1:
             print('extract barcodes')
         if self._verbose >= 1:
-            iterable_barcode = tqdm(range(self._barcode_count), desc='barcode', leave=False)
+            iterable_barcode = tqdm(range(self._codebook_matrix.shape[0]), desc='barcode', leave=False)
         else:
-            iterable_barcode = range(self._barcode_count)
+            iterable_barcode = range(self._codebook_matrix.shape[0])
         decoded_image = cp.asarray(self._decoded_image, dtype=cp.int16)
         intensity_image = np.concatenate([np.expand_dims(self._distance_image,axis=0),
                                          self._scaled_pixel_images],axis=0).transpose(1,2,3,0)
