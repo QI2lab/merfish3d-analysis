@@ -880,10 +880,13 @@ def postprocess(dataset_path: Path,
                 
         # construct baysor command
         julia_threading = "JULIA_NUM_THREADS="+str(baysor_num_threads)+ " "
-        baysor_options = r" run -p -x global_x -y global_y -z global_z -g gene_id -s "+str(baysor_cell_size) +\
-            r" --config.segmentation.iters 250 --config.data.force_2d=false"+\
-            r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
-            r" --prior-segmentation-confidence "+str(baysor_cellpose_prior)+r" "
+        baysor_options = r" run -m 24 -p -c /home/qi2lab/Documents/github/wf-merfish/src/wf_merfish/postprocess/baysor_config.toml "
+        # baysor_options = r" run -p -x global_x -y global_y -z global_z -g gene_id"+\
+        #     r" --config.segmentation.iters 500 --config.data.force_2d=false"+\
+        #     r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
+        #     r" --min-pixels-per-cell 30 --scale-std 25 --estimate-scale-from-centers True"+\
+        #     r" --n-frames 20 --new-component-fraction 0.3 --n-cluster 4"+\
+        #     r" --prior-segmentation-confidence "+str(baysor_cellpose_prior)+r" "
         if baysor_ignore_genes:
             baysor_genes_to_ignore = r"--config.data.exclude_genes='" + baysor_genes_to_exclude + "' "
             baysor_options = baysor_options + baysor_genes_to_ignore
