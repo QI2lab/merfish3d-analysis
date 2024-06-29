@@ -90,7 +90,7 @@ class PixelDecoder():
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
-        self._barcode_count = self._decoding_matrix.shape[0] - self._blank_count
+        self._barcode_count = self._decoding_matrix.shape[0]
         self._bit_count = self._decoding_matrix.shape[1]
         
         if scale_factors is not None:
@@ -885,7 +885,7 @@ class PixelDecoder():
             for threshold in np.arange(0, 1, 0.1):  # Coarse step: 0.1
                 fdr = self.calculate_fdr(self._df_barcodes_loaded, 
                                         threshold,
-                                        self._blank_count, # TO DO: FIX
+                                        self._blank_count, 
                                         self._barcode_count,
                                         self._verbose)
                 if fdr <= fdr_target:
@@ -904,7 +904,7 @@ class PixelDecoder():
                     break
                 
             df_above_threshold = self._df_barcodes_loaded[self._df_barcodes_loaded['predicted_probability'] > fine_threshold]
-            self._df_filtered_barcodes = df_above_threshold[['tile_idx', 'gene_id', 'global_z', 'global_y', 'global_x',]].copy()
+            self._df_filtered_barcodes = df_above_threshold[['tile_idx', 'gene_id', 'global_z', 'global_y', 'global_x','distance_mean',]].copy()
             self._df_filtered_barcodes['cell_id'] = -1
             self._barcodes_filtered = True
             
