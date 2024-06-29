@@ -111,7 +111,7 @@ class PixelDecoder():
                
         self._codebook_style = 1        
         self._filter_type = None
-
+        
     def _parse_dataset(self):
         self._readout_dir_path = self._dataset_path / Path('readouts')
         self._tile_ids = sorted([entry.name for entry in self._readout_dir_path.iterdir() if entry.is_dir()],
@@ -148,7 +148,7 @@ class PixelDecoder():
         
     def _normalize_codebook(self, include_errors: bool = False):
         self._barcode_set = cp.asarray(self._codebook_matrix[:,0:self._n_merfish_bits])
-        magnitudes = cp.linalg.norm(self._barcode_set, axis=0, keepdims=True)
+        magnitudes = cp.linalg.norm(self._barcode_set, axis=1, keepdims=True)
 
         if not include_errors:
             # Normalize directly using broadcasting
@@ -403,7 +403,7 @@ class PixelDecoder():
   
         if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
-        
+       
         norms = cp.linalg.norm(pixel_traces, axis=0)
         norms = cp.where(norms == 0, np.inf, norms)
         normalized_traces = pixel_traces / norms
@@ -950,7 +950,10 @@ class PixelDecoder():
             rtree_index = rtree.index.Index()
 
             for cell_id, polygon in outline_polygons.items():
-                rtree_index.insert(cell_id, polygon.bounds)
+                try:
+                    rtree_index.insert(cell_id, polygon.bounds)
+                except:
+                    bad_cell = True
 
             def check_point(row):
                 point = Point(row['global_y'], row['global_x'])
