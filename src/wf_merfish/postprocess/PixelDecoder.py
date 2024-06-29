@@ -742,16 +742,13 @@ class PixelDecoder():
         
         if self._verbose > 1:
             print('save barcodes')
-        
-        readout_dir_path = self._dataset_path / Path('readouts')
-        tile_ids = [entry.name for entry in readout_dir_path.iterdir() if entry.is_dir()]
-        
+               
         decoded_dir_path = self._dataset_path / Path('decoded')
         decoded_dir_path.mkdir(exist_ok=True)
         
         if not(self._barcodes_filtered):
         
-            barcode_path = decoded_dir_path / Path(tile_ids[self._tile_idx]+'_decoded_features.' + format)
+            barcode_path = decoded_dir_path / Path(self._tile_ids[self._tile_idx]+'_decoded_features.' + format)
             self._barcode_path = barcode_path
             if format == 'csv':
                 self._df_barcodes.to_csv(barcode_path)
