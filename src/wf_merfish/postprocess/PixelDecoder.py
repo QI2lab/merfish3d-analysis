@@ -149,6 +149,7 @@ class PixelDecoder():
     def _normalize_codebook(self, include_errors: bool = False):
         self._barcode_set = cp.asarray(self._codebook_matrix[:,0:self._n_merfish_bits])
         magnitudes = cp.linalg.norm(self._barcode_set, axis=1, keepdims=True)
+        magnitudes[magnitudes==0] = 1 # ensure with smFISH rounds have magnitude 1
 
         if not include_errors:
             # Normalize directly using broadcasting
