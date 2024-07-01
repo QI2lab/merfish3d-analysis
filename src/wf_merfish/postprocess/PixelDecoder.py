@@ -798,11 +798,15 @@ class PixelDecoder():
                       barcode_count,
                       verbose):
 
-        df['prediction'] = df['predicted_probability'] > threshold
+        if threshold >=0 :
+            df['prediction'] = df['predicted_probability'] > threshold
 
-        coding = df[(~df['gene_id'].str.startswith('Blank')) & (df['predicted_probability'] > threshold)].shape[0]
-        noncoding = df[(df['gene_id'].str.startswith('Blank')) & (df['predicted_probability'] > threshold)].shape[0]
-    
+            coding = df[(~df['gene_id'].str.startswith('Blank')) & (df['predicted_probability'] > threshold)].shape[0]
+            noncoding = df[(df['gene_id'].str.startswith('Blank')) & (df['predicted_probability'] > threshold)].shape[0]
+        else:
+            coding = df[(~df['gene_id'].str.startswith('Blank'))].shape[0]
+            noncoding = df[(df['gene_id'].str.startswith('Blank'))].shape[0]
+        
         if coding > 0:
             fdr = (noncoding/blank_count) / (coding/(barcode_count-blank_count))
         else:
@@ -827,14 +831,14 @@ class PixelDecoder():
         
         self._df_barcodes_loaded['X'] = ~self._df_barcodes_loaded['gene_id'].str.startswith('Blank')
         if self._is_3D:
-            columns = ['X', 'area', 's-b_mean', 's-b_max', 'distance_mean',
+            columns = ['X', 'signal_mean', 's-b_mean', 'distance_mean',
                     'moments_normalized-0-0-2', 'moments_normalized-0-0-3', 'moments_normalized-0-1-1',
                     'moments_normalized-0-1-2', 'moments_normalized-0-1-3', 'moments_normalized-0-2-0',
                     'moments_normalized-0-2-1', 'moments_normalized-0-2-3', 'moments_normalized-0-3-0',
                     'moments_normalized-0-3-1', 'moments_normalized-0-3-2', 'moments_normalized-0-3-3',
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1', 'inertia_tensor_eigvals-2']
         else:
-            columns = ['X', 'area', 's-b_mean', 's-b_max', 'distance_mean',
+            columns = ['X', 'signal_mean', 's-b_mean', 'distance_mean',
                     'moments_normalized-0-2', 'moments_normalized-0-3', 
                     'moments_normalized-1-1', 'moments_normalized-1-2', 'moments_normalized-1-3',
                     'moments_normalized-2-0', 'moments_normalized-2-1', 'moments_normalized-2-2', 'moments_normalized-2-3',
@@ -842,14 +846,14 @@ class PixelDecoder():
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1']
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
-                
+                        
         if (len(df_false)>0):
             
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
             x = df_combined.drop('X', axis=1)
             y = df_combined['X']
-            X_train, X_test, y_train, y_test = train_test_split(x, y, test_size=0.4, random_state=42)
+            X_train, X_test, y_train, y_test = train_test_split(x, y, test_size=0.1, random_state=42)
             
             if self._verbose > 1:
                 print('generating synthetic samples for class balance')
