@@ -81,9 +81,6 @@ def postprocess(dataset_path: Path,
                                             'cellpose_prior_confidence': 0.5},
                 baysor_ignore_genes: bool = False,
                 baysor_genes_to_exclude: Optional[str] = None,
-                baysor_filtering_parameters: dict = {'cell_area_microns' : 7.5,
-                                                    'confidence' : 0.7,
-                                                    'lifespan' : 100},
                 run_mtx_creation: bool = True,
                 mtx_creation_parameters: dict = {'confidence_cutoff' : 0.7},
                 noise_map_path: Optional[Path] = None,
@@ -801,71 +798,20 @@ def postprocess(dataset_path: Path,
     if run_tile_decoding:
         
         from wf_merfish.postprocess.PixelDecoder import PixelDecoder
-        import cupy as cp
         
-        global_normalization_limits = tile_decoding_parameters['normalization']
-        calculate_normalization = tile_decoding_parameters['calculate_normalization']
         exp_type = tile_decoding_parameters['exp_type']
-        merfish_bits = tile_decoding_parameters['merfish_bits']
-        lowpass_sigma = tile_decoding_parameters['lowpass_sigma']
-        distance_threshold = tile_decoding_parameters['distance_threshold']
-        magnitude_threshold = tile_decoding_parameters['magnitude_threshold']
+
         minimum_pixels = tile_decoding_parameters['minimum_pixels']
         fdr_target = tile_decoding_parameters['fdr_target']
             
-        decode_factory = PixelDecoder(dataset_path=output_dir_path,
-                                      global_normalization_limits=global_normalization_limits,
-                                      overwrite_normalization=calculate_normalization,
-                                      exp_type=exp_type,
-                                      merfish_bits=merfish_bits)
-
-        tile_ids = decode_factory._tile_ids
-        
-        del decode_factory
-        gc.collect()
-        cp.get_default_memory_pool().free_all_blocks()
-        
-        for tile_idx, tile_id in enumerate(tqdm(tile_ids,desc='tile',leave=True)):
-    
-            decode_factory = PixelDecoder(dataset_path=output_dir_path,
-                                        global_normalization_limits=global_normalization_limits,
-                                        overwrite_normalization=False,
-                                        tile_idx=tile_idx,
-                                        exp_type=exp_type,
-                                        merfish_bits=merfish_bits)
-            decode_factory.run_decoding(lowpass_sigma=lowpass_sigma,
-                                        distance_threshold=distance_threshold,
-                                        magnitude_threshold=magnitude_threshold,
-                                        minimum_pixels=minimum_pixels,
-                                        skip_extraction=False)
-            decode_factory.save_barcodes()
-            decode_factory.cleanup()
-            
-            del decode_factory
-            gc.collect()
-            cp.get_default_memory_pool().free_all_blocks()
-            
-            progress_updates['Decode'] = ((tile_idx+1) / num_tiles) * 100
-            yield progress_updates
-                        
-        decode_factory = PixelDecoder(dataset_path=output_dir_path,
-                                    global_normalization_limits=global_normalization_limits,
-                                    overwrite_normalization=False,
+        decode_factory = PixelDecoder(dataset_path=dataset_path,
                                     exp_type=exp_type,
-                                    merfish_bits=merfish_bits)
-    
-        decode_factory.load_all_barcodes()
-        decode_factory.filter_all_barcodes(fdr_target=fdr_target)
-        decode_factory.remove_duplicates_in_tile_overlap(radius=.75)
-        decode_factory.remove_duplicates_in_tile_overlap(radius=.5)
-        decode_factory.assign_cells()
-        decode_factory.save_barcodes(format='parquet')
-        decode_factory.save_all_barcodes_for_baysor()
-
-        del decode_factory
-        gc.collect()
-        cp.get_default_memory_pool().free_all_blocks()
+                                    verbose=1)
         
+        decode_factory.optimize_normalization_by_decoding()
+        decode_factory.decode_all_tiles(minimum_pixels=minimum_pixels,
+                                        fdr_target=fdr_target)
+       
         progress_updates['Decode'] = 100
         yield progress_updates
         
@@ -874,19 +820,10 @@ def postprocess(dataset_path: Path,
         
         baysor_path = Path(baysor_parameters['baysor_path'])
         baysor_num_threads = baysor_parameters['num_threads']
-        baysor_cell_size = baysor_parameters['cell_size_microns']
-        baysor_min_molecules = baysor_parameters['min_molecules_per_cell']
-        baysor_cellpose_prior = baysor_parameters['cellpose_prior_confidence']
                 
         # construct baysor command
         julia_threading = "JULIA_NUM_THREADS="+str(baysor_num_threads)+ " "
         baysor_options = r" run -m 24 -p -c /home/qi2lab/Documents/github/wf-merfish/src/wf_merfish/postprocess/baysor_config.toml "
-        # baysor_options = r" run -p -x global_x -y global_y -z global_z -g gene_id"+\
-        #     r" --config.segmentation.iters 500 --config.data.force_2d=false"+\
-        #     r" --count-matrix-format 'tsv' --save-polygons 'GeoJSON' --min-molecules-per-cell "+str(baysor_min_molecules)+\
-        #     r" --min-pixels-per-cell 30 --scale-std 25 --estimate-scale-from-centers True"+\
-        #     r" --n-frames 20 --new-component-fraction 0.3 --n-cluster 4"+\
-        #     r" --prior-segmentation-confidence "+str(baysor_cellpose_prior)+r" "
         if baysor_ignore_genes:
             baysor_genes_to_ignore = r"--config.data.exclude_genes='" + baysor_genes_to_exclude + "' "
             baysor_options = baysor_options + baysor_genes_to_ignore
@@ -943,14 +880,6 @@ if __name__ == '__main__':
     codebook_path = dataset_path / ('codebook.csv')
     bit_order_path = dataset_path / ('bit_order.csv')
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
-    # baysor_genes_to_exclude = "OR10C1, OR10G2, OR10H1, OR10H5, OR10Q1, OR10S1, OR10W1, OR11A1,\
-    #                         OR12D1, OR13A1, OR13J1, OR1F1, OR1I1, OR1M1, OR2A1, OR2A14,\
-    #                         OR2A20P, OR2A4, OR2A42, OR2A9P, OR2AT4, OR2B11, OR2C1, OR2C3,\
-    #                         OR2F1, OR2H1, OR2H2, OR2L13, OR2S2, OR2T2, OR2T27, OR2T35,\
-    #                         OR2T5, OR2T7, OR2Z1, OR3A2, OR3A3, OR3A4P, OR51D1, OR51E1,\
-    #                         OR51E2, OR51G1, OR52I1, OR52I2, OR52K2, OR52L1, OR52W1,\
-    #                         OR56B1, OR56B4, OR5AU1, OR5C1, OR6A2, OR6J1, OR6W1P, OR7A5,\
-    #                         OR8A1, OR9Q1, Blank*"
     baysor_genes_to_exclude = None
 
     func = postprocess(dataset_path = dataset_path, 
@@ -971,28 +900,15 @@ if __name__ == '__main__':
                                               'flow_threshold': 0.8,
                                               'normalization': [10,90]},
                        run_tile_decoding =  True,
-                       tile_decoding_parameters = {'normalization': [.1,80],
-                                                   'calculate_normalization': False,
-                                                   'exp_type': '3D',
-                                                   'merfish_bits': 16,
-                                                   'lowpass_sigma': (3,1,1),
-                                                   'distance_threshold': 0.8,
-                                                   'magnitude_threshold': 0.3,
-                                                   'minimum_pixels': 27,
+                       tile_decoding_parameters = {'minimum_pixels': 27,
                                                    'fdr_target': .05},
                        # smfish_parameters = {'bits': [17,18],
                        #                      'threshold': -1}
                        run_baysor= False,
                        baysor_parameters = {'baysor_path' : r"~/Documents/github/Baysor/bin/baysor/bin/./baysor",
-                                            'num_threads': 24,
-                                            'cell_size_microns': 10,
-                                            'min_molecules_per_cell': 20,
-                                            'cellpose_prior_confidence': 0.5},
+                                            'num_threads': 24},
                        baysor_ignore_genes = False,
                        baysor_genes_to_exclude = baysor_genes_to_exclude,
-                       baysor_filtering_parameters = {'cell_area_microns' : 7.5,
-                                                      'confidence_cutoff' : 0.7,
-                                                      'lifespan' : 100},
                        run_mtx_creation = False,
                        mtx_creation_parameters = {'confidence_cutoff' : 0.7},
                        noise_map_path = noise_map_path)

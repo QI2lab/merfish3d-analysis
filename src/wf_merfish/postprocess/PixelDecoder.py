@@ -23,16 +23,14 @@ from shapely.geometry import Point, Polygon
 import json
 import rtree
 from scipy.spatial import cKDTree
+import warnings
+warnings.filterwarnings("ignore", message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?")
 
 class PixelDecoder():
     def __init__(self,
                  dataset_path: Union[Path,str],
-                 tile_idx: int = 0,
                  exp_type: Optional[str] = "3D",
                  use_mask: Optional[bool] = False,
-                 scale_factors: Optional[np.ndarray] = None,
-                 global_normalization_limits: Optional[Sequence[float]] = None,
-                 overwrite_normalization: Optional[bool] = False,
                  z_range: Optional[Sequence[int]] = None,
                  include_blanks: Optional[bool] = True,
                  merfish_bits: int = 16,
@@ -53,14 +51,6 @@ class PixelDecoder():
             each z-plane independently. 3D assume axial spacing is at or near Nyquist sampling.
         use_mask: Optiona[bool] = False
             use mask stored in polyDT directory  
-        scale_factors: Optional[np.ndarray] = None
-            optional user supplied scale factors. nbits x 2 array, with the
-            first dimension being value to subtract for background and second
-            being normalization by division factor
-        global_normalization_limits: Optional[Sequence[float]] = None
-            rescales per bit data to [0,1], using [lower_normalization,upper_normalization] limits
-        overwrite_normalization: bool = False
-            if true, will recalculate and save new per bit normalization factors
         merfish_bits: int = 16
             number of merfish bits. Assumes that in codebook, MERFISH rounds are [0,merfish_bits].
         verbose: int = 1
@@ -68,7 +58,6 @@ class PixelDecoder():
         """
 
         self._dataset_path = dataset_path
-        self._tile_idx = tile_idx
         self._verbose = verbose
         self._barcodes_filtered = False
         self._include_blanks = include_blanks
@@ -92,31 +81,25 @@ class PixelDecoder():
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
         self._barcode_count = self._decoding_matrix.shape[0]
         self._bit_count = self._decoding_matrix.shape[1]
-        
-        if scale_factors is not None:
-            self._background_vector = scale_factors[:,0]
-            self._normalization_vector = scale_factors[:,1]
-        else:
-            if global_normalization_limits is not None:
-                self._global_normalization_factors(low_percentile_cut=global_normalization_limits[0],
-                                                   high_percentile_cut=global_normalization_limits[1],
-                                                   overwrite=overwrite_normalization)
-            else:
-                self._global_normalization_factors(overwrite=overwrite_normalization)
-                
+                        
         if use_mask:
-            self._load_mask()
+            self._load_mask() # TO DO: implement
         else:
             self._mask_image = None
                
-        self._codebook_style = 1        
-        self._filter_type = None
+        self._codebook_style = 1
+        self._optimize_normalization_weights = False
+        self._global_normalization_loaded = False
+        self._iterative_normalization_loaded = False
+        self._distance_threshold = 0.5172 # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
+        self._magnitude_threshold = 1.1 # default for HW4D4 code
+
         
     def _parse_dataset(self):
         self._readout_dir_path = self._dataset_path / Path('readouts')
         self._tile_ids = sorted([entry.name for entry in self._readout_dir_path.iterdir() if entry.is_dir()],
                            key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
-        tile_dir_path = self._readout_dir_path / Path(self._tile_ids[self._tile_idx])
+        tile_dir_path = self._readout_dir_path / Path(self._tile_ids[0])
         self._bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
                                 key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))[0:self._n_merfish_bits]
         
@@ -125,7 +108,6 @@ class PixelDecoder():
         calibration_dir_path = self._dataset_path / Path("calibrations.zarr")
         self._calibration_zarr = zarr.open(calibration_dir_path,mode='a')
         
-        # TO DO: fix in calibration.zarr creation
         self._na = 1.35
         self._ri = 1.4
         self._num_on_bits = 4
@@ -174,123 +156,194 @@ class PixelDecoder():
             # Stack all barcodes (original normalized + with single errors)
             all_barcodes = cp.vstack(barcodes_with_single_errors)
             return cp.asnumpy(all_barcodes)
-         
-    def _global_normalization_factors(self,
-                                      low_percentile_cut: float = 20.0,
-                                      high_percentile_cut: float = 99.995,
-                                      camera_background: int = 10,
-                                      hot_pixel_threshold: int = 5000,
-                                      overwrite: bool = False):
-    
+        
+    def _load_global_normalization_vectors(self):
         try:
             normalization_vector = cp.asarray(self._calibration_zarr.attrs['global_normalization'])
             background_vector = cp.asarray(self._calibration_zarr.attrs['global_background'])
-            data_not_found = False
-        except:         
-            data_not_found = True
+            self._global_normalization_loaded = True
+            self._global_background_vector = background_vector
+            self._global_normalization_vector = normalization_vector
+        except:
+            self._global_normalization_vectors()
+              
+    def _global_normalization_vectors(self,
+                                      low_percentile_cut: float = 10.0,
+                                      high_percentile_cut: float = 90.0,
+                                      hot_pixel_threshold: int = 5000):
+
+        if len(self._tile_ids) > 5:
+            random_tiles = sample(self._tile_ids,5)
+        else:
+            random_tiles = self._tile_ids
             
-        if data_not_found or overwrite:
+        normalization_vector = cp.ones(len(self._bit_ids),dtype=cp.float32)
+        background_vector = cp.zeros(len(self._bit_ids),dtype=cp.float32)
+
+        if self._verbose >= 1:
+            print('calculate normalizations')
+            iterable_bits = enumerate(tqdm(self._bit_ids,desc='bit',leave=False))
+        else:
+            iterable_bits = enumerate(self._bit_ids)
+        
+        for bit_idx, bit_id in iterable_bits:
+            all_images = []
             
-            if len(self._tile_ids) > 20:
-                random_tiles = sample(self._tile_ids,20)
+            if self._verbose >= 1:
+                iterable_tiles = tqdm(random_tiles,desc='loading tiles',leave=False)
             else:
-                random_tiles = self._tile_ids
+                iterable_tiles = random_tiles
+            
+            for tile_id in iterable_tiles:
+                tile_dir_path = self._readout_dir_path / Path(tile_id)
+                bit_dir_path = tile_dir_path / Path(bit_id)
+                current_bit = zarr.open(bit_dir_path,mode='r')
+                current_image = cp.where(cp.asarray(current_bit["registered_ufish_data"], dtype=cp.float32) > 0.1, 
+                                            cp.asarray(current_bit["registered_decon_data"], dtype=cp.float32), 
+                                            0.)
+                current_image[current_image>hot_pixel_threshold] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
+                if self._z_crop:
+                    all_images.append(cp.asnumpy(current_image[self._z_range[0]:self._z_range[1],:]).astype(np.float32))
+                else:
+                    all_images.append(cp.asnumpy(current_image).astype(np.float32))
+                del current_image
+                cp.get_default_memory_pool().free_all_blocks()
+                gc.collect()
                 
-            normalization_vector = cp.ones(len(self._bit_ids),dtype=cp.float32)
-            background_vector = cp.zeros(len(self._bit_ids),dtype=cp.float32)
+            all_images = np.array(all_images)
 
             if self._verbose >= 1:
-                print('calculate normalizations')
-                iterable_bits = enumerate(tqdm(self._bit_ids,desc='bit',leave=False))
+                iterable_tiles = enumerate(tqdm(random_tiles,desc='background est.',leave=False))
             else:
-                iterable_bits = enumerate(self._bit_ids)
+                iterable_tiles = random_tiles
+
+            low_pixels = []    
+            for tile_idx, tile_id in iterable_tiles:
+                
+                current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32)
+                low_cutoff = cp.percentile(current_image, low_percentile_cut)
+                low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))                                        
+                del current_image
+                cp.get_default_memory_pool().free_all_blocks()
+                gc.collect()
+
+            low_pixels = cp.concatenate(low_pixels,axis=0)
+            if low_pixels.shape[0]>0:
+                background_vector[bit_idx] = cp.median(low_pixels)
+            else:
+                background_vector[bit_idx] = 0
             
-            for bit_idx, bit_id in iterable_bits:
-                all_images = []
+            del low_pixels
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+            
+            if self._verbose >= 1:
+                iterable_tiles = enumerate(tqdm(random_tiles,desc='normalization est.',leave=False))
+            else:
+                iterable_tiles = random_tiles
+            
+            high_pixels = []
+            for tile_idx, tile_id in iterable_tiles:
                 
-                if self._verbose >= 1:
-                    iterable_tiles = tqdm(random_tiles,desc='loading tiles',leave=False)
-                else:
-                    iterable_tiles = random_tiles
+                current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32) - background_vector[bit_idx]
+                current_image[current_image<0] = 0
+                high_cutoff = cp.percentile(current_image, high_percentile_cut)
+                high_pixels.append(current_image[current_image > high_cutoff].flatten().astype(cp.float32))
                 
-                for tile_id in iterable_tiles:
-                    tile_dir_path = self._readout_dir_path / Path(tile_id)
-                    bit_dir_path = tile_dir_path / Path(bit_id)
-                    current_bit = zarr.open(bit_dir_path,mode='r')
-                    current_image = cp.where(cp.asarray(current_bit["registered_ufish_data"], dtype=cp.float32) > 0.1, 
-                                             cp.asarray(current_bit["registered_decon_data"], dtype=cp.float32), 
-                                             0.)
-                    #current_image[current_image<camera_background] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
-                    current_image[current_image>hot_pixel_threshold] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
-                    if self._z_crop:
-                        all_images.append(cp.asnumpy(current_image[self._z_range[0]:self._z_range[1],:]).astype(np.float32))
-                    else:
-                        all_images.append(cp.asnumpy(current_image).astype(np.float32))
-                    del current_image
-                    cp.get_default_memory_pool().free_all_blocks()
-                    gc.collect()
-                    
-                all_images = np.array(all_images)
-
-                if self._verbose >= 1:
-                    iterable_tiles = enumerate(tqdm(random_tiles,desc='background est.',leave=False))
-                else:
-                    iterable_tiles = random_tiles
-
-                low_pixels = []    
-                for tile_idx, tile_id in iterable_tiles:
-                    
-                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32)
-                    low_cutoff = cp.percentile(current_image, low_percentile_cut)
-                    low_pixels.append(current_image[current_image < low_cutoff].flatten().astype(cp.float32))                                        
-                    del current_image
-                    cp.get_default_memory_pool().free_all_blocks()
-                    gc.collect()
-
-                low_pixels = cp.concatenate(low_pixels,axis=0)
-                if low_pixels.shape[0]>0:
-                    background_vector[bit_idx] = cp.median(low_pixels)
-                else:
-                    background_vector[bit_idx] = 0
-                
-                del low_pixels
+                del current_image
                 cp.get_default_memory_pool().free_all_blocks()
                 gc.collect()
                 
-                if self._verbose >= 1:
-                    iterable_tiles = enumerate(tqdm(random_tiles,desc='normalization est.',leave=False))
-                else:
-                    iterable_tiles = random_tiles
+            high_pixels = cp.concatenate(high_pixels,axis=0)
+            if high_pixels.shape[0]>0:
+                normalization_vector[bit_idx] = cp.median(high_pixels)
+            else:
+                normalization_vector[bit_idx] = 1
                 
-                high_pixels = []
-                for tile_idx, tile_id in iterable_tiles:
+            del high_pixels
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+                                                
+        self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
+        self._calibration_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
                     
-                    current_image = cp.asarray(all_images[tile_idx,:],dtype=cp.float32) - background_vector[bit_idx]
-                    current_image[current_image<0] = 0
-                    high_cutoff = cp.percentile(current_image, high_percentile_cut)
-                    high_pixels.append(current_image[current_image > high_cutoff].flatten().astype(cp.float32))
-                    
-                    del current_image
-                    cp.get_default_memory_pool().free_all_blocks()
-                    gc.collect()
-                    
-                high_pixels = cp.concatenate(high_pixels,axis=0)
-                if high_pixels.shape[0]>0:
-                    normalization_vector[bit_idx] = cp.median(high_pixels)
-                else:
-                    normalization_vector[bit_idx] = 1
-                    
-                del high_pixels
-                cp.get_default_memory_pool().free_all_blocks()
-                gc.collect()
-                                                   
-            self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-            self._calibration_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
-                      
-        self._background_vector = background_vector
-        self._normalization_vector = normalization_vector
+        self._global_background_vector = background_vector
+        self._global_normalization_vector = normalization_vector
+        self._global_normalization_loaded = True
+    
+    def _load_iterative_normalization_vectors(self):
         
+        try:
+            iterative_background_vector = np.asarray(self._calibration_zarr.attrs['iterative_background_vector'])
+            iterative_normalization_vector = np.asarray(self._calibration_zarr.attrs['iterative_normalization_vector'])
+            self._iterative_normalization_loaded = True
+            self._iterative_normalization_vector = iterative_normalization_vector
+            self._iterative_background_vector = iterative_background_vector
+        except:
+            self._iterative_normalization_loaded = False
+    
+    def _iterative_normalization_vectors(self):
         
+        df_barcodes_loaded_no_blanks = self._df_barcodes_loaded[~self._df_barcodes_loaded['gene_id'].str.startswith('Blank')]
+
+        bit_columns = [col for col in df_barcodes_loaded_no_blanks.columns if col.startswith('bit') and col.endswith('_mean_intensity')]
+
+        barcode_intensities = []
+        barcode_background = []
+        for index, row in df_barcodes_loaded_no_blanks.iterrows():
+            selected_columns = [
+                f'bit{row["on_bit_1"]:02d}_mean_intensity',
+                f'bit{row["on_bit_2"]:02d}_mean_intensity',
+                f'bit{row["on_bit_3"]:02d}_mean_intensity',
+                f'bit{row["on_bit_4"]:02d}_mean_intensity'
+            ]
+            
+            selected_dict = {col: (row[col] if col in selected_columns else None) for col in bit_columns}
+            not_selected_dict = {col: (row[col] if col not in selected_columns else None) for col in bit_columns}
+            
+            barcode_intensities.append(selected_dict)
+            barcode_background.append(not_selected_dict)
+            
+        df_barcode_intensities = pd.DataFrame(barcode_intensities)
+        df_barcode_background = pd.DataFrame(barcode_background)
+                
+        df_barcode_intensities = df_barcode_intensities.reindex(sorted(df_barcode_intensities.columns), axis=1)
+        df_barcode_background = df_barcode_background.reindex(sorted(df_barcode_background.columns), axis=1)
+        
+        barcode_based_normalization_vector = np.round(df_barcode_intensities.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
+        barcode_based_background_vector = np.round(df_barcode_background.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
+       
+        try:
+            old_iterative_background_vector = np.asarray(self._calibration_zarr.attrs['iterative_background_vector'])
+            old_iterative_normalization_vector = np.asarray(self._calibration_zarr.attrs['iterative_normalization_vector'])
+        except:
+            old_iterative_background_vector = np.round(cp.asnumpy(self._global_background_vector),1)
+            old_iterative_normalization_vector = np.round(cp.asnumpy(self._global_normalization_vector),1)
+            
+        diff_iterative_background_vector = np.round(np.abs(barcode_based_background_vector - old_iterative_background_vector),1)
+        diff_iterative_normalization_vector = np.round(np.abs(barcode_based_normalization_vector - old_iterative_normalization_vector),1)
+        self._calibration_zarr.attrs['diff_iterative_normalization_vector'] = diff_iterative_normalization_vector.astype(np.float32).tolist()
+        self._calibration_zarr.attrs['diff_iterative_background_vector'] = diff_iterative_background_vector.astype(np.float32).tolist()
+        self._calibration_zarr.attrs['iterative_normalization_vector'] = barcode_based_normalization_vector.astype(np.float32).tolist()
+        self._calibration_zarr.attrs['iterative_background_vector'] = barcode_based_background_vector.astype(np.float32).tolist()
+        
+        print('---')
+        print('Background')
+        print(diff_iterative_background_vector)
+        print(barcode_based_background_vector)
+        print('Foreground')
+        print(diff_iterative_normalization_vector)
+        print(barcode_based_normalization_vector)
+        print('---')
+        
+        self._iterative_normalization_vector = barcode_based_normalization_vector
+        self._iterative_background_vector = barcode_based_background_vector
+        
+        self._iterative_normalization_loaded = True
+        
+        del df_barcodes_loaded_no_blanks
+        gc.collect()
+            
     def _load_bit_data(self):   
         if self._verbose > 1:    
             print('load raw data')
@@ -467,10 +520,16 @@ class PixelDecoder():
             else:
                 z_plane_shape = self._image_data[:,z_idx,:].shape
                 scaled_pixel_traces = cp.asarray(self._image_data[:,z_idx,:]).reshape(self._n_merfish_bits, -1).astype(cp.float32)
-                
-            scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
-                                                    self._background_vector,
-                                                    self._normalization_vector)
+            
+            if self._iterative_normalization_loaded: 
+                scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
+                                                        self._iterative_background_vector,
+                                                        self._iterative_normalization_vector)
+            elif self._global_normalization_loaded:
+                scaled_pixel_traces = self._scale_pixel_traces(scaled_pixel_traces,
+                                                        self._global_background_vector,
+                                                        self._global_normalization_vector)
+            
             scaled_pixel_traces = self._clip_pixel_traces(scaled_pixel_traces)
             normalized_pixel_traces, pixel_magnitude_trace = self._normalize_pixel_traces(scaled_pixel_traces)
             distance_trace, codebook_index_trace = self._calculate_distances(normalized_pixel_traces,self._decoding_matrix)
@@ -515,8 +574,16 @@ class PixelDecoder():
         else:
             iterable_barcode = range(self._codebook_matrix.shape[0])
         decoded_image = cp.asarray(self._decoded_image, dtype=cp.int16)
-        intensity_image = np.concatenate([np.expand_dims(self._distance_image,axis=0),
-                                         self._scaled_pixel_images],axis=0).transpose(1,2,3,0)
+        if self._optimize_normalization_weights:
+            if self._filter_type == 'lp':
+                intensity_image = np.concatenate([np.expand_dims(self._distance_image,axis=0),
+                                                self._image_data_lp],axis=0).transpose(1,2,3,0)
+            else:
+                intensity_image = np.concatenate([np.expand_dims(self._distance_image,axis=0),
+                                                self._image_data],axis=0).transpose(1,2,3,0)
+        else:
+            intensity_image = np.concatenate([np.expand_dims(self._distance_image,axis=0),
+                                            self._scaled_pixel_images],axis=0).transpose(1,2,3,0)
 
         for barcode_index in iterable_barcode:
             
@@ -546,13 +613,13 @@ class PixelDecoder():
                                                     min_size=minimum_pixels)
                 if self._verbose > 1:
                     print('regionprops table')
+                    
+
                 props = regionprops_table(cp.asnumpy(labeled_image).astype(np.int32),
                                         intensity_image=intensity_image,
-                                        properties=['label',
-                                                    'area',
+                                        properties=['area',
                                                     'centroid',
                                                     'intensity_mean',
-                                                    'intensity_max',
                                                     'moments_normalized',
                                                     'inertia_tensor_eigvals'])
                 
@@ -591,29 +658,19 @@ class PixelDecoder():
                 df_barcode['global_y'] = np.round(pts[:,1],2)
                 df_barcode['global_x'] = np.round(pts[:,2],2)
                 
-                df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
                 df_barcode.rename(columns={'intensity_mean-0': 'distance_mean'}, inplace=True)
-                df_barcode.rename(columns={'intensity_max-0': 'distance_max'}, inplace=True)
                 for i in range(1,self._n_merfish_bits+1):
-                    df_barcode.rename(columns={'intensity_min-'+str(i): 'bit'+str(i).zfill(2)+'_min_intensity'}, inplace=True)
                     df_barcode.rename(columns={'intensity_mean-'+str(i): 'bit'+str(i).zfill(2)+'_mean_intensity'}, inplace=True)
-                    df_barcode.rename(columns={'intensity_max-'+str(i): 'bit'+str(i).zfill(2)+'_max_intensity'}, inplace=True)
     
                 on_bits = on_bits_indices+np.ones(4)
                     
                 signal_mean_columns = [f'bit{int(bit):02d}_mean_intensity' for bit in on_bits]
                 bkd_mean_columns = [f'bit{int(bit):02d}_mean_intensity' for bit in range(1, self._n_merfish_bits+1) if bit not in on_bits]
-                
-                signal_max_columns = [f'bit{int(bit):02d}_max_intensity' for bit in on_bits]
-                bkd_max_columns = [f'bit{int(bit):02d}_max_intensity' for bit in range(1, self._n_merfish_bits+1) if bit not in on_bits]
-                                
+                        
                 df_barcode['signal_mean'] = df_barcode[signal_mean_columns].mean(axis=1)
-                df_barcode['signal_max'] = df_barcode[signal_max_columns].mean(axis=1)
                 df_barcode['bkd_mean'] = df_barcode[bkd_mean_columns].mean(axis=1)
-                df_barcode['bkd_max'] = df_barcode[bkd_max_columns].mean(axis=1)
                 df_barcode['s-b_mean'] = df_barcode['signal_mean'] - df_barcode['bkd_mean']
-                df_barcode['s-b_max'] = df_barcode['signal_max'] - df_barcode['bkd_max']
-                
+ 
                 del props
                 gc.collect()
                 
@@ -651,10 +708,8 @@ class PixelDecoder():
                         print('regionprops table')
                     props = regionprops_table(cp.asnumpy(labeled_image).astype(np.int32),
                                             intensity_image=intensity_image[z_idx,:],
-                                            properties=['label',
-                                                        'area',
+                                            properties=['area',
                                                         'centroid',
-                                                        'intensity_mean',
                                                         'intensity_max',
                                                         'moments_normalized',
                                                         'inertia_tensor_eigvals'])
@@ -695,29 +750,18 @@ class PixelDecoder():
                     df_barcode['global_y'] = np.round(pts[:,1],2)
                     df_barcode['global_x'] = np.round(pts[:,2],2)
           
-                    
-                    df_barcode.rename(columns={'intensity_min-0': 'distance_min'}, inplace=True)
                     df_barcode.rename(columns={'intensity_mean-0': 'distance_mean'}, inplace=True)
-                    df_barcode.rename(columns={'intensity_max-0': 'distance_max'}, inplace=True)
                     for i in range(1,self._n_merfish_bits+1):
-                        df_barcode.rename(columns={'intensity_min-'+str(i): 'bit'+str(i).zfill(2)+'_min_intensity'}, inplace=True)
                         df_barcode.rename(columns={'intensity_mean-'+str(i): 'bit'+str(i).zfill(2)+'_mean_intensity'}, inplace=True)
-                        df_barcode.rename(columns={'intensity_max-'+str(i): 'bit'+str(i).zfill(2)+'_max_intensity'}, inplace=True)
         
                     on_bits = on_bits_indices+np.ones(4)
                         
                     signal_mean_columns = [f'bit{int(bit):02d}_mean_intensity' for bit in on_bits]
                     bkd_mean_columns = [f'bit{int(bit):02d}_mean_intensity' for bit in range(1, self._n_merfish_bits+1) if bit not in on_bits]
-                    
-                    signal_max_columns = [f'bit{int(bit):02d}_max_intensity' for bit in on_bits]
-                    bkd_max_columns = [f'bit{int(bit):02d}_max_intensity' for bit in range(1, self._n_merfish_bits+1) if bit not in on_bits]
-                                    
+                                 
                     df_barcode['signal_mean'] = df_barcode[signal_mean_columns].mean(axis=1)
-                    df_barcode['signal_max'] = df_barcode[signal_max_columns].mean(axis=1)
                     df_barcode['bkd_mean'] = df_barcode[bkd_mean_columns].mean(axis=1)
-                    df_barcode['bkd_max'] = df_barcode[bkd_max_columns].mean(axis=1)
                     df_barcode['s-b_mean'] = df_barcode['signal_mean'] - df_barcode['bkd_mean']
-                    df_barcode['s-b_max'] = df_barcode['signal_max'] - df_barcode['bkd_max']
                     
                     del props
                     gc.collect()
@@ -732,40 +776,42 @@ class PixelDecoder():
                         
                     del df_barcode
                     gc.collect()
-                
-                
+                  
         del decoded_image, intensity_image
         gc.collect()
         cp.get_default_memory_pool().free_all_blocks()
         
-    def save_barcodes(self,
+    def _save_barcodes(self,
                       format: str = 'csv'):
         
         if self._verbose > 1:
             print('save barcodes')
-               
-        decoded_dir_path = self._dataset_path / Path('decoded')
-        decoded_dir_path.mkdir(exist_ok=True)
+        
+        if self._optimize_normalization_weights:
+            decoded_dir_path = self._dataset_path / Path('decode_optimization')
+            decoded_dir_path.mkdir(exist_ok=True)
+        else:
+            decoded_dir_path = self._dataset_path / Path('decoded')
+            decoded_dir_path.mkdir(exist_ok=True)
         
         if not(self._barcodes_filtered):
         
             barcode_path = decoded_dir_path / Path(self._tile_ids[self._tile_idx]+'_decoded_features.' + format)
             self._barcode_path = barcode_path
             if format == 'csv':
-                self._df_barcodes.to_csv(barcode_path)
+                self._df_barcodes.to_csv(barcode_path, index=False)
             else:
-                self._df_barcodes.to_parquet(barcode_path)
-                
-        else:
+                self._df_barcodes.to_parquet(barcode_path, index=False)
             
+        else:
             barcode_path = decoded_dir_path / Path('all_tiles_filtered_decoded_features.' + format)
             self._barcode_path = barcode_path
             if format == 'csv':
-                self._df_filtered_barcodes.to_csv(barcode_path)
+                self._df_filtered_barcodes.to_csv(barcode_path, index=False)
             else:
-                self._df_filtered_barcodes.to_parquet(barcode_path)
+                self._df_filtered_barcodes.to_parquet(barcode_path, index=False)
                 
-    def save_all_barcodes_for_baysor(self):
+    def _reformat_barcodes_for_baysor(self):
         
         decoded_dir_path = self._dataset_path / Path('decoded')
         decoded_dir_path.mkdir(exist_ok=True)
@@ -776,22 +822,28 @@ class PixelDecoder():
             baysor_df['cell_id'] = baysor_df['cell_id'] + 1
             baysor_df.to_csv(baysor_path)
             
-    def load_all_barcodes(self,
+    def _load_all_barcodes(self,
                           format: str = 'csv'):
         
-        decoded_dir_path = self._dataset_path / Path('decoded')
+        if self._optimize_normalization_weights:
+            decoded_dir_path = self._dataset_path / Path('decode_optimization')
+        else:
+            decoded_dir_path = self._dataset_path / Path('decoded')
         tile_files = decoded_dir_path.glob('*.'+format)
         tile_files = sorted(tile_files, key=lambda x: x.name)
         
         if self._verbose >=1:
-            iterable_csv = tqdm(tile_files)
+            iterable_files = tqdm(tile_files,desc='tile',leave=False)
         else:
-            iterable_csv = tile_files
-                     
-        tile_data = [pd.read_csv(csv_file) for csv_file in iterable_csv]      
+            iterable_file = tile_files
+
+        if format == 'csv':
+            tile_data = [pd.read_csv(csv_file) for csv_file in iterable_files]      
+        else:
+            tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
 
         self._df_barcodes_loaded = pd.concat(tile_data)
-        
+                
     @staticmethod
     def calculate_fdr(df, 
                       threshold,
@@ -821,8 +873,8 @@ class PixelDecoder():
         
         return fdr
     
-    def filter_all_barcodes(self,
-                            fdr_target: float = .15):
+    def _filter_all_barcodes(self,
+                            fdr_target: float = .05):
         
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
@@ -939,7 +991,7 @@ class PixelDecoder():
             outlines[cell_id] = np.array(coordinates)
         return outlines
                        
-    def assign_cells(self):
+    def _assign_cells(self):
         try:
             outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.json")
             cell_outlines = self._load_microjson(outlines_path)
@@ -964,8 +1016,7 @@ class PixelDecoder():
             
             self._df_filtered_barcodes['cell_id'] = self._df_filtered_barcodes.apply(check_point, axis=1)
             
-    def remove_duplicates_in_tile_overlap(self, radius: float = 1.0):
-        # Ensure the DataFrame's index is aligned
+    def _remove_duplicates_in_tile_overlap(self, radius: float = 0.75):
         self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
         
         coords = self._df_filtered_barcodes[['global_z', 'global_y', 'global_x']].values
@@ -991,11 +1042,43 @@ class PixelDecoder():
         avg_distance = np.mean(distances) if distances else 0
         dropped_count = len(rows_to_drop)
         
-        if self._verbose == 2:
-            print('Average distance metric of dropped points: ' + str(avg_distance))
+        if self._verbose > 1:
+            print('Average distance metric of dropped points (overlap): ' + str(avg_distance))
             print('Dropped points: ' + str(dropped_count))
             
-    def cleanup(self):
+    def _display_results(self):
+            
+        import napari
+        from qtpy.QtWidgets import QApplication
+        
+        def on_close_callback():
+            viewer.layers.clear()
+            gc.collect()
+        
+        viewer = napari.Viewer()
+        app = QApplication.instance()
+
+        app.lastWindowClosed.connect(on_close_callback)
+        
+        viewer.add_image(self._scaled_pixel_images,
+                        scale=[self._axial_step,self._pixel_size,self._pixel_size],
+                        name='pixels')
+        
+        viewer.add_image(self._decoded_image,
+                        scale=[self._axial_step,self._pixel_size,self._pixel_size],
+                        name='decoded')
+
+        viewer.add_image(self._magnitude_image,
+                        scale=[self._axial_step,self._pixel_size,self._pixel_size],
+                        name='magnitude')
+
+        viewer.add_image(self._distance_image,
+                        scale=[self._axial_step,self._pixel_size,self._pixel_size],
+                        name='distance')
+
+        napari.run()
+            
+    def _cleanup(self):
         
         if self._filter_type == 'lp':
             del self._image_data_lp
@@ -1003,26 +1086,118 @@ class PixelDecoder():
             del self._image_data
             
         del self._scaled_pixel_images, self._decoded_image, self._distance_image, self._magnitude_image
-        del self._codebook_matrix, self._df_codebook, self._decoding_matrix
-        del self._df_barcodes, self._gene_ids
-        
+        # del self._codebook_matrix, self._df_codebook, self._decoding_matrix
+        # del self._gene_ids
+        try:
+            del self._df_barcodes
+        except:
+            pass
         if self._barcodes_filtered:
             del self._df_filtered_barcodes
         
         gc.collect()
         cp.get_default_memory_pool().free_all_blocks()
-    
-    def run_decoding(self,
-                     lowpass_sigma: Sequence[float] = (3,1,1),
-                     distance_threshold: float =.5172,
-                     magnitude_threshold: float = 0.4,
-                     minimum_pixels: int = 21,
-                     skip_extraction: bool = False):
-
+      
+    def decode_one_tile(self,
+                        tile_idx: int = 0,
+                        display_results: bool = True,
+                        use_iterative_normalization: Optional[bool] = False,
+                        lowpass_sigma: Optional[Sequence[float]] = (3,1,1)):
+        
+        self._load_global_normalization_vectors()
+        if not(self._global_normalization_loaded):
+            self._global_normalization_vectors()
+            
+        if use_iterative_normalization:
+            self._load_iterative_normalization_vectors()
+            
+        self._tile_idx = tile_idx
         self._load_bit_data()
         if not(np.any(lowpass_sigma==0)):
             self._lp_filter(sigma=lowpass_sigma)
-        self._decode_pixels(distance_threshold = distance_threshold,
-                            magnitude_threshold = magnitude_threshold)
-        if not(skip_extraction):
-            self._extract_barcodes(minimum_pixels)
+        self._decode_pixels(distance_threshold = self._distance_threshold,
+                            magnitude_threshold = self._magnitude_threshold)
+        if display_results:
+            self._display_results()
+        if not(self._optimize_normalization_weights):
+            self._cleanup()
+        else:
+            self._extract_barcodes()
+            
+    def optimize_normalization_by_decoding(self,
+                                           n_random_tiles: int = 10,
+                                           n_iterations: int = 10):
+        
+        self._optimize_normalization_weights = True
+        
+        if len(self._tile_ids) > n_random_tiles:
+            random_tiles = sample(range(len(self._tile_ids)),n_random_tiles)
+        else:
+            random_tiles = range(len(self._tile_ids))
+            
+        if self._verbose >= 1:
+            iterable_iteration = tqdm(range(n_iterations),desc='iteration',leave=True)
+        else:
+            iterable_iteration = range(n_iterations)
+            
+           
+        self._load_global_normalization_vectors()
+        for iteration in iterable_iteration:
+            if self._verbose >= 1:
+                iterable_tiles = tqdm(random_tiles,desc='tile',leave=True)
+            else:
+                iterable_tiles = random_tiles
+            if iteration > 0:
+                self._load_iterative_normalization_vectors()
+            for tile_idx in iterable_tiles:
+                self.decode_one_tile(tile_idx=tile_idx,
+                                    display_results=False)
+                self._save_barcodes(format='parquet')
+            self._load_all_barcodes(format='parquet')
+            print('---')
+            print('Total # of barcodes: '+str(len(self._df_barcodes_loaded)))
+            print('---')
+            self._iterative_normalization_vectors()
+        self._cleanup()
+        self._optimize_normalization_weights = False
+            
+    def decode_all_tiles(self,
+                         assign_to_cells: bool = True,
+                         prep_for_baysor: bool = True,
+                         lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
+                         minimum_pixels: Optional[float] = 27.0,
+                         fdr_target: Optional[float]= 0.05):
+        
+        if self._verbose >= 1:
+            iterable_tile_id = enumerate(tqdm(self._tile_ids, desc='tile', leave=False))
+        else:
+            iterable_tile_id = enumerate(self._tile_ids)
+            
+        self._optimize_normalization_weights = False
+        self._load_iterative_normalization_vectors()
+        
+        if not(self._iterative_normalization_loaded):
+            raise ValueError('Perform iterative normalization before decoding.')
+            
+        for tile_idx, _ in iterable_tile_id:
+            self._tile_idx = tile_idx
+            self._load_bit_data()
+            if not(np.any(lowpass_sigma==0)):
+                self._lp_filter(sigma=lowpass_sigma)
+            self._decode_pixels(distance_threshold = self._distance_threshold,
+                                magnitude_threshold = self._magnitude_threshold)
+            self._extract_barcodes(minimum_pixels=minimum_pixels)
+            self._save_barcodes(format='parquet')
+            self._cleanup()
+            
+        self._load_all_barcodes()
+        self._verbose = 2
+        self._filter_all_barcodes(fdr_target=fdr_target)
+        self._verbose = 1
+        self._remove_duplicates_in_tile_overlap()
+        if assign_to_cells:
+            self._assign_cells()
+        self._save_barcodes(format='parquet')
+        if prep_for_baysor:
+            self._reformat_barcodes_for_baysor()
+        self._cleanup()
