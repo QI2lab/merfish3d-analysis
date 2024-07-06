@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import cupy as cp
 import pandas as pd
 from pathlib import Path
 from wf_merfish.postprocess.PixelDecoder import PixelDecoder
@@ -250,10 +251,51 @@ def test_load_codebook(temp_dataset, mocker, mock_codebook, include_blanks, expe
     assert decoder._gene_ids == expected_gene_ids
     assert decoder._blank_count == expected_blank_count
 
-# def test_normalize_codebook(mock_pixel_decoder):
-#     # Ensure _normalize_codebook method returns correct shape
-#     result = mock_pixel_decoder._normalize_codebook()
-#     assert result.shape == (100, 16)
+
+def calculate_expected_normalized_codebook(mock_codebook, n_positive_bits, merfish_bits):
+    codebook_array = np.array([row[1:merfish_bits+1] for row in mock_codebook], dtype=float)
+    normalized_codebook = codebook_array / np.sqrt(n_positive_bits)
+    return cp.asarray(normalized_codebook)
+
+@pytest.mark.parametrize("include_errors", [False])
+def test_normalize_codebook(temp_dataset, mocker, mock_codebook, include_errors):
+    n_positive_bits = 4  # Example value, adjust as needed
+    expected_normalized_codebook = calculate_expected_normalized_codebook(mock_codebook, n_positive_bits, 16)
+    
+    # Print the expected normalized codebook
+    print("Expected Normalized Codebook:")
+    print(expected_normalized_codebook)
+
+    # Mock _calibration_zarr to include the known codebook array
+    mock_calibration_zarr = mocker.MagicMock()
+    mock_calibration_zarr.attrs = {'codebook': mock_codebook}
+
+    # Patch the PixelDecoder methods to avoid actual file I/O
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True, side_effect=lambda self: setattr(self, "_codebook_matrix", expected_normalized_codebook))
+
+    # Patch zarr.open to return the mocked _calibration_zarr
+    mocker.patch('zarr.open', return_value=mock_calibration_zarr)
+
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,  # or False, depending on what you need for your test
+        merfish_bits=16,
+        verbose=1
+    )
+
+    # Normalize the codebook
+    normalized_codebook = decoder._normalize_codebook(include_errors)
+    
+    print("Normalized Codebook:")
+    print(normalized_codebook)
+
+    # Compare the results
+    np.testing.assert_almost_equal(cp.asnumpy(normalized_codebook), cp.asnumpy(expected_normalized_codebook))
 
 # def test_lp_filter(mock_pixel_decoder):
 #     # Ensure _lp_filter method processes image data correctly
