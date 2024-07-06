@@ -106,6 +106,7 @@ ENV/
 .vscode/
 *.pyc
 jobs/
+BioProtean PL024 files/
 examples/simulated_images
 src/wf_merfish/test_postprocess.py
 src/wf_merfish/test_roundalignment.py
