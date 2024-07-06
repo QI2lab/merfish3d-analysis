@@ -251,7 +251,6 @@ def test_load_codebook(temp_dataset, mocker, mock_codebook, include_blanks, expe
     assert decoder._gene_ids == expected_gene_ids
     assert decoder._blank_count == expected_blank_count
 
-
 def calculate_expected_normalized_codebook(mock_codebook, n_positive_bits, merfish_bits):
     codebook_array = np.array([row[1:merfish_bits+1] for row in mock_codebook], dtype=float)
     normalized_codebook = codebook_array / np.sqrt(n_positive_bits)
@@ -261,10 +260,6 @@ def calculate_expected_normalized_codebook(mock_codebook, n_positive_bits, merfi
 def test_normalize_codebook(temp_dataset, mocker, mock_codebook, include_errors):
     n_positive_bits = 4  # Example value, adjust as needed
     expected_normalized_codebook = calculate_expected_normalized_codebook(mock_codebook, n_positive_bits, 16)
-    
-    # Print the expected normalized codebook
-    print("Expected Normalized Codebook:")
-    print(expected_normalized_codebook)
 
     # Mock _calibration_zarr to include the known codebook array
     mock_calibration_zarr = mocker.MagicMock()
@@ -291,11 +286,86 @@ def test_normalize_codebook(temp_dataset, mocker, mock_codebook, include_errors)
     # Normalize the codebook
     normalized_codebook = decoder._normalize_codebook(include_errors)
     
-    print("Normalized Codebook:")
-    print(normalized_codebook)
-
     # Compare the results
     np.testing.assert_almost_equal(cp.asnumpy(normalized_codebook), cp.asnumpy(expected_normalized_codebook))
+    
+    
+@pytest.fixture
+def mock_normalization_vectors():
+    return {
+        'global_normalization': [0.5] * 16,
+        'global_background': [0.1] * 16
+    }
+
+def test_load_global_normalization_vectors_success(temp_dataset, mocker, mock_normalization_vectors):
+    # Mock _calibration_zarr to include the known normalization vectors
+    mock_calibration_zarr = mocker.MagicMock()
+    mock_calibration_zarr.attrs = mock_normalization_vectors
+
+    # Patch the PixelDecoder methods to avoid actual file I/O
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", autospec=True)
+
+    # Patch zarr.open to return the mocked _calibration_zarr
+    mocker.patch('zarr.open', return_value=mock_calibration_zarr)
+    # Patch cp.asarray to return a cupy array from the mock normalization vectors
+    mocker.patch('cupy.asarray', side_effect=lambda x: cp.array(x))
+
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,
+        merfish_bits=16,
+        verbose=1
+    )
+
+    # Call the method
+    decoder._load_global_normalization_vectors()
+
+    # Assertions
+    assert decoder._global_normalization_loaded is True
+    assert cp.array_equal(decoder._global_background_vector, cp.array(mock_normalization_vectors['global_background']))
+    assert cp.array_equal(decoder._global_normalization_vector, cp.array(mock_normalization_vectors['global_normalization']))
+
+def test_load_global_normalization_vectors_fallback(temp_dataset, mocker):
+    # Mock _calibration_zarr without the normalization vectors
+    mock_calibration_zarr = mocker.MagicMock()
+    mock_calibration_zarr.attrs = {}
+
+    # Patch the PixelDecoder methods to avoid actual file I/O
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", autospec=True)
+
+    # Patch zarr.open to return the mocked _calibration_zarr
+    mocker.patch('zarr.open', return_value=mock_calibration_zarr)
+    # Patch cp.asarray to raise an exception when trying to access missing attributes
+    mocker.patch('cupy.asarray', side_effect=KeyError)
+
+    # Patch _global_normalization_vectors to check if it's called
+    mock_global_normalization_vectors = mocker.patch.object(PixelDecoder, "_global_normalization_vectors", autospec=True)
+
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,
+        merfish_bits=16,
+        verbose=1
+    )
+
+    # Call the method
+    decoder._load_global_normalization_vectors()
+
+    # Assertions
+    assert mock_global_normalization_vectors.called
+
 
 # def test_lp_filter(mock_pixel_decoder):
 #     # Ensure _lp_filter method processes image data correctly
