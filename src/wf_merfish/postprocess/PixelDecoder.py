@@ -1080,14 +1080,19 @@ class PixelDecoder():
             
     def _cleanup(self):
         
-        if self._filter_type == 'lp':
-            del self._image_data_lp
-        else:
-            del self._image_data
-            
-        del self._scaled_pixel_images, self._decoded_image, self._distance_image, self._magnitude_image
-        # del self._codebook_matrix, self._df_codebook, self._decoding_matrix
-        # del self._gene_ids
+        try:
+            if self._filter_type == 'lp':
+                del self._image_data_lp
+            else:
+                del self._image_data
+        except:
+            pass
+        
+        try:
+            del self._scaled_pixel_images, self._decoded_image, self._distance_image, self._magnitude_image
+        except:
+            pass
+
         try:
             del self._df_barcodes
         except:
@@ -1190,7 +1195,7 @@ class PixelDecoder():
             self._save_barcodes(format='parquet')
             self._cleanup()
             
-        self._load_all_barcodes()
+        self._load_all_barcodes(format='parquet')
         self._verbose = 2
         self._filter_all_barcodes(fdr_target=fdr_target)
         self._verbose = 1

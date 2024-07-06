@@ -6,9 +6,10 @@ from pathlib import Path
 import matplotlib.style as mplstyle
 mplstyle.use(['dark_background', 'ggplot', 'fast'])
 
-# modify these line
+# modify these two lines
 data_path = Path('/mnt/data/bartelle/20240425_ECL_48CryoB_1_PL025') # should be top level path for dataset
 data_to_use = 'sum_corrected_pixels' # options: 'sum_corrected_pixels' or 'sum_decon_pixels'
+
 # 'sum_corrected_pixels' uses spot intensities from the camera after offset and gain correction
 # 'sum_decon_pixels' uses spot intensities after deconvolution
 # 'sum_corrected_pixels' is only available on datasets generated with v0.1.4 or later.
