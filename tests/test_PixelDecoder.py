@@ -6,7 +6,24 @@ from wf_merfish.postprocess.PixelDecoder import PixelDecoder
 
 @pytest.fixture
 def mock_codebook():
-    return np.random.randint(0, 2, (100, 16))
+    return [
+        ['genes001', 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        ['genes002', 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+        ['genes003', 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes004', 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ['genes005', 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        ['genes006', 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes007', 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes008', 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
+        ['genes009', 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes010', 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+        ['Blank01', 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        ['Blank02', 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        ['Blank03', 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        ['Blank04', 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+        ['Blank05', 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+    ]
+    
 
 @pytest.fixture
 def mock_image_data():
@@ -131,9 +148,107 @@ def test_load_experiment_parameters(temp_dataset, mocker):
     assert decoder._ri == 1.4
     assert decoder._num_on_bits == 4
 
-# def test_load_codebook(mock_pixel_decoder):
-#     # Ensure _load_codebook method runs without errors
-#     mock_pixel_decoder._load_codebook()
+@pytest.mark.parametrize("include_blanks,expected_df,expected_codebook_matrix,expected_gene_ids,expected_blank_count", [
+    (True, 
+     pd.DataFrame([
+        ['genes001', 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        ['genes002', 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+        ['genes003', 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes004', 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ['genes005', 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        ['genes006', 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes007', 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes008', 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
+        ['genes009', 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes010', 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+        ['Blank01', 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        ['Blank02', 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        ['Blank03', 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        ['Blank04', 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+        ['Blank05', 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+    ], dtype=object).astype({1: int, 2: int, 3: int, 4: int, 5: int, 6: int,
+                             7: int, 8: int, 9: int, 10: int, 11: int, 12: int,
+                             13: int, 14: int, 15: int, 16: int, 17: int, 18: int}),
+     np.array([
+        [0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+        [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+    ]),
+     ['genes001', 'genes002', 'genes003', 'genes004', 'genes005', 'genes006',
+      'genes007', 'genes008', 'genes009', 'genes010', 'Blank01', 'Blank02',
+      'Blank03', 'Blank04', 'Blank05'],
+     5),
+    (False, 
+     pd.DataFrame([
+        ['genes001', 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        ['genes002', 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+        ['genes003', 1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes004', 0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ['genes005', 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        ['genes006', 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes007', 0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        ['genes008', 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
+        ['genes009', 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        ['genes010', 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0]
+    ], dtype=object).astype({1: int, 2: int, 3: int, 4: int, 5: int, 6: int,
+                             7: int, 8: int, 9: int, 10: int, 11: int, 12: int,
+                             13: int, 14: int, 15: int, 16: int, 17: int, 18: int}),
+     np.array([
+        [0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+        [1, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 1, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0]
+    ]),
+     ['genes001', 'genes002', 'genes003', 'genes004', 'genes005', 'genes006',
+      'genes007', 'genes008', 'genes009', 'genes010'],
+     5)
+])
+def test_load_codebook(temp_dataset, mocker, mock_codebook, include_blanks, expected_df, expected_codebook_matrix, expected_gene_ids, expected_blank_count):
+    # Mock _calibration_zarr to include the known codebook array
+    mock_calibration_zarr = mocker.MagicMock()
+    mock_calibration_zarr.attrs = {'codebook': mock_codebook}
+    
+    # Patch zarr.open to return the mocked _calibration_zarr
+    mocker.patch('zarr.open', return_value=mock_calibration_zarr)
+    
+    # Patch the PixelDecoder methods to avoid actual file I/O
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", autospec=True)
+    
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=include_blanks,
+        merfish_bits=16,
+        verbose=1
+    )
+    
+    # Assertions
+    pd.testing.assert_frame_equal(decoder._df_codebook.reset_index(drop=True), expected_df.reset_index(drop=True))
+    assert np.array_equal(decoder._codebook_matrix, expected_codebook_matrix)
+    assert decoder._gene_ids == expected_gene_ids
+    assert decoder._blank_count == expected_blank_count
 
 # def test_normalize_codebook(mock_pixel_decoder):
 #     # Ensure _normalize_codebook method returns correct shape
