@@ -77,10 +77,59 @@ def test_parse_dataset(temp_dataset, mocker):
     
     assert decoder._tile_ids == expected_tile_ids
     assert decoder._bit_ids == expected_bit_ids
+    
 
-# def test_load_experiment_parameters(mock_pixel_decoder):
-#     # Ensure _load_experiment_parameters method runs without errors
-#     mock_pixel_decoder._load_experiment_parameters()
+def test_load_experiment_parameters(temp_dataset, mocker):
+    
+    mocker.patch.object(PixelDecoder, "_load_experiment_parameters", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", return_value=np.random.rand(100, 16), autospec=True)
+    
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,
+        merfish_bits=16,
+        verbose=1
+    )
+        
+    # Assertions
+    expected_tile_ids = ['tile0.zarr', 'tile1.zarr', 'tile2.zarr']
+    expected_bit_ids = [f'bit{i}.zarr' for i in range(16)]
+    
+    assert decoder._tile_ids == expected_tile_ids
+    assert decoder._bit_ids == expected_bit_ids
+    
+
+def test_load_experiment_parameters(temp_dataset, mocker):
+    # Mock zarr.open to avoid actual file I/O
+    mock_zarr_open = mocker.patch('zarr.open', autospec=True)
+    
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", return_value=np.random.rand(100, 16), autospec=True)
+    
+    # Initialize the PixelDecoder with the temp_dataset path
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,
+        merfish_bits=16,
+        verbose=1
+    )
+    
+    # Assertions
+    expected_path = temp_dataset / "calibrations.zarr"
+    mock_zarr_open.assert_called_once_with(expected_path, mode='a')
+    
+    assert decoder._na == 1.35
+    assert decoder._ri == 1.4
+    assert decoder._num_on_bits == 4
 
 # def test_load_codebook(mock_pixel_decoder):
 #     # Ensure _load_codebook method runs without errors
