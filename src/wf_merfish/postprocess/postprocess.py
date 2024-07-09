@@ -92,11 +92,13 @@ def postprocess(dataset_path: Path,
         pixel_size = 2.4 / (60 * (165/180))
         binning = 2
         e_per_ADU = .03 # from calibration done by Peter and Jeff
+        flir_qe = [.82,.82,.82,.82,.82,.7,.45]
     elif camera == 'bsi':
-        pixel_size = 6.5 / (60 * (165/180))
+        pixel_size = 6.5 / (60 * (200/180))
         binning = 1
-        e_per_ADU = 1 # assumes 11-bit sensitity mode
+        e_per_ADU = 1 # assumes 11-bit sensitity or 12-bit CMS mode
         bsi_offset = 100
+        bsi_qe = [.9,.9,.9,.9,.9,.95,.8]
     
     axial_step = .315 #TO DO: fix to load from file.
     tile_overlap = 0.2 #TO DO: fix to load from file.
@@ -405,18 +407,21 @@ def postprocess(dataset_path: Path,
                                 if run_shading_correction:
                                     data = correct_shading(noise_map,darkfield_image,shading_images[ch_idx],raw_data)
                                     offset = np.median(noise_map)
+                                    qe = flir_qe
                                 elif not(run_shading_correction) and (run_hotpixel_correction):
                                     data = replace_hot_pixels(noise_map,raw_data)
                                     offset = np.median(noise_map)
+                                    qe = flir_qe
                                 elif camera=='bsi':
                                     data = raw_data.copy()
                                     offset = bsi_offset
+                                    qe = bsi_qe
                                     del raw_data
                                     gc.collect()
                                     
                                 corrected_data = (data.astype(np.float32)-offset)
                                 corrected_data[corrected_data<0]=0
-                                corrected_data = (corrected_data * float(e_per_ADU))
+                                corrected_data = (corrected_data * float(e_per_ADU)) / qe[ch_idx]
                                 
                                 if camera=='flir' and (run_hotpixel_correction):
                                     corrected_data = replace_hot_pixels(np.max(corrected_data,axis=0),
