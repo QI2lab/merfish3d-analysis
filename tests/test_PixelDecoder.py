@@ -31,6 +31,15 @@ def mock_image_data():
     return np.random.rand(16, 256, 256)
 
 @pytest.fixture
+def mock_tile_ids():
+    return ['tile001', 'tile002', 'tile003', 'tile004', 'tile005']
+
+@pytest.fixture
+def mock_bit_ids():
+    return ['bit01', 'bit02', 'bit03', 'bit04', 'bit05', 'bit06', 'bit07', 'bit08', 'bit09', 'bit10', 'bit11', 'bit12', 'bit13', 'bit14', 'bit15', 'bit16']
+
+
+@pytest.fixture
 def mock_pixel_decoder(mock_codebook, mock_image_data,mocker):
     with mocker.patch('wf_merfish.postprocess.PixelDecoder._parse_dataset'), \
          mocker.patch('wf_merfish.postprocess.PixelDecoder._load_experiment_parameters'), \
@@ -53,26 +62,29 @@ def mock_pixel_decoder(mock_codebook, mock_image_data,mocker):
         
         return decoder
     
-def create_dataset_structure(base_path):
+def create_dataset_structure(base_path, mock_tile_ids, mock_bit_ids):
     readouts_path = base_path / 'readouts'
     readouts_path.mkdir(parents=True, exist_ok=True)
+    
+    tile_ids = mock_tile_ids
+    bit_ids = mock_bit_ids
 
     # Create tile directories
-    for tile_idx in range(3):  # Assuming 3 tiles for this example
-        tile_path = readouts_path / f'tile{tile_idx}.zarr'
+    for tile_id in tile_ids:  # Assuming 3 tiles for this example
+        tile_path = readouts_path / Path(tile_id+'.zarr')
         tile_path.mkdir(parents=True, exist_ok=True)
         
         # Create bit directories
-        for bit_idx in range(16):  # Assuming 16 bits
-            bit_path = tile_path / f'bit{bit_idx}.zarr'
+        for bit_id in bit_ids:  # Assuming 16 bits
+            bit_path = tile_path / Path(bit_id+'.zarr')
             bit_path.mkdir(parents=True, exist_ok=True)
 
 @pytest.fixture
-def temp_dataset(tmp_path):
-    create_dataset_structure(tmp_path)
+def temp_dataset(tmp_path, mock_tile_ids, mock_bit_ids):
+    create_dataset_structure(tmp_path, mock_tile_ids, mock_bit_ids)
     return tmp_path
 
-def test_parse_dataset(temp_dataset, mocker):
+def test_parse_dataset(temp_dataset, mocker, mock_tile_ids, mock_bit_ids):
     
     mocker.patch.object(PixelDecoder, "_load_experiment_parameters", autospec=True)
     mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
@@ -90,13 +102,12 @@ def test_parse_dataset(temp_dataset, mocker):
     )
         
     # Assertions
-    expected_tile_ids = ['tile0.zarr', 'tile1.zarr', 'tile2.zarr']
-    expected_bit_ids = [f'bit{i}.zarr' for i in range(16)]
+    expected_tile_ids = mock_tile_ids
+    expected_bit_ids = mock_bit_ids
     
     assert decoder._tile_ids == expected_tile_ids
     assert decoder._bit_ids == expected_bit_ids
     
-
 def test_load_experiment_parameters(temp_dataset, mocker):
     
     mocker.patch.object(PixelDecoder, "_load_experiment_parameters", autospec=True)
@@ -366,7 +377,95 @@ def test_load_global_normalization_vectors_fallback(temp_dataset, mocker):
     # Assertions
     assert mock_global_normalization_vectors.called
 
+# Function to generate matrices with known percentiles
+def generate_matrices_with_known_percentiles():
+    shape = (3, 512, 512)
+    num_tiles = 5
+    num_bits = 16
 
+    matrices = np.zeros((num_tiles, num_bits, *shape), dtype=np.float32)
+    low_value = 150
+    high_value = 1000
+    noise_sigma = 50
+
+    for bit_idx in range(num_bits):
+        for tile_idx in range(num_tiles):
+            matrix = np.zeros(shape, dtype=np.float32)
+
+            # Add low value to all pixels
+            matrix += low_value
+
+            # Add high value to 30% of pixels
+            high_indices = np.random.choice(matrix.size, size=int(matrix.size * 0.3), replace=False)
+            matrix.flat[high_indices] += high_value
+
+            # Add Gaussian noise
+            matrix += np.random.normal(0, noise_sigma, size=matrix.shape)
+
+            matrices[tile_idx, bit_idx, :] = matrix
+
+    # Calculate expected percentiles
+    expected_background_vector = np.percentile(matrices, 10, axis=(0, 2, 3))
+    expected_normalization_vector = np.percentile(matrices, 90, axis=(0, 2, 3))
+    
+    return matrices, expected_background_vector, expected_normalization_vector
+
+@pytest.fixture
+def static_image_data():
+    return generate_matrices_with_known_percentiles()
+
+def test_global_normalization_vectors(temp_dataset, mocker, static_image_data, mock_tile_ids, mock_bit_ids):
+    images, expected_background_vector, expected_normalization_vector = static_image_data
+
+    # Mock necessary PixelDecoder attributes and methods
+    mock_calibration_zarr = mocker.MagicMock()
+    mock_calibration_zarr.attrs = {}
+
+    mocker.patch.object(PixelDecoder, "_parse_dataset", autospec=True)
+    mocker.patch.object(PixelDecoder, "_load_codebook", autospec=True)
+    mocker.patch.object(PixelDecoder, "_normalize_codebook", autospec=True)
+    mocker.patch('zarr.open', return_value=mock_calibration_zarr)
+
+    decoder = PixelDecoder(
+        dataset_path=temp_dataset,
+        exp_type='3D',
+        use_mask=False,
+        z_range=None,
+        include_blanks=True,
+        merfish_bits=16,
+        verbose=1
+    )
+
+    decoder._tile_ids = mock_tile_ids
+    decoder._bit_ids = mock_bit_ids
+    decoder._readout_dir_path = Path("/mock/path/to/readouts")
+
+    def mock_zarr_open(path, mode='r'):
+        class MockZarr:
+            def __init__(self, data):
+                self.data = data
+                self.attrs = {
+                    'registered_ufish_data': data,
+                    'registered_decon_data': data
+                }
+                
+            def __getitem__(self, key):
+                return self.data
+
+        tile_idx = int(path.parts[-2].split('tile')[-1]) - 1
+        bit_idx = int(path.parts[-1].split('bit')[-1]) - 1
+        return MockZarr(images[tile_idx, bit_idx, :])
+
+    mocker.patch('zarr.open', mock_zarr_open)
+
+    decoder._global_normalization_vectors()
+    
+    assert decoder._global_normalization_loaded is True
+    np.testing.assert_almost_equal(cp.asnumpy(decoder._global_background_vector), expected_background_vector, decimal=6)
+    np.testing.assert_almost_equal(cp.asnumpy(decoder._global_normalization_vector), expected_normalization_vector, decimal=6)
+
+
+        
 # def test_lp_filter(mock_pixel_decoder):
 #     # Ensure _lp_filter method processes image data correctly
 #     mock_pixel_decoder._lp_filter(sigma=(2, 1, 1))
