@@ -21,19 +21,19 @@ mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.02 p
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-## qi2lab MERFISH zarr layout v0.1
+## qi2lab MERFISH zarr layout v0.2
 <details>
 <summary>file format</summary>
   
 - /project_root
-  - /calibrations.zarr
+  - /calibrations.zarr (calibration information)
     - .zattrs
       - <exp_codebook> (with blank codes)
       - <exp_order> (e.g. round 0 -> codebook bits 0,1)
       - <metadata> (objective NA, channels used, etc...)
     - <camera_noise_map> (used for hotpixel correction)
     - <psf_data> (calculated based on experiment metadata)
-  - /polyDT
+  - /polyDT (raw and processed image data for polyDT label)
     - /tile000
       - /round0000.zarr
         - .zattrs
@@ -62,7 +62,7 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
     - /tile001
     - ...
     - /tileNNN
-  - /readouts
+  - /readouts (raw and processed image data for readout bits)
     - /tile0000
       - /bit00.zarr
         - .zattrs
@@ -77,24 +77,26 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
       - /bit01.zarr
       - ...
       - /bitNN.zarr
-  - /ufish_localizations
+  - /ufish_localizations (ufish spot predictions, can be useful for diagnostics)
     - /tile0000
       - bit01.parquet
       - bitNN.parquet
     - /tile0001
     - ....
     - /tileNNNN
-  - /decoded
-    - tile0000_decoded_features.csv
+  - /decoded (decoding results)
+    - tile0000_decoded_features.parquet
     - ...
-    - tileNNNN_decoded_features.csv
+    - tileNNNN_decoded_features.parquet
     - all_tiles_filtered_decoded_features.parquet
-  - /fused
+  - /decoded_optimization (temporary files used during iterative optimizing for normalization factors)
+    - tileNNNN_decoded_features.parquet
+  - /fused (fused, down-sampled polyDT image)
     - /fused.zarr
       - Either one of:
         - <fused_iso_all_zyx> (polyDT and readouts deconvolved, registered data fused at isotropic voxel spacing)
         - <fused_iso_polyDT_zyx> (polyDT deconvolved, registered data fused at isotropic voxel spacing)
-  - /segmentation
+  - /segmentation (segmentation and spots-to-cell assignment results)
     - /cellpose
       - cell_centroids.parquet (yx centroid for each cell in maximum Z projection of cellpose mask prediction)
       - cell_outlines.json (yx polygons for each cell in maximum Z projection of cellpose mask prediction)
@@ -104,6 +106,7 @@ Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` a
       - baysor_filtered_genes.parquet (gene ID, global zyx position, cell assignment, and confidence for all tiles)
       - segmentation_polygons.json (yx polygons for each cell determined by Baysor. GeoJSON format.)
       - diagnostic outputs (see Baysor repository for explanations)
+  - /mtx_output (mtx formatted output of genes assigned to cells)
 
 </details>
       
