@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 '''
 qi2lab WF MERFISH / smFISH processing
-Microscope post-processing v0.1.3
+Microscope post-processing v0.2.0
 
 qi2lab LED scope MERFISH post-processing
 - Rewrite raw data in compressed Zarr in qi2lab MERFISH format
@@ -11,7 +11,6 @@ qi2lab LED scope MERFISH post-processing
 - Mask all potential RNA spots using U-FISH package
 - Segment polyDT using Cellpose for guess at cell boundaries
 - Decode MERFISH spots on GPU 
-    - TO DO: help user determine optimal normalization and decoding settings
     - TO DO: Process smFISH bits if requested
 - Assign RNA to Cellpose cell outlines in global coordinate system
 - Refine cell boundaries using Baysor in global coordinate system
@@ -21,6 +20,7 @@ qi2lab LED scope MERFISH post-processing
 - TO DO: docstrings and comments
 
 Change log:
+Shepherd 07/24 - changes to automate finding normalizations for decoding
 Shepherd 05/24 - rework for different stitching and cell outline strategy
 Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
                  rework function for explicit flags and parameter dictionaries.
