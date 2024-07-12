@@ -1,8 +1,5 @@
 from wf_merfish.postprocess.postprocess import postprocess
 from pathlib import Path
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, message="Dask configuration key 'distributed.comm.recent-messages-log-length' has been deprecated; please use 'distributed.admin.low-level-log-length' instead")
-
 
 if __name__ == '__main__':
     
@@ -12,15 +9,15 @@ if __name__ == '__main__':
     noise_map_path = Path('/home/qi2lab/Documents/github/wf-merfish/hot_pixel_image.tif')
 
     camera = 'flir'
-    write_raw_camera_data = False
+    write_raw_camera_data = True
     write_polyDT_tiff = False
     run_hotpixel_correction = True
     run_shading_correction = False
-    run_tile_registration = False
-    run_global_registration =  False
+    run_tile_registration = True
+    run_global_registration =  True
     global_registration_parameters = {'data_to_fuse': 'polyDT', # 'all' or 'polyDT'
                                     'parallel_fusion': True}
-    run_cellpose = False
+    run_cellpose = True
     cellpose_parameters = {'diam_mean_pixels': 30,
                             'flow_threshold': 0.6,
                             'normalization': [10,80]}
