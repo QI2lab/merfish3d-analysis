@@ -1,6 +1,6 @@
 # merfish3d-analysis
 
-_WARNING: alpha software._ We are sharing this early in case it is useful to other recent groups. Please expect breaking changes.
+_WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes. Examples of running the package are found in `/Examples`.
 
 GPU accelerated post-processing for 3D MERFISH data generated using qi2lab microscopes. This package currently **Linux only** due to RAPIDS.AI package availabilty.
 
