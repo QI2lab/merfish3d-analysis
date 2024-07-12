@@ -116,9 +116,6 @@ class PixelDecoder():
 
         self._df_codebook = pd.DataFrame(self._calibration_zarr.attrs['codebook'])
         self._df_codebook.fillna(0, inplace=True)
-        column_to_check = 1
-        if not self._df_codebook[column_to_check].apply(lambda x: isinstance(x, int)).all():
-            self._df_codebook.drop(columns=[column_to_check], inplace=True)
             
         self._blank_count = self._df_codebook[0].str.lower().str.startswith('blank').sum()
         
