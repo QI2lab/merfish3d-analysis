@@ -123,3 +123,6 @@ src/wf_merfish/test_sitk_transform.py
 src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
 src/wf_merfish/utils/__pycache__/_dataio.cpython-310.pyc
 src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
+run_postprocessing.py
+test_pixeldecode.py
+test_round_alignment.py
