@@ -1,11 +1,8 @@
-# wf-merfish
+# merfish3d-analysis
 
-[![License](https://img.shields.io/pypi/l/wf-merfish.svg?color=green)](https://github.com/dpshepherd/wf-merfish/main/LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/wf-merfish.svg?color=green)](https://pypi.org/project/wf-merfish)
-[![Python Version](https://img.shields.io/pypi/pyversions/wf-merfish.svg?color=green)](https://python.org)
-[![CI](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml/badge.svg)](https://github.com/dpshepherd/wf-merfish/actions/workflows/ci.yml)
+_WARNING: alpha software._ We are sharing this early in case it is useful to other recent groups. Please expect breaking changes.
 
-GPU accelerated post-processing for qi2lab 3D MERFISH. This package currently Linux only due to RAPIDS.AI package availabilty.
+GPU accelerated post-processing for 3D MERFISH data generated using qi2lab microscopes. This package currently **Linux only** due to RAPIDS.AI package availabilty.
 
 ## Installation
 
