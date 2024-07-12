@@ -1,5 +1,8 @@
 from wf_merfish.postprocess.postprocess import postprocess
 from pathlib import Path
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message="Dask configuration key 'distributed.comm.recent-messages-log-length' has been deprecated; please use 'distributed.admin.low-level-log-length' instead")
+
 
 if __name__ == '__main__':
     
@@ -21,8 +24,9 @@ if __name__ == '__main__':
     cellpose_parameters = {'diam_mean_pixels': 30,
                             'flow_threshold': 0.6,
                             'normalization': [10,80]}
-    run_tile_decoding = False
-    tile_decoding_parameters = {'minimum_pixels': 27,
+    run_tile_decoding = True
+    tile_decoding_parameters = {'exp_type': '3D',
+                                'minimum_pixels': 27,
                                 'fdr_target': .15}
     # smfish_parameters = {'bits': [17,18], 'threshold': -1}
     run_baysor = True

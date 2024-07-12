@@ -327,14 +327,15 @@ class PixelDecoder():
         self._calibration_zarr.attrs['iterative_normalization_vector'] = barcode_based_normalization_vector.astype(np.float32).tolist()
         self._calibration_zarr.attrs['iterative_background_vector'] = barcode_based_background_vector.astype(np.float32).tolist()
         
-        print('---')
-        print('Background')
-        print(diff_iterative_background_vector)
-        print(barcode_based_background_vector)
-        print('Foreground')
-        print(diff_iterative_normalization_vector)
-        print(barcode_based_normalization_vector)
-        print('---')
+        if self._verbose > 1:
+            print('---')
+            print('Background')
+            print(diff_iterative_background_vector)
+            print(barcode_based_background_vector)
+            print('Foreground')
+            print(diff_iterative_normalization_vector)
+            print(barcode_based_normalization_vector)
+            print('---')
         
         self._iterative_normalization_vector = barcode_based_normalization_vector
         self._iterative_background_vector = barcode_based_background_vector
@@ -1159,9 +1160,10 @@ class PixelDecoder():
                                     display_results=False)
                 self._save_barcodes(format='parquet')
             self._load_all_barcodes(format='parquet')
-            print('---')
-            print('Total # of barcodes: '+str(len(self._df_barcodes_loaded)))
-            print('---')
+            if self._verbose > 1:
+                print('---')
+                print('Total # of barcodes: '+str(len(self._df_barcodes_loaded)))
+                print('---')
             self._iterative_normalization_vectors()
         self._cleanup()
         self._optimize_normalization_weights = False

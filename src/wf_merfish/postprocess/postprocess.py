@@ -1,16 +1,21 @@
 #!/usr/bin/env python
 '''
-qi2lab WF MERFISH / smFISH processing
+qi2lab 3D MERFISH / iterative smFISH processing
 Microscope post-processing v0.2.0
+This script is specifically for qi2lab widefield microscopes and assume use of
+qi2lab microscope control software (www.github.com/qi2lab/iterativeFISH-acquisition)
 
-qi2lab LED scope MERFISH post-processing
-- Rewrite raw data in compressed Zarr in qi2lab MERFISH format
+Overview
+- Rewrite raw NDTIFF data in compressed Zarr in qi2lab MERFISH format
 - Correct hot pixels or corrects illumination shading
+- Convert camera counts to photons
 - Calculate registration across rounds for each tile for decoding
-- Calculate registration across tiles for global coordinates
+- Deconvolve photon-converted data
 - Mask all potential RNA spots using U-FISH package
-- Segment polyDT using Cellpose for guess at cell boundaries
-- Decode MERFISH spots on GPU 
+- Calculate registration across tiles for global coordinates
+- Write out downsampled polyDT mosaic. XY downsampled to match Z sampling.
+- Segment mosaic polyDT using Cellpose for guess at cell boundaries
+- Decode 3D MERFISH spots on GPU
     - TO DO: Process smFISH bits if requested
 - Assign RNA to Cellpose cell outlines in global coordinate system
 - Refine cell boundaries using Baysor in global coordinate system
@@ -18,14 +23,17 @@ qi2lab LED scope MERFISH post-processing
     - TO DO: figure out how to write a SpatialData object in global coordinate system
 - TO DO: write all run parameters to .json with date/timestamp for tracking
 - TO DO: docstrings and comments
+- TO DO: unit and integration tests
+- TO DO: rewrite simulation as package
 
 Change log:
 Shepherd 07/24 - changes to automate finding normalizations for decoding
+                 updates for qi2lab iterative FISH file format v0.2
 Shepherd 05/24 - rework for different stitching and cell outline strategy
 Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
                  rework function for explicit flags and parameter dictionaries.
 Shepherd 04/24 - fully automated processing and decoding.
-Shepherd 01/24 - updates for qi2lab MERFISH file format v1.0.
+Shepherd 01/24 - updates for qi2lab iterative FISH file format v0.1
 Shepherd 09/23 - new LED widefield scope post-processing.
 '''
 
@@ -800,7 +808,7 @@ def postprocess(dataset_path: Path,
         minimum_pixels = tile_decoding_parameters['minimum_pixels']
         fdr_target = tile_decoding_parameters['fdr_target']
             
-        decode_factory = PixelDecoder(dataset_path=dataset_path,
+        decode_factory = PixelDecoder(dataset_path=output_dir_path,
                                     exp_type=exp_type,
                                     verbose=1)
         
