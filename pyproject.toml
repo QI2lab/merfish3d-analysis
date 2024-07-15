@@ -26,7 +26,7 @@ dependencies = ["numpy", "tifffile", "zarr", "numba", "ndstorage",
                 "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field"]
 
 [tool.hatch.version]
-path = "src/wf_merfish/__init__.py"
+path = "src/merfish3danalysis/__init__.py"
 
 [tool.hatch.metadata]
 allow-direct-references = true
