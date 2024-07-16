@@ -42,7 +42,7 @@ from pathlib import Path
 from ndstorage import Dataset
 import gc
 from itertools import compress
-from wf_merfish.utils._dataio import return_data_dask, read_metadatafile, resave_baysor_output
+from merfish3danalysis.utils._dataio import return_data_dask, read_metadatafile, resave_baysor_output
 import zarr
 from numcodecs import blosc
 import time
@@ -194,9 +194,9 @@ def postprocess(dataset_path: Path,
                         
         # import image processing functions
         if run_hotpixel_correction and not(run_shading_correction):
-            from wf_merfish.utils._imageprocessing import replace_hot_pixels
+            from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
         elif run_shading_correction:
-            from wf_merfish.utils._imageprocessing import correct_shading
+            from merfish3danalysis.utils._imageprocessing import correct_shading
 
         # initialize tile counter and channel information
         ex_wavelengths=[.520,.520,.520,.520,.488,.561,.635]
@@ -502,7 +502,7 @@ def postprocess(dataset_path: Path,
                     
     if run_tile_registration:
         run_optical_flow = True
-        from wf_merfish.postprocess.DataRegistration import DataRegistration
+        from merfish3danalysis.postprocess.DataRegistration import DataRegistration
 
         for tile_idx in range(num_tiles):
             if camera=='flir':
@@ -721,7 +721,7 @@ def postprocess(dataset_path: Path,
             print('No fused image, cannot run Cellpose.')
         else:  
             from cellpose import models
-            from wf_merfish.utils._outlinesprocessing import extract_outlines, create_microjson, calculate_centroids
+            from merfish3danalysis.utils._outlinesprocessing import extract_outlines, create_microjson, calculate_centroids
                        
             channels = [[0,0]]
             
@@ -801,7 +801,7 @@ def postprocess(dataset_path: Path,
             
     if run_tile_decoding:
         
-        from wf_merfish.postprocess.PixelDecoder import PixelDecoder
+        from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
         
         exp_type = tile_decoding_parameters['exp_type']
 
@@ -827,7 +827,7 @@ def postprocess(dataset_path: Path,
                 
         # construct baysor command
         julia_threading = "JULIA_NUM_THREADS="+str(baysor_num_threads)+ " "
-        baysor_options = r" run -m 24 -p -c /home/qi2lab/Documents/github/wf-merfish/src/wf_merfish/postprocess/baysor_config.toml "
+        baysor_options = r" run -m 24 -p -c /home/qi2lab/Documents/github/wf-merfish/src/merfish3danalysis/postprocess/baysor_config.toml "
         if baysor_ignore_genes:
             baysor_genes_to_ignore = r"--config.data.exclude_genes='" + baysor_genes_to_exclude + "' "
             baysor_options = baysor_options + baysor_genes_to_ignore
@@ -869,7 +869,7 @@ def postprocess(dataset_path: Path,
                 baysor_output_genes_path = baysor_filtered_output_genes_path
 
     if run_mtx_creation:
-        from wf_merfish.utils._dataio import create_mtx
+        from merfish3danalysis.utils._dataio import create_mtx
         create_mtx(baysor_output_genes_path,
                    output_dir_path / Path('mtx_output'),
                    mtx_creation_parameters['confidence_cutoff'])

@@ -6,7 +6,7 @@ import numpy as np
 import gc
 from numpy.typing import ArrayLike
 from numba import njit, prange
-from typing import Sequence
+from typing import Sequence, Tuple
 
 # GPU
 CUPY_AVIALABLE = True
@@ -116,6 +116,7 @@ def correct_shading(darkfield_image: ArrayLike,
 
     return data
 
+@njit
 def deskew_shape_estimator(input_shape: Sequence[int],
                            theta: float = 30.0,
                            distance: float = .4,
@@ -157,7 +158,7 @@ def deskew(data: ArrayLike,
            theta: float = 30.0,
            distance: float = .4,
            pixel_size: float = .115):
-    """Perform parallelized orthogonal interpolation into a uniform pixel size grid.
+    """Numba accelerated orthogonal interpolation for oblique data.
     
     Parameters
     ----------
@@ -250,3 +251,95 @@ def deskew(data: ArrayLike,
 
     # return output
     return output
+
+def lab2cam(x: int, 
+            y: int,
+            z: int,
+            theta: float = 30. * (np.pi/180.)) -> Tuple[int,int,int]:
+    """Convert xyz coordinates to camera coordinates sytem, x', y', and stage position.
+    
+    Parameters
+    ----------
+    x: int
+        coverslip x coordinate
+    y: int
+        coverslip y coordinate
+    z: int
+        coverslip z coordinate
+    theta: float
+        OPM angle in radians
+        
+        
+    Returns
+    -------
+    xp: int
+        xp coordinate
+    yp: int
+        yp coordinate
+    stage_pos: int
+        distance of leading edge of camera frame from the y-axis
+    """
+    xp = x
+    stage_pos = y - z / np.tan(theta)
+    yp = z / np.sin(theta)
+    return xp, yp, stage_pos
+
+def chunk_indices(length: int, 
+                  chunk_size: int) -> Sequence[int]:
+    """Calculate indices for evenly distributed chunks.
+    
+    Parameters
+    ----------
+    length: int
+        axis array length
+    chunk_size: int
+        size of chunks
+        
+    Returns
+    -------
+    indices: Sequence[int,...]
+        chunk indices
+    """
+    
+    indices = []
+    for i in range(0, length - chunk_size, chunk_size):
+        indices.append((i, i + chunk_size))
+    if length % chunk_size != 0:
+        indices.append((length - chunk_size, length))
+    return indices
+            
+@njit(parallel=True)
+def downsample_deskewed_z(image: ArrayLike, 
+                          level: int = 2) -> ArrayLike:
+    """Numba acelerated z downsampling for 3D image.
+    
+    Parameters
+    ----------
+    image: ArrayLike
+        3D image to be downsampled in "z" (first axis)
+    level: int
+        amount of downsampling
+        
+    Returns
+    -------
+    downsampled_image: ArrayLike
+        3D downsampled image
+    
+    """
+    new_length = image.shape[0] // level + (1 if image.shape[0] % level != 0 else 0)    
+    downsampled_image = np.zeros((new_length,image.shape[1],image.shape[2]),dtype=np.uint16)
+    
+    for y in prange(image.shape[1]):
+        for x in range(image.shape[2]):
+            for z in range(new_length):
+                sum_value = 0.0
+                count = 0
+                for j in range(level):
+                    original_index = z * level + j
+                    if original_index < image.shape[0]:
+                        sum_value += image[original_index,y,x]
+                        count += 1
+                if count > 0:
+                    downsampled_image[z,y,x] = np.uint16(sum_value / count)
+            
+    return downsampled_image

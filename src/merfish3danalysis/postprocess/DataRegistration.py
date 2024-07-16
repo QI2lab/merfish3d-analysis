@@ -16,7 +16,7 @@ from cmap import Colormap
 import warnings
 import SimpleITK as sitk
 from numcodecs import blosc
-from wf_merfish.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform
+from merfish3danalysis.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform
 from clij2fft.richardson_lucy_dask import richardson_lucy_dask
 import pandas as pd
 from ufish.api import UFish
