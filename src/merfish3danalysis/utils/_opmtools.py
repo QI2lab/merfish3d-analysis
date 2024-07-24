@@ -116,23 +116,3 @@ def chunked_orthogonal_deskew(oblique_image: ArrayLike,
     gc.collect()
     
     return deskewed_image
-        
-# if perform_ufish:
-# ufish_array = np.zeros_like(output_array,dtype=np.float32)
-
-# slices = Slicer(image=output_array,
-#                 crop_size = (output_array.shape[0],output_array.shape[2],output_array.shape[2]),
-#                 overlap = (0,32,0),
-#                 pad=True,
-#                 batch_size=1)
-
-# for crop, source, destination in tqdm(slices,leave=True):
-#     _, ufish_crop = ufish.predict(crop,
-#                                 axes='zyx',
-#                                 blend_3d=False,
-#                                 batch_size=3)
-#     ufish_array[destination] = ufish_crop[source]
-                                                
-#     torch.cuda.empty_cache()
-#     cp.get_default_memory_pool().free_all_blocks()
-#     gc.collect()
