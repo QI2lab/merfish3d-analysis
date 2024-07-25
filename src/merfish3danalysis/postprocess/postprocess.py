@@ -479,26 +479,9 @@ def postprocess(dataset_path: Path,
                                                     photometric='minisblack',
                                                     resolutionunit='CENTIMETER')
                                         
-                                progress_updates['Channel'] = ((ch_idx-channels_idxs_in_data_tile[0]+1) / len(channels_idxs_in_data_tile)) * 100
-                                yield progress_updates
-
                         dataset.close()
                         del dataset
                         gc.collect()
-
-                progress_updates['Channel'] = 0
-                progress_updates['Round'] = ((r_idx+1) / num_r) * 100
-                yield progress_updates
-
-            progress_updates['Channel'] = 0
-            progress_updates['Round'] = 0
-            progress_updates['Tile'] = ((tile_idx+1) / num_tiles) * 100
-            yield progress_updates
-            
-    progress_updates['Channel'] = 100
-    progress_updates['Round'] = 100
-    progress_updates['Tile'] = 100
-    yield progress_updates
                     
     if run_tile_registration:
         run_optical_flow = True
@@ -514,14 +497,9 @@ def postprocess(dataset_path: Path,
             data_register_factory.generate_registrations()
             data_register_factory.apply_registration_to_bits()
             
-            progress_updates['Register/Process'] = ((tile_idx+1) / num_tiles) * 100
-            yield progress_updates
-
             del data_register_factory
             gc.collect()
             
-    progress_updates['Register/Process'] = 100
-    yield progress_updates
     
     if run_global_registration:
         try:   
@@ -812,10 +790,7 @@ def postprocess(dataset_path: Path,
         decode_factory.optimize_normalization_by_decoding()
         decode_factory.decode_all_tiles(minimum_pixels=minimum_pixels,
                                         fdr_target=fdr_target)
-       
-        progress_updates['Decode'] = 100
-        yield progress_updates
-        
+               
     if run_baysor:
         import subprocess
         
@@ -913,6 +888,3 @@ if __name__ == '__main__':
                        run_mtx_creation = False,
                        mtx_creation_parameters = {'confidence_cutoff' : 0.7},
                        noise_map_path = noise_map_path)
-    
-    for val in func:
-        temp_val = val

@@ -20,7 +20,7 @@ import zarr
 from numcodecs import blosc
 from tifffile import imread
 import pandas as pd
-from typing import Dict, Generator, Optional
+from typing import Dict
 import json
 import re
 from ufish.api import UFish

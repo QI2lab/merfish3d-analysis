@@ -1,4 +1,4 @@
-from wf_merfish.postprocess.postprocess import postprocess
+from merfish3danalysis.postprocess.postprocess import postprocess
 from pathlib import Path
 
 if __name__ == '__main__':
@@ -64,6 +64,3 @@ if __name__ == '__main__':
                        run_mtx_creation = run_mtx_creation,
                        mtx_creation_parameters = mtx_creation_parameters,
                        noise_map_path = noise_map_path)
-    
-    for val in func:
-        temp_val = val
