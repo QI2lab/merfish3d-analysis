@@ -13,7 +13,7 @@ Activate the environment and install the GPU dependencies.
 
 ```
 mamba activate wf-merfish
-mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.02 pylibraft cuda-version=12.1 cudnn cutensor nccl onnx onnxruntime pytorch torchvision pytorch-cuda=12.1
+mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai-nightly cupy cucim=24.08 pylibraft cudadecon cuda-version=12.5 cudnn cutensor nccl onnx onnxruntime pytorch torchvision 'pytorch=*=*cuda*'
 ```
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.

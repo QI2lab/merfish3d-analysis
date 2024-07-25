@@ -30,7 +30,8 @@ class DataRegistration:
                  overwrite_registered: bool = False,
                  perform_optical_flow: bool = False,
                  tile_idx: Optional[int] = None,
-                 RL_mem_limit: Optional[float] = 16):
+                 decon_iters: Optional[int] = 10,
+                 decon_background: Optional[float] = 100.):
         """
         Retrieve and pre-process one tile from qi2lab 3D widefield zarr structure.
         Apply rigid and optical flow registration transformations if available.
@@ -61,7 +62,8 @@ class DataRegistration:
         self._compressor = blosc.Blosc(cname='zstd', clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
         blosc.set_nthreads(20)
         self._overwrite_registered = overwrite_registered
-        self._RL_mem_limit = RL_mem_limit
+        self._decon_iters = decon_iters
+        self._decon_background = decon_background
 
     # -----------------------------------
     # property access for class variables
@@ -200,6 +202,14 @@ class DataRegistration:
         calibrations_dir_path = self._dataset_path / Path('calibrations.zarr')
         calibrations_zarr = zarr.open(calibrations_dir_path,mode='r')
         self._psfs = np.asarray(calibrations_zarr['psf_data'],dtype=np.float32)
+        try:
+            self._na = float(current_round.attrs['na'])
+        except:
+            self._na = 1.35
+        try:
+            self._ri = float(current_round.attrs['ri'])
+        except:
+            self._ri = 1.51
 
         del current_round, calibrations_zarr
         gc.collect()
@@ -309,10 +319,10 @@ class DataRegistration:
         if self._data_raw is None:
             self.load_raw_data()
         
-        current_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
-        current_round = zarr.open(current_round_path,mode='a')
+        first_round_path = self._polyDT_dir_path / Path(self._tile_id) / Path(self._round_ids[0] + ".zarr")
+        first_round = zarr.open(first_round_path,mode='a')
         
-        test_path = current_round_path / Path('registered_decon_data') / Path('.zarray')
+        test_path = first_round_path / Path('registered_decon_data') / Path('.zarray')
         if test_path.exists():
             has_reg_decon_data = True
         else:
@@ -321,29 +331,29 @@ class DataRegistration:
         if not(has_reg_decon_data) or self._overwrite_registered:
             ref_image_decon = chunked_cudadecon(
                 image=np.asarray(self._data_raw[0,:].compute()).astype(np.uint16),
-                psf=self._psfs[0,:],
+                psf=(self._psfs[0,:]).astype(np.float32),
                 image_voxel_zyx_um=self._voxel_size,
                 psf_voxel_zyx_um=self._voxel_size,
-                wavelength_um=.520, #TODO: fix
-                na=1.35, #TODO: fix
-                ri=1.51, #TODO: fix
-                n_iters = 10, #TODO: fix
-                background=100. #TODO: fix
-            )     
+                wavelength_um=float(current_round.attrs['emission_um']),
+                na=self._na,
+                ri=self._ri,
+                n_iters = self._decon_iters,
+                background=self._decon_background
+            )
+    
             try:
-                data_reg_zarr = current_round.zeros('registered_decon_data',
+                data_reg_zarr = first_round.zeros('registered_decon_data',
                                                 shape=ref_image_decon.shape,
                                                 chunks=(1,ref_image_decon.shape[1],ref_image_decon.shape[2]),
                                                 compressor=self._compressor,
                                                 dtype=np.uint16)
                 data_reg_zarr[:] = ref_image_decon.astype(np.uint16)
             except Exception:
-                data_reg_zarr = current_round['registered_decon_data']
+                data_reg_zarr = first_round['registered_decon_data']
                 data_reg_zarr[:] = ref_image_decon
-                        
-        ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
+            del data_reg_zarr
         
-        del current_round_path, current_round, data_reg_zarr
+        del first_round_path
         gc.collect()
 
         for r_idx, round_id in enumerate(self._round_ids[1:]):
@@ -360,17 +370,23 @@ class DataRegistration:
                 has_reg_decon_data = False
             
             if not(has_reg_decon_data) or self._overwrite_registered:
+    
+                try:
+                    ref_image_sitk = sitk.GetImageFromArray(ref_image_decon.astype(np.float32))
+                except:
+                    ref_image_sitk = sitk.GetImageFromArray(np.asarray(first_round['registered_decon_data']).astype(np.float32))
+
                 mov_image_decon = chunked_cudadecon(
                     image=np.asarray(self._data_raw[r_idx,:].compute()).astype(np.uint16),
                     psf=self._psfs[psf_idx,:],
                     image_voxel_zyx_um=self._voxel_size,
                     psf_voxel_zyx_um=self._voxel_size,
-                    wavelength_um=.520, #TODO: fix
-                    na=1.35, #TODO: fix
-                    ri=1.51, #TODO: fix
-                    n_iters = 10, #TODO: fix
-                    background=100. #TODO: fix
-                )     
+                    wavelength_um=float(current_round.attrs['emission_um']),
+                    na=self._na,
+                    ri=self._ri,
+                    n_iters = self._decon_iters,
+                    background=self._decon_background
+                )
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
@@ -508,12 +524,9 @@ class DataRegistration:
                 
                 data_reg_zarr[:] = data_registered
                 
-                del data_registered, mov_image_sitk
+                del data_registered, mov_image_sitk, ref_image_sitk
                 gc.collect()
-                
-        del ref_image_sitk
-        gc.collect()
-                        
+                                        
     def apply_registration_to_bits(self):
         """
         Generate registered data and save to zarr.
@@ -595,12 +608,12 @@ class DataRegistration:
                     psf=self._psfs[psf_idx,:],
                     image_voxel_zyx_um=self._voxel_size,
                     psf_voxel_zyx_um=self._voxel_size,
-                    wavelength_um=.520, #TODO: fix
-                    na=1.35, #TODO: fix
-                    ri=1.51, #TODO: fix
-                    n_iters = 10, #TODO: fix
-                    background=100. #TODO: fix
-                )     
+                    wavelength_um=float(current_bit_channel.attrs['emission_um']),
+                    na=self._na,
+                    ri=self._ri,
+                    n_iters = self._decon_iters,
+                    background=self._decon_background
+                )    
 
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')

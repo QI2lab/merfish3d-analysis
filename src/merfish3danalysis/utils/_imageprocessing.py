@@ -229,7 +229,7 @@ def next_multiple_of_32(x: int) -> int:
         next multiple of 32 above x.
     """
     
-    next_32_x = (x + 31) // 32 * 32
+    next_32_x = int(np.ceil((x + 31) / 32)) * 32
     
     return next_32_x
 
@@ -346,19 +346,20 @@ def chunked_cudadecon(image: ArrayLike,
         image_decon_padded[destination] = decon(
                             images = crop,
                             psf = psf,
-                            dzpsf=psf_voxel_zyx_um[0],
-                            dxpsf=psf_voxel_zyx_um[1],
-                            dzdata=image_voxel_zyx_um[0],
-                            dxdata=image_voxel_zyx_um[1],
-                            wavelength=np.round(wavelength_um*1000,2),
-                            na=na,
-                            nimm=ri,
-                            n_iters=n_iters,
+                            dzpsf=float(psf_voxel_zyx_um[0]),
+                            dxpsf=float(psf_voxel_zyx_um[1]),
+                            dzdata=float(image_voxel_zyx_um[0]),
+                            dxdata=float(image_voxel_zyx_um[1]),
+                            wavelength=int(wavelength_um*1000),
+                            na=float(na),
+                            nimm=float(ri),
+                            n_iters=int(n_iters),
                             cleanup_otf=True,
                             napodize=15,
-                            background=background)[source]
+                            background=float(background))[source]
         
     image_decon = remove_padding_z(image_decon_padded,pad_z_before,pad_z_after)
+
     del image_padded, image_decon_padded
     gc.collect()
     
