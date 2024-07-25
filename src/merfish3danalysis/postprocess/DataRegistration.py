@@ -334,7 +334,7 @@ class DataRegistration:
                 psf=(self._psfs[0,:]).astype(np.float32),
                 image_voxel_zyx_um=self._voxel_size,
                 psf_voxel_zyx_um=self._voxel_size,
-                wavelength_um=float(current_round.attrs['emission_um']),
+                wavelength_um=float(first_round.attrs['emission_um']),
                 na=self._na,
                 ri=self._ri,
                 n_iters = self._decon_iters,
