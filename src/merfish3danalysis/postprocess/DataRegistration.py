@@ -1,8 +1,9 @@
 """
-DataRegistration: Register qi2lab widefield MERFISH data using cross-correlation and optical flow
+DataRegistration: Register qi2lab 3D MERFISH data using cross-correlation and optical flow
 
+Shepherd 2024/07 - swap to pycudadecon and begin removing all Dask usage
 Shepherd 2024/04 - updates to use U-FISH and remove SPOTS3D
-Shepherd 2024/01 - updates for qi2lab MERFISH file format v1.0
+Shepherd 2024/01 - updates for qi2lab MERFISH file format v0.1
 Shepherd 2023/09 - initial commit
 """
 
@@ -17,8 +18,7 @@ import warnings
 import SimpleITK as sitk
 from numcodecs import blosc
 from merfish3danalysis.postprocess._registration import compute_optical_flow, apply_transform, downsample_image, compute_rigid_transform
-from clij2fft.richardson_lucy_dask import richardson_lucy_dask
-import pandas as pd
+from merfish3danalysis.utils._imageprocessing import chunked_cudadecon, downsample_image_isotropic
 from ufish.api import UFish
 import dask.array as da
 import torch
@@ -319,11 +319,17 @@ class DataRegistration:
             has_reg_decon_data = False
                        
         if not(has_reg_decon_data) or self._overwrite_registered:
-            ref_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[0,:].compute()).astype(np.uint16),
-                                                    psf=self._psfs[0,:],
-                                                    numiterations=200,
-                                                    regularizationfactor=1e-2,
-                                                    mem_to_use=self._RL_mem_limit)               
+            ref_image_decon = chunked_cudadecon(
+                image=np.asarray(self._data_raw[0,:].compute()).astype(np.uint16),
+                psf=self._psfs[0,:],
+                image_voxel_zyx_um=self._voxel_size,
+                psf_voxel_zyx_um=self._voxel_size,
+                wavelength_um=.520, #TODO: fix
+                na=1.35, #TODO: fix
+                ri=1.51, #TODO: fix
+                n_iters = 10, #TODO: fix
+                background=100. #TODO: fix
+            )     
             try:
                 data_reg_zarr = current_round.zeros('registered_decon_data',
                                                 shape=ref_image_decon.shape,
@@ -354,11 +360,17 @@ class DataRegistration:
                 has_reg_decon_data = False
             
             if not(has_reg_decon_data) or self._overwrite_registered:
-                mov_image_decon = richardson_lucy_dask(np.asarray(self._data_raw[r_idx,:].compute()),
-                                                        psf=self._psfs[psf_idx,:],
-                                                        numiterations=200,
-                                                        regularizationfactor=1e-2,
-                                                        mem_to_use=self._RL_mem_limit)
+                mov_image_decon = chunked_cudadecon(
+                    image=np.asarray(self._data_raw[r_idx,:].compute()).astype(np.uint16),
+                    psf=self._psfs[psf_idx,:],
+                    image_voxel_zyx_um=self._voxel_size,
+                    psf_voxel_zyx_um=self._voxel_size,
+                    wavelength_um=.520, #TODO: fix
+                    na=1.35, #TODO: fix
+                    ri=1.51, #TODO: fix
+                    n_iters = 10, #TODO: fix
+                    background=100. #TODO: fix
+                )     
 
                 mov_image_sitk = sitk.GetImageFromArray(mov_image_decon.astype(np.float32))
                                     
@@ -578,11 +590,17 @@ class DataRegistration:
                 except:
                     corrected_image = np.asarray(current_bit_channel['raw_data'])
                     
-                decon_image = richardson_lucy_dask(corrected_image,
-                                    psf=self._psfs[psf_idx,:],
-                                    numiterations=200,
-                                    regularizationfactor=1e-8,
-                                    mem_to_use=self._RL_mem_limit)
+                decon_image = chunked_cudadecon(
+                    image=corrected_image,
+                    psf=self._psfs[psf_idx,:],
+                    image_voxel_zyx_um=self._voxel_size,
+                    psf_voxel_zyx_um=self._voxel_size,
+                    wavelength_um=.520, #TODO: fix
+                    na=1.35, #TODO: fix
+                    ri=1.51, #TODO: fix
+                    n_iters = 10, #TODO: fix
+                    background=100. #TODO: fix
+                )     
 
                 if r_idx > 0:
                     polyDT_tile_round_path = self._dataset_path / Path('polyDT') / Path(self._tile_id) / Path('round'+str(r_idx).zfill(3)+'.zarr')

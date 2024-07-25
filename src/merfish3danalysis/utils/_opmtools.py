@@ -1,32 +1,211 @@
-from merfish3danalysis.utils._imageprocessing import deskew_shape_estimator, deskew, lab2cam, chunk_indices, downsample_deskewed_z
+"""
+OPM specific data handling tools
+
+Shepherd 2024/07 - initial commit.
+"""
+
+
+from merfish3danalysis.utils._imageprocessing import downsample_axis, pad_z, remove_padding_z
 from ryomen import Slicer
 from tqdm import tqdm
 import numpy as np
 from numpy.typing import ArrayLike
+from typing import Sequence, Tuple
+from numba import njit, prange
 import gc
 
-def pad_to_nearest_16_z_reflect(image):
-    def next_multiple_of_16(x):
-        return (x + 15) // 16 * 16
+@njit
+def deskew_shape_estimator(input_shape: Sequence[int],
+                           theta: float = 30.0,
+                           distance: float = .4,
+                           pixel_size: float = .115):
+    """Generate shape of orthogonal interpolation output array.
     
-    z, y, x = image.shape
-    
-    new_z = next_multiple_of_16(z)
-    pad_z = new_z - z
-    
-    # Distribute padding evenly on both sides
-    pad_z_before = pad_z // 2
-    pad_z_after = pad_z - pad_z_before
-    
-    # Padding configuration for numpy.pad
-    pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
-    
-    padded_image = np.pad(image, pad_width, mode='reflect')
-    
-    return padded_image, pad_z_before, pad_z_after
+    Parameters
+    ----------
+    shape: Sequence[int]
+        shape of oblique array
+    theta: float 
+        angle relative to coverslip
+    distance: float 
+        step between image planes along coverslip
+    pizel_size: float 
+        in-plane camera pixel size in OPM coordinates
 
-def remove_padding_z(image, pad_z_before, pad_z_after):
-    return image[pad_z_before:-pad_z_after,:]
+    Returns
+    -------
+    output_shape: Sequence[int]
+        shape of deskewed array
+    """
+    
+    # change step size from physical space (nm) to camera space (pixels)
+    pixel_step = distance/pixel_size    # (pixels)
+
+    # calculate the number of pixels scanned during stage scan 
+    scan_end = input_shape[0] * pixel_step  # (pixels)
+
+    # calculate properties for final image
+    final_ny = np.int64(np.ceil(scan_end+input_shape[1]*np.cos(theta*np.pi/180))) # (pixels)
+    final_nz = np.int64(np.ceil(input_shape[1]*np.sin(theta*np.pi/180)))          # (pixels)
+    final_nx = np.int64(input_shape[2])
+    
+    return [final_nz, final_ny, final_nx]
+    
+@njit(parallel=True)
+def deskew(data: ArrayLike,
+           theta: float = 30.0,
+           distance: float = .4,
+           pixel_size: float = .115):
+    """Numba accelerated orthogonal interpolation for oblique data.
+    
+    Parameters
+    ----------
+    data: ArrayLike
+        image stack of uniformly spaced OPM planes
+    theta: float 
+        angle relative to coverslip
+    distance: float 
+        step between image planes along coverslip
+    pizel_size: float 
+        in-plane camera pixel size in OPM coordinates
+
+    Returns
+    -------
+    output: ArrayLike
+        image stack of deskewed OPM planes on uniform grid
+    """
+
+    # unwrap parameters 
+    [num_images,ny,nx]=data.shape     # (pixels)
+
+    # change step size from physical space (nm) to camera space (pixels)
+    pixel_step = distance/pixel_size    # (pixels)
+
+    # calculate the number of pixels scanned during stage scan 
+    scan_end = num_images * pixel_step  # (pixels)
+
+    # calculate properties for final image
+    final_ny = np.int64(np.ceil(scan_end+ny*np.cos(theta*np.pi/180))) # (pixels)
+    final_nz = np.int64(np.ceil(ny*np.sin(theta*np.pi/180)))          # (pixels)
+    final_nx = np.int64(nx)                                           # (pixels)
+
+    # create final image
+    output = np.zeros((final_nz, final_ny, final_nx),dtype=np.float32)  # (time, pixels,pixels,pixels - data is float32)
+
+    # precalculate trig functions for scan angle
+    tantheta = np.float32(np.tan(theta * np.pi/180)) # (float32)
+    sintheta = np.float32(np.sin(theta * np.pi/180)) # (float32)
+    costheta = np.float32(np.cos(theta * np.pi/180)) # (float32)
+
+    # perform orthogonal interpolation
+
+    # loop through output z planes
+    # defined as parallel loop in numba
+    for z in prange(0,final_nz):
+        # calculate range of output y pixels to populate
+        y_range_min=np.minimum(0,np.int64(np.floor(np.float32(z)/tantheta)))
+        y_range_max=np.maximum(final_ny,np.int64(np.ceil(scan_end+np.float32(z)/tantheta+1)))
+
+        # loop through final y pixels
+        # defined as parallel loop in numba
+        for y in prange(y_range_min,y_range_max):
+
+            # find the virtual tilted plane that intersects the interpolated plane 
+            virtual_plane = y - z/tantheta
+
+            # find raw data planes that surround the virtual plane
+            plane_before = np.int64(np.floor(virtual_plane/pixel_step))
+            plane_after = np.int64(plane_before+1)
+
+            # continue if raw data planes are within the data range
+            if ((plane_before>=0) and (plane_after<num_images)):
+                
+                # find distance of a point on the  interpolated plane to plane_before and plane_after
+                l_before = virtual_plane - plane_before * pixel_step
+                l_after = pixel_step - l_before
+                
+                # determine location of a point along the interpolated plane
+                za = z/sintheta
+                virtual_pos_before = za + l_before*costheta
+                virtual_pos_after = za - l_after*costheta
+
+                # determine nearest data points to interpoloated point in raw data
+                pos_before = np.int64(np.floor(virtual_pos_before))
+                pos_after = np.int64(np.floor(virtual_pos_after))
+
+                # continue if within data bounds
+                if ((pos_before>=0) and (pos_after >= 0) and (pos_before<ny-1) and (pos_after<ny-1)):
+                    
+                    # determine points surrounding interpolated point on the virtual plane 
+                    dz_before = virtual_pos_before - pos_before
+                    dz_after = virtual_pos_after - pos_after
+
+                    # compute final image plane using orthogonal interpolation
+                    output[z,y,:] = (l_before * dz_after * data[plane_after,pos_after+1,:] +
+                                    l_before * (1-dz_after) * data[plane_after,pos_after,:] +
+                                    l_after * dz_before * data[plane_before,pos_before+1,:] +
+                                    l_after * (1-dz_before) * data[plane_before,pos_before,:]) /pixel_step
+
+
+    # return output
+    return output
+
+def lab2cam(x: int, 
+            y: int,
+            z: int,
+            theta: float = 30. * (np.pi/180.)) -> Tuple[int,int,int]:
+    """Convert xyz coordinates to camera coordinates sytem, x', y', and stage position.
+    
+    Parameters
+    ----------
+    x: int
+        coverslip x coordinate
+    y: int
+        coverslip y coordinate
+    z: int
+        coverslip z coordinate
+    theta: float
+        OPM angle in radians
+        
+        
+    Returns
+    -------
+    xp: int
+        xp coordinate
+    yp: int
+        yp coordinate
+    stage_pos: int
+        distance of leading edge of camera frame from the y-axis
+    """
+    xp = x
+    stage_pos = y - z / np.tan(theta)
+    yp = z / np.sin(theta)
+    return xp, yp, stage_pos
+
+def chunk_indices(length: int, 
+                  chunk_size: int) -> Sequence[int]:
+    """Calculate indices for evenly distributed chunks.
+    
+    Parameters
+    ----------
+    length: int
+        axis array length
+    chunk_size: int
+        size of chunks
+        
+    Returns
+    -------
+    indices: Sequence[int,...]
+        chunk indices
+    """
+    
+    indices = []
+    for i in range(0, length - chunk_size, chunk_size):
+        indices.append((i, i + chunk_size))
+    if length % chunk_size != 0:
+        indices.append((length - chunk_size, length))
+    return indices
+            
 
 def chunked_orthogonal_deskew(oblique_image: ArrayLike,
                             psf_data: ArrayLike,
@@ -39,7 +218,7 @@ def chunked_orthogonal_deskew(oblique_image: ArrayLike,
                             z_downsample_level = 2,
                             perform_decon: bool = True,
                             decon_iterations: int = 10,
-                            decon_chunks: int = 256) -> ArrayLike:
+                            decon_chunks: int = 1024) -> ArrayLike:
 
     output_shape = deskew_shape_estimator(oblique_image.shape)
     output_shape[0] = output_shape[0]//z_downsample_level
@@ -92,14 +271,15 @@ def chunked_orthogonal_deskew(oblique_image: ArrayLike,
         if perform_decon:
             from pycudadecon import decon
             
-            data_padded, pad_z_before, pad_z_after = pad_to_nearest_16_z_reflect(raw_data)
+            data_padded, pad_z_before, pad_z_after = pad_z(raw_data)
+            
             del raw_data
             gc.collect()
             data_decon_padded = np.zeros_like(data_padded)
             
             slices = Slicer(data_padded,
-                crop_size=(decon_chunks,1600,1600),
-                overlap=(64,64,64),
+                crop_size=(decon_chunks,384,1200),
+                overlap=(32,32,32),
                 batch_size=1,
                 pad=True)
 
@@ -107,43 +287,29 @@ def chunked_orthogonal_deskew(oblique_image: ArrayLike,
                 data_decon_padded[destination] = decon(
                         images = crop,
                         psf = psf_data,
+                        otf_bgrd=0.,
+                        background=0.,
                         dzpsf=0.400,
                         dxpsf=.115,
                         dzdata=.400,
                         dxdata=.115,
-                        wavelength=520,
+                        wavelength=670,
                         na=1.3,
                         nimm=1.4,
                         n_iters=decon_iterations,
-                        cleanup_otf=True,
                         napodize=30,
-                        skewed_decon=True)[source]
+                        skewed_decon=True,
+                        cleanup_otf=True)[source]
                 
-            data_decon = remove_padding_z(data_decon_padded,pad_z_before,pad_z_after)
+            data_decon = remove_padding_z(
+                data_decon_padded, pad_z_before, pad_z_after)
             del data_padded, data_decon_padded
             gc.collect()
 
-            
-            
-            # from clij2fft.richardson_lucy import richardson_lucy_nc, getlib
-            # import cupy as cp
-            # lib = getlib()
-            # slices = Slicer(raw_data,
-            #                 crop_size=(decon_chunks,raw_data.shape[1],raw_data.shape[2]),
-            #                 overlap=(64,0,0),
-            #                 batch_size=1,
-            #                 pad=True)
-            
-            # for crop, source, destination in tqdm(slices,leave=False):             
-            #     raw_data[destination] = richardson_lucy_nc(img=crop,
-            #                                             psf=psf_data,
-            #                                             numiterations=decon_iterations,
-            #                                             regularizationfactor=1e-4,
-            #                                             lib=lib)[source].astype(np.uint16)
-            #     cp.clear_memo()
-            #     cp._default_memory_pool.free_all_blocks()
-        
-        temp_deskew = deskew(data_decon).astype(np.uint16)
+            temp_deskew = deskew(data_decon).astype(np.uint16)
+
+        else:
+            temp_deskew = deskew(raw_data).astype(np.uint16)
         
         if crop_start and crop_end:
             crop_deskew = temp_deskew[:,overlap_size:-overlap_size,:]
@@ -166,7 +332,7 @@ def chunked_orthogonal_deskew(oblique_image: ArrayLike,
                 crop_deskew = temp_deskew[:,overlap_size-diff:-1,:]
                     
         if z_downsample_level > 1:
-            deskewed_image[:,idx[0]:idx[1],:] = downsample_deskewed_z(crop_deskew,z_downsample_level)
+            deskewed_image[:,idx[0]:idx[1],:] = downsample_axis(image=crop_deskew,level=z_downsample_level,axis=0)
         else:
             deskewed_image[:,idx[0]:idx[1],:] = crop_deskew
                 
