@@ -1,9 +1,10 @@
 """
-Image registration functions using scikit-image and SimpleITK.
+Image registration functions using cucim, scikit-image, and SimpleITK.
 
-2024/01 - Doug Shepherd.
-          Updates for qi2lab MERFISH file format v1.0
-2023/07 - Doug Shepherd
+Shepherd 2024/07 - Prepping to remove all Dask usage and integrate these 
+                   functions into DataRegistration class as static_methods.
+Shepherd 2024/01 - Updates for qi2lab MERFISH file format v0.1
+Shepherd 2023/07 - initial commit.
 """
 
 import numpy as np
