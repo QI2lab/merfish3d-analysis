@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-'''
+"""
 qi2lab 3D MERFISH / iterative smFISH processing
 Microscope post-processing v0.2.0
 This script is specifically for qi2lab widefield microscopes and assume use of
@@ -35,14 +34,13 @@ Shepherd 05/24 - added cellpose and baysor for segmentation and assignment.
 Shepherd 04/24 - fully automated processing and decoding.
 Shepherd 01/24 - updates for qi2lab iterative FISH file format v0.1
 Shepherd 09/23 - new LED widefield scope post-processing.
-'''
+"""
 
 import numpy as np
 from pathlib import Path
-from ndstorage import Dataset
 import gc
 from itertools import compress
-from merfish3danalysis.utils._dataio import return_data_dask, read_metadatafile, resave_baysor_output
+from merfish3danalysis.utils._dataio import return_data_zarr, read_metadatafile, resave_baysor_output
 import zarr
 from numcodecs import blosc
 import time
@@ -149,7 +147,7 @@ def postprocess(dataset_path: Path,
 
     # create output directory
     output_dir_path_base = dataset_path
-    output_dir_path = output_dir_path_base / 'processed_v2'
+    output_dir_path = output_dir_path_base / 'processed_v3'
     
     qi2lab_exists = True
     # check if qi2lab zarr structure exists
@@ -167,15 +165,7 @@ def postprocess(dataset_path: Path,
             
     else:
         qi2lab_exists = False
-        
-    progress_updates = {
-        "Round": 0,
-        "Tile": 0,
-        "Channel": 0,
-        "Register/Process": 0,
-        "Decode": 0,
-    }
-    
+           
     if not(qi2lab_exists):
         output_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -342,13 +332,13 @@ def postprocess(dataset_path: Path,
                     # construct directory name
                     current_tile_dir_path = Path(root_name+'_r'+str(r_idx+1).zfill(4)+'_tile'+str(tile_idx).zfill(4)+'_1')
                     tile_dir_path_to_load = dataset_path / current_tile_dir_path
+                    tile_data_path_to_load = tile_dir_path_to_load / Path(root_name+'_r'+str(r_idx+1).zfill(4)+'_tile'+str(tile_idx).zfill(4)+'_NDTiffStack.tif')
 
                     file_load = False
                     # open dataset directory using NDTIFF
-                    try:
-                        dataset = Dataset(str(tile_dir_path_to_load))
+                    if tile_data_path_to_load.exists():
                         file_load = True
-                    except Exception:
+                    else:
                         file_load = False
                         print('Dataset loading error. Skipping this stage position.')
     
@@ -380,10 +370,10 @@ def postprocess(dataset_path: Path,
                     if file_load:
                         # loop over all channels in this round/tile
                         for channel_id, ch_idx in zip(channels_ids_in_data_tile,channels_idxs_in_data_tile):
-                            # load raw data into memory via Dask
+                            # load raw data into memory via tifffile
                             raw_data_success = False
                             try:
-                                raw_data = return_data_dask(dataset,channel_id)
+                                raw_data = return_data_zarr(tile_data_path_to_load,ch_idx,4)
                                 raw_data_success = True
                             except Exception:
                                 raw_data_success = False
@@ -478,9 +468,6 @@ def postprocess(dataset_path: Path,
                                                     metadata=metadata,
                                                     photometric='minisblack',
                                                     resolutionunit='CENTIMETER')
-                                        
-                        dataset.close()
-                        del dataset
                         gc.collect()
                     
     if run_tile_registration:

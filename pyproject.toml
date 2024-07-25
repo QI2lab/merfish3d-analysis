@@ -14,7 +14,7 @@ authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
 dynamic = ["version"]
-dependencies = ["numpy", "tifffile", "zarr", "numba", "ndstorage",
+dependencies = ["numpy", "tifffile", "zarr", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "magicgui[pyqt5]", "napari", "pandas",
                 "scikit-image", "pyarrow", "tbb", "shapely",

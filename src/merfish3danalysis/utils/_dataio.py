@@ -1,30 +1,28 @@
-#!/usr/bin/env python
+"""
+Data I/O functions for qi2lab 3D MERFISH
 
-'''
-QI2lab OPM suite
-Reconstruction tools
-
-Read and write metadata, read raw data, Zarr creation, Zarr conversion
-'''
+Shepherd 2024/07 - Remove native NDTiff reading package and use tifffile/zarr.
+                   Trying to remove as much dask dependence as possible.
+"""
 
 import re
-from typing import Dict, Union, List
-from numpy.typing import NDArray
+from typing import Union, Sequence, Optional
+from numpy.typing import ArrayLike
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from ndstorage import Dataset
+from tifffile import imread
 from datetime import datetime
 import scipy.sparse as sparse
 import scipy.io as sio
 import subprocess
 import csv
 import json
+import zarr
+import tensorstore as ts
 
-def read_metadatafile(fname: Union[str,Path]) -> Dict:
-    """
-    Read data from csv file consisting of one line giving titles, and the other giving values.
-    Return as dictionary
+def read_metadatafile(fname: Union[str,Path]) -> dict:
+    """Read metadata from csv file. 
 
     Parameters
     ----------
@@ -67,13 +65,17 @@ def read_metadatafile(fname: Union[str,Path]) -> Dict:
 
     return metadata
 
-def read_config_file(config_path):
-    """
-    Read data from csv file consisting of one line giving titles, and the other giving values. Return as dictionary
-
-    :param config_path: Path
+def read_config_file(config_path: Union[Path,str]) -> dict:
+    """Read config data from csv file. 
+    
+    Parameters
+    ----------
+    config_path: Path
         Location of configuration file
-    :return dict_from_csv: dict
+    
+    Returns
+    -------
+    dict_from_csv: dict
         instrument configuration metadata
     """
 
@@ -81,14 +83,17 @@ def read_config_file(config_path):
 
     return dict_from_csv
 
-def read_fluidics_program(program_path):
-    """
-    Read fluidics program from CSV file as pandas dataframe
+def read_fluidics_program(program_path: Union[Path,str]) -> pd.DataFrame:
+    """Read fluidics program from CSV file as pandas dataframe.
 
-    :param program_path: Path
+    Parameters
+    ----------
+    program_path: Path
         location of fluidics program
 
-    :return df_fluidics: Dataframe
+    Returns
+    -------
+    df_fluidics: Dataframe
         dataframe containing fluidics program 
     """
 
@@ -105,10 +110,9 @@ def read_fluidics_program(program_path):
 
     return df_fluidics
 
-def write_metadata(data_dict: Dict, 
-                   save_path: Union[str,Path]):
-    """
-    Write dictionary as CSV file
+def write_metadata(data_dict: dict, 
+                   save_path: Union[str,Path]) -> None:
+    """Write dictionary as CSV file.
 
     Parameters
     ----------
@@ -124,46 +128,78 @@ def write_metadata(data_dict: Dict,
     """
     
     pd.DataFrame([data_dict]).to_csv(save_path)
-
-def return_data_dask(dataset: Dataset,
-                     channel_id: str) -> NDArray:
-    """
-    Return NDTIFF data as a numpy array via dask
+    
+def return_data_zarr(dataset_path: Union[Path,str],
+                     ch_idx : int,
+                     ch_idx_offset: Optional[int] = 0) -> ArrayLike:
+    """Return NDTIFF data as a numpy array via tiffile.
 
     Parameters
     ----------
     dataset: Dataset
         pycromanager dataset object
-    channel_axis: str
-        channel axis name. One of 'Blue', 'Yellow', 'Red'.
+    ch_idx: int
+        channel index in ZarrTiffStore file
+    ch_idx_offset: int
+        channel index offset for unused phase channels
 
     Returns
     -------
     data: NDArray
         data stack
     """
+    
+    ndtiff_zarr_store = imread(dataset_path, mode='r+', aszarr=True)
+    ndtiff_zarr = zarr.open(ndtiff_zarr_store, mode='r+')
+    first_dim = str(ndtiff_zarr.attrs['_ARRAY_DIMENSIONS'][0])
 
-    data = dataset.as_array(channel=channel_id)
-    data = data.compute(scheduler="single-threaded")
-
+    if first_dim == 'C':
+        data = np.asarray(ndtiff_zarr[ch_idx-ch_idx_offset, :],dtype=np.uint16)
+    else:
+        data = np.asarray(ndtiff_zarr[:,ch_idx-ch_idx_offset,:],dtype=np.uint16)
+    del ndtiff_zarr_store, ndtiff_zarr
+    
     return np.squeeze(data)
+    
+# def return_data_dask(dataset: Dataset,
+#                      channel_id: str) -> NDArray:
+#     """
+#     Return NDTIFF data as a numpy array via dask
+
+#     Parameters
+#     ----------
+#     dataset: Dataset
+#         pycromanager dataset object
+#     channel_axis: str
+#         channel axis name. One of 'Blue', 'Yellow', 'Red'.
+
+#     Returns
+#     -------
+#     data: NDArray
+#         data stack
+#     """
+
+#     data = dataset.as_array(channel=channel_id)
+#     data = data.compute(scheduler="single-threaded")
+
+#     return np.squeeze(data)
 
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def load_baysor_outlines(baysor_outlines_path: Path):
+def load_baysor_outlines(baysor_outlines_path: Union[Path,str]) -> dict:
     with open(baysor_outlines_path, 'r') as f:
         outlines = json.load(f)
         
     return outlines
 
-def save_baysor_outlines(outlines,
-                         outlines_path: Path):
+def save_baysor_outlines(outlines: dict,
+                         outlines_path: Union[Path,str]) -> None:
     with open(outlines_path, 'w') as f:
         json.dump(outlines, f, indent=4)
         
-def resave_baysor_output(baysor_result_path: Path,
-                         baysor_output_path: Path):
+def resave_baysor_output(baysor_result_path: Union[Path,str],
+                         baysor_output_path: Union[Path,str]) -> None:
     
     df_baysor = pd.read_csv(baysor_result_path)
     selected_columns = ['gene','z','y','x','cell_id','confidence','cell','assignment_confidence']
@@ -179,10 +215,10 @@ def resave_baysor_output(baysor_result_path: Path,
     
     df_filtered_baysor.to_parquet(baysor_output_path)
     
-def create_mtx(baysor_output_path: Path, 
-               output_dir_path: Path, 
+def create_mtx(baysor_output_path: Union[Path,str], 
+               output_dir_path: Union[Path,str], 
                confidence_cutoff: float = 0.7, 
-               rep_int:int = 100000):
+               rep_int:int = 100000) -> None:
 
     try:
         baysor_path = Path(baysor_output_path)
@@ -230,7 +266,10 @@ def create_mtx(baysor_output_path: Path,
 
     write_sparse_mtx(output_dir_path, matrix, cells, features)
 
-def write_sparse_mtx(output_dir_path, matrix, cells, features):
+def write_sparse_mtx(output_dir_path : Union[Path,str], 
+                     matrix: ArrayLike, 
+                     cells: Sequence[str], 
+                     features: Sequence[str]) -> None:
 
     sparse_mat = sparse.coo_matrix(matrix.values)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
