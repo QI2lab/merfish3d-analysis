@@ -8,12 +8,13 @@ from typing import Union, Optional, Sequence, Tuple, Collection
 from pathlib import Path
 from numpy.typing import ArrayLike
 
-# import tensorstore as ts
+import tensorstore as ts
 import zarr
 import pandas as pd
 import numpy as np
 import gc
 import json
+from numcodecs import blosc
 
 class qi2labDataStore:
     def __init__(self, datastore_path: Union[str, Path]):
@@ -32,6 +33,18 @@ class qi2labDataStore:
             self._parse_datastore()
         else:
             self._init_datastore()
+            
+        self._blosc_compressor = blosc.Blosc(cname="zstd", clevel=5, shuffle=blosc.Blosc.BITSHUFFLE)
+        self._zarrv2_spec = {
+            'driver': 'zarr',
+            'kvstore': None,
+            'metadata': {
+                'chunks': None,
+                'compressor': self._blosc_compressor  # Set Blosc compressor
+            },
+            'create': False,
+            'delete_existing': False
+        }
             
     @property
     def datastore_state(self) -> Optional[dict]:
@@ -207,6 +220,7 @@ class qi2labDataStore:
         # initialize datastore state
         self._datastore_state_json_path = self._datastore_path / Path(r'datastore_state.json')
         self._datastore_state = {
+            "Version": 0.3,
             "Initialized": True,
             "Converted": False,
             "LocalRegister": False,
@@ -218,11 +232,26 @@ class qi2labDataStore:
             "RefinedCells": False,
             "RefinedSpots": False,
             "mtxOutput": False
-        }
+        } 
         
         with open('progress.json', 'w') as json_file:
             json.dump(self._datastore_state, json_file, indent=4)
-                
+    
+    @staticmethod
+    def _get_kvstore_key(path: Union[Path,str]) -> dict:
+        """Convert datastore location to tensorstore kvstore key"""
+        path_str = str(path)
+        if path_str.startswith("s3://") or "s3.amazonaws.com" in path_str:
+            return {'driver': 's3', 'path': path_str}
+        elif path_str.startswith("gs://") or "storage.googleapis.com" in path_str:
+            return {'driver': 'gcs', 'path': path_str}
+        elif path_str.startswith("azure://") or "blob.core.windows.net" in path_str:
+            return {'driver': 'azure', 'path': path_str}
+        elif path_str.startswith("http://") or path_str.startswith("https://"):
+            raise ValueError("Unsupported cloud storage provider in URL")
+        else:
+            return {'driver': 'file', 'path': path_str}
+                  
     def _parse_datastore(self):
         """Parse datastore to discover available components."""
         
@@ -284,104 +313,239 @@ class qi2labDataStore:
         calibrations_dir_path = self._dataset_path / Path("calibrations.zarr")
         calibrations_zarr = zarr.open(calibrations_dir_path, mode="r")
         self._psfs = np.asarray(calibrations_zarr["psf_data"], dtype=np.float32)
-        try:
-            self._na = float(current_round.attrs["na"])
-        except Exception:
-            self._na = 1.35
-        try:
-            self._ri = float(current_round.attrs["ri"])
-        except Exception:
-            self._ri = 1.51
 
         del current_round, calibrations_zarr
         gc.collect()
-        
+                
     def load_codebook_parsed(
         self,
-    ) -> Tuple[Collection[str],ArrayLike]:
+    ) -> Optional[Tuple[Collection[str],ArrayLike]]:
         pass
 
     def load_local_bit_linker(
         self, 
         tile_idx: int = 0, 
         round_idx: int = 0,
-    ) -> Sequence[int]:
+    ) -> Optional[Sequence[int]]:
         pass
     
     def save_local_bit_linker(
         self,
         bit_linker: Sequence[int],
         tile_idx: int = 0, 
-        round_idx: int = 0,
-    ) -> None:
+        round_idx: int = -1,
+    ):
         pass
 
     def load_local_round_linker(
         self, 
         tile_idx: int = 0, 
-        bit_idx: int = 0
-    ) -> Sequence[int]:
+        bit_idx: int = -1,
+    ) -> Optional[Sequence[int]]:
         pass
     
     def save_local_round_linker(
         self, 
         round_linker: Sequence[int],
         tile_idx: int = 0, 
-        bit_idx: int = 0
-    ) -> None:
+        bit_idx: int = -1,
+    ):
         pass
 
     def load_local_stage_position_zyx_um(
         self, 
         tile_idx: int = 0, 
-        round_idx: int = 0,
-    ) -> ArrayLike:
-        pass
+        round_idx: int = -1,
+    ) -> Optional[ArrayLike]:
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        else:
+            return None
+        
+        if not(current_local_zarr_path.exists()):
+            return None
+        
+        current_local = ts.open({
+            **self._zarrv2_spec,
+            'kvstore': self._get_kvstore_key(current_local_zarr_path),
+        }).result()
+        
+        try:
+            stage_position_zyx_um = np.asarray(current_local.attrs["stage_zyx_um"], dtype=np.float32)
+        except Exception:
+            return None
+        
+        del current_local_zarr_path, current_local
+        gc.collect()
+        
+        return stage_position_zyx_um
     
     def save_local_stage_position_zyx_um(
         self,
         stage_position_zyx_um: ArrayLike,
         tile_idx: int = 0, 
         round_idx: int = 0,
-    ) -> None:
-        pass
-
+    ):
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        else:
+            return
+        
+        spec = self._zarrv2_spec.copy()
+        if not current_local_zarr_path.exists():
+            spec['create'] = True
+            spec['delete_existing'] = False
+        
+        spec['kvstore'] = self._get_kvstore_key(current_local_zarr_path)
+        spec['metadata']['dtype'] = '<f4'
+        spec['metadata']['shape'] = (1,)
+        spec['metadata']['chunks'] = (1,)
+        
+        current_local = ts.open(spec).result()
+        
+        current_local.attrs['stage_zyx_um'] = np.array(stage_position_zyx_um).tolist()
+        
+        del current_local_zarr_path, current_local, spec
+        gc.collect()
+        
     def load_local_wavelengths_um(
         self,
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
-    ) -> Tuple[float,float]:
-        pass
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
+    ) -> Optional[Tuple[float,float]]:
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return None
+        
+        if not current_local_zarr_path.exists():
+            return None
+        
+        current_local = ts.open({
+            **self._zarrv2_spec,
+            'kvstore': self._get_kvstore_key(current_local_zarr_path),
+        }).result()
+        
+        try:
+            excitation_um = float(current_local.attrs['excitation_um'])
+            emission_um = float(current_local.attrs['emission_um'])
+        except Exception:
+            return None
+        
+        del current_local_zarr_path, current_local
+        gc.collect()
+        
+        return (excitation_um, emission_um)
     
     def save_local_wavelengths_um(
         self,
         wavelengths_um: Tuple[float,float],
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
-    ) -> None:
-        pass
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
+    ):
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return
+        
+        spec = self._zarrv2_spec.copy()
+        if not current_local_zarr_path.exists():
+            spec['create'] = True
+            spec['delete_existing'] = False
+        
+        spec['kvstore'] = self._get_kvstore_key(current_local_zarr_path)
+        spec['metadata']['dtype'] = '<f4'
+        spec['metadata']['shape'] = (1,)
+        spec['metadata']['chunks'] = (1,)
+        
+        current_local = ts.open(spec).result()
+
+        current_local.attrs['excitation_um'] = wavelengths_um[0]
+        current_local.attrs['emission_um'] = wavelengths_um[1]
+        
+        del current_local_zarr_path, current_local, spec
+        gc.collect()
 
     def load_local_corrected_image(
         self,
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
-    ) -> ArrayLike:
-        pass
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
+    ) -> Optional[ArrayLike]:
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return None
+        
+        if not current_local_zarr_path.exists():
+            return None
+        
+        current_local = ts.open({
+            **self._zarrv2_spec,
+            'kvstore': self._get_kvstore_key(current_local_zarr_path),
+        }).result()
+        
+        try:
+            corrected_image = current_local['corrected_data']
+        except Exception:
+            return None
+        
+        del current_local_zarr_path, current_local
+        gc.collect()
+        
+        return corrected_image
 
     def save_local_corrected_image(
         self,
         image: ArrayLike,
         gain_correction: bool = True,
-        hotpixel_corection: bool = True,
+        hotpixel_correction: bool = True,
         shading_correction: bool = False,
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
     ):
-        pass
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return
+        
+        spec = self._zarrv2_spec.copy()
+        if not current_local_zarr_path.exists():
+            spec['create'] = True
+            spec['delete_existing'] = False
+        
+        spec['kvstore'] = self._get_kvstore_key(current_local_zarr_path)
+        spec['metadata']['dtype'] = str(image.dtype)
+        spec['metadata']['shape'] = image.shape
+        spec['metadata']['chunks'] = [1,image.shape[1],image.shape[2]]
+        
+        current_local = ts.open(spec).result()
+
+        current_local['corrected_data'][...] = image
+        current_local.attrs['gain'] = gain_correction
+        current_local.attrs['hotpixel'] = hotpixel_correction
+        current_local.attrs['shading'] = shading_correction
+        
+        del current_local_zarr_path, current_local, spec
+        gc.collect()
+        
+        return
 
     def load_local_coord_rigid_xform_xyz_px(
         self,
@@ -416,35 +580,127 @@ class qi2labDataStore:
     def load_local_registered_image(
         self,
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
-    ) -> ArrayLike:
-        pass
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
+    ) -> Optional[ArrayLike]:
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return None
+        
+        if not current_local_zarr_path.exists():
+            return None
+        
+        current_local = ts.open({
+            **self._zarrv2_spec,
+            'kvstore': self._get_kvstore_key(current_local_zarr_path),
+        }).result()
+        
+        try:
+            registered_image = current_local['registered_decon_data']
+        except Exception:
+            return None
+        
+        del current_local_zarr_path, current_local
+        gc.collect()
+        
+        return registered_image
 
     def save_local_registered_image(
         self,
-        image: ArrayLike,
+        registered_image: ArrayLike,
         deconvolution_run: bool = True,
         tile_idx: int = 0,
-        round_idx: Optional[int] = 0,
-        bit_idx: Optional[int] = 0,
-    ) -> None:
-        pass
+        round_idx: Optional[int] = -1,
+        bit_idx: Optional[int] = -1,
+    ):
+        
+        if round_idx > -1:
+            current_local_zarr_path = str(self._polyDT_root_path / Path(self._tile_ids[tile_idx]) / Path(self._round_ids[round_idx] + ".zarr"))
+        elif bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return
+        
+        if not current_local_zarr_path.exists():
+            return
+        
+        spec = self._zarrv2_spec.copy()
+        spec['kvstore'] = self._get_kvstore_key(current_local_zarr_path)
+        spec['metadata']['dtype'] = str(registered_image.dtype)
+        spec['metadata']['shape'] = registered_image.shape
+        spec['metadata']['chunks'] = [1,registered_image.shape[1],registered_image.shape[2]]
+        
+        current_local = ts.open(spec).result()
+
+        current_local['registered_decon_data'][...] = registered_image
+        
+        del current_local_zarr_path, current_local, spec
+        gc.collect()
+        
+        return
 
     def load_local_ufish_image(
         self,
         tile_idx: int = 0,
-        bit_idx: int = 0,
-    ) -> ArrayLike:
-        pass
+        bit_idx: int = -1,
+    ) -> Optional[ArrayLike]:
+        
+        if bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return None
+        
+        if not current_local_zarr_path.exists():
+            return None
+        
+        current_local = ts.open({
+            **self._zarrv2_spec,
+            'kvstore': self._get_kvstore_key(current_local_zarr_path),
+        }).result()
+        
+        try:
+            ufish_image = current_local['registered_ufish_data']
+        except Exception:
+            return None
+        
+        del current_local_zarr_path, current_local
+        gc.collect()
+        
+        return ufish_image
 
     def save_local_ufish_image(
         self,
-        image: ArrayLike,
+        ufish_image: ArrayLike,
         tile_idx: int = 0,
-        bit_idx: int = 0,
-    ) -> None:
-        pass
+        bit_idx: int = -1,
+    ):
+        
+        if bit_idx > -1:
+            current_local_zarr_path = str(self._readouts_root_path / Path(self._tile_ids[tile_idx]) / Path(self._bit_ids[bit_idx] + ".zarr"))
+        else:
+            return
+        
+        if not current_local_zarr_path.exists():
+            return
+        
+        spec = self._zarrv2_spec.copy()
+        spec['kvstore'] = self._get_kvstore_key(current_local_zarr_path)
+        spec['metadata']['dtype'] = str(ufish_image.dtype)
+        spec['metadata']['shape'] = ufish_image.shape
+        spec['metadata']['chunks'] = [1,ufish_image.shape[1],ufish_image.shape[2]]
+        
+        current_local = ts.open(spec).result()
+
+        current_local['registered_ufish_data'][...] = ufish_image
+        
+        del current_local_zarr_path, current_local, spec
+        gc.collect()
+        
+        return
 
     def load_local_ufish_spots(
         self,
@@ -460,14 +716,7 @@ class qi2labDataStore:
         bit_idx: int = 0,
     ) -> None:
         pass
-
-    def load_local_predict_image(
-        self,
-        tile_idx: int = 0,
-        bit_idx: int = 0,
-    ) -> ArrayLike:
-        pass
-    
+        
     def load_global_coord_xforms_um(
         self,
         tile_idx: int = 0,
