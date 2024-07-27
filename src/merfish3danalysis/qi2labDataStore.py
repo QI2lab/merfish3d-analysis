@@ -14,6 +14,7 @@ import gc
 import json
 from itertools import product
 
+
 class qi2labDataStore:
     def __init__(self, datastore_path: Union[str, Path]):
         """API to qi2lab MERFISH store.
@@ -28,7 +29,7 @@ class qi2labDataStore:
             "id": "blosc",
             "cname": "zstd",
             "clevel": 5,
-            "shuffle": 2
+            "shuffle": 2,
         }
         self._zarrv2_spec = {
             "driver": "zarr",
@@ -234,7 +235,6 @@ class qi2labDataStore:
             "SegmentedCells": False,
             "DecodedSpots": False,
             "FilteredSpots": False,
-            "RefinedCells": False,
             "RefinedSpots": False,
             "mtxOutput": False,
         }
@@ -278,34 +278,33 @@ class qi2labDataStore:
         # read in .json in root directory that indicates what steps have been run
         # with open("progress.json", "r") as json_file:
         #     self._datastore_state = json.load(json_file)
-            
+
         self._datastore_state = {
             "Version": 0.2,
             "Initialized": True,
             "Calibrations": True,
             "Corrected": True,
-            "LocalRegistered": False,
-            "GlobalRegistered": False,
-            "Fused": False,
-            "SegmentedCells": False,
-            "DecodedSpots": False,
-            "FilteredSpots": False,
-            "RefinedCells": False,
-            "RefinedSpots": False,
+            "LocalRegistered": True,
+            "GlobalRegistered": True,
+            "Fused": True,
+            "SegmentedCells": True,
+            "DecodedSpots": True,
+            "FilteredSpots": True,
+            "RefinedSpots": True,
             "mtxOutput": False,
         }
 
         # validate calibrations.zarr
         if self._datastore_state["Calibrations"]:
             if not (self._calibrations_zarr_path.exists()):
-                print('Calibration data error.')
+                print("Calibration data error.")
             try:
                 zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
-                with open(zattrs_path, 'r') as f:
+                with open(zattrs_path, "r") as f:
                     attributes = json.load(f)
             except Exception:
-                print('Calibration attributes not found')
-            
+                print("Calibration attributes not found")
+
             keys_to_check = [
                 "num_rounds",
                 "num_tiles",
@@ -319,22 +318,19 @@ class qi2labDataStore:
                 "codebook",
             ]
             if self._datastore_state["Version"] == 0.3:
-                keys_to_check.append([
-                    "microscope_type",
-                    "camera_model",
-                    "voxel_size_zyx_um"
-                ])
+                keys_to_check.append(
+                    ["microscope_type", "camera_model", "voxel_size_zyx_um"]
+                )
             for key in keys_to_check:
                 if key not in attributes.keys():
                     raise Exception("Calibration attributes incomplete")
                 else:
-                    setattr(self,"_"+key,attributes[key])
-                
+                    setattr(self, "_" + key, attributes[key])
+
             current_local_zarr_path = str(
-                self._calibrations_zarr_path
-                / Path("psf_data")
+                self._calibrations_zarr_path / Path("psf_data")
             )
-                        
+
             try:
                 current_local = ts.open(
                     {
@@ -344,15 +340,14 @@ class qi2labDataStore:
                 ).result()
                 self._psfs = current_local.read().result()
             except Exception:
-                print('Calibration psfs missing.')
-                
+                print("Calibration psfs missing.")
+
             del current_local_zarr_path, current_local
-                
+
             current_local_zarr_path = str(
-                self._calibrations_zarr_path
-                / Path("noise_map")
+                self._calibrations_zarr_path / Path("noise_map")
             )
-                        
+
             try:
                 current_local = ts.open(
                     {
@@ -362,7 +357,7 @@ class qi2labDataStore:
                 ).result()
                 self._noise_map = current_local.read().result()
             except Exception:
-                print('Calibration noise map missing.')
+                print("Calibration noise map missing.")
 
         # validate polyDT and readout bits data
         if self._datastore_state["Corrected"]:
@@ -377,7 +372,9 @@ class qi2labDataStore:
                     ],
                     key=lambda x: int(x.split("tile")[1].split(".zarr")[0]),
                 )
-                current_tile_dir_path = self._polyDT_root_path / Path(polyDT_tile_ids[0])
+                current_tile_dir_path = self._polyDT_root_path / Path(
+                    polyDT_tile_ids[0]
+                )
                 self._round_ids = sorted(
                     [
                         entry.name.split(".")[0]
@@ -413,14 +410,41 @@ class qi2labDataStore:
             ), "polyDT and readout tile ids do not match. Conversion error."
             self._tile_ids = polyDT_tile_ids.copy()
             del polyDT_tile_ids, readout_tile_ids
-            
-            for tile_id, round_id in product(self._tile_ids,self._round_ids):
+
+            for tile_id, round_id in product(self._tile_ids, self._round_ids):
+                try:
+                    zattrs_path = str(
+                        self._polyDT_root_path
+                        / Path(tile_id)
+                        / Path(round_id + ".zarr")
+                        / Path(".zattrs")
+                    )
+                    with open(zattrs_path, "r") as f:
+                        attributes = json.load(f)
+                except Exception:
+                    print("polyDT tile attributes not found")
+
+                keys_to_check = [
+                    "stage_zyx_um",
+                    "excitation_um",
+                    "emission_um",
+                    "voxel_zyx_um",
+                    "bits",
+                    "exposure_ms",
+                    "psf_idx",
+                ]
+
+                for key in keys_to_check:
+                    if key not in attributes.keys():
+                        raise Exception("Corrected polyDT attributes incomplete")
+
                 current_local_zarr_path = str(
                     self._polyDT_root_path
                     / Path(tile_id)
                     / Path(round_id + ".zarr")
-                    / Path("corrected_data"))
-                
+                    / Path("corrected_data")
+                )
+
                 try:
                     current_local = ts.open(
                         {
@@ -429,16 +453,42 @@ class qi2labDataStore:
                         }
                     ).result()
                 except Exception:
-                    print(tile_id,round_id)
+                    print(tile_id, round_id)
                     print("Corrected polyDT data missing.")
-                                    
-            for tile_id, bit_id in product(self._tile_ids,self._bit_ids):
+
+            for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
+                try:
+                    zattrs_path = str(
+                        self._readouts_root_path
+                        / Path(tile_id)
+                        / Path(bit_id + ".zarr")
+                        / Path(".zattrs")
+                    )
+                    with open(zattrs_path, "r") as f:
+                        attributes = json.load(f)
+                except Exception:
+                    print("Readout tile attributes not found")
+
+                keys_to_check = [
+                    "stage_zyx_um",
+                    "excitation_um",
+                    "emission_um",
+                    "voxel_zyx_um",
+                    "round",
+                    "exposure_ms",
+                    "psf_idx",
+                ]
+                for key in keys_to_check:
+                    if key not in attributes.keys():
+                        raise Exception("Corrected readout attributes incomplete")
+
                 current_local_zarr_path = str(
                     self._readouts_root_path
                     / Path(tile_id)
                     / Path(bit_id + ".zarr")
-                    / Path("corrected_data"))
-                
+                    / Path("corrected_data")
+                )
+
                 try:
                     current_local = ts.open(
                         {
@@ -447,62 +497,247 @@ class qi2labDataStore:
                         }
                     ).result()
                 except Exception:
-                    print(tile_id,bit_id)
+                    print(tile_id, bit_id)
                     print("Corrected readout data missing.")
 
-        # check and validate registered data
+        # check and validate local registered data
         if self._datastore_state["LocalRegistered"]:
-            try:
-                for tile_id, round_id in product(self._tile_ids,self._round_ids):
+            for tile_id, round_id in product(self._tile_ids, self._round_ids):
+                if round_id is not self._round_ids[0]:
+                    try:
+                        zattrs_path = str(
+                            self._polyDT_root_path
+                            / Path(tile_id)
+                            / Path(round_id + ".zarr")
+                            / Path(".zattrs")
+                        )
+                        with open(zattrs_path, "r") as f:
+                            attributes = json.load(f)
+                    except Exception:
+                        print("polyDT tile attributes not found")
+
+                    keys_to_check = ["rigid_xform_xyz_px"]
+
+                    for key in keys_to_check:
+                        if key not in attributes.keys():
+                            raise Exception("Rigid registration missing")
+
                     current_local_zarr_path = str(
                         self._polyDT_root_path
                         / Path(tile_id)
-                        / Path(round_id + ".zarr"))
-                        
+                        / Path(round_id + ".zarr")
+                        / Path("of_xform_3x_px")
+                    )
+
+                    try:
+                        current_local = ts.open(
+                            {
+                                **self._zarrv2_spec,
+                                "kvstore": self._get_kvstore_key(
+                                    current_local_zarr_path
+                                ),
+                            }
+                        ).result()
+                    except Exception:
+                        print(tile_id, round_id)
+                        print("Optical flow registration data missing.")
+
+                current_local_zarr_path = str(
+                    self._polyDT_root_path
+                    / Path(tile_id)
+                    / Path(round_id + ".zarr")
+                    / Path("registered_decon_data")
+                )
+
+                try:
                     current_local = ts.open(
                         {
                             **self._zarrv2_spec,
                             "kvstore": self._get_kvstore_key(current_local_zarr_path),
                         }
                     ).result()
-                    
-                    if "registered_decon_data" not in current_local.keys():
-                        raise Exception
-            except Exception:
-                print('PolyDT local registration error.')
-                
-            try:
-                for tile_id, bit_id in product(self._tile_ids,self._bit_ids):
-                    current_local_zarr_path = str(
-                        self._readouts_root_path
+                except Exception:
+                    print(tile_id, round_id)
+                    print("Registered polyDT data missing.")
+
+            for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
+                current_local_zarr_path = str(
+                    self._readouts_root_path
+                    / Path(tile_id)
+                    / Path(bit_id + ".zarr")
+                    / Path("registered_decon_data")
+                )
+
+                try:
+                    current_local = ts.open(
+                        {
+                            **self._zarrv2_spec,
+                            "kvstore": self._get_kvstore_key(current_local_zarr_path),
+                        }
+                    ).result()
+                except Exception:
+                    print(tile_id, round_id)
+                    print("Registered readout data missing.")
+
+                current_local_zarr_path = str(
+                    self._readouts_root_path
+                    / Path(tile_id)
+                    / Path(bit_id + ".zarr")
+                    / Path("registered_ufish_data")
+                )
+
+                try:
+                    current_local = ts.open(
+                        {
+                            **self._zarrv2_spec,
+                            "kvstore": self._get_kvstore_key(current_local_zarr_path),
+                        }
+                    ).result()
+                except Exception:
+                    print(tile_id, round_id)
+                    print("Registered ufish prediction missing.")
+
+        for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
+            current_ufish_path = (
+                self._ufish_localizations_root_path
+                / Path(tile_id)
+                / Path(bit_id + ".parquet")
+            )
+            if not (current_ufish_path.exists()):
+                raise Exception(tile_id + " " + bit_id + " ufish localization missing")
+
+        # check and validate global registered data
+        if self._datastore_state["GlobalRegistered"]:
+            for tile_id in self._tile_ids:
+                try:
+                    zattrs_path = str(
+                        self._polyDT_root_path
                         / Path(tile_id)
-                        / Path(bit_id + ".zarr"))
-                        
-                    current_local = ts.open(
-                        {
-                            **self._zarrv2_spec,
-                            "kvstore": self._get_kvstore_key(current_local_zarr_path),
-                        }
-                    ).result()
-                    
-                    if "registered_decon_data" not in current_local.keys():
-                        raise Exception
-                    if "registered_ufish_data" not in current_local.keys():
-                        raise Exception
+                        / Path(self._round_ids[0] + ".zarr")
+                        / Path(".zattrs")
+                    )
+                    with open(zattrs_path, "r") as f:
+                        attributes = json.load(f)
+                except Exception:
+                    print("polyDT tile attributes not found")
+
+                keys_to_check = ["affine_zyx_um", "origin_zyx_um", "spacing_zyx_um"]
+
+                for key in keys_to_check:
+                    if key not in attributes.keys():
+                        raise Exception("Global registration missing")
+
+        # check and validate fused
+        if self._datastore_state["Fused"]:
+            try:
+                zattrs_path = str(
+                    self._fused_root_path
+                    / Path("fused.zarr")
+                    / Path("fused_polyDT_iso_zyx")
+                    / Path(".zattrs")
+                )
+                with open(zattrs_path, "r") as f:
+                    attributes = json.load(f)
             except Exception:
-                print('Readouts local registration error.')
-            
-        # check and validate ufish_localization
+                print("Fused image attributes not found")
 
-        # check and validate decoded
+            keys_to_check = ["affine_zyx_um", "origin_zyx_um", "spacing_zyx_um"]
 
-        # check and validate fused polyDT
+            for key in keys_to_check:
+                if key not in attributes.keys():
+                    raise Exception("Fused image metadata missing")
 
-        # check and validate segmentation
+            current_local_zarr_path = str(
+                self._fused_root_path
+                / Path("fused.zarr")
+                / Path("fused_polyDT_iso_zyx")
+            )
 
-        # check and validate baysor
+            try:
+                current_local = ts.open(
+                    {
+                        **self._zarrv2_spec,
+                        "kvstore": self._get_kvstore_key(current_local_zarr_path),
+                    }
+                ).result()
+            except Exception:
+                print("Fused data missing.")
+
+        # check and validate cellpose segmentation
+        if self._datastore_state["SegmentedCells"]:
+            current_local_zarr_path = str(
+                self._segmentation_root_path
+                / Path("cellpose")
+                / Path("cellpose.zarr")
+                / Path("masks_polyDT_iso_zyx")
+            )
+
+            try:
+                current_local = ts.open(
+                    {
+                        **self._zarrv2_spec,
+                        "kvstore": self._get_kvstore_key(current_local_zarr_path),
+                    }
+                ).result()
+            except Exception:
+                print("Cellpose data missing.")
+
+            cell_centroids_path = (
+                self._segmentation_root_path
+                / Path("cellpose")
+                / Path("cell_centroids.parquet")
+            )
+            if not (cell_centroids_path.exists()):
+                raise Exception("Cellpose cell centroids missing.")
+            cell_outlines_path = (
+                self._segmentation_root_path
+                / Path("cellpose")
+                / Path("cell_outlines.json")
+            )
+            if not (cell_outlines_path.exists()):
+                raise Exception("Cellpose cell oultines missing.")
+
+        # check and validate decoded spots
+        if self._datastore_state["DecodedSpots"]:
+            for tile_id in self._tile_ids:
+                decoded_path = self._decoded_root_path / Path(
+                    tile_id + "_decoded_features.parquet"
+                )
+
+                if not (decoded_path.exists()):
+                    raise Exception(tile_id + " decoded spots missing.")
+
+        # check and validate filtered decoded spots
+        if self._datastore_state["FilteredSpots"]:
+            filtered_path = self._decoded_root_path / Path(
+                "all_tiles_filtered_decoded_features.parquet"
+            )
+
+            if not (filtered_path.exists()):
+                raise Exception("filtered decoded spots missing.")
+
+        if self._datastore_state["RefinedSpots"]:
+            baysor_spots_path = (
+                self._segmentation_root_path
+                / Path("baysor")
+                / Path("baysor_filtered_genes.parquet")
+            )
+
+            if not (baysor_spots_path.exists()):
+                raise Exception("Baysor filtered decoded spots missing.")
 
         # check and validate mtx
+        if self._datastore_state["mtxOutput"]:
+            mtx_barcodes_path = self._mtx_output_root_path / Path("barcodes.tsv.gz")
+            mtx_features_path = self._mtx_output_root_path / Path("features.tsv.gz")
+            mtx_matrix_path = self._mtx_output_root_path / Path("matrix.tsv.gz")
+
+            if (
+                not (mtx_barcodes_path.exists())
+                or not (mtx_features_path.exists())
+                or not (mtx_matrix_path.exists())
+            ):
+                raise Exception("mtx output missing.")
 
     def load_codebook_parsed(
         self,
