@@ -571,9 +571,7 @@ class qi2labDataStore:
                         kvstore=self._get_kvstore_key(current_local_zarr_path),
                         spec=self._zarrv2_spec,
                     )
-                    .read()
-                    .result()
-                )
+                ).result()
             except Exception:
                 print("Calibration psfs missing.")
 
@@ -589,9 +587,7 @@ class qi2labDataStore:
                         kvstore=self._get_kvstore_key(current_local_zarr_path),
                         spec=self._zarrv2_spec,
                     )
-                    .read()
-                    .result()
-                )
+                ).result()
             except Exception:
                 print("Calibration noise map missing.")
 
@@ -982,13 +978,13 @@ class qi2labDataStore:
     ) -> Optional[Sequence[int]]:
         """Load readout bits linked to fidicual round for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -998,7 +994,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((round, int)):
+        if isinstance(round, int):
             if round < 0:
                 print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
@@ -1043,13 +1039,13 @@ class qi2labDataStore:
     ) -> Optional[Sequence[int]]:
         """Load fidicual round linked to readout bit for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1059,7 +1055,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((bit, int)):
+        if isinstance(bit, int):
             if bit < 0 or bit > len(self._bit_ids):
                 print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                 return None
@@ -1104,13 +1100,13 @@ class qi2labDataStore:
     ) -> Optional[ArrayLike]:
         """Load tile stage position for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1120,7 +1116,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((round, int)):
+        if isinstance(round, int):
             if round < 0:
                 print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
@@ -1170,13 +1166,13 @@ class qi2labDataStore:
             print("Provide either 'round' or 'bit', but not both")
             return None
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1187,7 +1183,7 @@ class qi2labDataStore:
             return None
 
         if bit is not None:
-            if isinstance((bit, int)):
+            if isinstance(bit, int):
                 if bit < 0 or bit > len(self._bit_ids):
                     print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                     return None
@@ -1203,7 +1199,7 @@ class qi2labDataStore:
                 print("'bit' must be integer index or string identifier")
                 return None
         else:
-            if isinstance((round, int)):
+            if isinstance(round, int):
                 if round < 0:
                     print("Set round index >=0 and <" + str(self._num_rounds))
                     return None
@@ -1256,13 +1252,13 @@ class qi2labDataStore:
             print("Provide either 'round' or 'bit', but not both")
             return None
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1273,7 +1269,7 @@ class qi2labDataStore:
             return None
 
         if bit is not None:
-            if isinstance((bit, int)):
+            if isinstance(bit, int):
                 if bit < 0 or bit > len(self._bit_ids):
                     print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                     return None
@@ -1288,8 +1284,14 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
+            current_local_zarr_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("corrected_data")
+            )
         else:
-            if isinstance((round, int)):
+            if isinstance(round, int):
                 if round < 0:
                     print("Set round index >=0 and <" + str(self._num_rounds))
                     return None
@@ -1304,14 +1306,13 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-
-        current_local_zarr_path = str(
-            self._polyDT_root_path
-            / Path(tile_id)
-            / Path(local_id + ".zarr")
-            / Path("corrected_data")
-        )
-
+            current_local_zarr_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("corrected_data")
+            )
+        
         if not Path(current_local_zarr_path).exists():
             print("Array does not exist.")
             return None
@@ -1346,13 +1347,13 @@ class qi2labDataStore:
     ) -> ArrayLike:
         """Load calculated rigid registration transform for one round and tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1362,7 +1363,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((round, int)):
+        if isinstance(round, int):
             if round < 0:
                 print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
@@ -1410,13 +1411,13 @@ class qi2labDataStore:
     ) -> ArrayLike:
         """Local fidicual optical flow matrix for one round and tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1426,7 +1427,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((round, int)):
+        if isinstance(round, int):
             if round < 0:
                 print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
@@ -1475,8 +1476,8 @@ class qi2labDataStore:
     def load_local_registered_image(
         self,
         tile: Union[int, str],
-        round: Optional[Union[int, str]],
-        bit: Optional[Union[int, str]],
+        round: Optional[Union[int, str]] = None,
+        bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
         """Local registered, deconvolved image for fidiculial OR readout bit for one tile."""
@@ -1485,13 +1486,13 @@ class qi2labDataStore:
             print("Provide either 'round' or 'bit', but not both")
             return None
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1502,7 +1503,7 @@ class qi2labDataStore:
             return None
 
         if bit is not None:
-            if isinstance((bit, int)):
+            if isinstance(bit, int):
                 if bit < 0 or bit > len(self._bit_ids):
                     print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                     return None
@@ -1517,8 +1518,14 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
+            current_local_zarr_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("registered_decon_data")
+            )
         else:
-            if isinstance((round, int)):
+            if isinstance(round, int):
                 if round < 0:
                     print("Set round index >=0 and <" + str(self._num_rounds))
                     return None
@@ -1533,13 +1540,12 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-
-        current_local_zarr_path = str(
-            self._polyDT_root_path
-            / Path(tile_id)
-            / Path(local_id + ".zarr")
-            / Path("registered_decon_data")
-        )
+            current_local_zarr_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("registered_decon_data")
+            )
 
         if not current_local_zarr_path.exists():
             print("Array does not exist.")
@@ -1574,13 +1580,13 @@ class qi2labDataStore:
     ) -> Optional[ArrayLike]:
         """Load readout bit U-Fish prediction image for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1590,7 +1596,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((bit, int)):
+        if isinstance(bit, int):
             if bit < 0 or bit > len(self._bit_ids):
                 print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                 return None
@@ -1643,13 +1649,13 @@ class qi2labDataStore:
     ) -> pd.DataFrame:
         """Load U-Fish spot localizations and features for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1659,7 +1665,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if isinstance((bit, int)):
+        if isinstance(bit, int):
             if bit < 0 or bit > len(self._bit_ids):
                 print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                 return None
@@ -1704,13 +1710,13 @@ class qi2labDataStore:
     ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
         """Load global registration transform for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
@@ -1786,13 +1792,13 @@ class qi2labDataStore:
     ) -> pd.DataFrame:
         """Load decoded spots and features for one tile."""
 
-        if isinstance((tile, int)):
+        if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
             else:
-                tile_id = self._tile_id[tile]
-        elif isinstance((tile, str)):
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
