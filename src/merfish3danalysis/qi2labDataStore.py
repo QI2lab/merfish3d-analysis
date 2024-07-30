@@ -1,5 +1,5 @@
 """
-DataLoader: Load data from qi2lab MERFISH datastore
+qi2labDataStore: Interface to qi2lab MERFISH datastore
 
 Shepherd 2024/07 - initial commit
 """
@@ -21,7 +21,7 @@ class qi2labDataStore:
     ----------
     datastore_path : Union[str, Path]
         Path to qi2lab MERFISH store
-        
+
     """
 
     def __init__(self, datastore_path: Union[str, Path]):
@@ -413,6 +413,22 @@ class qi2labDataStore:
 
         with open(dictionary_path, "w") as file:
             json.dump(dictionary, file, indent=4)
+            
+    @staticmethod
+    def _load_from_microjson(dictionary_path: Union[Path, str]) -> dict:
+        """Load cell outlines outlines microjson as dictionary"""
+        
+        try:
+            with open(dictionary_path, 'r') as f:
+                data = json.load(f)
+                outlines = {}
+                for feature in data['features']:
+                    cell_id = feature['properties']['cell_id']
+                    coordinates = feature['geometry']['coordinates'][0]
+                    outlines[cell_id] = np.array(coordinates)
+        except Exception:
+            outlines = {}
+        return outlines
 
     @staticmethod
     def _check_for_zarr_array(kvstore: Union[Path, str], spec: dict):
@@ -949,11 +965,11 @@ class qi2labDataStore:
             ):
                 raise Exception("mtx output missing.")
 
-    # Loading and saving functions
-
     def load_codebook_parsed(
         self,
     ) -> Optional[tuple[Collection[str], ArrayLike]]:
+        """Load and split codebook into gene_ids and codebook matrix."""
+
         try:
             data = getattr(self, "_codebook", None)
 
@@ -1312,7 +1328,7 @@ class qi2labDataStore:
                 / Path(local_id + ".zarr")
                 / Path("corrected_data")
             )
-        
+
         if not Path(current_local_zarr_path).exists():
             print("Array does not exist.")
             return None
@@ -1344,7 +1360,7 @@ class qi2labDataStore:
         self,
         tile: Union[int, str],
         round: Union[int, str],
-    ) -> ArrayLike:
+    ) -> Optional[ArrayLike]:
         """Load calculated rigid registration transform for one round and tile."""
 
         if isinstance(tile, int):
@@ -1408,7 +1424,7 @@ class qi2labDataStore:
         tile: Optional[Union[int, str]],
         round: Optional[Union[int, str]],
         return_future: Optional[bool] = True,
-    ) -> ArrayLike:
+    ) -> Optional[ArrayLike]:
         """Local fidicual optical flow matrix for one round and tile."""
 
         if isinstance(tile, int):
@@ -1646,7 +1662,7 @@ class qi2labDataStore:
         self,
         tile: Union[int, str],
         bit: Union[int, str],
-    ) -> pd.DataFrame:
+    ) -> Optional[pd.DataFrame]:
         """Load U-Fish spot localizations and features for one tile."""
 
         if isinstance(tile, int):
@@ -1707,7 +1723,7 @@ class qi2labDataStore:
     def load_global_coord_xforms_um(
         self,
         tile: Union[int, str],
-    ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
+    ) -> Optional[tuple[ArrayLike, ArrayLike, ArrayLike]]:
         """Load global registration transform for one tile."""
 
         if isinstance(tile, int):
@@ -1755,7 +1771,7 @@ class qi2labDataStore:
     def load_global_fidicual_image(
         self,
         return_future: Optional[bool] = True,
-    ) -> ArrayLike:
+    ) -> Optional[ArrayLike]:
         """Load downsampled, fused fidicual image."""
 
         current_local_zarr_path = str(
@@ -1789,7 +1805,7 @@ class qi2labDataStore:
     def load_local_decoded_spots(
         self,
         tile: Union[int, str],
-    ) -> pd.DataFrame:
+    ) -> Optional[pd.DataFrame]:
         """Load decoded spots and features for one tile."""
 
         if isinstance(tile, int):
@@ -1829,7 +1845,7 @@ class qi2labDataStore:
 
     def load_global_filtered_decoded_spots(
         self,
-    ) -> pd.DataFrame:
+    ) -> Optional[pd.DataFrame]:
         """Load all decoded and filtered spots."""
 
         current_global_filtered_decoded_path = self._decoded_root_path / Path(
@@ -1853,8 +1869,23 @@ class qi2labDataStore:
 
     def load_global_cellpose_centroids(
         self,
-    ) -> pd.DataFrame:
-        pass
+    ) -> Optional[pd.DataFrame]:
+        """Load Cellpose prediction cell centroids."""
+
+        current_cellpose_centroids_path = (
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("cell_centroids.parquet")
+        )
+
+        if not current_cellpose_centroids_path.exists():
+            print("Array does not exist.")
+            return None
+        else:
+            cellpose_centroids = self._load_from_parquet(
+                current_cellpose_centroids_path
+            )
+            return cellpose_centroids
 
     def save_global_cellpose_centroids(
         self,
@@ -1864,9 +1895,24 @@ class qi2labDataStore:
 
     def load_global_cellpose_outlines(
         self,
-    ) -> dict:
-        pass
+    ) -> Optional[dict]:
+        """Load Cellpose max projection cell outlines."""
+        
+        current_cellpose_outlines_path = (
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("cell_outlines.json")
+        )
 
+        if not current_cellpose_outlines_path.exists():
+            print("Cellpose outlines do not exist.")
+            return None
+        else:
+            cellpose_outlines = self._load_from_microjson(
+                current_cellpose_outlines_path
+            )
+            return cellpose_outlines
+ 
     def save_global_cellpose_outlines(
         self,
         outlines: dict,
@@ -1875,8 +1921,28 @@ class qi2labDataStore:
 
     def load_global_cellpose_segmentation_image(
         self,
-    ) -> ArrayLike:
-        pass
+        return_future: Optional[bool] = True,
+    ) -> Optional[ArrayLike]:
+        """Load Cellpose max projection, downsampled segmentation image."""
+        
+        current_local_zarr_path = str(
+            self._segmentation_root_path / Path("cellpose") / Path("cellpose.zarr") / Path("masks_polyDT_iso_zyx")
+        )
+
+        if not current_local_zarr_path.exists():
+            print("Array does not exist.")
+            return None
+
+        try:
+            fused_image = self._load_from_zarr_array(
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future,
+            )
+            return fused_image
+        except Exception:
+            print("Error loading fused image.")
+            return None
 
     def save_global_cellpose_segmentation_image(
         self,
@@ -1884,12 +1950,27 @@ class qi2labDataStore:
     ) -> None:
         pass
 
-    def load_global_baysor_assigned_spots(
+    def load_global_baysor_filtered_spots(
         self,
-    ) -> pd.DataFrame:
-        pass
+    ) -> Optional[pd.DataFrame]:
+        """Load Baysor re-assigned decoded RNA."""
 
-    def save_global_baysor_assigned_spots(
+        current_baysor_spots_path = (
+            self._segmentation_root_path
+            / Path("baysor")
+            / Path("baysor_filtered_genes.parquet")
+        )
+
+        if not current_baysor_spots_path.exists():
+            print("Baysor filtered genes do not exist.")
+            return None
+        else:
+            baysor_filtered_genes = self._load_from_parquet(
+                current_baysor_spots_path
+            )
+            return baysor_filtered_genes
+
+    def save_global_baysor_filtered_spots(
         self,
         baysor_spots_df: pd.DataFrame,
     ) -> None:
@@ -1897,8 +1978,23 @@ class qi2labDataStore:
 
     def load_global_baysor_outlines(
         self,
-    ) -> dict:
-        pass
+    ) -> Optional[dict]:
+        """Load Baysor cell outlines."""
+        
+        current_baysor_outlines_path = (
+            self._segmentation_root_path
+            / Path("baysor")
+            / Path("cell_outlines.json")
+        )
+
+        if not current_baysor_outlines_path.exists():
+            print("Baysor outlines do not exist.")
+            return None
+        else:
+            baysor_outlines = self._load_from_microjson(
+                current_baysor_outlines_path
+            )
+            return baysor_outlines
 
     def save_global_baysor_outlines(self, outlines: dict) -> None:
         pass
