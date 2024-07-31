@@ -117,6 +117,10 @@ class qi2labDataStore:
         calib_zattrs["num_tiles"] = value
         self._save_to_json(calib_zattrs, zattrs_path)
 
+        self._tile_ids = []
+        for tile_idx in range(value):
+            self._tile_ids.append("tile" + str(tile_idx).zfill(4))
+
     @property
     def channels_in_data(self) -> Optional[Collection[int]]:
         """Channel names."""
@@ -213,13 +217,12 @@ class qi2labDataStore:
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("noise_map"))
 
         try:
-            current_local = ts.open(
-                {
-                    **self._zarrv2_spec,
-                    "kvstore": self._get_kvstore_key(current_local_zarr_path),
-                }
-            ).result()
-            current_local[...] = value
+            self._save_to_zarr_array(
+                value,
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future=False,
+            )
         except Exception:
             print(r"Could not access calibrations.zarr/noise_map")
 
@@ -237,13 +240,12 @@ class qi2labDataStore:
         )
 
         try:
-            current_local = ts.open(
-                {
-                    **self._zarrv2_spec,
-                    "kvstore": self._get_kvstore_key(current_local_zarr_path),
-                }
-            ).result()
-            current_local[...] = value
+            self._save_to_zarr_array(
+                value,
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future=False,
+            )
         except Exception:
             print(r"Could not access calibrations.zarr/shading_maps")
 
@@ -258,13 +260,12 @@ class qi2labDataStore:
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("psf_data"))
 
         try:
-            current_local = ts.open(
-                {
-                    **self._zarrv2_spec,
-                    "kvstore": self._get_kvstore_key(current_local_zarr_path),
-                }
-            ).result()
-            current_local[...] = value
+            self._save_to_zarr_array(
+                value,
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future=False,
+            )
         except Exception:
             print(r"Could not access calibrations.zarr/psf_data")
 
@@ -272,17 +273,32 @@ class qi2labDataStore:
     def experiment_order(self) -> Optional[pd.DataFrame]:
         """Round and bit order."""
 
-        return pd.DataFrame(
-            getattr(self, "_experiment_order", None), columns=["round", "yellow", "red"]
-        )
+        return getattr(self, "_experiment_order", None)
 
     @experiment_order.setter
-    def experiment_order(self, value: pd.DataFrame):
-        self._experiment_order = value
+    def experiment_order(self, value: Union[ArrayLike, pd.DataFrame]):
+        if isinstance(value, pd.DataFrame):
+            self._experiment_order = value
+        else:
+            self._experiment_order = pd.DataFrame(
+                value.astype(np.int8), columns=["blue", "yellow", "red"]
+            )
+
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["exp_order"] = self._experimental_order.values.tolist()
+        calib_zattrs["exp_order"] = self._experiment_order.values.tolist()
         self._save_to_json(calib_zattrs, zattrs_path)
+
+        self._num_rounds = int(value[-1, 0])
+        self._num_bits = int(np.max(value[-1, 1:]))
+
+        self._round_ids = []
+        for round_idx in range(self._num_rounds):
+            self._round_ids.append("round" + str(round_idx + 1).zfill(3))
+
+        self._bit_ids = []
+        for bit_idx in range(self._num_bits):
+            self._bit_ids.append("bit" + str(bit_idx + 1).zfill(3))
 
     @property
     def codebook(self) -> Optional[pd.DataFrame]:
@@ -340,8 +356,12 @@ class qi2labDataStore:
     def _init_datastore(self):
         """Initialize datastore."""
 
-        self._datastore_path.mkdir()
+        self._datastore_path.mkdir(parents=True)
         self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations.zarr")
+        self._calibrations_zarr_path.mkdir()
+        calibrations_zattrs_path = self._calibrations_zarr_path / Path(r".zattrs")
+        empty_zattrs = {}
+        self._save_to_json(empty_zattrs, calibrations_zattrs_path)
         self._polyDT_root_path = self._datastore_path / Path(r"polyDT")
         self._polyDT_root_path.mkdir()
         self._readouts_root_path = self._datastore_path / Path(r"readouts")
@@ -413,18 +433,18 @@ class qi2labDataStore:
 
         with open(dictionary_path, "w") as file:
             json.dump(dictionary, file, indent=4)
-            
+
     @staticmethod
     def _load_from_microjson(dictionary_path: Union[Path, str]) -> dict:
         """Load cell outlines outlines microjson as dictionary"""
-        
+
         try:
-            with open(dictionary_path, 'r') as f:
+            with open(dictionary_path, "r") as f:
                 data = json.load(f)
                 outlines = {}
-                for feature in data['features']:
-                    cell_id = feature['properties']['cell_id']
-                    coordinates = feature['geometry']['coordinates'][0]
+                for feature in data["features"]:
+                    cell_id = feature["properties"]["cell_id"]
+                    coordinates = feature["geometry"]["coordinates"][0]
                     outlines[cell_id] = np.array(coordinates)
         except Exception:
             outlines = {}
@@ -477,24 +497,35 @@ class qi2labDataStore:
 
         Defaults to returning future result.
         """
+        
+        if str(array.dtype) == "uint16":
+            array_dtype = "<u2"
+        if str(array.dtype) == "float32":
+            array_dtype = "<f4"
+        
 
-        spec["Metadata"]["shape"] = array.shape
-        spec["Metadata"]["chunks"] = [1, array.shape[1], array.shape[2]]
+        spec["metadata"]["shape"] = array.shape
+        spec["metadata"]["chunks"] = [1, array.shape[1], array.shape[2]]
+        spec["metadata"]["dtype"] = array_dtype
 
-        current_zarr = ts.open(
-            {
-                **spec,
-                "kvstore": kvstore,
-            }
-        ).result()
+        try:
+            current_zarr = ts.open(
+                {
+                    **spec,
+                    "kvstore": kvstore,
+                }
+            ).result()
 
-        current_zarr = array
+            write_future = current_zarr.write(array)
 
-        if return_future:
-            return current_zarr
-        else:
-            current_zarr.result()
-            return None
+            if return_future:
+                return write_future
+            else:
+                write_future.result()
+                return None
+        except Exception as e:
+            print(e)
+            print("Error writing zarr array.")
 
     @staticmethod
     def _load_from_parquet(parquet_path: Union[Path, str]) -> pd.DataFrame:
@@ -987,6 +1018,74 @@ class qi2labDataStore:
             print("Error parsing codebook.")
             return None
 
+    def initialize_tile(
+        self,
+        tile: Union[int, str],
+        stage_zyx_um: ArrayLike,
+    ):
+        """Initialize directory structure for a tile"""
+
+        if getattr(self, "_experiment_order", None) is None:
+            print("Assign experimental order before creating tiles.")
+            return None
+
+        if getattr(self, "_num_tiles", None) is None:
+            print("Assign number of tiles before creating tiles.")
+            return None
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <" + str(self._num_tiles))
+                return None
+            else:
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tile id.")
+                return None
+            else:
+                tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        try:
+            polyDT_tile_path = self._polyDT_root_path / Path(tile_id)
+            polyDT_tile_path.mkdir()
+            for round_idx, round_id in enumerate(self._round_ids):
+                polyDT_round_path = polyDT_tile_path / Path(round_id+".zarr")
+                polyDT_round_path.mkdir()
+                polydt_round_attrs_path = polyDT_round_path / Path(".zattrs")
+                round_attrs = {
+                    "stage_zyx_um": np.asarray(stage_zyx_um, dtype=np.float32).tolist(),
+                    "bit_linker": self._experiment_order.to_numpy()[round_idx, 1:]
+                    .astype(int)
+                    .tolist(),
+                }
+                self._save_to_json(round_attrs, polydt_round_attrs_path)
+        except Exception:
+            print("Error creating polyDT tile. Does it exist already?")
+
+        try:
+            readout_tile_path = self._readouts_root_path / Path(tile_id)
+            readout_tile_path.mkdir()
+            for bit_idx, bit_id in enumerate(self._bit_ids):
+                readout_bit_path = readout_tile_path / Path(bit_id+".zarr")
+                readout_bit_path.mkdir()
+                readout_bit_attrs_path = readout_bit_path / Path(".zattrs")
+                row = self._experiment_order[
+                    (self._experiment_order["yellow"] == bit_idx)
+                    | (self._experiment_order["red"] == bit_idx)
+                ]
+                bit_attrs = {
+                    "stage_zyx_um": np.asarray(stage_zyx_um, dtype=np.float32).tolist(),
+                    "round_linker": int(row["blue"].values[0]),
+                }
+                self._save_to_json(bit_attrs, readout_bit_attrs_path)
+        except Exception as e:
+            print(e)
+            print("Error creating readout tile. Does it exist already?")
+
     def load_local_bit_linker(
         self,
         tile: Union[int, str],
@@ -1002,7 +1101,7 @@ class qi2labDataStore:
                 tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
-                print("set valid tiled id")
+                print("set valid tiled id.")
                 return None
             else:
                 tile_id = tile
@@ -1018,7 +1117,7 @@ class qi2labDataStore:
                 round_id = self._round_ids[round]
         elif isinstance(round, str):
             if round not in self._round_ids:
-                print("Set valid round id")
+                print("Set valid round id.")
                 return None
             else:
                 round_id = round
@@ -1037,16 +1136,62 @@ class qi2labDataStore:
             return attributes["bits"][1:]
         except Exception:
             print(tile_id, round_id)
-            print("Local attributes not found")
+            print("Bit linker attribute not found.")
             return None
 
     def save_local_bit_linker(
         self,
         bit_linker: Sequence[int],
-        tile_idx: int = 0,
-        round_idx: int = -1,
+        tile: Union[int, str],
+        round: Union[int, str],
     ):
-        pass
+        """Save readout bits linked to fidicual round for one tile."""
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <" + str(self._num_tiles))
+                return None
+            else:
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id.")
+                return None
+            else:
+                tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            else:
+                round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id.")
+                return None
+            else:
+                round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        try:
+            zattrs_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(round_id + ".zarr")
+                / Path(".zattrs")
+            )
+            attributes = self._load_from_json(zattrs_path)
+            return attributes["bits"][1:]
+        except Exception:
+            print(tile_id, round_id)
+            print("Bit linker attribute not found.")
+            return None
 
     def load_local_round_linker(
         self,
@@ -1063,7 +1208,7 @@ class qi2labDataStore:
                 tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
-                print("set valid tiled id")
+                print("set valid tiled id.")
                 return None
             else:
                 tile_id = tile
@@ -1079,7 +1224,7 @@ class qi2labDataStore:
                 bit_id = self._bit_ids[bit]
         elif isinstance(bit, str):
             if bit not in self._bit_ids:
-                print("Set valid bit id")
+                print("Set valid bit id.")
                 return None
             else:
                 bit_id = bit
@@ -1098,7 +1243,7 @@ class qi2labDataStore:
             return attributes["round"]
         except Exception:
             print(tile_id, bit_id)
-            print("Local attributes not found")
+            print("Round linker attribute not found.")
             return None
 
     def save_local_round_linker(
@@ -1124,7 +1269,7 @@ class qi2labDataStore:
                 tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
-                print("set valid tiled id")
+                print("set valid tiled id.")
                 return None
             else:
                 tile_id = tile
@@ -1140,7 +1285,7 @@ class qi2labDataStore:
                 round_id = self._round_ids[round]
         elif isinstance(round, str):
             if round not in self._round_ids:
-                print("Set valid round id")
+                print("Set valid round id.")
                 return None
             else:
                 round_id = round
@@ -1159,7 +1304,7 @@ class qi2labDataStore:
             return np.asarray(attributes["stage_zyx_um"], dtype=np.float32)
         except Exception:
             print(tile_id, round_id)
-            print("Local attributes not found")
+            print("Stage position attribute not found.")
             return None
 
     def save_local_stage_position_zyx_um(
@@ -1243,7 +1388,7 @@ class qi2labDataStore:
             em_wavelength_um = attributes["emission_um"]
             return (ex_wavelength_um, em_wavelength_um)
         except Exception:
-            print("Local attributes not found")
+            print("Wavelength attributes not found.")
             return None
 
     def save_local_wavelengths_um(
@@ -1330,7 +1475,7 @@ class qi2labDataStore:
             )
 
         if not Path(current_local_zarr_path).exists():
-            print("Array does not exist.")
+            print("Corrected image not found.")
             return None
 
         try:
@@ -1347,14 +1492,91 @@ class qi2labDataStore:
     def save_local_corrected_image(
         self,
         image: ArrayLike,
+        tile: Union[int, str],
         gain_correction: bool = True,
         hotpixel_correction: bool = True,
         shading_correction: bool = False,
-        tile_idx: int = 0,
-        round_idx: Optional[int] = -1,
-        bit_idx: Optional[int] = -1,
+        round: Optional[Union[int, str]] = None,
+        bit: Optional[Union[int, str]] = None,
+        return_future: Optional[bool] = False,
     ):
-        pass
+        """Save gain and offset corrected image."""
+        if (round is None and bit is None) or (round is not None and bit is not None):
+            print("Provide either 'round' or 'bit', but not both")
+            return None
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            else:
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            else:
+                tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if bit is not None:
+            if isinstance(bit, int):
+                if bit < 0 or bit > len(self._bit_ids):
+                    print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
+                    return None
+                else:
+                    local_id = self._bit_ids[bit]
+            elif isinstance(bit, str):
+                if bit not in self._bit_ids:
+                    print("Set valid bit id")
+                    return None
+                else:
+                    local_id = bit
+            else:
+                print("'bit' must be integer index or string identifier")
+                return None
+            current_local_zarr_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("corrected_data")
+            )
+        else:
+            if isinstance(round, int):
+                if round < 0:
+                    print("Set round index >=0 and <" + str(self._num_rounds))
+                    return None
+                else:
+                    local_id = self._round_ids[round]
+            elif isinstance(round, str):
+                if round not in self._round_ids:
+                    print("Set valid round id")
+                    return None
+                else:
+                    local_id = round
+            else:
+                print("'round' must be integer index or string identifier")
+                return None
+            current_local_zarr_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path("corrected_data")
+            )
+
+        try:
+            self._save_to_zarr_array(
+                image,
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future,
+            )
+        except Exception as e:
+            print(e)
+            print("Error saving corrected image.")
+            return None
 
     def load_local_rigid_xform_xyz_px(
         self,
@@ -1408,7 +1630,7 @@ class qi2labDataStore:
             return rigid_xform_xyz_px
         except Exception:
             print(tile_id, round_id)
-            print("Local attributes not found")
+            print("Rigid transform mapping back to first round not found.")
             return None
 
     def save_local_rigid_xform_xyz_px(
@@ -1467,7 +1689,7 @@ class qi2labDataStore:
         )
 
         if not current_local_zarr_path.exists():
-            print("Array does not exist.")
+            print("Optical flow transform mapping back to first round not found.")
             return None
 
         try:
@@ -1564,7 +1786,7 @@ class qi2labDataStore:
             )
 
         if not current_local_zarr_path.exists():
-            print("Array does not exist.")
+            print("Registered deconvolved image not found.")
             return None
 
         try:
@@ -1575,7 +1797,7 @@ class qi2labDataStore:
             )
             return registered_decon_image
         except Exception:
-            print("Error loading registered image.")
+            print("Error loading registered deconvolved image.")
             return None
 
     def save_local_registered_image(
@@ -1594,7 +1816,7 @@ class qi2labDataStore:
         bit: Union[int, str],
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
-        """Load readout bit U-Fish prediction image for one tile."""
+        """Load readout bit U-FISH prediction image for one tile."""
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1636,7 +1858,7 @@ class qi2labDataStore:
         )
 
         if not current_local_zarr_path.exists():
-            print("Array does not exist.")
+            print("U-FISH prediction image not found.")
             return None
 
         try:
@@ -1647,7 +1869,7 @@ class qi2labDataStore:
             )
             return registered_ufish_image
         except Exception:
-            print("Error loading ufish image.")
+            print("Error loading U-FISH image.")
             return None
 
     def save_local_ufish_image(
@@ -1663,7 +1885,7 @@ class qi2labDataStore:
         tile: Union[int, str],
         bit: Union[int, str],
     ) -> Optional[pd.DataFrame]:
-        """Load U-Fish spot localizations and features for one tile."""
+        """Load U-FISH spot localizations and features for one tile."""
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1704,7 +1926,7 @@ class qi2labDataStore:
         )
 
         if not current_ufish_localizations_path.exists():
-            print("Array does not exist.")
+            print("U-FISH localizations not found.")
             return None
         else:
             ufish_localizations = self._load_from_parquet(
@@ -1756,7 +1978,7 @@ class qi2labDataStore:
             return (affine_zyx_um, origin_zyx_um, spacing_zyx_um)
         except Exception:
             print(tile_id, self._round_ids[0])
-            print("Local attributes not found")
+            print("Global coordinate transforms not found")
             return None
 
     def save_global_coord_xforms_um(
@@ -1779,7 +2001,7 @@ class qi2labDataStore:
         )
 
         if not current_local_zarr_path.exists():
-            print("Array does not exist.")
+            print("Globally registered, fused image not found.")
             return None
 
         try:
@@ -1790,7 +2012,7 @@ class qi2labDataStore:
             )
             return fused_image
         except Exception:
-            print("Error loading fused image.")
+            print("Error loading globally registered, fused image.")
             return None
 
     def save_global_fidicual_image(
@@ -1829,7 +2051,7 @@ class qi2labDataStore:
         )
 
         if not current_tile_features_path.exists():
-            print("Array does not exist.")
+            print("Decoded spots not found.")
             return None
         else:
             tile_features = self._load_from_parquet(current_tile_features_path)
@@ -1853,7 +2075,7 @@ class qi2labDataStore:
         )
 
         if not current_global_filtered_decoded_path.exists():
-            print("Array does not exist.")
+            print("Global, filtered, decoded spots not found.")
             return None
         else:
             all_tiles_filtered = self._load_from_parquet(
@@ -1879,7 +2101,7 @@ class qi2labDataStore:
         )
 
         if not current_cellpose_centroids_path.exists():
-            print("Array does not exist.")
+            print("Cellpose cell mask centroids not found.")
             return None
         else:
             cellpose_centroids = self._load_from_parquet(
@@ -1897,22 +2119,20 @@ class qi2labDataStore:
         self,
     ) -> Optional[dict]:
         """Load Cellpose max projection cell outlines."""
-        
+
         current_cellpose_outlines_path = (
-            self._segmentation_root_path
-            / Path("cellpose")
-            / Path("cell_outlines.json")
+            self._segmentation_root_path / Path("cellpose") / Path("cell_outlines.json")
         )
 
         if not current_cellpose_outlines_path.exists():
-            print("Cellpose outlines do not exist.")
+            print("Cellpose cell mask outlines not found.")
             return None
         else:
             cellpose_outlines = self._load_from_microjson(
                 current_cellpose_outlines_path
             )
             return cellpose_outlines
- 
+
     def save_global_cellpose_outlines(
         self,
         outlines: dict,
@@ -1924,13 +2144,16 @@ class qi2labDataStore:
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
         """Load Cellpose max projection, downsampled segmentation image."""
-        
+
         current_local_zarr_path = str(
-            self._segmentation_root_path / Path("cellpose") / Path("cellpose.zarr") / Path("masks_polyDT_iso_zyx")
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("cellpose.zarr")
+            / Path("masks_polyDT_iso_zyx")
         )
 
         if not current_local_zarr_path.exists():
-            print("Array does not exist.")
+            print("Cellpose prediction on global fused image not found.")
             return None
 
         try:
@@ -1962,12 +2185,10 @@ class qi2labDataStore:
         )
 
         if not current_baysor_spots_path.exists():
-            print("Baysor filtered genes do not exist.")
+            print("Baysor filtered genes not found.")
             return None
         else:
-            baysor_filtered_genes = self._load_from_parquet(
-                current_baysor_spots_path
-            )
+            baysor_filtered_genes = self._load_from_parquet(current_baysor_spots_path)
             return baysor_filtered_genes
 
     def save_global_baysor_filtered_spots(
@@ -1980,20 +2201,16 @@ class qi2labDataStore:
         self,
     ) -> Optional[dict]:
         """Load Baysor cell outlines."""
-        
+
         current_baysor_outlines_path = (
-            self._segmentation_root_path
-            / Path("baysor")
-            / Path("cell_outlines.json")
+            self._segmentation_root_path / Path("baysor") / Path("cell_outlines.json")
         )
 
         if not current_baysor_outlines_path.exists():
-            print("Baysor outlines do not exist.")
+            print("Baysor outlines not found.")
             return None
         else:
-            baysor_outlines = self._load_from_microjson(
-                current_baysor_outlines_path
-            )
+            baysor_outlines = self._load_from_microjson(current_baysor_outlines_path)
             return baysor_outlines
 
     def save_global_baysor_outlines(self, outlines: dict) -> None:
