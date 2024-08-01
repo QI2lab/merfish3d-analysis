@@ -25,7 +25,7 @@ class qi2labDataStore:
     """
 
     def __init__(self, datastore_path: Union[str, Path]):
-        self._blosc_compressor = {
+        compressor = {
             "id": "blosc",
             "cname": "zstd",
             "clevel": 5,
@@ -34,7 +34,7 @@ class qi2labDataStore:
         self._zarrv2_spec = {
             "driver": "zarr",
             "kvstore": None,
-            "metadata": {},
+            "metadata": {"compressor": compressor},
             "open": True,
             "assume_metadata": False,
             "create": True,
@@ -223,7 +223,8 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future=False,
             )
-        except Exception:
+        except Exception as e:
+            print(e)
             print(r"Could not access calibrations.zarr/noise_map")
 
     @property
@@ -281,7 +282,11 @@ class qi2labDataStore:
             self._experiment_order = value
         else:
             self._experiment_order = pd.DataFrame(
-                value.astype(np.int8), columns=["blue", "yellow", "red"]
+                value.astype(np.int8), columns=[
+                    str(self._channels_in_data[0]),
+                    str(self._channels_in_data[1]),
+                    str(self._channels_in_data[2]),
+                    ]
             )
 
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
@@ -290,7 +295,14 @@ class qi2labDataStore:
         self._save_to_json(calib_zattrs, zattrs_path)
 
         self._num_rounds = int(value[-1, 0])
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["num_round"] = self._num_rounds
+        self._save_to_json(calib_zattrs, zattrs_path)
+        
         self._num_bits = int(np.max(value[-1, 1:]))
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["num_bits"] = self._num_bits
+        self._save_to_json(calib_zattrs, zattrs_path)
 
         self._round_ids = []
         for round_idx in range(self._num_rounds):
@@ -388,8 +400,8 @@ class qi2labDataStore:
             "Initialized": True,
             "Calibrations": False,
             "Corrected": False,
-            "LocalRegister": False,
-            "GlobalRegister": False,
+            "LocalRegistered": False,
+            "GlobalRegistered": False,
             "Fused": False,
             "SegmentedCells": False,
             "DecodedSpots": False,
@@ -397,11 +409,8 @@ class qi2labDataStore:
             "RefinedSpots": False,
             "mtxOutput": False,
         }
-        
-        self._save_to_json(
-            self._datastore_state,
-            self._datastore_state_json_path
-        )
+
+        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     @staticmethod
     def _get_kvstore_key(path: Union[Path, str]) -> dict:
@@ -493,7 +502,6 @@ class qi2labDataStore:
         array: ArrayLike,
         kvstore: dict,
         spec: dict,
-        attributes : Optional[dict] = {},
         return_future: Optional[bool] = False,
     ) -> Optional[ArrayLike]:
         """Save array to zarr using tensorstore.
@@ -509,11 +517,16 @@ class qi2labDataStore:
         elif str(array.dtype) == "float32":
             array_dtype = "<f4"
         else:
-            print("Unsupported data type: "+str(array.dtype))
+            print("Unsupported data type: " + str(array.dtype))
             return None
-        
+
         spec["metadata"]["shape"] = array.shape
-        spec["metadata"]["chunks"] = [1, array.shape[1], array.shape[2]]
+        if len(array.shape)==2:
+            spec["metadata"]["chunks"] = [array.shape[0], array.shape[1]]
+        elif len(array.shape)==3:
+            spec["metadata"]["chunks"] = [1, array.shape[1], array.shape[2]]
+        elif len(array.shape)==4:
+            spec["metadata"]["chunks"] = [1, 1, array.shape[1], array.shape[2]]
         spec["metadata"]["dtype"] = array_dtype
 
         try:
@@ -523,9 +536,6 @@ class qi2labDataStore:
                     "kvstore": kvstore,
                 }
             ).result()
-            
-            if attributes:
-                current_zarr.info.update_metadata({"zattrs": attributes})
 
             write_future = current_zarr.write(array)
 
@@ -534,7 +544,8 @@ class qi2labDataStore:
             else:
                 write_future.result()
                 return None
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error writing zarr array.")
 
     @staticmethod
@@ -568,7 +579,7 @@ class qi2labDataStore:
         )
 
         # read in .json in root directory that indicates what steps have been run
-        with open("datastore_state.json", "r") as json_file:
+        with open(self._datastore_state_json_path, "r") as json_file:
             self._datastore_state = json.load(json_file)
 
         # validate calibrations.zarr
@@ -855,14 +866,14 @@ class qi2labDataStore:
                     print(tile_id, round_id)
                     print("Registered ufish prediction missing.")
 
-        for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
-            current_ufish_path = (
-                self._ufish_localizations_root_path
-                / Path(tile_id)
-                / Path(bit_id + ".parquet")
-            )
-            if not (current_ufish_path.exists()):
-                raise Exception(tile_id + " " + bit_id + " ufish localization missing")
+            for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
+                current_ufish_path = (
+                    self._ufish_localizations_root_path
+                    / Path(tile_id)
+                    / Path(bit_id + ".parquet")
+                )
+                if not (current_ufish_path.exists()):
+                    raise Exception(tile_id + " " + bit_id + " ufish localization missing")
 
         # check and validate global registered data
         if self._datastore_state["GlobalRegistered"]:
@@ -1047,7 +1058,7 @@ class qi2labDataStore:
             polyDT_tile_path = self._polyDT_root_path / Path(tile_id)
             polyDT_tile_path.mkdir()
             for round_idx, round_id in enumerate(self._round_ids):
-                polyDT_round_path = polyDT_tile_path / Path(round_id+".zarr")
+                polyDT_round_path = polyDT_tile_path / Path(round_id + ".zarr")
                 polyDT_round_path.mkdir()
                 polydt_round_attrs_path = polyDT_round_path / Path(".zattrs")
                 round_attrs = {
@@ -1063,15 +1074,18 @@ class qi2labDataStore:
             readout_tile_path = self._readouts_root_path / Path(tile_id)
             readout_tile_path.mkdir()
             for bit_idx, bit_id in enumerate(self._bit_ids):
-                readout_bit_path = readout_tile_path / Path(bit_id+".zarr")
+                readout_bit_path = readout_tile_path / Path(bit_id + ".zarr")
                 readout_bit_path.mkdir()
                 readout_bit_attrs_path = readout_bit_path / Path(".zattrs")
+                fiducial_channel = self._channels_in_data[0]
+                readout_one_channel = self._channels_in_data[1]
+                readout_two_channel = self._channels_in_data[2]
                 row = self._experiment_order[
-                    (self._experiment_order["yellow"] == bit_idx)
-                    | (self._experiment_order["red"] == bit_idx)
+                    (self._experiment_order[str(readout_one_channel)] == (bit_idx+1))
+                    | (self._experiment_order[str(readout_two_channel)] == (bit_idx+1))
                 ]
                 bit_attrs = {
-                    "round_linker": int(row["blue"].values[0]),
+                    "round_linker": int(row[str(fiducial_channel)].values[0]),
                 }
                 self._save_to_json(bit_attrs, readout_bit_attrs_path)
         except Exception as e:
@@ -1180,7 +1194,7 @@ class qi2labDataStore:
             )
             attributes = self._load_from_json(zattrs_path)
             attributes["bits"] = bit_linker
-            self._save_to_json(attributes,zattrs_path)
+            self._save_to_json(attributes, zattrs_path)
         except Exception:
             print(tile_id, round_id)
             print("Error writing bit linker attribute.")
@@ -1242,11 +1256,11 @@ class qi2labDataStore:
     def save_local_round_linker(
         self,
         round_linker: int,
-        tile: Union[int,str],
-        bit: Union[int,str],
+        tile: Union[int, str],
+        bit: Union[int, str],
     ):
         """Save fidicual round linker attribute to readout bit for one tile."""
-        
+
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -1288,7 +1302,7 @@ class qi2labDataStore:
             )
             attributes = self._load_from_json(zattrs_path)
             attributes["round"] = int(round_linker)
-            self._save_to_json(attributes,zattrs_path)
+            self._save_to_json(attributes, zattrs_path)
         except Exception:
             print(tile_id, bit_id)
             print("Error writing round linker attribute.")
@@ -1396,7 +1410,7 @@ class qi2labDataStore:
             )
             attributes = self._load_from_json(zattrs_path)
             attributes["stage_zyx_um"] = stage_zyx_um.tolist()
-            self._save_to_json(attributes,zattrs_path)
+            self._save_to_json(attributes, zattrs_path)
         except Exception:
             print(tile_id, round_id)
             print("Error writing stage position attribute.")
@@ -1446,6 +1460,12 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
+            zattrs_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -1462,14 +1482,14 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-
-        try:
             zattrs_path = str(
                 self._polyDT_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
                 / Path(".zattrs")
             )
+
+        try:
             attributes = self._load_from_json(zattrs_path)
             ex_wavelength_um = attributes["excitation_um"]
             em_wavelength_um = attributes["emission_um"]
@@ -1523,6 +1543,12 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
+            zattrs_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -1539,18 +1565,19 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-
-        try:
             zattrs_path = str(
                 self._polyDT_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
                 / Path(".zattrs")
             )
+
+        try:
+            
             attributes = self._load_from_json(zattrs_path)
             attributes["excitation_um"] = float(wavelengths_um[0])
             attributes["emission_um"] = float(wavelengths_um[1])
-            self._save_to_json(attributes,zattrs_path)
+            self._save_to_json(attributes, zattrs_path)
         except Exception:
             print("Error writing wavelength attributes.")
             return None
@@ -1656,7 +1683,7 @@ class qi2labDataStore:
         return_future: Optional[bool] = False,
     ):
         """Save gain and offset corrected image."""
-        
+
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -1699,6 +1726,12 @@ class qi2labDataStore:
                 / Path(local_id + ".zarr")
                 / Path("corrected_data")
             )
+            current_local_zattrs_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -1721,21 +1754,27 @@ class qi2labDataStore:
                 / Path(local_id + ".zarr")
                 / Path("corrected_data")
             )
+            current_local_zattrs_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
+            )
 
-        attributes ={
-            "gain_correction" : gain_correction,
-            "hotpixel_correction" : hotpixel_correction,
-            "shading_correction" : shading_correction,
-        } 
+        attributes = {
+            "gain_correction": gain_correction,
+            "hotpixel_correction": hotpixel_correction,
+            "shading_correction": shading_correction,
+        }
 
         try:
             self._save_to_zarr_array(
                 image,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec,
-                attributes,
                 return_future,
             )
+            self._save_to_json(attributes,current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
             return None
@@ -1842,8 +1881,8 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
             attributes = self._load_from_json(zattrs_path)
-            attributes["rigid_xform_xyz_px"] =  rigid_xform_xyz_px.tolist()
-            self._save_to_json(attributes,zattrs_path)
+            attributes["rigid_xform_xyz_px"] = rigid_xform_xyz_px.tolist()
+            self._save_to_json(attributes, zattrs_path)
         except Exception:
             print(tile_id, round_id)
             print("Error writing rigid transform attribute.")
@@ -1854,7 +1893,7 @@ class qi2labDataStore:
         tile: Optional[Union[int, str]],
         round: Optional[Union[int, str]],
         return_future: Optional[bool] = True,
-    ) -> Optional[tuple[ArrayLike,ArrayLike]]:
+    ) -> Optional[tuple[ArrayLike, ArrayLike]]:
         """Local fidicual optical flow matrix for one round and tile."""
 
         if isinstance(tile, int):
@@ -1896,13 +1935,12 @@ class qi2labDataStore:
             / Path("of_xform_px")
         )
         zattrs_path = str(
-                self._polyDT_root_path
-                / Path(tile_id)
-                / Path(round_id + ".zarr")
-                / Path("of_xform_px")
-                / Path(".zattrs")
+            self._polyDT_root_path
+            / Path(tile_id)
+            / Path(round_id + ".zarr")
+            / Path(".zattrs")
         )
-        
+
         if not current_local_zarr_path.exists():
             print("Optical flow transform mapping back to first round not found.")
             return None
@@ -1914,10 +1952,8 @@ class qi2labDataStore:
                 return_future,
             )
             attributes = self._load_from_json(zattrs_path)
-            downsampling = np.asarray(
-                attributes["downsampling"], dtype=np.float32
-            )
-            
+            downsampling = np.asarray(attributes["opticalflow_downsampling"], dtype=np.float32)
+
             return of_xform_px, downsampling
         except Exception:
             print("Error loading optical flow transform.")
@@ -1932,7 +1968,7 @@ class qi2labDataStore:
         return_future: Optional[bool] = False,
     ):
         """Save fidicual optical flow matrix for one round and tile."""
-        
+
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -1970,19 +2006,23 @@ class qi2labDataStore:
             / Path(local_id + ".zarr")
             / Path("of_xform_px")
         )
-        
-        attributes = {
-            "downsampling" : downsampling
-        }
-        
+        current_local_zattrs_path = str(
+            self._polyDT_root_path
+            / Path(tile_id)
+            / Path(local_id + ".zarr")
+            / Path(".zattrs")
+        )
+
+        attributes = {"opticalflow_downsampling": downsampling}
+
         try:
             self._save_to_zarr_array(
                 of_xform_px,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec,
-                attributes,
                 return_future,
             )
+            self._save_to_json(attributes,current_local_zattrs_path)
         except Exception:
             print("Error saving optical flow transform.")
             return None
@@ -2086,7 +2126,7 @@ class qi2labDataStore:
         return_future: Optional[bool] = False,
     ):
         """Save registered, deconvolved image."""
-        
+
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -2151,19 +2191,23 @@ class qi2labDataStore:
                 / Path(local_id + ".zarr")
                 / Path("corrected_data")
             )
-        
-        attributes = {
-            "deconvolution" : deconvolution
-        }
-        
+            current_local_zattrs_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
+            )
+
+        attributes = {"deconvolution": deconvolution}
+
         try:
             self._save_to_zarr_array(
                 registered_image,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec,
-                attributes,
                 return_future,
             )
+            self._save_to_json(attributes,current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
             return None
@@ -2238,7 +2282,7 @@ class qi2labDataStore:
         return_future: Optional[bool] = True,
     ):
         """Save U-FISH prediction image."""
-        
+
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -2283,7 +2327,6 @@ class qi2labDataStore:
                 ufish_image,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec,
-                {},
                 return_future,
             )
         except Exception:
@@ -2347,11 +2390,11 @@ class qi2labDataStore:
     def save_local_ufish_spots(
         self,
         spot_df: pd.DataFrame,
-        tile: Union[int,str],
-        bit: Union[int,str],
+        tile: Union[int, str],
+        bit: Union[int, str],
     ):
         """Save U-FISH localizations and features."""
-        
+
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -2389,12 +2432,9 @@ class qi2labDataStore:
             / Path(tile_id)
             / Path(bit_id + ".parquet")
         )
-        
+
         try:
-            self._save_to_parquet(
-                spot_df,
-                current_ufish_localizations_path
-            )
+            self._save_to_parquet(spot_df, current_ufish_localizations_path)
         except Exception:
             print("Error saving U-FISH localizations.")
             return None
@@ -2481,24 +2521,27 @@ class qi2labDataStore:
         return_future: Optional[bool] = False,
     ):
         """Save downsampled, fused fidicual image."""
-        
+
         current_local_zarr_path = str(
             self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx")
         )
+        current_local_zattrs_path = str(
+            self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx") / Path(".zattrs")
+        )
 
         attributes = {
-            "affine_zyx_um" : affine_zyx_um.tolist(),
-            "origin_zyx_um" : origin_zyx_um.tolist(),
-            "spacing_zyx_um" : spacing_zyx_um.tlist(), 
+            "affine_zyx_um": affine_zyx_um.tolist(),
+            "origin_zyx_um": origin_zyx_um.tolist(),
+            "spacing_zyx_um": spacing_zyx_um.tlist(),
         }
         try:
             self._save_to_zarr_array(
                 fused_image,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec,
-                attributes,
                 return_future,
             )
+            self._save_to_json(attributes,current_local_zattrs_path)
         except Exception:
             print("Error saving fused image.")
             return None
@@ -2643,14 +2686,44 @@ class qi2labDataStore:
             )
             return fused_image
         except Exception:
-            print("Error loading fused image.")
+            print("Error loading Cellpose image.")
             return None
 
     def save_global_cellpose_segmentation_image(
         self,
         cellpose_image: ArrayLike,
-    ) -> None:
-        pass
+        downsampling: Sequence[float],
+        return_future: Optional[bool] = False,
+    ):
+        """Save Cellpose max projection, downsampled segmentation image"""
+
+        current_local_zarr_path = str(
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("cellpose.zarr")
+            / Path("masks_polyDT_iso_zyx")
+        )
+        current_local_zattrs_path = str(
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("cellpose.zarr")
+            / Path("masks_polyDT_iso_zyx")
+            / Path(".zattrs")
+        )
+
+        attributes = {"downsampling": downsampling}
+
+        try:
+            self._save_to_zarr_array(
+                cellpose_image,
+                self._get_kvstore_key(current_local_zarr_path),
+                self._zarrv2_spec,
+                return_future,
+            )
+            self._save_to_json(attributes,current_local_zattrs_path)
+        except Exception:
+            print("Error saving Cellpose image.")
+            return None
 
     def load_global_baysor_filtered_spots(
         self,
