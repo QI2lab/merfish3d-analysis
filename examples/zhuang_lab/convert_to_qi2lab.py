@@ -3,8 +3,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from psfmodels import make_psf
-from tifffile import imread
+from tifffile import imread, TiffFile
 from tqdm import tqdm
+from natsort import natsorted
 
 # root data folder
 root_path = Path(r"/mnt/data/zhuang/mop/mouse_sample1_raw/")
@@ -20,7 +21,7 @@ bit_mapping = {rs_columns[i]: f"bit{str(i+1).zfill(2)}" for i in range(len(rs_co
 codebook.rename(columns=bit_mapping, inplace=True)
 
 # experimental order. 19 rounds with two readouts per round. The 20th round is polyDT and DAPI.
-# The actual experiment is more complicated, but they have already parsed the data.
+# The actual experiment is more complicated, but the BIL dataset has already parsed the data.
 experiment_order = np.zeros((19, 3))
 for i in range(19):
     experiment_order[i, :] = [(i + 1), ((i + 1) * 2) - 1, (i + 1) * 2]
@@ -45,13 +46,13 @@ stage_position_path = (
     / Path("fov_positions")
     / Path("mouse1_sample1.txt")
 )
-stage_position_df = pd.read_csv(stage_position_path)
+stage_position_df = pd.read_csv(stage_position_path,header=None)
 stage_positions = stage_position_df.values
 
 # num tiles back on number of stage positions
 num_tiles = stage_positions.shape[0]
 
-# generate 2D PSFs from metadata
+# generate 2D PSFs for each channel from metadata
 psfs = []
 for psf_idx in range(3):
     psf = make_psf(z=1, nx=51, dxy=voxel_zyx_um[1], NA=na, ni=ri)
@@ -59,10 +60,10 @@ for psf_idx in range(3):
     psfs.append(psf)
 psfs = np.asarray(psfs, dtype=np.float32)
 
-# # initialize dataset
+# initialize datastore
 datastore_path = Path(r"/mnt/data/zhuang/mop/mouse_sample1_raw/processed_v3")
 
-# # setup global datatset properties
+# setup global datastore properties
 datastore = qi2labDataStore(datastore_path)
 datastore.codebook = codebook
 datastore.channels_in_data = ["alexa488", "cy5", "alexa750"]
@@ -88,21 +89,30 @@ datastore_state = datastore.datastore_state
 datastore_state.update({"Calibrations": True})
 datastore.datastore_state = datastore_state
 
-# initialize tiles
-for tile_id in datastore.tile_ids:
-    datastore.initialize_tile(tile_id)
-
-# # parse raw data and place into tiles
+# generate natural sorted list of raw data files
 raw_images_files_path = root_path / Path("mouse1_sample1_raw")
-raw_image_files = tile_file_ids = sorted(list(raw_images_files_path.glob("*.tif")))
-num_of_z_planes_per_channel = 7
+raw_image_files = natsorted(list(raw_images_files_path.glob("*.tif")))
 
 for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
+    # initialize datastore tile
+    # this creates the directory structure and links fiducial rounds <-> readout bits
+    datastore.initialize_tile(tile_idx)
+    
     # load raw image
-    raw_image = imread(raw_image_file)
-
-    # fidicual first.
-    # Write the same polyDT for each round, as the data is already registered.
+    # some Zhuang tif files appear to be corrupted when downloaded with wget, 
+    # so we catch those errors and notify user.
+    try:
+        raw_image = imread(raw_image_file).astype(np.uint16)
+        good_shape = raw_image.shape
+    except Exception:
+        print("Error reading: " + raw_image_file  + "; Please redownload")
+        raw_image = np.zeros((good_shape),dtype=np.uint16)
+            
+    # Normally, we would correct the raw data for gain, offset, and hot pixels.
+    # However, this is information is not provided with Zhuang data.
+    
+    # write fidicual data first.
+    # Write the same polyDT for each round, as the data is already locally registered.
     # The metadata tells us polyDT is the 39th entry
     ch_idx = 0
     for round_idx, round_id in enumerate(tqdm(datastore.round_ids,desc="round",leave=False)):
@@ -123,9 +133,8 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
             round=round_id
         )
 
-    # readouts next
-    # The bits go in order of the codebook, starting from the 1st entry
-    # of first axis.
+    # write all readouts
+    # The bits go in order of the codebook
     ch_idx = 1
     for bit_idx, bit_id in enumerate(tqdm(datastore.bit_ids,desc="bit",leave=False)):
         datastore.save_local_corrected_image(
@@ -147,7 +156,7 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
         else:
             ch_idx = ch_idx + 1
 
-
+# update datastore state that "corrected" data is written
 datastore_state = datastore.datastore_state
 datastore_state.update({"Corrected": True})
 datastore.datastore_state = datastore_state
