@@ -52,7 +52,6 @@ class DataRegistration:
         decon_iters: Optional[int] = 10,
         decon_background: Optional[float] = 50.0,
     ):
-       """Initialize tile registration factory.""" 
     
         self._datastore = datastore
         self._tile_ids = self._datastore.tile_ids
@@ -181,6 +180,8 @@ class DataRegistration:
                         round=self._round_ids[0],
                         return_future=False
                     )
+                del temp
+                gc.collect()
 
                 mov_image_decon = chunked_cudadecon(
                     image=np.asarray(
@@ -321,7 +322,7 @@ class DataRegistration:
                     identity_transform = sitk.Transform(3, sitk.sitkIdentity)
                     optical_flow_sitk = sitk.Resample(
                         of_xform_sitk,
-                        mov_image_sitk,
+                        sitk.GetImageFromArray(mov_image_decon),
                         identity_transform,
                         interpolator,
                         0,
