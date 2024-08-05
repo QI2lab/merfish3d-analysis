@@ -1,6 +1,9 @@
 """
 DataRegistration: Register qi2lab 3D MERFISH data using cross-correlation and optical flow
 
+Shepherd 2024/08 - swap to qi2labdatastore for data access
+                   swap to numba accelerated downsampling
+                   clean up numpy usage to allow for ryomen tiling later
 Shepherd 2024/07 - swap to pycudadecon and begin removing all Dask usage
 Shepherd 2024/04 - updates to use U-FISH and remove SPOTS3D
 Shepherd 2024/01 - updates for qi2lab MERFISH file format v0.1
@@ -24,7 +27,6 @@ from merfish3danalysis.utils._imageprocessing import (
 from ufish.api import UFish
 import torch
 import cupy as cp
-
 
 class DataRegistration:
     """Register 2D or 3D MERFISH data across rounds.
@@ -61,11 +63,7 @@ class DataRegistration:
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None
-        self._rigid_xforms = None
-        self._of_xforms = None
         self._has_registered_data = None
-        self._has_rigid_registrations = False
-        self._has_of_registrations = False
         self._overwrite_registered = overwrite_registered
         self._decon_iters = decon_iters
         self._decon_background = decon_background
@@ -87,17 +85,57 @@ class DataRegistration:
         self._datastore = value
 
     @property
-    def tile_idx(self):
-        if self._tile_idx is not None:
-            tile_idx = self._tile_idx
-            return tile_idx
+    def tile_id(self):
+        if self._tile_id is not None:
+            tile_id = self._tile_id
+            return tile_id
         else:
             print("Tile coordinate not defined.")
             return None
 
-    @tile_idx.setter
+    @tile_id.setter
     def tile_idx(self, value: Union[int,str]):
-        self._tile_id = value        
+        if isinstance(value, int):
+            if value < 0 or value > self._datastore.num_tiles:
+                print("Set value index >=0 and <=" + str(self._datastore.num_tiles))
+                return None
+            else:
+                self._tile_id = self._datastore.tile_ids[value]
+        elif isinstance(value, str):
+            if value not in self._datastore.tile_ids:
+                print("set valid tile id")
+                return None
+            else:
+                self._tile_id = value
+                
+    @property
+    def perform_optical_flow(self):
+        return self._perform_optical_flow
+    
+    @perform_optical_flow.setter
+    def perform_optical_flow(self, value: bool):
+        self._perform_optical_flow = value
+
+    @property
+    def overwrite_registered(self):
+        return self._overwrite_registered
+    
+    @overwrite_registered.setter
+    def overwrite_registered(self, value: bool):
+        self._overwrite_registered = value
+        
+    def register_all_tiles(self):
+        for tile_id in self._datastore.tile_ids:
+            self.tile_id=tile_id
+            self._load_raw_data()
+            self._generate_registrations()
+            self._apply_registration_to_bits()
+            
+    def register_one_tile(self, tile_id: Union[int,str]):
+        self.tile_id = tile_id
+        self._load_raw_data()
+        self._generate_registrations()
+        self._apply_registration_to_bits()
 
     def _load_raw_data(self):
         """
@@ -362,7 +400,7 @@ class DataRegistration:
                 del data_registered
                 gc.collect()
 
-    def apply_registration_to_bits(self):
+    def _apply_registration_to_bits(self):
         """Generate ufish + deconvolved, registered readout data and save to datastore.
         
         """

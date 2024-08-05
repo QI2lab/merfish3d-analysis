@@ -282,11 +282,12 @@ class qi2labDataStore:
             self._experiment_order = value
         else:
             self._experiment_order = pd.DataFrame(
-                value.astype(np.int8), columns=[
+                value.astype(np.int8),
+                columns=[
                     str(self._channels_in_data[0]),
                     str(self._channels_in_data[1]),
                     str(self._channels_in_data[2]),
-                    ]
+                ],
             )
 
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
@@ -298,7 +299,7 @@ class qi2labDataStore:
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["num_round"] = self._num_rounds
         self._save_to_json(calib_zattrs, zattrs_path)
-        
+
         self._num_bits = int(np.max(value[-1, 1:]))
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["num_bits"] = self._num_bits
@@ -345,6 +346,118 @@ class qi2labDataStore:
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["voxel_size_zyx_um"] = value
+        self._save_to_json(calib_zattrs, zattrs_path)
+
+    @property
+    def global_normalization_vector(self) -> Optional[ArrayLike]:
+        """Global normalization vector."""
+
+        value = getattr(self, "_global_normalization_vector", None)
+        if value is None:
+            zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+            calib_zattrs = self._load_from_json(zattrs_path)
+            value = np.asarray(
+                calib_zattrs["global_normalization_vector"], dtype=np.float32
+            )
+
+            if value is None:
+                print("Global normalization vector not calculated.")
+                return None
+
+            return value
+
+    @global_normalization_vector.setter
+    def global_normalization_vector(self, value: ArrayLike):
+        self._global_normalization_vector = value
+        zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["global_normalization_vector"] = (
+            self._global_normalization_vector.tolist()
+        )
+        self._save_to_json(calib_zattrs, zattrs_path)
+
+    @property
+    def global_background_vector(self) -> Optional[ArrayLike]:
+        """Global background vector."""
+
+        value = getattr(self, "_global_background_vector", None)
+        if value is None:
+            zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+            calib_zattrs = self._load_from_json(zattrs_path)
+            value = np.asarray(
+                calib_zattrs["global_background_vector"], dtype=np.float32
+            )
+
+            if value is None:
+                print("Global background vector not calculated.")
+                return None
+
+            return value
+
+    @global_background_vector.setter
+    def global_background_vector(self, value: ArrayLike):
+        self._global_background_vector = value
+        zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["global_background_vector"] = (
+            self._global_background_vector.tolist()
+        )
+        self._save_to_json(calib_zattrs, zattrs_path)
+
+    @property
+    def iterative_normalization_vector(self) -> Optional[ArrayLike]:
+        """Iterative normalization vector."""
+
+        value = getattr(self, "_iterative_normalization_vector", None)
+        if value is None:
+            zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+            calib_zattrs = self._load_from_json(zattrs_path)
+            value = np.asarray(
+                calib_zattrs["iterative_normalization_vector"], dtype=np.float32
+            )
+
+            if value is None:
+                print("Iterative normalization vector not calculated.")
+                return None
+
+            return value
+
+    @iterative_normalization_vector.setter
+    def iterative_normalization_vector(self, value: ArrayLike):
+        self._iterative_normalization_vector = value
+        zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["iterative_normalization_vector"] = (
+            self._iterative_normalization_vector.tolist()
+        )
+        self._save_to_json(calib_zattrs, zattrs_path)
+
+    @property
+    def iterative_background_vector(self) -> Optional[ArrayLike]:
+        """Iterative background vector."""
+
+        value = getattr(self, "_iterative_background_vector", None)
+        if value is None:
+            zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+            calib_zattrs = self._load_from_json(zattrs_path)
+            value = np.asarray(
+                calib_zattrs["iterative_background_vector"], dtype=np.float32
+            )
+
+            if value is None:
+                print("Iterative background vector not calculated.")
+                return None
+
+            return value
+
+    @iterative_background_vector.setter
+    def iterative_background_vector(self, value: ArrayLike):
+        self._iterative_background_vector = value
+        zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["iterative_background_vector"] = (
+            self._iterative_background_vector.tolist()
+        )
         self._save_to_json(calib_zattrs, zattrs_path)
 
     @property
@@ -521,11 +634,11 @@ class qi2labDataStore:
             return None
 
         spec["metadata"]["shape"] = array.shape
-        if len(array.shape)==2:
+        if len(array.shape) == 2:
             spec["metadata"]["chunks"] = [array.shape[0], array.shape[1]]
-        elif len(array.shape)==3:
+        elif len(array.shape) == 3:
             spec["metadata"]["chunks"] = [1, array.shape[1], array.shape[2]]
-        elif len(array.shape)==4:
+        elif len(array.shape) == 4:
             spec["metadata"]["chunks"] = [1, 1, array.shape[1], array.shape[2]]
         spec["metadata"]["dtype"] = array_dtype
 
@@ -873,7 +986,9 @@ class qi2labDataStore:
                     / Path(bit_id + ".parquet")
                 )
                 if not (current_ufish_path.exists()):
-                    raise Exception(tile_id + " " + bit_id + " ufish localization missing")
+                    raise Exception(
+                        tile_id + " " + bit_id + " ufish localization missing"
+                    )
 
         # check and validate global registered data
         if self._datastore_state["GlobalRegistered"]:
@@ -1081,8 +1196,11 @@ class qi2labDataStore:
                 readout_one_channel = self._channels_in_data[1]
                 readout_two_channel = self._channels_in_data[2]
                 row = self._experiment_order[
-                    (self._experiment_order[str(readout_one_channel)] == (bit_idx+1))
-                    | (self._experiment_order[str(readout_two_channel)] == (bit_idx+1))
+                    (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
+                    | (
+                        self._experiment_order[str(readout_two_channel)]
+                        == (bit_idx + 1)
+                    )
                 ]
                 bit_attrs = {
                     "round_linker": int(row[str(fiducial_channel)].values[0]),
@@ -1573,7 +1691,6 @@ class qi2labDataStore:
             )
 
         try:
-            
             attributes = self._load_from_json(zattrs_path)
             attributes["excitation_um"] = float(wavelengths_um[0])
             attributes["emission_um"] = float(wavelengths_um[1])
@@ -1774,7 +1891,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-            self._save_to_json(attributes,current_local_zattrs_path)
+            self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
             return None
@@ -1952,7 +2069,9 @@ class qi2labDataStore:
                 return_future,
             )
             attributes = self._load_from_json(zattrs_path)
-            downsampling = np.asarray(attributes["opticalflow_downsampling"], dtype=np.float32)
+            downsampling = np.asarray(
+                attributes["opticalflow_downsampling"], dtype=np.float32
+            )
 
             return of_xform_px, downsampling
         except Exception:
@@ -2022,7 +2141,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-            self._save_to_json(attributes,current_local_zattrs_path)
+            self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving optical flow transform.")
             return None
@@ -2207,7 +2326,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-            self._save_to_json(attributes,current_local_zattrs_path)
+            self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
             return None
@@ -2526,7 +2645,10 @@ class qi2labDataStore:
             self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx")
         )
         current_local_zattrs_path = str(
-            self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx") / Path(".zattrs")
+            self._fused_root_path
+            / Path("fused.zarr")
+            / Path("fused_polyDT_iso_zyx")
+            / Path(".zattrs")
         )
 
         attributes = {
@@ -2541,7 +2663,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-            self._save_to_json(attributes,current_local_zattrs_path)
+            self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving fused image.")
             return None
@@ -2720,7 +2842,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-            self._save_to_json(attributes,current_local_zattrs_path)
+            self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving Cellpose image.")
             return None

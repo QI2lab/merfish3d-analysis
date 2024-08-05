@@ -98,58 +98,6 @@ def apply_transform(image1: ArrayLike,
 
     return sitk.GetArrayFromImage(resampled_image).astype(np.float32)
 
-def downsample_image(image: sitk.Image, factor: int) -> sitk.Image:
-    """
-    Isotropic 3D downsample using simpleITK
-
-    Parameters
-    ----------
-    image: simpleITK image
-        image
-    factor: int
-        isotropic shrink factor
-
-    Returns
-    -------
-    image_downsampled: simpleITK image
-        isotropic downsampled image
-    """
-
-    # Downsample the image using BinShrink
-    image_downsampled = sitk.BinShrink(image, [factor]*image.GetDimension())
-
-    return image_downsampled
-
-def normalize_histograms(image1: sitk.Image, 
-                         image2: sitk.Image) -> sitk.Image:
-    """
-    Normalize histograms using simpleITK
-
-    Parameters
-    ----------
-    image1: simpleITK image
-        reference image
-    image2: simpleITK image
-        moving image
-
-    Returns
-    -------
-    image2_matched: simpleITK image
-        moving image histogram matched to reference image
-    """
-
-    # Initialize the HistogramMatchingImageFilter
-    matcher = sitk.HistogramMatchingImageFilter()
-
-    # Set the number of histogram bins and the number of match points
-    matcher.SetNumberOfHistogramLevels(1024)
-    matcher.SetNumberOfMatchPoints(7)
-
-    # Match the histograms
-    image2_matched = matcher.Execute(image2, image1)
-
-    return image2_matched
-
 def compute_rigid_transform(image1: ArrayLike, 
                             image2: ArrayLike,
                             use_mask: Optional[bool] = False,
