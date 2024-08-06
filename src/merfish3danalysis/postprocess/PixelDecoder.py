@@ -5,9 +5,9 @@ Shepherd 2024/03 - rework of GPU logic to reduce out-of-memory crashes
 Shepherd 2024/01 - updates for qi2lab MERFISH file format v1.0
 """
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 import numpy as np
 from pathlib import Path
-import zarr
 import gc
 import cupy as cp
 from cupyx.scipy.ndimage import gaussian_filter
@@ -28,8 +28,7 @@ warnings.filterwarnings("ignore", message="Only one label was provided to `remov
 
 class PixelDecoder():
     def __init__(self,
-                 dataset_path: Union[Path,str],
-                 exp_type: Optional[str] = "3D",
+                 datastore: qi2labDataStore,
                  use_mask: Optional[bool] = False,
                  z_range: Optional[Sequence[int]] = None,
                  include_blanks: Optional[bool] = True,
@@ -57,14 +56,14 @@ class PixelDecoder():
             control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
         """
 
-        self._dataset_path = dataset_path
+        self._datastore = datastore
         self._verbose = verbose
         self._barcodes_filtered = False
         self._include_blanks = include_blanks
         
         self._n_merfish_bits = merfish_bits
         
-        if exp_type == "2D":
+        if self._datastore.microscope_type == "2D":
             self._is_3D = False
         else:
             self._is_3D = True
@@ -74,8 +73,6 @@ class PixelDecoder():
             self._z_crop = True
             self._z_range = [z_range[0],z_range[1]]
         
-        self._parse_dataset()
-        self._load_experiment_parameters()
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
@@ -94,27 +91,11 @@ class PixelDecoder():
         self._distance_threshold = 0.5172 # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
         self._magnitude_threshold = 1.1 # default for HW4D4 code
 
-        
-    def _parse_dataset(self):
-        self._readout_dir_path = self._dataset_path / Path('readouts')
-        self._tile_ids = sorted([entry.name for entry in self._readout_dir_path.iterdir() if entry.is_dir()],
-                           key=lambda x: int(x.split('tile')[1].split('.zarr')[0]))
-        tile_dir_path = self._readout_dir_path / Path(self._tile_ids[0])
-        self._bit_ids = sorted([entry.name for entry in tile_dir_path.iterdir() if entry.is_dir()],
-                                key=lambda x: int(x.split('bit')[1].split('.zarr')[0]))[0:self._n_merfish_bits]
-        
-    def _load_experiment_parameters(self):
-        
-        calibration_dir_path = self._dataset_path / Path("calibrations.zarr")
-        self._calibration_zarr = zarr.open(calibration_dir_path,mode='a')
-        
-        self._na = 1.35
-        self._ri = 1.4
-        self._num_on_bits = 4
     
     def _load_codebook(self):
+        """Load and parse codebook into gene_id and codeword matrix."""
 
-        self._df_codebook = pd.DataFrame(self._calibration_zarr.attrs['codebook'])
+        self._df_codebook = self._datastore.codebook.copy()
         self._df_codebook.fillna(0, inplace=True)
             
         self._blank_count = self._df_codebook[0].str.lower().str.startswith('blank').sum()
@@ -126,6 +107,8 @@ class PixelDecoder():
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
         
     def _normalize_codebook(self, include_errors: bool = False):
+        """Normalize each codeword by L2 norm."""
+        
         self._barcode_set = cp.asarray(self._codebook_matrix[:,0:self._n_merfish_bits])
         magnitudes = cp.linalg.norm(self._barcode_set, axis=1, keepdims=True)
         magnitudes[magnitudes==0] = 1 # ensure with smFISH rounds have magnitude 1
@@ -155,13 +138,14 @@ class PixelDecoder():
             return cp.asnumpy(all_barcodes)
         
     def _load_global_normalization_vectors(self):
-        try:
-            normalization_vector = cp.asarray(self._calibration_zarr.attrs['global_normalization'])
-            background_vector = cp.asarray(self._calibration_zarr.attrs['global_background'])
+
+        normalization_vector = self._datastore.global_normalization_vector
+        background_vector = self._datastore.global_background_vector
+        if normalization_vector is not None and background_vector is not None:
+            self._global_normalization_vector = cp.asarray(normalization_vector)
+            self._global_background_vector = cp.asarray(background_vector)
             self._global_normalization_loaded = True
-            self._global_background_vector = background_vector
-            self._global_normalization_vector = normalization_vector
-        except:
+        else:
             self._global_normalization_vectors()
               
     def _global_normalization_vectors(self,
@@ -192,11 +176,18 @@ class PixelDecoder():
                 iterable_tiles = random_tiles
             
             for tile_id in iterable_tiles:
-                tile_dir_path = self._readout_dir_path / Path(tile_id)
-                bit_dir_path = tile_dir_path / Path(bit_id)
-                current_bit = zarr.open(bit_dir_path,mode='r')
-                current_image = cp.where(cp.asarray(current_bit["registered_ufish_data"], dtype=cp.float32) > 0.1, 
-                                            cp.asarray(current_bit["registered_decon_data"], dtype=cp.float32), 
+                
+                decon_image = self._datastore.load_local_registered_image(
+                    tile=tile_id,
+                    bit=bit_id,
+                )
+                ufish_image = self._datastore.load_local_ufish_image(
+                    tile=tile_id,
+                    bit=bit_id,
+                )
+                
+                current_image = cp.where(cp.asarray(ufish_image.result(), dtype=cp.float32) > 0.1, 
+                                            cp.asarray(decon_image.result(), dtype=cp.float32), 
                                             0.)
                 current_image[current_image>hot_pixel_threshold] = cp.median(current_image[current_image.shape[0]//2,:,:]).astype(cp.float32)
                 if self._z_crop:
@@ -261,8 +252,8 @@ class PixelDecoder():
             cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
                                                 
-        self._calibration_zarr.attrs['global_normalization'] = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-        self._calibration_zarr.attrs['global_background'] = cp.asnumpy(background_vector).astype(np.float32).tolist()
+        self._datastore.global_normalization_vector = cp.asnumpy(normalization_vector).astype(np.float32).tolist()
+        self._datastore.global_background_vector = cp.asnumpy(background_vector).astype(np.float32).tolist()
                     
         self._global_background_vector = background_vector
         self._global_normalization_vector = normalization_vector
@@ -270,14 +261,14 @@ class PixelDecoder():
     
     def _load_iterative_normalization_vectors(self):
         
-        try:
-            iterative_background_vector = np.asarray(self._calibration_zarr.attrs['iterative_background_vector'])
-            iterative_normalization_vector = np.asarray(self._calibration_zarr.attrs['iterative_normalization_vector'])
+        normalization_vector = self._datastore.iterative_normalization_vector
+        background_vector = self._datastore.iterative_background_vector
+        if normalization_vector is not None and background_vector is not None:
+            self._iterative_normalization_vector = cp.asarray(normalization_vector)
+            self._iterative_background_vector = cp.asarray(background_vector)
             self._iterative_normalization_loaded = True
-            self._iterative_normalization_vector = iterative_normalization_vector
-            self._iterative_background_vector = iterative_background_vector
-        except:
-            self._iterative_normalization_loaded = False
+        else:
+            self._iterative_normalization_vectors()
     
     def _iterative_normalization_vectors(self):
         
@@ -310,19 +301,18 @@ class PixelDecoder():
         barcode_based_normalization_vector = np.round(df_barcode_intensities.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
         barcode_based_background_vector = np.round(df_barcode_background.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
        
-        try:
-            old_iterative_background_vector = np.asarray(self._calibration_zarr.attrs['iterative_background_vector'])
-            old_iterative_normalization_vector = np.asarray(self._calibration_zarr.attrs['iterative_normalization_vector'])
-        except:
+        if self._datastore.iterative_background_vector is None and self._datastore.iterative_normalization_vector is None:
             old_iterative_background_vector = np.round(cp.asnumpy(self._global_background_vector),1)
             old_iterative_normalization_vector = np.round(cp.asnumpy(self._global_normalization_vector),1)
+        else:
+            old_iterative_background_vector = np.asarray(self._datastore.iterative_background_vector)
+            old_iterative_normalization_vector = np.asarray(self._datastore.iterative_normalization_vector)
+
             
         diff_iterative_background_vector = np.round(np.abs(barcode_based_background_vector - old_iterative_background_vector),1)
         diff_iterative_normalization_vector = np.round(np.abs(barcode_based_normalization_vector - old_iterative_normalization_vector),1)
-        self._calibration_zarr.attrs['diff_iterative_normalization_vector'] = diff_iterative_normalization_vector.astype(np.float32).tolist()
-        self._calibration_zarr.attrs['diff_iterative_background_vector'] = diff_iterative_background_vector.astype(np.float32).tolist()
-        self._calibration_zarr.attrs['iterative_normalization_vector'] = barcode_based_normalization_vector.astype(np.float32).tolist()
-        self._calibration_zarr.attrs['iterative_background_vector'] = barcode_based_background_vector.astype(np.float32).tolist()
+        self._datastore.iterative_background_vector = barcode_based_background_vector.astype(np.float32).tolist()
+        self._datastore.iterative_normalization_vector = barcode_based_normalization_vector.astype(np.float32).tolist()
         
         if self._verbose > 1:
             print('---')
@@ -345,53 +335,60 @@ class PixelDecoder():
     def _load_bit_data(self):   
         if self._verbose > 1:    
             print('load raw data')
-            iterable_bits = tqdm(self._bit_ids[0:self._n_merfish_bits],desc='bit',leave=False)
+            iterable_bits = tqdm(self._datastore.bit_ids[0:self._n_merfish_bits],desc='bit',leave=False)
         elif self._verbose >= 1:
-            iterable_bits = tqdm(self._bit_ids[0:self._n_merfish_bits],desc='loading',leave=False)
+            iterable_bits = tqdm(self._datastore.bit_ids[0:self._n_merfish_bits],desc='loading',leave=False)
         else:
-            iterable_bits = self._bit_ids[0:self._n_merfish_bits]
+            iterable_bits = self._datastore.bit_ids[0:self._n_merfish_bits]
         
         images = []
         self._em_wvl = []
         for bit_id in iterable_bits:
-            tile_dir_path = self._readout_dir_path / Path(self._tile_ids[self._tile_idx])
-            bit_dir_path = tile_dir_path / Path(bit_id)
-            current_bit = zarr.open(bit_dir_path,mode='r')
+            decon_image = self._datastore.load_local_registered_image(
+                tile=self._tile_idx,
+                bit=bit_id,
+            )
+            ufish_image = self._datastore.load_local_ufish_image(
+                tile=self._tile_idx,
+                bit=bit_id,
+            )
+                        
             if self._z_crop:
-                current_mask = np.asarray(current_bit["registered_ufish_data"][self._z_range[0]:self._z_range[1],:], dtype=np.float32)
+                current_mask = np.asarray(ufish_image[self._z_range[0]:self._z_range[1],:].result(), dtype=np.float32)
                 images.append(np.where(current_mask > .1, 
-                                       np.asarray(current_bit["registered_decon_data"][self._z_range[0]:self._z_range[1],:], dtype=np.float32),
-                                       0))
+                                       decon_image[self._z_range[0]:self._z_range[1],:].result(), dtype=np.float32),
+                                       0)
             else:
-                current_mask = np.asarray(current_bit["registered_ufish_data"], dtype=np.float32)
+                current_mask = np.asarray(ufish_image.result(), dtype=np.float32)
                 images.append(np.where(current_mask > .1,
-                                       np.asarray(current_bit["registered_decon_data"], dtype=np.float32),
-                                       0))
-            self._em_wvl.append(current_bit.attrs['emission_um'])
+                                       decon_image.result(), dtype=np.float32),
+                                       0)
+            self._em_wvl.append(self._datastore.load_local_wavelengths_um(
+                tile=self._tile_idx,
+                bit=bit_id,
+            )[1])
             
         self._image_data = np.stack(images,axis=0)
-        voxel_size_zyx_um = np.asarray(current_bit.attrs['voxel_zyx_um'],dtype=np.float32)
+        voxel_size_zyx_um = self._datastore.voxel_size_zyx_um
         self._pixel_size = voxel_size_zyx_um[1]
         self._axial_step = voxel_size_zyx_um[0]                
         
-        polyDT_dir_path = self._dataset_path / Path('polyDT')
-        polyDT_current_path = polyDT_dir_path / Path(self._tile_ids[self._tile_idx]) / Path("round000.zarr")
-        polyDT_current_tile = zarr.open(polyDT_current_path,mode='r')
-        try:
-            self._affine = np.asarray(polyDT_current_tile.attrs['affine_zyx_um'],
-                                        dtype=np.float32)
-            self._origin = np.asarray(polyDT_current_tile.attrs['origin_zyx_um'],
-                                        dtype=np.float32)
-            self._spacing = np.asarray(polyDT_current_tile.attrs['spacing_zyx_um'],
-                                        dtype=np.float32)           
-        except:
-            self._affine = np.eye(4)
-            self._origin = np.asarray(polyDT_current_tile.attrs['stage_zyx_um'],
-                                        dtype=np.float32)
-            self._spacing = np.asarray(polyDT_current_tile.attrs['voxel_zyx_um'],
-                                        dtype=np.float32)  
+        affine, origin, spacing = self._datastore.load_global_coord_xforms_um(
+            tile=self._tile_idx
+        )    
+        if affine is None or origin is None or spacing is None:
+            affine = np.eye(4)
+            origin = self._datastore.load_local_stage_position_zyx_um(
+                tile=self._tile_idx,
+                round=0
+            )
+            spacing = self._datastore.voxel_size_zyx_um
+            
+        self._affine = affine
+        self._origin = origin
+        self._spacing = spacing
         
-        del images, current_bit
+        del images
         gc.collect()
                
     def _lp_filter(self,
@@ -833,7 +830,7 @@ class PixelDecoder():
         if self._verbose >=1:
             iterable_files = tqdm(tile_files,desc='tile',leave=False)
         else:
-            iterable_file = tile_files
+            iterable_files = tile_files
 
         if format == 'csv':
             tile_data = [pd.read_csv(csv_file) for csv_file in iterable_files]      
@@ -895,8 +892,8 @@ class PixelDecoder():
                     'moments_normalized-2-0', 'moments_normalized-2-1', 'moments_normalized-2-2', 'moments_normalized-2-3',
                     'moments_normalized-3-0', 'moments_normalized-3-1', 'moments_normalized-3-2',  'moments_normalized-3-3',
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1']
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] is True][columns]
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] is False][columns]
                         
         if (len(df_false)>0):
             
@@ -994,7 +991,7 @@ class PixelDecoder():
             outlines_path = self._dataset_path / Path("segmentation") / Path("cellpose") / Path("cell_outlines.json")
             cell_outlines = self._load_microjson(outlines_path)
             has_cell_outlines = True
-        except:
+        except Exception:
             has_cell_outlines = False
        
         if has_cell_outlines:
@@ -1004,8 +1001,8 @@ class PixelDecoder():
             for cell_id, polygon in outline_polygons.items():
                 try:
                     rtree_index.insert(cell_id, polygon.bounds)
-                except:
-                    bad_cell = True
+                except Exception:
+                    bad_cell = True  # noqa: F841
 
             def check_point(row):
                 point = Point(row['global_y'], row['global_x'])
@@ -1083,17 +1080,17 @@ class PixelDecoder():
                 del self._image_data_lp
             else:
                 del self._image_data
-        except:
+        except Exception:
             pass
         
         try:
             del self._scaled_pixel_images, self._decoded_image, self._distance_image, self._magnitude_image
-        except:
+        except Exception:
             pass
 
         try:
             del self._df_barcodes
-        except:
+        except Exception:
             pass
         if self._barcodes_filtered:
             del self._df_filtered_barcodes
