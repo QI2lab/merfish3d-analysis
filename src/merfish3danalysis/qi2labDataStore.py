@@ -1776,13 +1776,16 @@ class qi2labDataStore:
             return None
 
         try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<u2"
             corrected_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                spec,
                 return_future,
             )
             return corrected_image
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error loading corrected image.")
             return None
 
@@ -1890,7 +1893,8 @@ class qi2labDataStore:
             attributes["shading_correction"] = shading_correction,
             attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error saving corrected image.")
             return None
 
@@ -1999,7 +2003,6 @@ class qi2labDataStore:
             attributes["rigid_xform_xyz_px"] = rigid_xform_xyz_px.tolist()
             self._save_to_json(attributes, zattrs_path)
         except Exception:
-            print(tile_id, round_id)
             print("Error writing rigid transform attribute.")
             return None
 
@@ -2223,13 +2226,16 @@ class qi2labDataStore:
             return None
 
         try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<f2"
             registered_decon_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                spec,
                 return_future,
             )
             return registered_decon_image
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error loading registered deconvolved image.")
             return None
 
@@ -2285,6 +2291,12 @@ class qi2labDataStore:
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
                 / Path("registered_decon_data")
+            )
+            current_local_zattrs_path = str(
+                self._readouts_root_path
+                / Path(tile_id)
+                / Path(local_id + ".zarr")
+                / Path(".zattrs")
             )
         else:
             if isinstance(round, int):
@@ -2381,13 +2393,16 @@ class qi2labDataStore:
             return None
 
         try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<f2"
             registered_ufish_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                spec,
                 return_future,
             )
             return registered_ufish_image
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error loading U-FISH image.")
             return None
 
@@ -2396,7 +2411,7 @@ class qi2labDataStore:
         ufish_image: ArrayLike,
         tile: Union[int, str],
         bit: Union[int, str],
-        return_future: Optional[bool] = True,
+        return_future: Optional[bool] = False,
     ):
         """Save U-FISH prediction image."""
 
@@ -2446,8 +2461,9 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
-        except Exception:
-            print("Error saving corrected image.")
+        except Exception as e:
+            print(e)
+            print("Error saving U-Fish image.")
             return None
 
     def load_local_ufish_spots(
@@ -2543,6 +2559,9 @@ class qi2labDataStore:
         else:
             print("'bit' must be integer index or string identifier")
             return None
+        
+        if not(self._ufish_localizations_root_path / Path(tile_id)).exists():
+            (self._ufish_localizations_root_path / Path(tile_id)).mkdir()
 
         current_ufish_localizations_path = (
             self._ufish_localizations_root_path
@@ -2552,7 +2571,8 @@ class qi2labDataStore:
 
         try:
             self._save_to_parquet(spot_df, current_ufish_localizations_path)
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error saving U-FISH localizations.")
             return None
 

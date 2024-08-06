@@ -1,3 +1,16 @@
+"""Convert Zhuang MERFISH MOP data to qi2labdatastore.
+
+Data found here: https://download.brainimagelibrary.org/cf/1c/cf1c1a431ef8d021/
+
+Download the "additional_files", "mouse1_sample1_raw", and 
+"dataset_metadata.xslx" folders.
+
+Change the path on line 23 to where the data is downloaded.
+
+Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
+"""
+
+
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
@@ -39,6 +52,11 @@ voxel_zyx_um = [1.5, 0.108, 0.108]
 na = 1.45
 ri = 1.51
 
+# gain and offset based on camera model (orca flash v3)
+# https://www.hamamatsu.com/content/dam/hamamatsu-photonics/sites/static/sys/en/manual/C13440-20CU_IM_En.pdf
+e_per_ADU = .46 # from hamamatsu manual
+offset = 100. # from hamamats manual
+
 # stage positions from metadata
 stage_position_path = (
     root_path
@@ -73,7 +91,7 @@ datastore.num_tiles = num_tiles
 datastore.microscope_type = "2D"
 datastore.camera_model = "zhuang"
 datastore.tile_overlap = 0.2
-datastore.e_per_ADU = 1.0  # unknown camera. don't convert to electrons
+datastore.e_per_ADU = e_per_ADU  # unknown camera. don't convert to electrons
 datastore.na = na
 datastore.ri = ri
 datastore.binning = 1
@@ -107,11 +125,13 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
         raw_image = imread(raw_image_file).astype(np.uint16)
         good_shape = raw_image.shape
     except Exception:
-        print("Error reading: " + raw_image_file  + "; Please redownload")
+        print("Error reading: " + raw_image_file  + "; Please re-download")
         raw_image = np.zeros((good_shape),dtype=np.uint16)
             
-    # Normally, we would correct the raw data for gain, offset, and hot pixels.
-    # However, this is information is not provided with Zhuang data.
+    # Correct for gain and offset
+    raw_image = (raw_image).astype(np.float32) - offset
+    raw_image[raw_image<0.] = 0.
+    raw_image = (raw_image * e_per_ADU).astype(np.uint16)
     
     # write fidicual data first.
     # Write the same polyDT for each round, as the data is already locally registered.
@@ -122,7 +142,7 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
             np.squeeze(raw_image[38,:]),
             tile=tile_idx,
             psf_idx=psf_idx,
-            gain_correction=False,
+            gain_correction=True,
             hotpixel_correction=False,
             shading_correction=False,
             round=round_id,
@@ -144,7 +164,7 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
             np.squeeze(raw_image[bit_idx, :]),
             tile=tile_idx,
             psf_idx=psf_idx,
-            gain_correction=False,
+            gain_correction=True,
             hotpixel_correction=False,
             shading_correction=False,
             bit=bit_id,
@@ -155,12 +175,11 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
             bit=bit_idx,
         )
         if psf_idx == 2:
-            round_idx = round_idx + 1
-            ch_idx = 1
+            psf_idx = 1
         else:
-            psf_idx = psf_idx + 1
+            psf_idx = 2
 
-# update datastore state that "corrected" data is written
+# update datastore state that "corrected_data" is complete
 datastore_state = datastore.datastore_state
 datastore_state.update({"Corrected": True})
 datastore.datastore_state = datastore_state
