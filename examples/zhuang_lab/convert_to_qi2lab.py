@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from psfmodels import make_psf
-from tifffile import imread, TiffFile
+from tifffile import imread
 from tqdm import tqdm
 from natsort import natsorted
 
@@ -65,6 +65,7 @@ datastore_path = Path(r"/mnt/data/zhuang/mop/mouse_sample1_raw/processed_v3")
 
 # setup global datastore properties
 datastore = qi2labDataStore(datastore_path)
+datastore.num_rounds = 19
 datastore.codebook = codebook
 datastore.channels_in_data = ["alexa488", "cy5", "alexa750"]
 datastore.experiment_order = experiment_order
@@ -75,6 +76,7 @@ datastore.tile_overlap = 0.2
 datastore.e_per_ADU = 1.0  # unknown camera. don't convert to electrons
 datastore.na = na
 datastore.ri = ri
+datastore.binning = 1
 datastore.noise_map = (
     np.zeros((2048, 2048), dtype=np.float32)
 )  # unknown camera. set noise / offset to zero.
@@ -114,11 +116,12 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
     # write fidicual data first.
     # Write the same polyDT for each round, as the data is already locally registered.
     # The metadata tells us polyDT is the 39th entry
-    ch_idx = 0
+    psf_idx = 0
     for round_idx, round_id in enumerate(tqdm(datastore.round_ids,desc="round",leave=False)):
         datastore.save_local_corrected_image(
             np.squeeze(raw_image[38,:]),
             tile=tile_idx,
+            psf_idx=psf_idx,
             gain_correction=False,
             hotpixel_correction=False,
             shading_correction=False,
@@ -128,33 +131,34 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
             stage_positions[tile_idx, :], tile=tile_idx, round=round_id
         )
         datastore.save_local_wavelengths_um(
-            (wavelengths_um[ch_idx, 0],wavelengths_um[ch_idx, 1]), 
+            (wavelengths_um[psf_idx, 0],wavelengths_um[psf_idx, 1]), 
             tile=tile_idx, 
             round=round_id
         )
 
     # write all readouts
     # The bits go in order of the codebook
-    ch_idx = 1
+    psf_idx = 1
     for bit_idx, bit_id in enumerate(tqdm(datastore.bit_ids,desc="bit",leave=False)):
         datastore.save_local_corrected_image(
             np.squeeze(raw_image[bit_idx, :]),
             tile=tile_idx,
+            psf_idx=psf_idx,
             gain_correction=False,
             hotpixel_correction=False,
             shading_correction=False,
             bit=bit_id,
         )
         datastore.save_local_wavelengths_um(
-            (wavelengths_um[ch_idx, 0], wavelengths_um[ch_idx, 1]),
+            (wavelengths_um[psf_idx, 0], wavelengths_um[psf_idx, 1]),
             tile=tile_idx,
             bit=bit_idx,
         )
-        if ch_idx == 2:
+        if psf_idx == 2:
             round_idx = round_idx + 1
             ch_idx = 1
         else:
-            ch_idx = ch_idx + 1
+            psf_idx = psf_idx + 1
 
 # update datastore state that "corrected" data is written
 datastore_state = datastore.datastore_state

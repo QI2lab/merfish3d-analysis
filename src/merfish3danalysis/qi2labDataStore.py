@@ -331,7 +331,7 @@ class qi2labDataStore:
         self._codebook = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["exp_order"] = self._codebook.values.tolist()
+        calib_zattrs["codebook"] = self._codebook.values.tolist()
         self._save_to_json(calib_zattrs, zattrs_path)
 
     @property
@@ -714,13 +714,13 @@ class qi2labDataStore:
                 "e_per_ADU",
                 "na",
                 "ri",
-                "experiment_order",
+                "exp_order",
                 "codebook",
             ]
             if self._datastore_state["Version"] == 0.3:
-                keys_to_check.append(
-                    ["microscope_type", "camera_model", "voxel_size_zyx_um"]
-                )
+                keys_to_check.append("microscope_type")
+                keys_to_check.append("camera_model")                
+                keys_to_check.append("voxel_size_zyx_um")
             for key in keys_to_check:
                 if key not in attributes.keys():
                     raise Exception("Calibration attributes incomplete")
@@ -825,14 +825,14 @@ class qi2labDataStore:
                     "stage_zyx_um",
                     "excitation_um",
                     "emission_um",
-                    "voxel_zyx_um",
-                    "bits",
-                    "exposure_ms",
+                    "bit_linker",
+                    #"exposure_ms",
                     "psf_idx",
                 ]
 
                 for key in keys_to_check:
                     if key not in attributes.keys():
+                        print(key)
                         raise Exception("Corrected polyDT attributes incomplete")
 
                 current_local_zarr_path = str(
@@ -864,12 +864,10 @@ class qi2labDataStore:
                     print("Readout tile attributes not found")
 
                 keys_to_check = [
-                    "stage_zyx_um",
                     "excitation_um",
                     "emission_um",
-                    "voxel_zyx_um",
-                    "round",
-                    "exposure_ms",
+                    "round_linker",
+                    #"exposure_ms",
                     "psf_idx",
                 ]
                 for key in keys_to_check:
@@ -1795,6 +1793,7 @@ class qi2labDataStore:
         gain_correction: bool = True,
         hotpixel_correction: bool = True,
         shading_correction: bool = False,
+        psf_idx: int = 0,
         round: Optional[Union[int, str]] = None,
         bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = False,
@@ -1878,12 +1877,6 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
 
-        attributes = {
-            "gain_correction": gain_correction,
-            "hotpixel_correction": hotpixel_correction,
-            "shading_correction": shading_correction,
-        }
-
         try:
             self._save_to_zarr_array(
                 image,
@@ -1891,6 +1884,11 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
+            attributes = self._load_from_json(current_local_zattrs_path)
+            attributes["gain_correction"] = gain_correction,
+            attributes["hotpixel_correction"] = hotpixel_correction,
+            attributes["shading_correction"] = shading_correction,
+            attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
@@ -2132,8 +2130,6 @@ class qi2labDataStore:
             / Path(".zattrs")
         )
 
-        attributes = {"opticalflow_downsampling": downsampling}
-
         try:
             self._save_to_zarr_array(
                 of_xform_px,
@@ -2141,6 +2137,8 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
+            attributes = self._load_from_json(current_local_zattrs_path)
+            attributes["opticalflow_downsampling"] = downsampling
             self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving optical flow transform.")
@@ -2286,7 +2284,7 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
-                / Path("corrected_data")
+                / Path("registered_decon_data")
             )
         else:
             if isinstance(round, int):
@@ -2308,7 +2306,7 @@ class qi2labDataStore:
                 self._polyDT_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
-                / Path("corrected_data")
+                / Path("registered_decon_data")
             )
             current_local_zattrs_path = str(
                 self._polyDT_root_path
@@ -2317,8 +2315,6 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
 
-        attributes = {"deconvolution": deconvolution}
-
         try:
             self._save_to_zarr_array(
                 registered_image,
@@ -2326,6 +2322,8 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future,
             )
+            attributes = self._load_from_json(current_local_zattrs_path)
+            attributes["deconvolution"] = deconvolution
             self._save_to_json(attributes, current_local_zattrs_path)
         except Exception:
             print("Error saving corrected image.")
@@ -2438,7 +2436,7 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
-                / Path("corrected_data")
+                / Path("registered_ufish_data")
             )
 
         try:
