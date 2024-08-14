@@ -356,15 +356,15 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["global_normalization_vector"], dtype=np.float32
-            )
-
-            if value is None:
+            
+            try:
+                value = np.asarray(
+                    calib_zattrs["global_normalization_vector"], dtype=np.float32
+                )
+                return value
+            except Exception as e:
                 print("Global normalization vector not calculated.")
                 return None
-
-            return value
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike):
@@ -384,15 +384,14 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["global_background_vector"], dtype=np.float32
-            )
-
-            if value is None:
+            try:
+                value = np.asarray(
+                    calib_zattrs["global_background_vector"], dtype=np.float32
+                )
+                return value
+            except Exception as e:
                 print("Global background vector not calculated.")
                 return None
-
-            return value
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike):
@@ -2221,13 +2220,13 @@ class qi2labDataStore:
                 / Path("registered_decon_data")
             )
 
-        if not current_local_zarr_path.exists():
+        if not Path(current_local_zarr_path).exists():
             print("Registered deconvolved image not found.")
             return None
 
         try:
             spec = self._zarrv2_spec.copy()
-            spec["metadata"]["dtype"] = "<f2"
+            spec["metadata"]["dtype"] = "<u2"
             registered_decon_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
                 spec,
@@ -2388,13 +2387,13 @@ class qi2labDataStore:
             / Path("registered_ufish_data")
         )
 
-        if not current_local_zarr_path.exists():
+        if not Path(current_local_zarr_path).exists():
             print("U-FISH prediction image not found.")
             return None
 
         try:
             spec = self._zarrv2_spec.copy()
-            spec["metadata"]["dtype"] = "<f2"
+            spec["metadata"]["dtype"] = "<f4"
             registered_ufish_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
                 spec,
