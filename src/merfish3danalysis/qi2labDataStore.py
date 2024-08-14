@@ -368,7 +368,7 @@ class qi2labDataStore:
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike):
-        self._global_normalization_vector = value
+        self._global_normalization_vector = np.asarray(value,dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["global_normalization_vector"] = (
@@ -395,7 +395,7 @@ class qi2labDataStore:
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike):
-        self._global_background_vector = value
+        self._global_background_vector = np.asarray(value,dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["global_background_vector"] = (
@@ -2619,9 +2619,38 @@ class qi2labDataStore:
         affine_zyx_um: ArrayLike,
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
-        tile_idx: int = 0,
+        tile: Union[int, str],
     ) -> None:
-        pass
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            else:
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            else:
+                tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        try:
+            zattrs_path = str(
+                self._polyDT_root_path
+                / Path(tile_id)
+                / Path(self._round_ids[0] + ".zarr")
+                / Path(".zattrs")
+            )
+            attributes = self._load_from_json(zattrs_path)
+            attributes["affine_zyx_um"] = affine_zyx_um.tolist()
+            attributes["origin_zyx_um"] = origin_zyx_um.tolist()
+            attributes["spacing_zyx_um"] = spacing_zyx_um.tolist()
+            self._save_to_json(attributes, zattrs_path)
+        except Exception as e:
+            print(e)
 
     def load_global_fidicual_image(
         self,

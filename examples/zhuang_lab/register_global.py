@@ -72,7 +72,7 @@ def register_global():
                     registration_binning={"z": 4, "y": 4, "x": 4},
                     groupwise_resolution_method="shortest_paths",
                     pre_registration_pruning_method="shortest_paths_overlap_weighted",
-                    plot_summary=True,
+                    plot_summary=False,
                 )
 
         for tile_idx, msim in enumerate(msims):
@@ -91,7 +91,7 @@ def register_global():
                 affine_zyx_um=affine,
                 origin_zyx_um=origin,
                 spacing_zyx_um=spacing,
-                tile_idx=tile_idx + tile_set[0],
+                tile=tile_idx + tile_set[0],
             )
 
 
