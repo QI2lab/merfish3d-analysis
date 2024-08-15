@@ -356,7 +356,7 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            
+
             try:
                 value = np.asarray(
                     calib_zattrs["global_normalization_vector"], dtype=np.float32
@@ -368,7 +368,7 @@ class qi2labDataStore:
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike):
-        self._global_normalization_vector = np.asarray(value,dtype=np.float32)
+        self._global_normalization_vector = np.asarray(value, dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["global_normalization_vector"] = (
@@ -395,7 +395,7 @@ class qi2labDataStore:
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike):
-        self._global_background_vector = np.asarray(value,dtype=np.float32)
+        self._global_background_vector = np.asarray(value, dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["global_background_vector"] = (
@@ -718,7 +718,7 @@ class qi2labDataStore:
             ]
             if self._datastore_state["Version"] == 0.3:
                 keys_to_check.append("microscope_type")
-                keys_to_check.append("camera_model")                
+                keys_to_check.append("camera_model")
                 keys_to_check.append("voxel_size_zyx_um")
             for key in keys_to_check:
                 if key not in attributes.keys():
@@ -825,7 +825,7 @@ class qi2labDataStore:
                     "excitation_um",
                     "emission_um",
                     "bit_linker",
-                    #"exposure_ms",
+                    # "exposure_ms",
                     "psf_idx",
                 ]
 
@@ -866,7 +866,7 @@ class qi2labDataStore:
                     "excitation_um",
                     "emission_um",
                     "round_linker",
-                    #"exposure_ms",
+                    # "exposure_ms",
                     "psf_idx",
                 ]
                 for key in keys_to_check:
@@ -1887,9 +1887,9 @@ class qi2labDataStore:
                 return_future,
             )
             attributes = self._load_from_json(current_local_zattrs_path)
-            attributes["gain_correction"] = gain_correction,
-            attributes["hotpixel_correction"] = hotpixel_correction,
-            attributes["shading_correction"] = shading_correction,
+            attributes["gain_correction"] = (gain_correction,)
+            attributes["hotpixel_correction"] = (hotpixel_correction,)
+            attributes["shading_correction"] = (shading_correction,)
             attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
         except Exception as e:
@@ -2558,8 +2558,8 @@ class qi2labDataStore:
         else:
             print("'bit' must be integer index or string identifier")
             return None
-        
-        if not(self._ufish_localizations_root_path / Path(tile_id)).exists():
+
+        if not (self._ufish_localizations_root_path / Path(tile_id)).exists():
             (self._ufish_localizations_root_path / Path(tile_id)).mkdir()
 
         current_ufish_localizations_path = (
@@ -2584,13 +2584,13 @@ class qi2labDataStore:
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
-                return None
+                return None, None, None
             else:
                 tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
-                return None
+                return None, None, None
             else:
                 tile_id = tile
         else:
@@ -2612,7 +2612,7 @@ class qi2labDataStore:
         except Exception:
             print(tile_id, self._round_ids[0])
             print("Global coordinate transforms not found")
-            return None
+            return None, None, None
 
     def save_global_coord_xforms_um(
         self,
@@ -2750,10 +2750,29 @@ class qi2labDataStore:
     def save_local_decoded_spots(
         self,
         features_df: pd.DataFrame,
-        tile_idx: int = 0,
-        bit_idx: int = 0,
+        tile: Union[int, str],
     ) -> None:
-        pass
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            else:
+                tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            else:
+                tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        current_tile_features_path = self._decoded_root_path / Path(
+            tile_id + "_decoded_features.parquet"
+        )
+
+        self._save_to_parquet(features_df, current_tile_features_path)
 
     def load_global_filtered_decoded_spots(
         self,
@@ -2777,7 +2796,14 @@ class qi2labDataStore:
         self,
         filtered_decoded_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        pass
+        current_global_filtered_decoded_path = self._decoded_root_path / Path(
+            "all_tiles_filtered_decoded_features.parquet"
+        )
+
+        if not current_global_filtered_decoded_path.exists():
+            current_global_filtered_decoded_path.mkdir()
+
+        self._save_to_parquet(filtered_decoded_df, current_global_filtered_decoded_path)
 
     def load_global_cellpose_centroids(
         self,

@@ -26,7 +26,7 @@ def register_global():
     for tile_set in tile_sets:
         msims = []
         for tile_idx, tile_id in enumerate(
-            tqdm(datastore.tile_ids[tile_set[0] : tile_set[1]], desc="tile")
+            tqdm(datastore.tile_ids[tile_set[0] : tile_set[1]+1], desc="tile")
         ):
             round_id = datastore.round_ids[0]
 

@@ -380,12 +380,21 @@ class PixelDecoder():
             tile=self._tile_idx
         )    
         if affine is None or origin is None or spacing is None:
-            affine = np.eye(4)
-            origin = self._datastore.load_local_stage_position_zyx_um(
-                tile=self._tile_idx,
-                round=0
-            )
-            spacing = self._datastore.voxel_size_zyx_um
+            if self._is_3D:
+                affine = np.eye(4)
+                origin = self._datastore.load_local_stage_position_zyx_um(
+                    tile=self._tile_idx,
+                    round=0
+                )
+                spacing = self._datastore.voxel_size_zyx_um
+            else:
+                affine = np.eye(4)
+                origin = self._datastore.load_local_stage_position_zyx_um(
+                    tile=self._tile_idx,
+                    round=0
+                )
+                origin = [0,origin[0],origin[1]]
+                spacing = self._datastore.voxel_size_zyx_um
             
         self._affine = affine
         self._origin = origin
@@ -796,25 +805,15 @@ class PixelDecoder():
             decoded_dir_path = self._temp_dir
             decoded_dir_path.mkdir(parents=True, exist_ok=True)
         else:
-            decoded_dir_path = self._dataset_path / Path('decoded')
-            decoded_dir_path.mkdir(exist_ok=True)
-        
-        if not(self._barcodes_filtered):
-        
-            barcode_path = decoded_dir_path / Path(self._datastore.tile_ids[self._tile_idx]+'_decoded_features.' + format)
-            self._barcode_path = barcode_path
-            if format == 'csv':
-                self._df_barcodes.to_csv(barcode_path, index=False)
+            if not(self._barcodes_filtered):
+                self._datastore.save_local_decoded_spots(
+                    self._df_barcodes,
+                    tile=self._tile_idx
+                )
             else:
-                self._df_barcodes.to_parquet(barcode_path, index=False)
-            
-        else:
-            barcode_path = decoded_dir_path / Path('all_tiles_filtered_decoded_features.' + format)
-            self._barcode_path = barcode_path
-            if format == 'csv':
-                self._df_filtered_barcodes.to_csv(barcode_path, index=False)
-            else:
-                self._df_filtered_barcodes.to_parquet(barcode_path, index=False)
+                self._datastore.save_global_filtered_decoded_spots(
+                    self._df_filtered_barcodes
+                )
                 
     def _reformat_barcodes_for_baysor(self):
         
