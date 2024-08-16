@@ -2796,12 +2796,16 @@ class qi2labDataStore:
         self,
         filtered_decoded_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        current_global_filtered_decoded_path = self._decoded_root_path / Path(
-            "all_tiles_filtered_decoded_features.parquet"
+        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
+            "all_tiles_filtered_decoded_features"
         )
 
-        if not current_global_filtered_decoded_path.exists():
-            current_global_filtered_decoded_path.mkdir()
+        if not current_global_filtered_decoded_dir_path.exists():
+            current_global_filtered_decoded_dir_path.mkdir()
+            
+        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
+            "decoded_features.parquet"
+        )
 
         self._save_to_parquet(filtered_decoded_df, current_global_filtered_decoded_path)
 

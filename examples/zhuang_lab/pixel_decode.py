@@ -14,11 +14,13 @@ def decode_pixels():
     decoder = PixelDecoder(
         datastore=datastore,
         use_mask=False,
-        merfish_bits=22
+        merfish_bits=22,
+        verbose=2
     )
     
-    decoder.optimize_normalization_by_decoding(n_random_tiles=20)
+    decoder.optimize_normalization_by_decoding(n_random_tiles=5)
+    decoder.decode_all_tiles(assign_to_cells=False,
+                             prep_for_baysor=False)
     
-
 if __name__ == "__main__":
     decode_pixels()

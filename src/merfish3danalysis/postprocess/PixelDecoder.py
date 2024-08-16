@@ -831,20 +831,27 @@ class PixelDecoder():
         
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
-        else:
-            decoded_dir_path = self._dataset_path / Path('decoded')
-        tile_files = decoded_dir_path.glob('*.'+format)
-        tile_files = sorted(tile_files, key=lambda x: x.name)
-        
-        if self._verbose >=1:
-            iterable_files = tqdm(tile_files,desc='tile',leave=False)
-        else:
-            iterable_files = tile_files
 
-        if format == 'csv':
-            tile_data = [pd.read_csv(csv_file) for csv_file in iterable_files]      
+            tile_files = decoded_dir_path.glob('*.'+format)
+            tile_files = sorted(tile_files, key=lambda x: x.name)
+            
+            if self._verbose >=1:
+                iterable_files = tqdm(tile_files,desc='tile',leave=False)
+            else:
+                iterable_files = tile_files
+
+            if format == 'csv':
+                tile_data = [pd.read_csv(csv_file) for csv_file in iterable_files]      
+            else:
+                tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
         else:
-            tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
+            if self._verbose >=1:
+                iterable_files = tqdm(self._datastore.tile_ids,desc='tile',leave=False)
+            else:
+                iterable_files = self._datastore.tile_ids
+            tile_data = []
+            for tile_id in iterable_files:
+                tile_data.append(self._datastore.load_local_decoded_spots(tile_id))
 
         self._df_barcodes_loaded = pd.concat(tile_data)
                 
@@ -901,9 +908,9 @@ class PixelDecoder():
                     'moments_normalized-2-0', 'moments_normalized-2-1', 'moments_normalized-2-2', 'moments_normalized-2-3',
                     'moments_normalized-3-0', 'moments_normalized-3-1', 'moments_normalized-3-2',  'moments_normalized-3-3',
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1']
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] is True][columns]
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] is False][columns]
-                        
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
+
         if (len(df_false)>0):
             
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
@@ -1193,16 +1200,16 @@ class PixelDecoder():
         if not(self._iterative_normalization_loaded):
             raise ValueError('Perform iterative normalization before decoding.')
             
-        for tile_idx, _ in iterable_tile_id:
-            self._tile_idx = tile_idx
-            self._load_bit_data()
-            if not(np.any(lowpass_sigma==0)):
-                self._lp_filter(sigma=lowpass_sigma)
-            self._decode_pixels(distance_threshold = self._distance_threshold,
-                                magnitude_threshold = self._magnitude_threshold)
-            self._extract_barcodes(minimum_pixels=minimum_pixels)
-            self._save_barcodes(format='parquet')
-            self._cleanup()
+        # for tile_idx, _ in iterable_tile_id:
+        #     self._tile_idx = tile_idx
+        #     self._load_bit_data()
+        #     if not(np.any(lowpass_sigma==0)):
+        #         self._lp_filter(sigma=lowpass_sigma)
+        #     self._decode_pixels(distance_threshold = self._distance_threshold,
+        #                         magnitude_threshold = self._magnitude_threshold)
+        #     self._extract_barcodes(minimum_pixels=minimum_pixels)
+        #     self._save_barcodes(format='parquet')
+        #     self._cleanup()
             
         self._load_all_barcodes(format='parquet')
         self._verbose = 2
