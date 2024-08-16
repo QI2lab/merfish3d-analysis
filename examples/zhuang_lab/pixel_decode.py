@@ -18,7 +18,7 @@ def decode_pixels():
         verbose=2
     )
     
-    decoder.optimize_normalization_by_decoding(n_random_tiles=5)
+    decoder.optimize_normalization_by_decoding(n_random_tiles=20)
     decoder.decode_all_tiles(assign_to_cells=False,
                              prep_for_baysor=False)
     

@@ -908,8 +908,8 @@ class PixelDecoder():
                     'moments_normalized-2-0', 'moments_normalized-2-1', 'moments_normalized-2-2', 'moments_normalized-2-3',
                     'moments_normalized-3-0', 'moments_normalized-3-1', 'moments_normalized-3-2',  'moments_normalized-3-3',
                     'inertia_tensor_eigvals-0', 'inertia_tensor_eigvals-1']
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns]
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns]
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == True][columns] #noqa
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded['X'] == False][columns] #noqa
 
         if (len(df_false)>0):
             
@@ -1200,16 +1200,16 @@ class PixelDecoder():
         if not(self._iterative_normalization_loaded):
             raise ValueError('Perform iterative normalization before decoding.')
             
-        # for tile_idx, _ in iterable_tile_id:
-        #     self._tile_idx = tile_idx
-        #     self._load_bit_data()
-        #     if not(np.any(lowpass_sigma==0)):
-        #         self._lp_filter(sigma=lowpass_sigma)
-        #     self._decode_pixels(distance_threshold = self._distance_threshold,
-        #                         magnitude_threshold = self._magnitude_threshold)
-        #     self._extract_barcodes(minimum_pixels=minimum_pixels)
-        #     self._save_barcodes(format='parquet')
-        #     self._cleanup()
+        for tile_idx, _ in iterable_tile_id:
+            self._tile_idx = tile_idx
+            self._load_bit_data()
+            if not(np.any(lowpass_sigma==0)):
+                self._lp_filter(sigma=lowpass_sigma)
+            self._decode_pixels(distance_threshold = self._distance_threshold,
+                                magnitude_threshold = self._magnitude_threshold)
+            self._extract_barcodes(minimum_pixels=minimum_pixels)
+            self._save_barcodes(format='parquet')
+            self._cleanup()
             
         self._load_all_barcodes(format='parquet')
         self._verbose = 2
