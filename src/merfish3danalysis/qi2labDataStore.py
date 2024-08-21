@@ -2779,8 +2779,11 @@ class qi2labDataStore:
     ) -> Optional[pd.DataFrame]:
         """Load all decoded and filtered spots."""
 
-        current_global_filtered_decoded_path = self._decoded_root_path / Path(
-            "all_tiles_filtered_decoded_features.parquet"
+        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
+            "all_tiles_filtered_decoded_features"
+        )
+        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
+            "decoded_features.parquet"
         )
 
         if not current_global_filtered_decoded_path.exists():

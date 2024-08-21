@@ -87,7 +87,7 @@ class PixelDecoder():
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172 # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = 1.1 # default for HW4D4 code
+        self._magnitude_threshold = .5 # default for HW4D4 code
 
     
     def _load_codebook(self):
@@ -149,7 +149,7 @@ class PixelDecoder():
     def _global_normalization_vectors(self,
                                       low_percentile_cut: float = 10.0,
                                       high_percentile_cut: float = 90.0,
-                                      hot_pixel_threshold: int = 5000):
+                                      hot_pixel_threshold: int = 50000):
 
         if len(self._datastore.tile_ids) > 5:
             random_tiles = sample(self._datastore.tile_ids,5)
@@ -272,8 +272,6 @@ class PixelDecoder():
     
     def _iterative_normalization_vectors(self):
         
-        
-        
         df_barcodes_loaded_no_blanks = self._df_barcodes_loaded[~self._df_barcodes_loaded['gene_id'].str.startswith('Blank')]
 
         bit_columns = [col for col in df_barcodes_loaded_no_blanks.columns if col.startswith('bit') and col.endswith('_mean_intensity')]
@@ -316,7 +314,7 @@ class PixelDecoder():
         self._datastore.iterative_background_vector = barcode_based_background_vector.astype(np.float32)
         self._datastore.iterative_normalization_vector = barcode_based_normalization_vector.astype(np.float32)
         
-        if self._verbose > 1:
+        if self._verbose >= 1:
             print('---')
             print('Background')
             print(diff_iterative_background_vector)
@@ -578,7 +576,7 @@ class PixelDecoder():
         return registered_space_point
             
     def _extract_barcodes(self, 
-                          minimum_pixels: int = 9,
+                          minimum_pixels: int = 2,
                           maximum_pixels: int = 200):
         
         if self._verbose > 1:
@@ -804,6 +802,8 @@ class PixelDecoder():
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
             decoded_dir_path.mkdir(parents=True, exist_ok=True)
+            temp_decoded_path = decoded_dir_path / Path("tile"+str(self._tile_idx).zfill(3)+"_temp_decoded.parquet")
+            self._df_barcodes.to_parquet(temp_decoded_path)
         else:
             if not(self._barcodes_filtered):
                 self._datastore.save_local_decoded_spots(
@@ -1117,15 +1117,12 @@ class PixelDecoder():
     def decode_one_tile(self,
                         tile_idx: int = 0,
                         display_results: bool = True,
-                        use_iterative_normalization: Optional[bool] = False,
-                        lowpass_sigma: Optional[Sequence[float]] = (3,1,1)):
+                        lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
+                        minimum_pixels: Optional[float] = 2.0):
         
         self._load_global_normalization_vectors()
         if not(self._global_normalization_loaded):
             self._global_normalization_vectors()
-            
-        if use_iterative_normalization:
-            self._load_iterative_normalization_vectors()
             
         self._tile_idx = tile_idx
         self._load_bit_data()
@@ -1138,11 +1135,12 @@ class PixelDecoder():
         if not(self._optimize_normalization_weights):
             self._cleanup()
         else:
-            self._extract_barcodes()
+            self._extract_barcodes(minimum_pixels=minimum_pixels)
             
     def optimize_normalization_by_decoding(self,
                                            n_random_tiles: int = 10,
-                                           n_iterations: int = 10):
+                                           n_iterations: int = 10,
+                                           minimum_pixels: Optional[float] = 5.0):
         
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
@@ -1170,7 +1168,8 @@ class PixelDecoder():
                 self._load_iterative_normalization_vectors()
             for tile_idx in iterable_tiles:
                 self.decode_one_tile(tile_idx=tile_idx,
-                                    display_results=False)
+                                    display_results=False,
+                                    minimum_pixels = minimum_pixels)
                 self._save_barcodes(format='parquet')
             self._load_all_barcodes(format='parquet')
             if self._verbose > 1:
@@ -1186,7 +1185,7 @@ class PixelDecoder():
                          assign_to_cells: bool = True,
                          prep_for_baysor: bool = True,
                          lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
-                         minimum_pixels: Optional[float] = 27.0,
+                         minimum_pixels: Optional[float] = 2.0,
                          fdr_target: Optional[float]= 0.05):
         
         if self._verbose >= 1:
