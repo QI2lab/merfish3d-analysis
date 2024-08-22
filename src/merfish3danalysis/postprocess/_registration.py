@@ -31,6 +31,7 @@ except ImportError:
     from skimage.metrics import structural_similarity # type: ignore
     CUCIM_AVAILABLE = False
 
+
 def compute_optical_flow(img_ref: ArrayLike, 
                          img_trg: ArrayLike) -> ArrayLike:
     """
@@ -151,6 +152,7 @@ def compute_rigid_transform(image1: ArrayLike,
             
             ssim = np.array(ssim)
             found_shift = float(ref_slice_idx - np.argmax(ssim))
+            del image1_cp, image2_cp, ssim_slice, ssim
         else:
             ref_slice_idx = image1.shape[0]//2
             ref_slice = image1[ref_slice_idx,:,:]
@@ -187,6 +189,7 @@ def compute_rigid_transform(image1: ArrayLike,
                                                         upsample_factor=10,
                                                         disambiguate=True)
             shift = cp.asnumpy(shift_cp)
+            del shift_cp
         else:
             if use_mask:
                 mask = np.zeros_like(image1)
@@ -225,11 +228,11 @@ def compute_rigid_transform(image1: ArrayLike,
             shift_xyz = [0.,0.,-downsample_factor*found_shift]
     else:
         shift_xyz = shift_reversed
+    print(shift_xyz)
 
     # Create an affine transform with the shift from the cross-correlation
     transform = sitk.TranslationTransform(3, shift_xyz)
     
-    del shift_cp, image1_cp, image2_cp, ssim_slice, ssim
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
 

@@ -94,7 +94,7 @@ class DataRegistration:
             return None
 
     @tile_id.setter
-    def tile_idx(self, value: Union[int,str]):
+    def tile_id(self, value: Union[int,str]):
         if isinstance(value, int):
             if value < 0 or value > self._datastore.num_tiles:
                 print("Set value index >=0 and <=" + str(self._datastore.num_tiles))
@@ -185,7 +185,7 @@ class DataRegistration:
                 psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
                 wavelength_um=self._datastore.load_local_wavelengths_um(
                     tile=self._tile_id,
-                    round=self._round_ids[0]),
+                    round=self._round_ids[0])[1],
                 na=self._datastore.na,
                 ri=self._datastore.ri,
                 n_iters=self._decon_iters,
@@ -212,25 +212,26 @@ class DataRegistration:
             if not (has_reg_decon_data) or self._overwrite_registered:
                 try:
                     temp = ref_image_decon[0:1,0:1,0:1].astype(np.float32)
+                    del temp
+                    gc.collect()
                 except Exception:
                     ref_image_decon = self._datastore.load_local_registered_image(
                         tile=self._tile_id,
                         round=self._round_ids[0],
                         return_future=False
                     )
-                del temp
-                gc.collect()
+                
 
                 mov_image_decon = chunked_cudadecon(
                     image=np.asarray(
-                        self._data_raw[r_idx, :].result(),dtype=np.uint16
+                        self._data_raw[r_idx].result(),dtype=np.uint16
                     ),
                     psf=self._psfs[0, :],
                     image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
                     psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
                     wavelength_um=float(self._datastore.load_local_wavelengths_um(
                         tile=self._tile_id,
-                        round=self._round_ids[0])
+                        round=self._round_ids[0])[1]
                     ),
                     na=self._datastore.na,
                     ri=self._datastore.ri,
@@ -384,7 +385,7 @@ class DataRegistration:
                     data_registered[data_registered < 0.0] = 0
                     data_registered = data_registered.astype(np.uint16)
                     
-                    del mov_image_sitk, optical_flow_sitk, displacement_field
+                    del mov_image_sitk, displacement_field
                     gc.collect()
                 else:
                     mov_image_decon[mov_image_decon < 0.0] = 0
@@ -411,6 +412,7 @@ class DataRegistration:
                 tile=self._tile_id,
                 bit=bit_id
             )
+            r_idx = r_idx - 1
             ex_wavelength_um, em_wavelength_um = self._datastore.load_local_wavelengths_um(
                 tile=self._tile_id,
                 bit=bit_id
@@ -418,9 +420,9 @@ class DataRegistration:
             
             # TO DO: hacky fix. Need to come up with a better way.
             if ex_wavelength_um < 600:
-                psf_idx = 2
+                psf_idx = 1
             else:
-                psf_idx = 3
+                psf_idx = 2
 
             test = self._datastore.load_local_registered_image(
                 tile=self._tile_id,
@@ -463,10 +465,12 @@ class DataRegistration:
 
                     if self._perform_optical_flow:
                         
-                        of_xform_px = self._datastore.load_coord_of_xform_px(
+                        of_xform_px, _ = self._datastore.load_coord_of_xform_px(
                             tile=self._tile_id,
-                            round=self._round_ids[r_idx]
+                            round=self._round_ids[r_idx],
+                            return_future=False
                         )
+                        print(of_xform_px.shape)
 
                         of_xform_sitk = sitk.GetImageFromArray(
                             of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
@@ -570,7 +574,7 @@ class DataRegistration:
                     roi_dims=(roi_z, roi_y, roi_x),
                 )
 
-                ufish_localization["tile_idx"] = self._tile_idx
+                ufish_localization["tile_idx"] = self._tile_ids.index(self._tile_id)
                 ufish_localization["bit_idx"] = bit_idx + 1
                 ufish_localization["tile_z_px"] = ufish_localization["z"]
                 ufish_localization["tile_y_px"] = ufish_localization["y"]
@@ -585,7 +589,6 @@ class DataRegistration:
                 self._datastore.save_local_ufish_image(
                     ufish_data,
                     tile=self._tile_id,
-                    deconvolution=True,
                     bit=bit_id
                 )
                 self._datastore.save_local_ufish_spots(

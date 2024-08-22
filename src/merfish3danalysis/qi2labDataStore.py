@@ -742,19 +742,19 @@ class qi2labDataStore:
 
             del current_local_zarr_path
 
-            current_local_zarr_path = str(
-                self._calibrations_zarr_path / Path("noise_map")
-            )
+            # current_local_zarr_path = str(
+            #     self._calibrations_zarr_path / Path("noise_map")
+            # )
 
-            try:
-                self._noise_map = (
-                    self._load_from_zarr_array(
-                        kvstore=self._get_kvstore_key(current_local_zarr_path),
-                        spec=self._zarrv2_spec,
-                    )
-                ).result()
-            except Exception:
-                print("Calibration noise map missing.")
+            # try:
+            #     self._noise_map = (
+            #         self._load_from_zarr_array(
+            #             kvstore=self._get_kvstore_key(current_local_zarr_path),
+            #             spec=self._zarrv2_spec,
+            #         )
+            #     ).result()
+            # except Exception:
+            #     print("Calibration noise map missing.")
 
         # validate polyDT and readout bits data
         if self._datastore_state["Corrected"]:
@@ -1362,7 +1362,7 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
             attributes = self._load_from_json(zattrs_path)
-            return attributes["round"]
+            return int(attributes["round_linker"])
         except Exception:
             print(tile_id, bit_id)
             print("Round linker attribute not found.")
@@ -2058,14 +2058,16 @@ class qi2labDataStore:
             / Path(".zattrs")
         )
 
-        if not current_local_zarr_path.exists():
+        if not Path(current_local_zarr_path).exists():
             print("Optical flow transform mapping back to first round not found.")
             return None
 
         try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<f4"
             of_xform_px = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                spec,
                 return_future,
             )
             attributes = self._load_from_json(zattrs_path)
@@ -2074,7 +2076,8 @@ class qi2labDataStore:
             )
 
             return of_xform_px, downsampling
-        except Exception:
+        except Exception as e:
+            print(e)
             print("Error loading optical flow transform.")
             return None
 

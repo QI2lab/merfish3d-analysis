@@ -15,12 +15,16 @@ def decode_pixels():
         datastore=datastore,
         use_mask=False,
         merfish_bits=22,
-        verbose=2
+        verbose=1
     )
     
-    decoder.optimize_normalization_by_decoding(n_random_tiles=20)
+    decoder.optimize_normalization_by_decoding(n_iterations=2,
+                                               n_random_tiles=50,
+                                               minimum_pixels=2.0)
     decoder.decode_all_tiles(assign_to_cells=False,
-                             prep_for_baysor=False)
+                             prep_for_baysor=False,
+                             minimum_pixels=2.0,
+                             fdr_target=.05)
     
 if __name__ == "__main__":
     decode_pixels()
