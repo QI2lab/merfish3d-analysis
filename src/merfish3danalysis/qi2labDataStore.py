@@ -264,7 +264,7 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 value,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future=False,
             )
         except Exception:
@@ -734,7 +734,7 @@ class qi2labDataStore:
                 self._psfs = (
                     self._load_from_zarr_array(
                         kvstore=self._get_kvstore_key(current_local_zarr_path),
-                        spec=self._zarrv2_spec,
+                        spec=self._zarrv2_spec.copy(),
                     )
                 ).result()
             except Exception:
@@ -844,7 +844,7 @@ class qi2labDataStore:
                 try:
                     self._check_for_zarr_array(
                         self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec,
+                        self._zarrv2_spec.copy(),
                     )
                 except Exception:
                     print(tile_id, round_id)
@@ -883,7 +883,7 @@ class qi2labDataStore:
                 try:
                     self._check_for_zarr_array(
                         self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec,
+                        self._zarrv2_spec.copy(),
                     )
                 except Exception:
                     print(tile_id, bit_id)
@@ -921,7 +921,7 @@ class qi2labDataStore:
                     try:
                         self._check_for_zarr_array(
                             self._get_kvstore_key(current_local_zarr_path),
-                            self._zarrv2_spec,
+                            self._zarrv2_spec.copy(),
                         )
                     except Exception:
                         print(tile_id, round_id)
@@ -937,7 +937,7 @@ class qi2labDataStore:
                 try:
                     self._check_for_zarr_array(
                         self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec,
+                        self._zarrv2_spec.copy(),
                     )
                 except Exception:
                     print(tile_id, round_id)
@@ -954,7 +954,7 @@ class qi2labDataStore:
                 try:
                     self._check_for_zarr_array(
                         self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec,
+                        self._zarrv2_spec.copy(),
                     )
                 except Exception:
                     print(tile_id, round_id)
@@ -970,7 +970,7 @@ class qi2labDataStore:
                 try:
                     self._check_for_zarr_array(
                         self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec,
+                        self._zarrv2_spec.copy(),
                     )
                 except Exception:
                     print(tile_id, round_id)
@@ -1036,7 +1036,7 @@ class qi2labDataStore:
 
             try:
                 self._check_for_zarr_array(
-                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec
+                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec.copy()
                 )
             except Exception:
                 print("Fused data missing.")
@@ -1052,7 +1052,7 @@ class qi2labDataStore:
 
             try:
                 self._check_for_zarr_array(
-                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec
+                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec.copy()
                 )
             except Exception:
                 print("Cellpose data missing.")
@@ -2063,11 +2063,25 @@ class qi2labDataStore:
             return None
 
         try:
-            spec = self._zarrv2_spec.copy()
-            spec["metadata"]["dtype"] = "<f4"
+            compressor = {
+                "id": "blosc",
+                "cname": "zstd",
+                "clevel": 5,
+                "shuffle": 2,
+            }
+            spec_of = {
+                "driver": "zarr",
+                "kvstore": None,
+                "metadata": {"compressor": compressor},
+                "open": True,
+                "assume_metadata": False,
+                "create": True,
+                "delete_existing": False,
+            }
+            spec_of["metadata"]["dtype"] = "<f4"
             of_xform_px = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                spec,
+                spec_of.copy(),
                 return_future,
             )
             attributes = self._load_from_json(zattrs_path)
@@ -2136,10 +2150,25 @@ class qi2labDataStore:
         )
 
         try:
+            compressor = {
+                "id": "blosc",
+                "cname": "zstd",
+                "clevel": 5,
+                "shuffle": 2,
+            }
+            spec_of = {
+                "driver": "zarr",
+                "kvstore": None,
+                "metadata": {"compressor": compressor},
+                "open": True,
+                "assume_metadata": False,
+                "create": True,
+                "delete_existing": False,
+            }
             self._save_to_zarr_array(
                 of_xform_px,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                spec_of.copy(),
                 return_future,
             )
             attributes = self._load_from_json(current_local_zattrs_path)
@@ -2333,7 +2362,7 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 registered_image,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future,
             )
             attributes = self._load_from_json(current_local_zattrs_path)
@@ -2460,7 +2489,7 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 ufish_image,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future,
             )
         except Exception as e:
@@ -2672,7 +2701,7 @@ class qi2labDataStore:
         try:
             fused_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future,
             )
             return fused_image
@@ -2709,7 +2738,7 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 fused_image,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_specc.copy(),
                 return_future,
             )
             self._save_to_json(attributes, current_local_zattrs_path)
@@ -2885,7 +2914,7 @@ class qi2labDataStore:
         try:
             fused_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future,
             )
             return fused_image
@@ -2921,7 +2950,7 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 cellpose_image,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec,
+                self._zarrv2_spec.copy(),
                 return_future,
             )
             self._save_to_json(attributes, current_local_zattrs_path)

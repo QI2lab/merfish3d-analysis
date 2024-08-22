@@ -470,7 +470,6 @@ class DataRegistration:
                             round=self._round_ids[r_idx],
                             return_future=False
                         )
-                        print(of_xform_px.shape)
 
                         of_xform_sitk = sitk.GetImageFromArray(
                             of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
@@ -494,32 +493,35 @@ class DataRegistration:
                         del optical_flow_sitk, of_xform_px
                         gc.collect()
 
-                    decon_bit_image_sitk = apply_transform(
-                        sitk.GetImageFromArray(decon_image), 
-                        sitk.GetImageFromArray(decon_image), 
+                    decon_image_rigid = apply_transform(
+                        decon_image, 
+                        decon_image, 
                         xyz_transform
                     )
+                    del decon_image
 
                     if self._perform_optical_flow:
                         decon_bit_image_sitk = sitk.Resample(
-                            decon_bit_image_sitk, 
+                            sitk.GetImageFromArray(decon_image_rigid), 
                             displacement_field
                         )
                         del displacement_field
 
-                    data_decon_registered = sitk.GetArrayFromImage(
-                        decon_bit_image_sitk
-                    ).astype(np.float32)
-                    del decon_bit_image_sitk
+                        data_decon_registered = sitk.GetArrayFromImage(
+                            decon_bit_image_sitk
+                        ).astype(np.float32)
+                        del decon_bit_image_sitk
+                    else:
+                        data_decon_registered = decon_image_rigid.copy()
+                        del decon_image_rigid
                     gc.collect()
 
                 else:
                     data_decon_registered = decon_image.copy()
+                    del decon_image
                     gc.collect()
                     
                 data_decon_registered[data_decon_registered<0.]=0.0
-
-                del decon_image
 
                 ufish = UFish(device="cuda")
                 ufish.load_weights_from_internet()
