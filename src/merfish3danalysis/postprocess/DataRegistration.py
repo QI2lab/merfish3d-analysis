@@ -392,7 +392,7 @@ class DataRegistration:
                     data_registered = mov_image_decon.astype(np.uint16)
 
                 self._datastore.save_local_registered_image(
-                    registered_image=data_registered,
+                    registered_image=data_registered.astype(np.uint16),
                     tile=self._tile_id,
                     deconvolution=True,
                     round=round_id
@@ -583,7 +583,7 @@ class DataRegistration:
                 ufish_localization["tile_x_px"] = ufish_localization["x"]
 
                 self._datastore.save_local_registered_image(
-                    data_decon_registered,
+                    data_decon_registered.astype(np.uint16),
                     tile=self._tile_id,
                     deconvolution=True,
                     bit=bit_id
