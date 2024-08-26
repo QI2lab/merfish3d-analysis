@@ -831,7 +831,7 @@ class qi2labDataStore:
 
                 for key in keys_to_check:
                     if key not in attributes.keys():
-                        print(key)
+                        print(tile_id, round_id, key)
                         raise Exception("Corrected polyDT attributes incomplete")
 
                 current_local_zarr_path = str(
@@ -2359,10 +2359,12 @@ class qi2labDataStore:
             )
 
         try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<u2"
             self._save_to_zarr_array(
                 registered_image,
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_spec.copy(),
+                spec,
                 return_future,
             )
             attributes = self._load_from_json(current_local_zattrs_path)

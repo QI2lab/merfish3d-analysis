@@ -82,7 +82,7 @@ for channel_id in channels_in_data:
         ni=ri,
         ni0=ri,
         model="vectorial",
-    )
+    ).astype(np.float32)
     psf = psf / np.sum(psf, axis=(0, 1, 2))
     channel_psfs.append(psf)
 channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
@@ -146,9 +146,9 @@ for round_idx in tqdm(range(num_rounds), desc="rounds"):
         stage_z = np.round(float(df_stage_positions['stage_z']),2)
         stage_pos_zyx_um = np.asarray([stage_z,stage_y,stage_x],dtype=np.float32)
 
-        # write fidicual data first.
+        # write fidicual data and metadata
         datastore.save_local_corrected_image(
-            np.squeeze(raw_image[0, :]),
+            np.squeeze(raw_image[0, :]).astype(np.uint16),
             tile=tile_idx,
             psf_idx=0,
             gain_correction=True,
@@ -167,9 +167,9 @@ for round_idx in tqdm(range(num_rounds), desc="rounds"):
             round=round_idx,
         )
 
-        # write readouts
+        # write first readout channel and metadata
         datastore.save_local_corrected_image(
-            np.squeeze(raw_image[1, :]),
+            np.squeeze(raw_image[1, :]).astype(np.uint16),
             tile=tile_idx,
             psf_idx=1,
             gain_correction=True,
@@ -183,6 +183,7 @@ for round_idx in tqdm(range(num_rounds), desc="rounds"):
             bit=int(experiment_order[round_idx,1])-1,
         )
         
+        # write second readout channel and metadata
         datastore.save_local_corrected_image(
             np.squeeze(raw_image[2 :]),
             tile=tile_idx,
@@ -193,7 +194,7 @@ for round_idx in tqdm(range(num_rounds), desc="rounds"):
             bit=int(experiment_order[round_idx,2])-1,
         )
         datastore.save_local_wavelengths_um(
-            (ex_wavelengths_um[1], em_wavelengths_um[1]),
+            (ex_wavelengths_um[2], em_wavelengths_um[2]),
             tile=tile_idx,
             bit=int(experiment_order[round_idx,2])-1,
         )
