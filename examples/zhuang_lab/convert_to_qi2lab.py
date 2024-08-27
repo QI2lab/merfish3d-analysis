@@ -65,6 +65,10 @@ stage_position_path = (
     / Path("mouse1_sample1.txt")
 )
 stage_position_df = pd.read_csv(stage_position_path,header=None)
+
+# Because the data is transposed and flipped, we need to process the stage
+# positions to match data
+stage_position_df[[1]] = stage_position_df[[1]].max() - stage_position_df[[1]]
 stage_positions = stage_position_df.values
 
 # num tiles back on number of stage positions
@@ -91,13 +95,13 @@ datastore.num_tiles = num_tiles
 datastore.microscope_type = "2D"
 datastore.camera_model = "zhuang"
 datastore.tile_overlap = 0.2
-datastore.e_per_ADU = e_per_ADU  # unknown camera. don't convert to electrons
+datastore.e_per_ADU = e_per_ADU 
 datastore.na = na
 datastore.ri = ri
 datastore.binning = 1
-datastore.noise_map = (
-    np.zeros((2048, 2048), dtype=np.float32)
-)  # unknown camera. set noise / offset to zero.
+datastore.noise_map = offset * (
+    np.ones((2048, 2048), dtype=np.float32)
+)
 datastore._shading_maps = np.ones(
     (3, 2048, 2048), dtype=np.float32
 )  # unknown flatfield. set shading value to one.
@@ -136,10 +140,11 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
     # write fidicual data first.
     # Write the same polyDT for each round, as the data is already locally registered.
     # The metadata tells us polyDT is the 39th entry
+    # The Zhuang data is both transposed and flipped, which we fix when writing the data
     psf_idx = 0
     for round_idx, round_id in enumerate(tqdm(datastore.round_ids,desc="round",leave=False)):
         datastore.save_local_corrected_image(
-            np.squeeze(raw_image[38,:]),
+            np.squeeze(np.flip(np.swapaxes(raw_image[38,:],1,2),axis=2)),
             tile=tile_idx,
             psf_idx=psf_idx,
             gain_correction=True,
@@ -158,10 +163,11 @@ for tile_idx, raw_image_file in enumerate(tqdm(raw_image_files,desc="tile")):
 
     # write all readouts
     # The bits go in order of the codebook
+    # The Zhuang data is both transposed and flipped, which we fix when writing the data
     psf_idx = 1
     for bit_idx, bit_id in enumerate(tqdm(datastore.bit_ids,desc="bit",leave=False)):
         datastore.save_local_corrected_image(
-            np.squeeze(raw_image[bit_idx, :]),
+            np.squeeze(np.flip(np.swapaxes(raw_image[bit_idx, :],1,2),axis=2)),
             tile=tile_idx,
             psf_idx=psf_idx,
             gain_correction=True,

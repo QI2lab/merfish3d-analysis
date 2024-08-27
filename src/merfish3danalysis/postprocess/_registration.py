@@ -228,7 +228,6 @@ def compute_rigid_transform(image1: ArrayLike,
             shift_xyz = [0.,0.,-downsample_factor*found_shift]
     else:
         shift_xyz = shift_reversed
-    print(shift_xyz)
 
     # Create an affine transform with the shift from the cross-correlation
     transform = sitk.TranslationTransform(3, shift_xyz)

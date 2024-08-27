@@ -198,3 +198,7 @@ for round_idx in tqdm(range(num_rounds), desc="rounds"):
             tile=tile_idx,
             bit=int(experiment_order[round_idx,2])-1,
         )
+
+datastore_state = datastore.datastore_state
+datastore_state.update({"Corrected": True})
+datastore.datastore_state = datastore_state
