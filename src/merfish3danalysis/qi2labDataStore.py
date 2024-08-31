@@ -2734,13 +2734,13 @@ class qi2labDataStore:
         attributes = {
             "affine_zyx_um": affine_zyx_um.tolist(),
             "origin_zyx_um": origin_zyx_um.tolist(),
-            "spacing_zyx_um": spacing_zyx_um.tlist(),
+            "spacing_zyx_um": spacing_zyx_um.tolist(),
         }
         try:
             self._save_to_zarr_array(
-                fused_image,
+                fused_image.astype(np.uint16),
                 self._get_kvstore_key(current_local_zarr_path),
-                self._zarrv2_specc.copy(),
+                self._zarrv2_spec.copy(),
                 return_future,
             )
             self._save_to_json(attributes, current_local_zattrs_path)

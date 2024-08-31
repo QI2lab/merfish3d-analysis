@@ -16,10 +16,10 @@ authors = [
 dynamic = ["version"]
 dependencies = ["numpy", "tifffile", "zarr", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
-                "tqdm", "magicgui[pyqt5]", "napari", "pandas",
+                "tqdm", "pandas",
                 "scikit-image", "pyarrow", "tbb", "shapely",
                 "imbalanced-learn", "scikit-learn", "dask[array]", "rtree",
-                "ryomen",
+                "ryomen", "tensorstore",
                 "pycudadecon @ git+https://github.com/tlambert03/pycudadecon@main",
                 "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
                 "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@simplified_fusion",
