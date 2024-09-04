@@ -12,7 +12,7 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils._imageprocessing import chunked_cudadecon
+
 from ufish.api import UFish
 import torch
 import cupy as cp
@@ -20,6 +20,13 @@ from pathlib import Path
 import gc
 import numpy as np
 from tqdm import tqdm
+
+ZHUANG_DATA = False
+
+if ZHUANG_DATA:
+    from merfish3danalysis.utils._imageprocessing import chunked_cudadecon
+else:
+    from pycudadecon import decon
 
 
 def register_local():
@@ -34,22 +41,52 @@ def register_local():
     # already registered and warped.
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids,desc='tile')):
         round_id = datastore.round_ids[0]
-        decon_image = chunked_cudadecon(
-            image = datastore.load_local_corrected_image(
-                tile=tile_id,
-                round=round_id,
-                return_future=False
-            ),
+        if ZHUANG_DATA:
+            decon_image = chunked_cudadecon(
+                image = datastore.load_local_corrected_image(
+                    tile=tile_id,
+                    round=round_id,
+                    return_future=False
+                ),
+                psf = fiducial_psf,
+                image_voxel_zyx_um=datastore.voxel_size_zyx_um,
+                psf_voxel_zyx_um=datastore.voxel_size_zyx_um,
+                wavelength_um=datastore.load_local_wavelengths_um(
+                    tile=tile_id,
+                    round=round_id
+                )[1],
+                na=datastore.na,
+                ri=datastore.ri
+            )
+        else:
             psf = fiducial_psf,
             image_voxel_zyx_um=datastore.voxel_size_zyx_um,
-            psf_voxel_zyx_um=datastore.voxel_size_zyx_um,
+            psf_voxel_zyx_um = datastore.voxel_size_zyx_um
             wavelength_um=datastore.load_local_wavelengths_um(
-                tile=tile_id,
-                round=round_id
-            )[1],
+                    tile=tile_id,
+                    round=round_id
+                )[1],
             na=datastore.na,
             ri=datastore.ri
-        )
+            decon_image = decon(
+                images=datastore.load_local_corrected_image(
+                    tile=tile_id,
+                    round=round_id,
+                    return_future=False
+                ),
+                psf=psf,
+                dzpsf=float(psf_voxel_zyx_um[0]),
+                dxpsf=float(psf_voxel_zyx_um[1]),
+                dzdata=float(image_voxel_zyx_um[0]),
+                dxdata=float(image_voxel_zyx_um[1]),
+                wavelength=int(wavelength_um * 1000),
+                na=float(na),
+                nimm=float(ri),
+                n_iters=int(10),
+                cleanup_otf=True,
+                napodize=15,
+                background=float(100),
+            )
         datastore.save_local_registered_image(
             decon_image,
             tile=tile_id,
@@ -74,22 +111,53 @@ def register_local():
         # already registered and warped.
         ch_idx = 1
         for bit_idx, bit_id in enumerate(tqdm(datastore.bit_ids,desc='bit')):
-            decon_image = chunked_cudadecon(
-                image = datastore.load_local_corrected_image(
-                    tile=tile_id,
-                    bit=bit_id,
-                    return_future=False,
-                ),
+            if ZHUANG_DATA:
+                decon_image = chunked_cudadecon(
+                    images = datastore.load_local_corrected_image(
+                        tile=tile_id,
+                        bit=bit_id,
+                        return_future=False,
+                    ),
+                    psf = datastore.channel_psfs[ch_idx,:],
+                    image_voxel_zyx_um=datastore.voxel_size_zyx_um,
+                    psf_voxel_zyx_um=datastore.voxel_size_zyx_um,
+                    wavelength_um=datastore.load_local_wavelengths_um(
+                        tile=tile_id,
+                        bit=bit_id
+                    )[1],
+                    na=datastore.na,
+                    ri=datastore.ri
+                )
+            else:
                 psf = datastore.channel_psfs[ch_idx,:],
                 image_voxel_zyx_um=datastore.voxel_size_zyx_um,
-                psf_voxel_zyx_um=datastore.voxel_size_zyx_um,
+                psf_voxel_zyx_um = datastore.voxel_size_zyx_um
                 wavelength_um=datastore.load_local_wavelengths_um(
-                    tile=tile_id,
-                    bit=bit_id
-                )[1],
+                        tile=tile_id,
+                        round=round_id
+                    )[1],
                 na=datastore.na,
                 ri=datastore.ri
-            )
+                decon_image = decon(
+                    images = datastore.load_local_corrected_image(
+                        tile=tile_id,
+                        bit=bit_id,
+                        return_future=False,
+                    ),
+                    psf=psf,
+                    dzpsf=float(psf_voxel_zyx_um[0]),
+                    dxpsf=float(psf_voxel_zyx_um[1]),
+                    dzdata=float(image_voxel_zyx_um[0]),
+                    dxdata=float(image_voxel_zyx_um[1]),
+                    wavelength=int(wavelength_um * 1000),
+                    na=float(na),
+                    nimm=float(ri),
+                    n_iters=int(10),
+                    cleanup_otf=True,
+                    napodize=15,
+                    background=float(100),
+                )
+            
             if ch_idx == 1:
                 ch_idx = 2
             else:

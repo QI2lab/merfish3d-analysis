@@ -915,7 +915,7 @@ class qi2labDataStore:
                         self._polyDT_root_path
                         / Path(tile_id)
                         / Path(round_id + ".zarr")
-                        / Path("of_xform_3x_px")
+                        / Path("of_xform_px")
                     )
 
                     try:
@@ -2689,16 +2689,21 @@ class qi2labDataStore:
     def load_global_fidicual_image(
         self,
         return_future: Optional[bool] = True,
-    ) -> Optional[ArrayLike]:
+    ) -> Optional[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]]:
         """Load downsampled, fused fidicual image."""
 
         current_local_zarr_path = str(
             self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx")
         )
 
-        if not current_local_zarr_path.exists():
+        if not Path(current_local_zarr_path).exists():
             print("Globally registered, fused image not found.")
             return None
+        
+        zattrs_path = str(
+            current_local_zarr_path
+            / Path(".zattrs")
+        )
 
         try:
             fused_image = self._load_from_zarr_array(
@@ -2706,7 +2711,11 @@ class qi2labDataStore:
                 self._zarrv2_spec.copy(),
                 return_future,
             )
-            return fused_image
+            attributes = self._load_from_json(zattrs_path)
+            affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
+            origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
+            spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+            return fused_image, affine_zyx_um, origin_zyx_um, spacing_zyx_um
         except Exception:
             print("Error loading globally registered, fused image.")
             return None
