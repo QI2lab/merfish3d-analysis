@@ -19,10 +19,10 @@ from tqdm import tqdm
 def register_global():
     datastore_path = Path(r"/home/julian/Documents/julian/training_data/readouts/processed")
     datastore = qi2labDataStore(datastore_path=datastore_path)
-
+    datastore.tile_overlap = 0.2
     # extracted from stage positions
     # tile_sets = [[0, 58], [59, 126], [127, 179], [180, 259], [260, 347], [348, 446]]
-    tile_sets = [[2*i,2*i+1] for i in range(7)]
+    tile_sets = [[8*i + 1, 8*(i+1)] for i in range(256)] #[[i, 255 - i] for i in range(128)] #[[0,255]] #[[2*i,2*i+1] for i in range(128)]
 
     for tile_set in tile_sets:
         msims = []
@@ -70,7 +70,7 @@ def register_global():
                     reg_channel_index=0,
                     transform_key="stage_metadata",
                     new_transform_key="translation_registered",
-                    registration_binning={"z": 4, "y": 4, "x": 4},
+                    registration_binning={"z": 2, "y": 2, "x": 2},
                     groupwise_resolution_method="shortest_paths",
                     pre_registration_pruning_method="shortest_paths_overlap_weighted",
                     plot_summary=False,
