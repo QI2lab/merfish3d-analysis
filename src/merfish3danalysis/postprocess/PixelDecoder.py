@@ -445,11 +445,11 @@ class PixelDecoder():
                             merfish_bits = 16) -> cp.ndarray:
         
         if isinstance(pixel_traces, np.ndarray):
-            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float16)
+            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
         if isinstance(background_vector, np.ndarray):
-            background_vector = cp.asarray(background_vector,dtype=cp.float16)
+            background_vector = cp.asarray(background_vector,dtype=cp.float32)
         if isinstance(normalization_vector, np.ndarray):
-            normalization_vector = cp.asarray(normalization_vector,dtype=cp.float16)
+            normalization_vector = cp.asarray(normalization_vector,dtype=cp.float32)
             
         background_vector = background_vector[0:merfish_bits]
         normalization_vector = normalization_vector[0:merfish_bits]
