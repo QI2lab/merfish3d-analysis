@@ -281,13 +281,12 @@ class qi2labDataStore:
         if isinstance(value, pd.DataFrame):
             self._experiment_order = value
         else:
+            channel_list = []
+            for idx in len(self._channels_in_data):
+                channel_list.append(str(self._channels_in_data[idx]))
             self._experiment_order = pd.DataFrame(
                 value.astype(np.int8),
-                columns=[
-                    str(self._channels_in_data[0]),
-                    str(self._channels_in_data[1]),
-                    str(self._channels_in_data[2]),
-                ],
+                columns=[channel_list],
             )
 
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
@@ -365,6 +364,8 @@ class qi2labDataStore:
             except Exception as e:
                 print("Global normalization vector not calculated.")
                 return None
+        else:
+            return value
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike):
@@ -392,6 +393,8 @@ class qi2labDataStore:
             except Exception as e:
                 print("Global background vector not calculated.")
                 return None
+        else:   
+            return value
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike):
@@ -420,6 +423,8 @@ class qi2labDataStore:
                 return None
 
             return value
+        else:
+            return value
 
     @iterative_normalization_vector.setter
     def iterative_normalization_vector(self, value: ArrayLike):
@@ -447,6 +452,8 @@ class qi2labDataStore:
                 print("Iterative background vector not calculated.")
                 return None
 
+            return value
+        else:
             return value
 
     @iterative_background_vector.setter
@@ -1191,14 +1198,20 @@ class qi2labDataStore:
                 readout_bit_attrs_path = readout_bit_path / Path(".zattrs")
                 fiducial_channel = self._channels_in_data[0]
                 readout_one_channel = self._channels_in_data[1]
-                readout_two_channel = self._channels_in_data[2]
-                row = self._experiment_order[
-                    (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
-                    | (
-                        self._experiment_order[str(readout_two_channel)]
-                        == (bit_idx + 1)
-                    )
-                ]
+                if len(self._channels_in_data)==3:
+                    readout_two_channel = self._channels_in_data[2]
+                    row = self._experiment_order[
+                        (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
+                        | (
+                            self._experiment_order[str(readout_two_channel)]
+                            == (bit_idx + 1)
+                        )
+                    ]
+                else:
+                    row = self._experiment_order[
+                        (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
+                    ]
+
                 bit_attrs = {
                     "round_linker": int(row[str(fiducial_channel)].values[0]),
                 }
@@ -2841,7 +2854,7 @@ class qi2labDataStore:
     def save_global_filtered_decoded_spots(
         self,
         filtered_decoded_df: pd.DataFrame,
-    ) -> pd.DataFrame:
+    ):
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
         )
@@ -2968,6 +2981,23 @@ class qi2labDataStore:
         except Exception:
             print("Error saving Cellpose image.")
             return None
+        
+    def save_spots_prepped_for_baysor(
+        self,
+        prepped_for_baysor_df: pd.DataFrame
+    ):
+        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
+            "all_tiles_filtered_decoded_features"
+        )
+
+        if not current_global_filtered_decoded_dir_path.exists():
+            current_global_filtered_decoded_dir_path.mkdir()
+            
+        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
+            "prepped_for_baysor.csv"
+        )
+
+        self._save_to_csv(prepped_for_baysor_df, current_global_filtered_decoded_path)
 
     def load_global_baysor_filtered_spots(
         self,

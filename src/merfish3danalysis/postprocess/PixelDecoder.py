@@ -69,7 +69,7 @@ class PixelDecoder():
         else:
             self._z_crop = True
             self._z_range = [z_range[0],z_range[1]]
-            
+                    
        
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
@@ -87,7 +87,7 @@ class PixelDecoder():
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172 # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = .5 # default for HW4D4 code
+        self._magnitude_threshold = 1.1 # default for HW4D4 code
 
     
     def _load_codebook(self):
@@ -305,8 +305,8 @@ class PixelDecoder():
             old_iterative_background_vector = np.round(cp.asnumpy(self._global_background_vector[0:self._n_merfish_bits]),1)
             old_iterative_normalization_vector = np.round(cp.asnumpy(self._global_normalization_vector[0:self._n_merfish_bits]),1)
         else:
-            old_iterative_background_vector = np.asarray(self._iterative_background_vector)
-            old_iterative_normalization_vector = np.asarray(self._iterative_normalization_vector)
+            old_iterative_background_vector = np.asarray(cp.asnumpy(self._iterative_background_vector))
+            old_iterative_normalization_vector = np.asarray(cp.asnumpy(self._iterative_normalization_vector))
 
             
         diff_iterative_background_vector = np.round(np.abs(barcode_based_background_vector - old_iterative_background_vector),1)
@@ -314,7 +314,7 @@ class PixelDecoder():
         self._datastore.iterative_background_vector = barcode_based_background_vector.astype(np.float32)
         self._datastore.iterative_normalization_vector = barcode_based_normalization_vector.astype(np.float32)
         
-        if self._verbose >= 1:
+        if self._verbose > 1:
             print('---')
             print('Background')
             print(diff_iterative_background_vector)
@@ -326,6 +326,8 @@ class PixelDecoder():
         
         self._iterative_normalization_vector = barcode_based_normalization_vector
         self._iterative_background_vector = barcode_based_background_vector
+        self._datastore.iterative_normalization_vector = barcode_based_normalization_vector
+        self._datastore.iterative_background_vector = barcode_based_background_vector
         
         self._iterative_normalization_loaded = True
         
@@ -443,11 +445,11 @@ class PixelDecoder():
                             merfish_bits = 16) -> cp.ndarray:
         
         if isinstance(pixel_traces, np.ndarray):
-            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
+            pixel_traces = cp.asarray(pixel_traces,dtype=cp.float16)
         if isinstance(background_vector, np.ndarray):
-            background_vector = cp.asarray(background_vector,dtype=cp.float32)
+            background_vector = cp.asarray(background_vector,dtype=cp.float16)
         if isinstance(normalization_vector, np.ndarray):
-            normalization_vector = cp.asarray(normalization_vector,dtype=cp.float32)
+            normalization_vector = cp.asarray(normalization_vector,dtype=cp.float16)
             
         background_vector = background_vector[0:merfish_bits]
         normalization_vector = normalization_vector[0:merfish_bits]
@@ -473,9 +475,9 @@ class PixelDecoder():
         normalized_traces = pixel_traces / norms
         norms = cp.where(norms == np.inf, -1, norms)
         
-        del pixel_traces
-        gc.collect()
-        cp.get_default_memory_pool().free_all_blocks()
+        # del pixel_traces
+        # gc.collect()
+        # cp.get_default_memory_pool().free_all_blocks()
         
         return normalized_traces, norms
     
@@ -487,8 +489,13 @@ class PixelDecoder():
             pixel_traces = cp.asarray(pixel_traces,dtype=cp.float32)
         if isinstance(codebook_matrix, np.ndarray):
             codebook_matrix = cp.asarray(codebook_matrix,dtype=cp.float32)
-            
-        distances = cdist(cp.ascontiguousarray(pixel_traces.T),cp.ascontiguousarray(codebook_matrix),metric='euclidean')
+                        
+        distances = cdist(
+            cp.ascontiguousarray(pixel_traces.T),
+            cp.ascontiguousarray(codebook_matrix),
+            metric='euclidean'
+        )
+
         min_indices = cp.argmin(distances, axis=1)
         min_distances = cp.min(distances, axis=1)
 
@@ -501,7 +508,7 @@ class PixelDecoder():
     def _decode_pixels(self,
                        distance_threshold: float = .5172,
                        magnitude_threshold: float = 1.0):
-        
+                
         if self._filter_type == 'lp':
             original_shape = self._image_data_lp.shape
             self._decoded_image = np.zeros((original_shape[1:]),dtype=np.int16)
@@ -549,10 +556,11 @@ class PixelDecoder():
             del normalized_pixel_traces
             cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
-
-            decoded_trace = cp.full((distance_trace.shape[0],), -1, dtype=cp.int16)
+            
+            
+            decoded_trace = cp.full(distance_trace.shape[0],-1, dtype=cp.int16)
             mask_trace = distance_trace < distance_threshold
-            decoded_trace[mask_trace] = codebook_index_trace[mask_trace].astype(cp.int16)
+            decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
             decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
     
             self._decoded_image[z_idx,:] = cp.asnumpy(cp.reshape(cp.round(decoded_trace,3), z_plane_shape[1:]))
@@ -817,14 +825,11 @@ class PixelDecoder():
                 
     def _reformat_barcodes_for_baysor(self):
         
-        decoded_dir_path = self._dataset_path / Path('decoded')
-        decoded_dir_path.mkdir(exist_ok=True)
         
-        if self._barcodes_filtered:
-            baysor_path = decoded_dir_path / Path('baysor_formatted_genes.csv')           
+        if self._barcodes_filtered:          
             baysor_df = self._df_filtered_barcodes[['gene_id','global_z','global_y','global_x','cell_id']].copy()
             baysor_df['cell_id'] = baysor_df['cell_id'] + 1
-            baysor_df.to_csv(baysor_path)
+            self._datastore.save_spots_prepped_for_baysor(baysor_df)
             
     def _load_all_barcodes(self,
                           format: str = 'csv'):
@@ -1118,7 +1123,7 @@ class PixelDecoder():
                         tile_idx: int = 0,
                         display_results: bool = True,
                         lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
-                        minimum_pixels: Optional[float] = 2.0):
+                        minimum_pixels: Optional[float] = 9.0):
         
         self._load_global_normalization_vectors()
         if not(self._global_normalization_loaded):
@@ -1127,7 +1132,7 @@ class PixelDecoder():
         self._tile_idx = tile_idx
         self._load_bit_data()
         if not(np.any(lowpass_sigma==0)):
-            self._lp_filter(sigma=lowpass_sigma)
+            self._lp_filter(sigma=lowpass_sigma)        
         self._decode_pixels(distance_threshold = self._distance_threshold,
                             magnitude_threshold = self._magnitude_threshold)
         if display_results:
@@ -1140,7 +1145,7 @@ class PixelDecoder():
     def optimize_normalization_by_decoding(self,
                                            n_random_tiles: int = 10,
                                            n_iterations: int = 10,
-                                           minimum_pixels: Optional[float] = 5.0):
+                                           minimum_pixels: float = 9.0):
         
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
@@ -1172,7 +1177,7 @@ class PixelDecoder():
                                     minimum_pixels = minimum_pixels)
                 self._save_barcodes(format='parquet')
             self._load_all_barcodes(format='parquet')
-            if self._verbose > 1:
+            if self._verbose >= 1:
                 print('---')
                 print('Total # of barcodes: '+str(len(self._df_barcodes_loaded)))
                 print('---')
