@@ -79,12 +79,17 @@ def global_register_data():
         }
 
         im_data = []
-        im_data = datastore.load_local_registered_image(
+        im_data.append(datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
-        )
+        ))
+        for bit_idx in datastore._num_bits:
+            im_data.append(datastore.load_local_registered_image(
+                tile=tile_id, bit=bit_idx,return_futre = False)
+            )
+        im_data = np.asarray(im_data,dtype=np.uint16)
 
         sim = si_utils.get_sim_from_array(
-            da.expand_dims(im_data, axis=0),
+            im_data,
             dims=("c", "z", "y", "x"),
             scale=scale,
             translation=tile_grid_positions,
@@ -133,10 +138,10 @@ def global_register_data():
             transform_key='translation_registered',
             output_spacing={
                 'z': voxel_zyx_um[0], 
-                'y': voxel_zyx_um[1]*np.round(voxel_zyx_um[0]/voxel_zyx_um[1],1), 
-                'x': voxel_zyx_um[2]*np.round(voxel_zyx_um[0]/voxel_zyx_um[2],1),
+                'y': voxel_zyx_um[1], 
+                'x': voxel_zyx_um[2],
             },
-            output_chunksize=512,
+            output_chunksize=1024,
             overlap_in_pixels=256,
         )
             
@@ -151,7 +156,8 @@ def global_register_data():
             fused_image=fused_sim.data.compute(),
             affine_zyx_um=affine,
             origin_zyx_um=origin,
-            spacing_zyx_um=spacing
+            spacing_zyx_um=spacing,
+            fusion_type='all'
         )
     
         del fused_sim

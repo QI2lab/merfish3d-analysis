@@ -2739,17 +2739,22 @@ class qi2labDataStore:
         affine_zyx_um: ArrayLike,
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
+        fusion_type: str = 'polyDT',
         return_future: Optional[bool] = False,
     ):
         """Save downsampled, fused fidicual image."""
 
+        if fusion_type == 'polyDT':
+            filename = "fused_polyDT_iso_zyx"
+        else:
+            filename = "fused_all_channels_zyx"
         current_local_zarr_path = str(
-            self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx")
+            self._fused_root_path / Path("fused.zarr") / Path(filename)
         )
         current_local_zattrs_path = str(
             self._fused_root_path
             / Path("fused.zarr")
-            / Path("fused_polyDT_iso_zyx")
+            / Path(filename)
             / Path(".zattrs")
         )
 

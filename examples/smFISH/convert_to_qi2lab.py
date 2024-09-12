@@ -1,5 +1,5 @@
 """
-Convert raw qi2lab WF MERFISH OB data to qi2labdatastore.
+Convert raw WF iterative RNA-FISH data to qi2labdatastore.
 
 Data found here: TO BE DEPOSISTED
 
