@@ -1,5 +1,5 @@
 """
-Perform registration on Human OB qi2labdatastore.
+Perform registration on iterative smFISH qi2labdatastore.
 
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
@@ -12,7 +12,6 @@ from multiview_stitcher import msi_utils, registration, fusion
 import numpy as np
 import gc
 import dask.diagnostics
-import dask.array as da
 from tqdm import tqdm
 
 def local_register_data():
@@ -82,9 +81,9 @@ def global_register_data():
         im_data.append(datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
         ))
-        for bit_idx in datastore._num_bits:
+        for bit_id in datastore.bit_ids:
             im_data.append(datastore.load_local_registered_image(
-                tile=tile_id, bit=bit_idx,return_futre = False)
+                tile=tile_id, bit=bit_id,return_futre = False)
             )
         im_data = np.asarray(im_data,dtype=np.uint16)
 
