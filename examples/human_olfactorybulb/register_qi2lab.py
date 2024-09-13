@@ -148,7 +148,7 @@ def global_register_data():
         del fused_msim
         
         datastore.save_global_fidicual_image(
-            fused_image=fused_sim.data.compute(),
+            fused_image=fused_sim.data.compute(scheduler='threads',num_workers=10),
             affine_zyx_um=affine,
             origin_zyx_um=origin,
             spacing_zyx_um=spacing
@@ -163,5 +163,5 @@ def global_register_data():
     datastore.datastore_state = datastore_state
                     
 if __name__ == "__main__":
-    local_register_data()
+    #local_register_data()
     global_register_data()

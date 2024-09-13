@@ -10,7 +10,7 @@ from pathlib import Path
 
 def decode_pixels():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240807_OB_22bit_PL028_2")
+    root_path = Path(r"/mnt/data/qi2lab/20240823_OB_22bit_2")
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
@@ -23,9 +23,9 @@ def decode_pixels():
         verbose=1
     )
     
-    # decoder.optimize_normalization_by_decoding(n_random_tiles=20, 
-    #                                            n_iterations=10,
-    #                                            minimum_pixels=6)
+    decoder.optimize_normalization_by_decoding(n_random_tiles=20, 
+                                               n_iterations=10,
+                                               minimum_pixels=6)
     
     decoder.decode_all_tiles(assign_to_cells=False,
                              prep_for_baysor=True,

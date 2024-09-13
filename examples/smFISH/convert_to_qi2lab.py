@@ -128,12 +128,7 @@ def convert_data():
                 / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_1")
                 / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_NDTiffStack.tif")
             )
-            if round_idx == 0 and tile_idx == 0:
-                image_path = (
-                root_path
-                / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_2")
-                / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_NDTiffStack.tif")
-            )
+
             raw_image = imread(image_path)
             raw_image = np.swapaxes(raw_image,0,1)
             if channel_order == "reversed":
