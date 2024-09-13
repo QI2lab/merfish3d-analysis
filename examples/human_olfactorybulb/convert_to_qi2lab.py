@@ -23,7 +23,7 @@ from itertools import compress
 
 def convert_data():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240823_OB_22bit_2")
+    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
 
     # load codebook
     # --------------
@@ -95,7 +95,7 @@ def convert_data():
     datastore = qi2labDataStore(datastore_path)
     datastore.num_rounds = num_rounds
     datastore.codebook = codebook
-    datastore.channels_in_data = ["alexa488", "atto565", "alxa647"]
+    datastore.channels_in_data = ["alexa488", "atto565", "alexa647"]
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
     datastore.microscope_type = "3D"
@@ -128,12 +128,7 @@ def convert_data():
                 / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_1")
                 / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_NDTiffStack.tif")
             )
-            if round_idx == 0 and tile_idx == 0:
-                image_path = (
-                root_path
-                / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_2")
-                / Path(root_name + "_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+"_NDTiffStack.tif")
-            )
+
             raw_image = imread(image_path)
             raw_image = np.swapaxes(raw_image,0,1)
             if channel_order == "reversed":
@@ -194,7 +189,7 @@ def convert_data():
             
             # write second readout channel and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[2 :]),
+                np.squeeze(raw_image[2,:]).astype(np.uint16),
                 tile=tile_idx,
                 psf_idx=2,
                 gain_correction=True,

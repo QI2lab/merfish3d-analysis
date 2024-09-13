@@ -285,9 +285,10 @@ class qi2labDataStore:
             for idx in range(len(self._channels_in_data)):
                 channel_list.append(str(self._channels_in_data[idx]))
             self._experiment_order = pd.DataFrame(
-                value.astype(np.int8),
-                columns=[channel_list],
-            )
+                value,
+                columns=channel_list,
+                dtype='int64'
+            )            
 
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -299,7 +300,7 @@ class qi2labDataStore:
         calib_zattrs["num_round"] = self._num_rounds
         self._save_to_json(calib_zattrs, zattrs_path)
 
-        self._num_bits = int(np.max(value[-1, 1:]))
+        self._num_bits = int(np.max(value[:, 1:]))
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["num_bits"] = self._num_bits
         self._save_to_json(calib_zattrs, zattrs_path)
@@ -361,7 +362,7 @@ class qi2labDataStore:
                     calib_zattrs["global_normalization_vector"], dtype=np.float32
                 )
                 return value
-            except Exception as e:
+            except Exception:
                 print("Global normalization vector not calculated.")
                 return None
         else:
@@ -390,7 +391,7 @@ class qi2labDataStore:
                     calib_zattrs["global_background_vector"], dtype=np.float32
                 )
                 return value
-            except Exception as e:
+            except Exception:
                 print("Global background vector not calculated.")
                 return None
         else:   
@@ -1196,24 +1197,21 @@ class qi2labDataStore:
                 readout_bit_path = readout_tile_path / Path(bit_id + ".zarr")
                 readout_bit_path.mkdir()
                 readout_bit_attrs_path = readout_bit_path / Path(".zattrs")
-                fiducial_channel = self._channels_in_data[0]
-                readout_one_channel = self._channels_in_data[1]
+                fiducial_channel = str(self._channels_in_data[0])
+                readout_one_channel = str(self._channels_in_data[1])
+                
                 if len(self._channels_in_data)==3:
-                    readout_two_channel = self._channels_in_data[2]
-                    row = self._experiment_order[
-                        (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
-                        | (
-                            self._experiment_order[str(readout_two_channel)]
-                            == (bit_idx + 1)
-                        )
-                    ]
+                    readout_two_channel = str(self._channels_in_data[2])
+                    condition_one = self._experiment_order[readout_one_channel] == (bit_idx + 1)
+                    condition_two = self._experiment_order[readout_two_channel] == (bit_idx + 1)
+                    combined_condition = condition_one | condition_two
+
                 else:
-                    row = self._experiment_order[
-                        (self._experiment_order[str(readout_one_channel)] == (bit_idx + 1))
-                    ]
+                    combined_condition = self._experiment_order[readout_one_channel] == (bit_idx + 1)
+                matching_rows = self._experiment_order.loc[combined_condition]
 
                 bit_attrs = {
-                    "round_linker": int(row[str(fiducial_channel)].values[0]),
+                    "round_linker": int(matching_rows[fiducial_channel].values[0])
                 }
                 self._save_to_json(bit_attrs, readout_bit_attrs_path)
         except Exception as e:
