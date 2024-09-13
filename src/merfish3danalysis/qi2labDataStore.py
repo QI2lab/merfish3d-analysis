@@ -282,7 +282,7 @@ class qi2labDataStore:
             self._experiment_order = value
         else:
             channel_list = []
-            for idx in len(self._channels_in_data):
+            for idx in range(len(self._channels_in_data)):
                 channel_list.append(str(self._channels_in_data[idx]))
             self._experiment_order = pd.DataFrame(
                 value.astype(np.int8),
