@@ -175,8 +175,6 @@ def create_mtx(baysor_output_path: Union[Path,str],
     
     transcripts_df['cell'] = transcripts_df['cell'].replace('', pd.NA).dropna().str.split('-').str[1]
     transcripts_df['cell'] = pd.to_numeric(transcripts_df['cell'], errors='coerce').fillna(0).astype(int)
-    
-    print(transcripts_df.head())
 
     # Find distinct set of features.
     features = transcripts_df["gene"].dropna().unique()
