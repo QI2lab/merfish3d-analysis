@@ -1,7 +1,8 @@
-* wf-merfish version:
+* merfish-3d version:
 * Python version:
 * Operating System:
-
+* Branch:
+  
 ### Description
 
 Describe what you were trying to get done.
