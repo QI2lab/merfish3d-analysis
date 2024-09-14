@@ -826,39 +826,50 @@ class PixelDecoder():
     def _reformat_barcodes_for_baysor(self):
         
         
-        if self._barcodes_filtered:          
-            baysor_df = self._df_filtered_barcodes[['gene_id','global_z','global_y','global_x','cell_id']].copy()
+        if self._barcodes_filtered:
+            missing_columns = [
+            col for col in [
+                'gene_id', 'global_z', 'global_y', 'global_x', 'cell_id', 'tile_idx', 'distance_mean'
+                ] if col not in self._df_filtered_barcodes.columns
+            ]
+            if missing_columns:
+                print(f"The following columns are missing: {missing_columns}")     
+            baysor_df = self._df_filtered_barcodes[
+                ['gene_id',
+                 'global_z',
+                 'global_y',
+                 'global_x',
+                 'cell_id',
+                 'tile_idx',
+                 'distance_mean']
+            ].copy()
+            baysor_df.rename(
+                columns={
+                    'gene_id': 'feature_name', 
+                    'global_x': 'x_location',
+                    'global_y': 'y_location',
+                    'global_z': 'z_location',
+                    'barcode_id' : 'codeword_index',
+                    'tile_idx' : 'fov_name',
+                    'distance_mean' : 'qv'
+                    },
+                inplace=True
+            )
+
             baysor_df['cell_id'] = baysor_df['cell_id'] + 1
+            baysor_df['transcript_id'] = pd.util.hash_pandas_object(baysor_df, index=False)
+            baysor_df['is_gene'] = ~baysor_df['feature_name'].str.contains('Blank', na=False)
+            print(baysor_df.head())
             self._datastore.save_spots_prepped_for_baysor(baysor_df)
             
-    def _load_all_barcodes(self,
-                          format: str = 'csv'):
+    def _load_all_barcodes(self):
         
-        if self._optimize_normalization_weights:
-            decoded_dir_path = self._temp_dir
-
-            tile_files = decoded_dir_path.glob('*.'+format)
-            tile_files = sorted(tile_files, key=lambda x: x.name)
-            
-            if self._verbose >=1:
-                iterable_files = tqdm(tile_files,desc='tile',leave=False)
-            else:
-                iterable_files = tile_files
-
-            if format == 'csv':
-                tile_data = [pd.read_csv(csv_file) for csv_file in iterable_files]      
-            else:
-                tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
-        else:
-            if self._verbose >=1:
-                iterable_files = tqdm(self._datastore.tile_ids,desc='tile',leave=False)
-            else:
-                iterable_files = self._datastore.tile_ids
-            tile_data = []
-            for tile_id in iterable_files:
-                tile_data.append(self._datastore.load_local_decoded_spots(tile_id))
-
-        self._df_barcodes_loaded = pd.concat(tile_data)
+        try:
+            self._df_filtered_barcodes = self._datastore.load_global_filtered_decoded_spots()
+            self._barcodes_filtered = True
+        except Exception:
+            self._df_filtered_barcodes = None
+            self._barcodes_filtered = False
                 
     @staticmethod
     def calculate_fdr(df, 

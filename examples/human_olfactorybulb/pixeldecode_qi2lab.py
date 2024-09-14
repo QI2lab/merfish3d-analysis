@@ -24,13 +24,17 @@ def decode_pixels():
     )
     
     decoder.optimize_normalization_by_decoding(n_random_tiles=20, 
-                                               n_iterations=10,
+                                               n_iterations=20,
                                                minimum_pixels=6)
     
     decoder.decode_all_tiles(assign_to_cells=False,
                              prep_for_baysor=True,
                              minimum_pixels=6,
                              fdr_target=.2)
+    
+    datastore.run_baysor()
+    datastore.save_mtx()
+    
     
 if __name__ == "__main__":
     decode_pixels()

@@ -285,10 +285,8 @@ class qi2labDataStore:
             for idx in range(len(self._channels_in_data)):
                 channel_list.append(str(self._channels_in_data[idx]))
             self._experiment_order = pd.DataFrame(
-                value,
-                columns=channel_list,
-                dtype='int64'
-            )            
+                value, columns=channel_list, dtype="int64"
+            )
 
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -394,7 +392,7 @@ class qi2labDataStore:
             except Exception:
                 print("Global background vector not calculated.")
                 return None
-        else:   
+        else:
             return value
 
     @global_background_vector.setter
@@ -1044,7 +1042,8 @@ class qi2labDataStore:
 
             try:
                 self._check_for_zarr_array(
-                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec.copy()
+                    self._get_kvstore_key(current_local_zarr_path),
+                    self._zarrv2_spec.copy(),
                 )
             except Exception:
                 print("Fused data missing.")
@@ -1060,7 +1059,8 @@ class qi2labDataStore:
 
             try:
                 self._check_for_zarr_array(
-                    self._get_kvstore_key(current_local_zarr_path), self._zarrv2_spec.copy()
+                    self._get_kvstore_key(current_local_zarr_path),
+                    self._zarrv2_spec.copy(),
                 )
             except Exception:
                 print("Cellpose data missing.")
@@ -1199,15 +1199,21 @@ class qi2labDataStore:
                 readout_bit_attrs_path = readout_bit_path / Path(".zattrs")
                 fiducial_channel = str(self._channels_in_data[0])
                 readout_one_channel = str(self._channels_in_data[1])
-                
-                if len(self._channels_in_data)==3:
+
+                if len(self._channels_in_data) == 3:
                     readout_two_channel = str(self._channels_in_data[2])
-                    condition_one = self._experiment_order[readout_one_channel] == (bit_idx + 1)
-                    condition_two = self._experiment_order[readout_two_channel] == (bit_idx + 1)
+                    condition_one = self._experiment_order[readout_one_channel] == (
+                        bit_idx + 1
+                    )
+                    condition_two = self._experiment_order[readout_two_channel] == (
+                        bit_idx + 1
+                    )
                     combined_condition = condition_one | condition_two
 
                 else:
-                    combined_condition = self._experiment_order[readout_one_channel] == (bit_idx + 1)
+                    combined_condition = self._experiment_order[
+                        readout_one_channel
+                    ] == (bit_idx + 1)
                 matching_rows = self._experiment_order.loc[combined_condition]
 
                 bit_attrs = {
@@ -2710,11 +2716,8 @@ class qi2labDataStore:
         if not Path(current_local_zarr_path).exists():
             print("Globally registered, fused image not found.")
             return None
-        
-        zattrs_path = str(
-            current_local_zarr_path
-            / Path(".zattrs")
-        )
+
+        zattrs_path = str(current_local_zarr_path / Path(".zattrs"))
 
         try:
             fused_image = self._load_from_zarr_array(
@@ -2737,12 +2740,12 @@ class qi2labDataStore:
         affine_zyx_um: ArrayLike,
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
-        fusion_type: str = 'polyDT',
+        fusion_type: str = "polyDT",
         return_future: Optional[bool] = False,
     ):
         """Save downsampled, fused fidicual image."""
 
-        if fusion_type == 'polyDT':
+        if fusion_type == "polyDT":
             filename = "fused_polyDT_iso_zyx"
         else:
             filename = "fused_all_channels_zyx"
@@ -2841,8 +2844,8 @@ class qi2labDataStore:
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
         )
-        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
-            "decoded_features.parquet"
+        current_global_filtered_decoded_path = (
+            current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
         )
 
         if not current_global_filtered_decoded_path.exists():
@@ -2864,9 +2867,9 @@ class qi2labDataStore:
 
         if not current_global_filtered_decoded_dir_path.exists():
             current_global_filtered_decoded_dir_path.mkdir()
-            
-        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
-            "decoded_features.parquet"
+
+        current_global_filtered_decoded_path = (
+            current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
         )
 
         self._save_to_parquet(filtered_decoded_df, current_global_filtered_decoded_path)
@@ -2984,23 +2987,40 @@ class qi2labDataStore:
         except Exception:
             print("Error saving Cellpose image.")
             return None
-        
-    def save_spots_prepped_for_baysor(
-        self,
-        prepped_for_baysor_df: pd.DataFrame
-    ):
+
+    def save_spots_prepped_for_baysor(self, prepped_for_baysor_df: pd.DataFrame):
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
         )
 
         if not current_global_filtered_decoded_dir_path.exists():
             current_global_filtered_decoded_dir_path.mkdir()
-            
-        current_global_filtered_decoded_path = current_global_filtered_decoded_dir_path / Path(
-            "prepped_for_baysor.csv"
+
+        current_global_filtered_decoded_path = (
+            current_global_filtered_decoded_dir_path / Path("transcripts.parquet")
         )
 
-        self._save_to_csv(prepped_for_baysor_df, current_global_filtered_decoded_path)
+        self._save_to_parquet(prepped_for_baysor_df, current_global_filtered_decoded_path)
+        
+    def run_baysor(self):
+        import subprocess
+        
+        baysor_input_path = self._datastore_path / Path("all_tiles_filtered_decoded_features") / Path("transcripts.parquet")
+        baysor_output_path = self._datastore_path / Path("segmentation")
+        
+        # construct baysor command
+        baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
+        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
+        baysor_options = r"run -p -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
+               
+        command = julia_threading + str(baysor_path) + " " + baysor_options + " " +\
+            str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
+                    
+        try:
+            result = subprocess.run(command, shell=True, check=True)
+            print("Baysor finished with return code:", result.returncode)
+        except subprocess.CalledProcessError as e:
+            print("Baysor failed with:", e)
 
     def load_global_baysor_filtered_spots(
         self,
@@ -3009,22 +3029,15 @@ class qi2labDataStore:
 
         current_baysor_spots_path = (
             self._segmentation_root_path
-            / Path("baysor")
-            / Path("baysor_filtered_genes.parquet")
+            / Path("segmentation.csv")
         )
 
         if not current_baysor_spots_path.exists():
             print("Baysor filtered genes not found.")
             return None
         else:
-            baysor_filtered_genes = self._load_from_parquet(current_baysor_spots_path)
+            baysor_filtered_genes = self._load_from_csv(current_baysor_spots_path)
             return baysor_filtered_genes
-
-    def save_global_baysor_filtered_spots(
-        self,
-        baysor_spots_df: pd.DataFrame,
-    ) -> None:
-        pass
 
     def load_global_baysor_outlines(
         self,
@@ -3032,7 +3045,7 @@ class qi2labDataStore:
         """Load Baysor cell outlines."""
 
         current_baysor_outlines_path = (
-            self._segmentation_root_path / Path("baysor") / Path("cell_outlines.json")
+            self._segmentation_root_path /  Path("segmentation_polygons_3d.json")
         )
 
         if not current_baysor_outlines_path.exists():
@@ -3041,9 +3054,14 @@ class qi2labDataStore:
         else:
             baysor_outlines = self._load_from_microjson(current_baysor_outlines_path)
             return baysor_outlines
+        
+    def save_mtx(self):
+        from merfish3danalysis.utils._dataio import create_mtx
 
-    def save_global_baysor_outlines(self, outlines: dict) -> None:
-        pass
-
-    def save_mtx(self, called_spots_df: pd.DataFrame) -> None:
-        pass
+        baysor_output_path = self._datastore_path / Path("segmentation") / Path("segmentation.csv")
+        mtx_output_path = self._datastore_path / Path("mtx_output")
+        
+        create_mtx(
+            baysor_output_path=baysor_output_path,
+            output_dir_path=mtx_output_path,
+        )
