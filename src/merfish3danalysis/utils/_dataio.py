@@ -17,9 +17,8 @@ import scipy.sparse as sparse
 import scipy.io as sio
 import subprocess
 import csv
-import json
 import zarr
-import tensorstore as ts
+
 
 def read_metadatafile(fname: Union[str,Path]) -> dict:
     """Read metadata from csv file. 
@@ -161,59 +160,8 @@ def return_data_zarr(dataset_path: Union[Path,str],
     
     return np.squeeze(data)
     
-# def return_data_dask(dataset: Dataset,
-#                      channel_id: str) -> NDArray:
-#     """
-#     Return NDTIFF data as a numpy array via dask
-
-#     Parameters
-#     ----------
-#     dataset: Dataset
-#         pycromanager dataset object
-#     channel_axis: str
-#         channel axis name. One of 'Blue', 'Yellow', 'Red'.
-
-#     Returns
-#     -------
-#     data: NDArray
-#         data stack
-#     """
-
-#     data = dataset.as_array(channel=channel_id)
-#     data = data.compute(scheduler="single-threaded")
-
-#     return np.squeeze(data)
-
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def load_baysor_outlines(baysor_outlines_path: Union[Path,str]) -> dict:
-    with open(baysor_outlines_path, 'r') as f:
-        outlines = json.load(f)
-        
-    return outlines
-
-def save_baysor_outlines(outlines: dict,
-                         outlines_path: Union[Path,str]) -> None:
-    with open(outlines_path, 'w') as f:
-        json.dump(outlines, f, indent=4)
-        
-def resave_baysor_output(baysor_result_path: Union[Path,str],
-                         baysor_output_path: Union[Path,str]) -> None:
-    
-    df_baysor = pd.read_csv(baysor_result_path)
-    selected_columns = ['gene','z','y','x','cell_id','confidence','cell','assignment_confidence']
-    
-    df_filtered_baysor = df_baysor[df_baysor['is_noise'] == False][selected_columns]
-    df_filtered_baysor['cell'] = df_filtered_baysor['cell'].str.split('-').str[1]
-    df_filtered_baysor.rename(columns={'cell': 'baysor_cell_id'}, inplace=True)
-    df_filtered_baysor.rename(columns={'cell_id': 'cellpose_cell_id'}, inplace=True)
-    df_filtered_baysor.rename(columns={'z': 'global_z'}, inplace=True)
-    df_filtered_baysor.rename(columns={'y': 'global_y'}, inplace=True)
-    df_filtered_baysor.rename(columns={'x': 'global_x'}, inplace=True)
-    df_filtered_baysor.reset_index(drop=True, inplace=True)
-    
-    df_filtered_baysor.to_parquet(baysor_output_path)
     
 def create_mtx(baysor_output_path: Union[Path,str], 
                output_dir_path: Union[Path,str], 
