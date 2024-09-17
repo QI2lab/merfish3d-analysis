@@ -17,9 +17,8 @@ import scipy.sparse as sparse
 import scipy.io as sio
 import subprocess
 import csv
-import json
 import zarr
-import tensorstore as ts
+
 
 def read_metadatafile(fname: Union[str,Path]) -> dict:
     """Read metadata from csv file. 
@@ -161,115 +160,58 @@ def return_data_zarr(dataset_path: Union[Path,str],
     
     return np.squeeze(data)
     
-# def return_data_dask(dataset: Dataset,
-#                      channel_id: str) -> NDArray:
-#     """
-#     Return NDTIFF data as a numpy array via dask
-
-#     Parameters
-#     ----------
-#     dataset: Dataset
-#         pycromanager dataset object
-#     channel_axis: str
-#         channel axis name. One of 'Blue', 'Yellow', 'Red'.
-
-#     Returns
-#     -------
-#     data: NDArray
-#         data stack
-#     """
-
-#     data = dataset.as_array(channel=channel_id)
-#     data = data.compute(scheduler="single-threaded")
-
-#     return np.squeeze(data)
-
 def time_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-def load_baysor_outlines(baysor_outlines_path: Union[Path,str]) -> dict:
-    with open(baysor_outlines_path, 'r') as f:
-        outlines = json.load(f)
-        
-    return outlines
-
-def save_baysor_outlines(outlines: dict,
-                         outlines_path: Union[Path,str]) -> None:
-    with open(outlines_path, 'w') as f:
-        json.dump(outlines, f, indent=4)
-        
-def resave_baysor_output(baysor_result_path: Union[Path,str],
-                         baysor_output_path: Union[Path,str]) -> None:
-    
-    df_baysor = pd.read_csv(baysor_result_path)
-    selected_columns = ['gene','z','y','x','cell_id','confidence','cell','assignment_confidence']
-    
-    df_filtered_baysor = df_baysor[df_baysor['is_noise'] == False][selected_columns]
-    df_filtered_baysor['cell'] = df_filtered_baysor['cell'].str.split('-').str[1]
-    df_filtered_baysor.rename(columns={'cell': 'baysor_cell_id'}, inplace=True)
-    df_filtered_baysor.rename(columns={'cell_id': 'cellpose_cell_id'}, inplace=True)
-    df_filtered_baysor.rename(columns={'z': 'global_z'}, inplace=True)
-    df_filtered_baysor.rename(columns={'y': 'global_y'}, inplace=True)
-    df_filtered_baysor.rename(columns={'x': 'global_x'}, inplace=True)
-    df_filtered_baysor.reset_index(drop=True, inplace=True)
-    
-    df_filtered_baysor.to_parquet(baysor_output_path)
     
 def create_mtx(baysor_output_path: Union[Path,str], 
                output_dir_path: Union[Path,str], 
-               confidence_cutoff: float = 0.7, 
-               rep_int:int = 100000) -> None:
+               confidence_cutoff: float = 0.7):
+        
+    # Read 5 columns from transcripts Parquet file
+    transcripts_df = pd.read_csv(baysor_output_path,
+                                usecols=["gene",
+                                        "cell",
+                                        "assignment_confidence"])
+    
+    transcripts_df['cell'] = transcripts_df['cell'].replace('', pd.NA).dropna().str.split('-').str[1]
+    transcripts_df['cell'] = pd.to_numeric(transcripts_df['cell'], errors='coerce').fillna(0).astype(int)
 
-    try:
-        baysor_path = Path(baysor_output_path)
-        if not baysor_path.exists():
-            raise FileNotFoundError(f"The specified Baysor output ({baysor_path}) does not exist!")
-    except FileNotFoundError as e:
-        print(e)
-        return
+    # Find distinct set of features.
+    features = transcripts_df["gene"].dropna().unique()
 
-    # Create a unique directory if the specified directory exists
-    if output_dir_path.exists():
-        output_dir_path = Path(f"{output_dir_path}/{time_stamp()}")
-    output_dir_path.mkdir(parents=True, exist_ok=True)
+    # Create lookup dictionary
+    feature_to_index = dict()
+    for index, val in enumerate(features):
+        feature_to_index[str(val)] = index
 
-    try:
-        transcripts_df = pd.read_parquet(baysor_path, columns=["gene", "baysor_cell_id", "assignment_confidence"])
-        format = 0  # all genes used in baysor
-    except:
-        try:
-            transcripts_df = pd.read_parquet(baysor_path, columns=["gene_id", "baysor_cell_id"])
-            transcripts_df["assignment_confidence"] = 1.0  # no baysor confidence due to clustering on subset
-            format = 1  # some genes excluded in baysor
-        except:
-            transcripts_df = pd.read_csv(baysor_path, usecols=["gene_id", "cell_id"])
-            transcripts_df["assignment_confidence"] = 1.0  # no baysor confidence due to clustering on subset
-            format = 2  # cellpose segmentations
+    # Find distinct set of cells. Discard the first entry which is 0 (non-cell)
+    cells = transcripts_df["cell"].dropna().unique()[1:]
 
-    features = np.unique(transcripts_df["gene" if format == 0 else "gene_id"])
-    feature_to_index = {str(val): index for index, val in enumerate(features)}
-    cell_column = "baysor_cell_id" if format in [0, 1] else "cell_id"
-    cells = np.unique(transcripts_df[cell_column])
+    # Create a cells x features data frame, initialized with 0
     matrix = pd.DataFrame(0, index=range(len(features)), columns=cells, dtype=np.int32)
 
+    # Iterate through all transcripts
     for index, row in transcripts_df.iterrows():
-        if index % rep_int == 0:
-            print(f"{index} transcripts processed.")
-
-        feature = row['gene' if format == 0 else 'gene_id']
-        cell = row[cell_column]
+        feature = str(row['gene'])
+        cell = row['cell']
         conf = row['assignment_confidence']
+
+        # Ignore transcript below user-specified cutoff
         if conf < confidence_cutoff:
             continue
-        if cell:
+
+        # If cell is not 0 at this point, it means the transcript is associated with a cell
+        if cell != 0:
+            # Increment count in feature-cell matrix
             matrix.at[feature_to_index[feature], cell] += 1
 
+    # Call a helper function to create Seurat and Scanpy compatible MTX output
     write_sparse_mtx(output_dir_path, matrix, cells, features)
 
 def write_sparse_mtx(output_dir_path : Union[Path,str], 
                      matrix: ArrayLike, 
                      cells: Sequence[str], 
-                     features: Sequence[str]) -> None:
+                     features: Sequence[str]):
 
     sparse_mat = sparse.coo_matrix(matrix.values)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)

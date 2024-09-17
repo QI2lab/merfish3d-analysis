@@ -8,8 +8,8 @@ Shepherd 2023/07 - initial commit.
 """
 
 import numpy as np
-from numpy.typing import NDArray
-from typing import Union, List, Sequence, Tuple, Optional, Dict
+from numpy.typing import ArrayLike
+from typing import Union, Sequence, Tuple, Optional
 import SimpleITK as sitk
 import deeds
 import gc
@@ -31,21 +31,22 @@ except ImportError:
     from skimage.metrics import structural_similarity # type: ignore
     CUCIM_AVAILABLE = False
 
-def compute_optical_flow(img_ref: NDArray, 
-                         img_trg: NDArray) -> NDArray:
+
+def compute_optical_flow(img_ref: ArrayLike, 
+                         img_trg: ArrayLike) -> ArrayLike:
     """
     Compute the optical flow to warp a target image to a reference image.
 
     Parameters
     ----------
-    img_ref: NDArray
+    img_ref: ArrayLike
         reference image
-    img_trg: NDArray
+    img_trg: ArrayLike
         moving image
 
     Returns
     -------
-    field: NDArray
+    field: ArrayLike
         optical flow matrix
     """
 
@@ -59,93 +60,47 @@ def compute_optical_flow(img_ref: NDArray,
     field = np.array(field)
     return field
 
-def apply_transform(image1: sitk.Image, 
-                    image2: sitk.Image,
+def apply_transform(image1: ArrayLike, 
+                    image2: ArrayLike,
                     transform: sitk.Transform) -> sitk.Image:
     """
     Apply simpleITK transform
 
     Parameters
     ----------
-    image1: sitk.Image
+    image1: ArrayLike
         reference image
-    image2: sitk.Image
+    image2: ArrayLike
         moving image
     transform: sitk.Transform
         simpleITK transform object
 
     Returns
     -------
-    resampled_image: sitk.Image
+    resampled_image: ArrayLike
         transformed moving image
     """
+    
+    image1_sitk = sitk.GetImageFromArray(image1)
+    image2_sitk = sitk.GetImageFromArray(image2)
 
     # Resample the moving image
     resampler = sitk.ResampleImageFilter()
-    resampler.SetReferenceImage(image1)  # The fixed image is the reference
+    resampler.SetReferenceImage(image1_sitk)  # The fixed image is the reference
     resampler.SetInterpolator(sitk.sitkLinear)
     resampler.SetDefaultPixelValue(0)
     resampler.SetTransform(transform)  # Use the transform from the registration
 
     # Apply the transform to the moving image
-    resampled_image = resampler.Execute(image2)
+    resampled_image = resampler.Execute(image2_sitk)
+    
+    del image1_sitk, image2_sitk
+    gc.collect()
 
-    return resampled_image
+    return sitk.GetArrayFromImage(resampled_image).astype(np.float32)
 
-def downsample_image(image: sitk.Image, factor: int) -> sitk.Image:
-    """
-    Isotropic 3D downsample using simpleITK
-
-    Parameters
-    ----------
-    image: simpleITK image
-        image
-    factor: int
-        isotropic shrink factor
-
-    Returns
-    -------
-    image_downsampled: simpleITK image
-        isotropic downsampled image
-    """
-
-    # Downsample the image using BinShrink
-    image_downsampled = sitk.BinShrink(image, [factor]*image.GetDimension())
-
-    return image_downsampled
-
-def normalize_histograms(image1: sitk.Image, 
-                         image2: sitk.Image) -> sitk.Image:
-    """
-    Normalize histograms using simpleITK
-
-    Parameters
-    ----------
-    image1: simpleITK image
-        reference image
-    image2: simpleITK image
-        moving image
-
-    Returns
-    -------
-    image2_matched: simpleITK image
-        moving image histogram matched to reference image
-    """
-
-    # Initialize the HistogramMatchingImageFilter
-    matcher = sitk.HistogramMatchingImageFilter()
-
-    # Set the number of histogram bins and the number of match points
-    matcher.SetNumberOfHistogramLevels(1024)
-    matcher.SetNumberOfMatchPoints(7)
-
-    # Match the histograms
-    image2_matched = matcher.Execute(image2, image1)
-
-    return image2_matched
-
-def compute_rigid_transform(image1: Union[sitk.Image,NDArray], 
-                            image2: Union[sitk.Image,NDArray],
+def compute_rigid_transform(image1: ArrayLike, 
+                            image2: ArrayLike,
                             use_mask: Optional[bool] = False,
                             downsample_factor: Optional[float] = 4.0,
                             projection: Optional[str] = None) -> Tuple[sitk.TranslationTransform,Sequence[float]]:
@@ -155,12 +110,16 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
 
     Parameters
     ----------
-    image1: Union[simpleITK image,NDArray]
+    image1: ArrayLike
         reference image
-    image2: Union[simpleITK image,NDArray]
+    image2: ArrayLike
         moving image
-    use_mask: bool
+    use_mask: Optional[bool]
         use mask for middle 1/3 of image
+    downsample_factor: Optional[float]
+        amount of downsampling applied before calling registration
+    projection: Optional[str]
+        projection method to use
 
     Returns
     -------
@@ -169,29 +128,23 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
     shift_xyz: Sequence[float]
         xyz shifts in pixels
     """
-
-    # Convert images to numpy arrays
-    image1_np = sitk.GetArrayFromImage(image1)
-    image2_np = sitk.GetArrayFromImage(image2)
-    
-    orig_shape = image1_np.shape
-    
+   
     if projection is not None:
         if projection == 'z':
-            image1_np = np.squeeze(np.max(image1_np,axis=0))
-            image2_np = np.squeeze(np.max(image2_np,axis=0))
+            image1 = np.squeeze(np.max(image1,axis=0))
+            image2 = np.squeeze(np.max(image2,axis=0))
         elif projection == 'y':
-            image1_np = np.squeeze(np.max(image1_np,axis=1))
-            image2_np = np.squeeze(np.max(image2_np,axis=1))
+            image1 = np.squeeze(np.max(image1,axis=1))
+            image2 = np.squeeze(np.max(image2,axis=1))
                 
     if projection == 'search':
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
-            image1_cp = cp.asarray(image1_np)
+            image1_cp = cp.asarray(image1)
             ref_slice_idx = image1_cp.shape[0]//2
             ref_slice = image1_cp[ref_slice_idx,:,:]
-            image2_cp = cp.asarray(image2_np)
+            image2_cp = cp.asarray(image2)
             ssim = []
-            for z_idx in range(image1_np.shape[0]):
+            for z_idx in range(image1.shape[0]):
                 ssim_slice = structural_similarity(ref_slice.astype(cp.uint16),
                                                    image2_cp[z_idx,:].astype(cp.uint16),
                                                    data_range=cp.max(ref_slice)-cp.min(ref_slice))
@@ -199,13 +152,14 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
             
             ssim = np.array(ssim)
             found_shift = float(ref_slice_idx - np.argmax(ssim))
+            del image1_cp, image2_cp, ssim_slice, ssim
         else:
-            ref_slice_idx = image1_np.shape[0]//2
-            ref_slice = image1_np[ref_slice_idx,:,:]
+            ref_slice_idx = image1.shape[0]//2
+            ref_slice = image1[ref_slice_idx,:,:]
             ssim = []
-            for z_idx in range(image1_np.shape[0]):
+            for z_idx in range(image1.shape[0]):
                 ssim_slice = structural_similarity(ref_slice.astype(np.uint16),
-                                                   image2_np[z_idx,:].astype(np.uint16),
+                                                   image2[z_idx,:].astype(np.uint16),
                                                    data_range=np.max(ref_slice)-np.min(ref_slice))
                 ssim.append(ssim_slice)
             
@@ -216,43 +170,44 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
         # Perform Fourier cross-correlation
         if CUPY_AVAILABLE and CUCIM_AVAILABLE:
             if use_mask:
-                mask = cp.zeros_like(image1_np)
+                mask = cp.zeros_like(image1)
                 if len(mask.shape) == 2:
-                    mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
-                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                    mask[image1.shape[0]//2-image1.shape[0]//6:image1.shape[0]//2+image1.shape[0]//6,
+                        image1.shape[1]//2-image1.shape[1]//6:image1.shape[1]//2+image1.shape[1]//6] = 1
                 else:
                     mask[:,
-                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6,
-                        image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[2]//6] = 1
-                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
-                                                        moving_image=cp.asarray(image2_np),
+                        image1.shape[1]//2-image1.shape[1]//6:image1.shape[1]//2+image1.shape[1]//6,
+                        image1.shape[2]//2-image1.shape[2]//6:image1.shape[2]//2+image1.shape[2]//6] = 1
+                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
+                                                        moving_image=cp.asarray(image2),
                                                         upsample_factor=10,
                                                         reference_mask=mask,
                                                         disambiguate=True)
             else:
-                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1_np), 
-                                                        moving_image=cp.asarray(image2_np),
+                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
+                                                        moving_image=cp.asarray(image2),
                                                         upsample_factor=10,
                                                         disambiguate=True)
             shift = cp.asnumpy(shift_cp)
+            del shift_cp
         else:
             if use_mask:
-                mask = np.zeros_like(image1_np)
+                mask = np.zeros_like(image1)
                 if len(mask.shape)==1:
-                    mask[image1_np.shape[0]//2-image1_np.shape[0]//6:image1_np.shape[0]//2+image1_np.shape[0]//6,
-                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[1]//6] = 1
+                    mask[image1.shape[0]//2-image1.shape[0]//6:image1.shape[0]//2+image1.shape[0]//6,
+                        image1.shape[1]//2-image1.shape[1]//6:image1.shape[1]//2+image1.shape[1]//6] = 1
                 else:
                     mask[:,
-                        image1_np.shape[1]//2-image1_np.shape[1]//6:image1_np.shape[1]//2+image1_np.shape[0]//6,
-                        image1_np.shape[2]//2-image1_np.shape[2]//6:image1_np.shape[2]//2+image1_np.shape[1]//6] = 1
-                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
-                                                        moving_image=image2_np,
+                        image1.shape[1]//2-image1.shape[1]//6:image1.shape[1]//2+image1.shape[0]//6,
+                        image1.shape[2]//2-image1.shape[2]//6:image1.shape[2]//2+image1.shape[1]//6] = 1
+                shift , _, _ = phase_cross_correlation(reference_image=image1, 
+                                                        moving_image=image2,
                                                         upsample_factor=10,
                                                         reference_mask=mask,
                                                         disambiguate=True)
             else:
-                shift , _, _ = phase_cross_correlation(reference_image=image1_np, 
-                                                        moving_image=image2_np,
+                shift , _, _ = phase_cross_correlation(reference_image=image1, 
+                                                        moving_image=image2,
                                                         upsample_factor=10,
                                                         disambiguate=True)
     
@@ -277,27 +232,26 @@ def compute_rigid_transform(image1: Union[sitk.Image,NDArray],
     # Create an affine transform with the shift from the cross-correlation
     transform = sitk.TranslationTransform(3, shift_xyz)
     
-    del image1_np, image2_np
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
 
     return transform, shift_xyz
 
-def warp_coordinates(coordinates: NDArray, 
+def warp_coordinates(coordinates: ArrayLike, 
                      tile_translation_transform: sitk.Transform,
-                     voxel_size_zyx_um: NDArray,
+                     voxel_size_zyx_um: ArrayLike,
                      displacement_field_transform: Optional[sitk.Transform] = None,
                      stage_translation_transform: Optional[sitk.Transform] = None,
-                     stage_refine_translation_transform: Optional[sitk.Transform] = None) -> NDArray:
+                     stage_refine_translation_transform: Optional[sitk.Transform] = None) -> ArrayLike:
     """
     First apply a translation transform to the coordinates, then warp them using a given displacement field.
 
     Parameters
     ----------
-    coordinates: List[Sequence[float]] 
+    coordinates: ArrayLike
         List of tuples representing the coordinates.
         MUST be in xyz order!
-    voxel_size_zyx_um: NDArray
+    voxel_size_zyx_um: ArrayLike
         physical pixel spacing
     translation_transform: sitk Translation transform
         simpleITK translation transform
@@ -306,7 +260,7 @@ def warp_coordinates(coordinates: NDArray,
         
     Returns
     -------
-    transformed_coordinates: NDArray
+    transformed_coordinates: ArrayLike
         List of tuples representing warped coordinates
         Returned in xyz order!
     """
@@ -333,21 +287,21 @@ def warp_coordinates(coordinates: NDArray,
 
     return np.array(transformed_physical_coords)
 
-def make_flow_vectors(field: Union[NDArray,List[NDArray]],
-                      mask: NDArray = None) -> NDArray:
+def make_flow_vectors(field: Union[ArrayLike,list[ArrayLike]],
+                      mask: ArrayLike = None) -> ArrayLike:
     """
     Arrange the results of a optical flow method to display vectors in a 3D volume.
     
     Parameters
     ----------
-    field: NDArray or List[NDArray]
+    field: ArrayLike or list[ArrayLike]
         Result from scikit-image or cucim ILK or TLV1 methods, or from DEEDS.
-    mask: NDArray
+    mask: ArrayLike
         Boolean mask to select areas where the flow field needs to be computed.
     
     Returns
     -------
-    flow_field: NDArray
+    flow_field: ArrayLike
         A (im_size x 2 x ndim) array indicating origin and final position of voxels.
     """
 

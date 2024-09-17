@@ -443,7 +443,6 @@ def postprocess(dataset_path: Path,
                                 current_channel.attrs['stage_zyx_um'] = np.array([stage_z,stage_y,stage_x]).tolist()
                                 current_channel.attrs['voxel_zyx_um'] = np.array([float(axial_step),float(pixel_size),float(pixel_size)]).tolist()
                                 current_channel.attrs['excitation_um'] = float(ex_wvl)
-                                current_channel.attrs['e_per_ADU'] = float(e_per_ADU)
                                 current_channel.attrs['emission_um'] = float(em_wvl)
                                 current_channel.attrs['exposure_ms'] = float(exposure_ms)
                                 current_channel.attrs['hotpixel'] = bool(run_hotpixel_correction)
