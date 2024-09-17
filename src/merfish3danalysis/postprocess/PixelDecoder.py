@@ -864,12 +864,26 @@ class PixelDecoder():
             
     def _load_all_barcodes(self):
         
-        try:
-            self._df_filtered_barcodes = self._datastore.load_global_filtered_decoded_spots()
-            self._barcodes_filtered = True
-        except Exception:
-            self._df_filtered_barcodes = None
-            self._barcodes_filtered = False
+        if self._optimize_normalization_weights:
+            decoded_dir_path = self._temp_dir
+
+            tile_files = decoded_dir_path.glob('*.parquet')
+            tile_files = sorted(tile_files, key=lambda x: x.name)
+            
+            if self._verbose >=1:
+                iterable_files = tqdm(tile_files,desc='tile',leave=False)
+            else:
+                iterable_files = tile_files
+
+            tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
+            self._df_barcodes_loaded = pd.concat(tile_data)
+        else:
+            try:
+                self._df_filtered_barcodes = self._datastore.load_global_filtered_decoded_spots()
+                self._barcodes_filtered = True
+            except Exception:
+                self._df_filtered_barcodes = None
+                self._barcodes_filtered = False
                 
     @staticmethod
     def calculate_fdr(df, 
@@ -1187,7 +1201,7 @@ class PixelDecoder():
                                     display_results=False,
                                     minimum_pixels = minimum_pixels)
                 self._save_barcodes(format='parquet')
-            self._load_all_barcodes(format='parquet')
+            self._load_all_barcodes()
             if self._verbose >= 1:
                 print('---')
                 print('Total # of barcodes: '+str(len(self._df_barcodes_loaded)))

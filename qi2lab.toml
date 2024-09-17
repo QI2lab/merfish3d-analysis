@@ -8,8 +8,8 @@ exclude_genes = "Blank*"
 min_molecules_per_cell = 10
 
 [segmentation]
-scale = 15.0
-scale_std = "25%" 
+scale = 10.0
+scale_std = "50%" 
 iters = 5000
 
 [plotting]
