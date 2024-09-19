@@ -18,6 +18,7 @@ from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 from merfish3danalysis.utils._dataio import read_metadatafile
+from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
 from itertools import compress
 
 
@@ -54,7 +55,7 @@ def convert_data():
         metadata["yellow_exposure"],
         metadata["red_exposure"],
     ]
-    channel_order = "reversed"
+    channel_order = "standard"
     voxel_size_zyx_um = [0.310, 0.098, 0.098]
     na = 1.35
     ri = 1.51
@@ -66,9 +67,16 @@ def convert_data():
     # camera gain and offset
     # from Photometrics manual
     # ----------------------
-    e_per_ADU = 1.0
-    offset = 100.0
-    noise_map = None
+    # e_per_ADU = 1.0
+    # offset = 100.0
+    # noise_map = None
+    
+    # camera gain and offset
+    # from flir calibration
+    # ----------------------
+    e_per_ADU = .03
+    offset = 0.0
+    noise_map = imread(root_path / Path(r"flir_hot_pixel_image.tif"))
 
     # generate PSFs
     # --------------
@@ -130,12 +138,16 @@ def convert_data():
             )
 
             raw_image = imread(image_path)
-            raw_image = np.swapaxes(raw_image,0,1)
+            #raw_image = np.swapaxes(raw_image,0,1)
             if channel_order == "reversed":
                 raw_image = np.flip(raw_image,axis=0)
-
+                
             # Correct for gain and offset
-            raw_image = (raw_image).astype(np.float32) - offset
+            raw_image = replace_hot_pixels(noise_map,raw_image)
+            raw_image = replace_hot_pixels(
+                np.max(raw_image,axis=0),
+                raw_image,
+                threshold=1000)
             raw_image[raw_image < 0.0] = 0.0
             raw_image = (raw_image * e_per_ADU).astype(np.uint16)
             
@@ -156,7 +168,7 @@ def convert_data():
                 tile=tile_idx,
                 psf_idx=0,
                 gain_correction=True,
-                hotpixel_correction=False,
+                hotpixel_correction=True,
                 shading_correction=False,
                 round=round_idx,
             )
