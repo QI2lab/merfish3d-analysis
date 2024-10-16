@@ -282,7 +282,7 @@ class DataRegistration:
                 _, intial_z_shift = compute_rigid_transform(
                     ref_image_decon_ds,
                     mov_image_decon_ds,
-                    use_mask=True,
+                    use_mask=False,
                     downsample_factor=downsample_factor,
                     projection="search",
                 )

@@ -3011,6 +3011,20 @@ class qi2labDataStore:
         # construct baysor command
         baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
         julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
+        baysor_options = r"preview -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
+               
+        command = julia_threading + str(baysor_path) + " " + baysor_options + " " +\
+            str(baysor_input_path) + " -o " + str(baysor_output_path)
+                    
+        try:
+            result = subprocess.run(command, shell=True, check=True)
+            print("Baysor finished with return code:", result.returncode)
+        except subprocess.CalledProcessError as e:
+            print("Baysor failed with:", e)
+        
+        
+        
+        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
         baysor_options = r"run -p -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
                
         command = julia_threading + str(baysor_path) + " " + baysor_options + " " +\

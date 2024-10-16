@@ -23,17 +23,17 @@ def decode_pixels():
         verbose=1
     )
     
-    decoder.optimize_normalization_by_decoding(n_random_tiles=20, 
+    decoder.optimize_normalization_by_decoding(n_random_tiles=10, 
                                                n_iterations=20,
-                                               minimum_pixels=6)
+                                               minimum_pixels=9)
     
     decoder.decode_all_tiles(assign_to_cells=False,
                              prep_for_baysor=True,
-                             minimum_pixels=6,
+                             minimum_pixels=9,
                              fdr_target=.2)
     
     datastore.run_baysor()
-    datastore.save_mtx()
+    # datastore.save_mtx()
     
     
 if __name__ == "__main__":

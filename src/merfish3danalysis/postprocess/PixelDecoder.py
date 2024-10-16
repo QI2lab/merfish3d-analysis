@@ -87,7 +87,7 @@ class PixelDecoder():
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172 # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = 1.1 # default for HW4D4 code
+        self._magnitude_threshold = .9 # default for HW4D4 code
 
     
     def _load_codebook(self):
@@ -335,7 +335,7 @@ class PixelDecoder():
         del df_barcodes_loaded_no_blanks
         gc.collect()
             
-    def _load_bit_data(self):   
+    def _load_bit_data(self, ufish_threshold: Optional[float] = 0.1):   
         if self._verbose > 1:    
             print('load raw data')
             iterable_bits = tqdm(self._datastore.bit_ids[0:self._n_merfish_bits],desc='bit',leave=False)
@@ -358,12 +358,12 @@ class PixelDecoder():
                         
             if self._z_crop:
                 current_mask = np.asarray(ufish_image[self._z_range[0]:self._z_range[1],:].result(), dtype=np.float32)
-                images.append(np.where(current_mask > .1, 
+                images.append(np.where(current_mask > ufish_threshold, 
                                        np.asarray(decon_image[self._z_range[0]:self._z_range[1],:].result(), dtype=np.float32),
                                        0))
             else:
                 current_mask = np.asarray(ufish_image.result(), dtype=np.float32)
-                images.append(np.where(current_mask > .1,
+                images.append(np.where(current_mask > ufish_threshold,
                                        np.asarray(decon_image.result(), dtype=np.float32),
                                        0))
             self._em_wvl.append(self._datastore.load_local_wavelengths_um(
@@ -404,7 +404,7 @@ class PixelDecoder():
         gc.collect()
                
     def _lp_filter(self,
-                   sigma = (2,1,1)):
+                   sigma = (3,1,1)):
         
         self._image_data_lp = self._image_data.copy()
     
@@ -622,7 +622,7 @@ class PixelDecoder():
                 if self._verbose > 1:
                         print('remove large')
                 pixel_counts = cp.bincount(labeled_image.ravel())
-                large_labels = cp.where(pixel_counts > maximum_pixels)[0]
+                large_labels = cp.where(pixel_counts >= maximum_pixels)[0]
                 large_label_mask = cp.zeros_like(labeled_image, dtype=bool)
                 large_label_mask = cp.isin(labeled_image, large_labels)
                 labeled_image[large_label_mask] = 0
@@ -630,7 +630,7 @@ class PixelDecoder():
                 if self._verbose > 1:
                     print('remove small')
                 labeled_image = remove_small_objects(labeled_image,
-                                                    min_size=minimum_pixels)
+                                                    min_size=(minimum_pixels-1))
                 if self._verbose > 1:
                     print('regionprops table')
                     
@@ -859,11 +859,10 @@ class PixelDecoder():
             baysor_df['cell_id'] = baysor_df['cell_id'] + 1
             baysor_df['transcript_id'] = pd.util.hash_pandas_object(baysor_df, index=False)
             baysor_df['is_gene'] = ~baysor_df['feature_name'].str.contains('Blank', na=False)
-            print(baysor_df.head())
             self._datastore.save_spots_prepped_for_baysor(baysor_df)
             
     def _load_all_barcodes(self):
-        
+                
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
 
@@ -877,14 +876,17 @@ class PixelDecoder():
 
             tile_data = [pd.read_parquet(parquet_file) for parquet_file in iterable_files]
             self._df_barcodes_loaded = pd.concat(tile_data)
+        elif self._load_tile_decoding:
+            tile_data = []
+            for tile_id in self._datastore.tile_ids:
+                tile_data.append(
+                    self._datastore.load_local_decoded_spots(tile_id)
+                )
+            self._df_barcodes_loaded = pd.concat(tile_data)
         else:
-            try:
-                self._df_filtered_barcodes = self._datastore.load_global_filtered_decoded_spots()
-                self._barcodes_filtered = True
-            except Exception:
-                self._df_filtered_barcodes = None
-                self._barcodes_filtered = False
-                
+            self._df_filtered_barcodes = self._datastore.load_global_filtered_decoded_spots()
+            self._barcodes_filtered = True
+
     @staticmethod
     def calculate_fdr(df, 
                       threshold,
@@ -1148,14 +1150,15 @@ class PixelDecoder():
                         tile_idx: int = 0,
                         display_results: bool = True,
                         lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
-                        minimum_pixels: Optional[float] = 9.0):
+                        minimum_pixels: Optional[float] = 9.0,
+                        use_normalization: Optional[bool]= True,
+                        ufish_threshold: Optional[float] = 0.1):
         
-        self._load_global_normalization_vectors()
-        if not(self._global_normalization_loaded):
-            self._global_normalization_vectors()
-            
+        if use_normalization:
+            self._load_iterative_normalization_vectors()
+                            
         self._tile_idx = tile_idx
-        self._load_bit_data()
+        self._load_bit_data(ufish_threshold = ufish_threshold)
         if not(np.any(lowpass_sigma==0)):
             self._lp_filter(sigma=lowpass_sigma)        
         self._decode_pixels(distance_threshold = self._distance_threshold,
@@ -1170,7 +1173,8 @@ class PixelDecoder():
     def optimize_normalization_by_decoding(self,
                                            n_random_tiles: int = 10,
                                            n_iterations: int = 10,
-                                           minimum_pixels: float = 9.0):
+                                           minimum_pixels: float = 9.0,
+                                           ufish_threshold: float = 0.6):
         
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
@@ -1199,7 +1203,8 @@ class PixelDecoder():
             for tile_idx in iterable_tiles:
                 self.decode_one_tile(tile_idx=tile_idx,
                                     display_results=False,
-                                    minimum_pixels = minimum_pixels)
+                                    minimum_pixels = minimum_pixels,
+                                    ufish_threshold = ufish_threshold)
                 self._save_barcodes(format='parquet')
             self._load_all_barcodes()
             if self._verbose >= 1:
@@ -1211,12 +1216,15 @@ class PixelDecoder():
         self._optimize_normalization_weights = False
         shutil.rmtree(self._temp_dir)
             
-    def decode_all_tiles(self,
-                         assign_to_cells: bool = True,
-                         prep_for_baysor: bool = True,
-                         lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
-                         minimum_pixels: Optional[float] = 2.0,
-                         fdr_target: Optional[float]= 0.05):
+    def decode_all_tiles(
+        self,
+        assign_to_cells: bool = True,
+        prep_for_baysor: bool = True,
+        lowpass_sigma: Optional[Sequence[float]] = (3,1,1),
+        minimum_pixels: Optional[float] = 2.0,
+        ufish_threshold: Optional[float] = 0.6,
+        fdr_target: Optional[float]= 0.05,
+    ):
         
         if self._verbose >= 1:
             iterable_tile_id = enumerate(tqdm(self._datastore.tile_ids, desc='tile', leave=False))
@@ -1231,7 +1239,7 @@ class PixelDecoder():
             
         for tile_idx, _ in iterable_tile_id:
             self._tile_idx = tile_idx
-            self._load_bit_data()
+            self._load_bit_data(ufish_threshold=ufish_threshold)
             if not(np.any(lowpass_sigma==0)):
                 self._lp_filter(sigma=lowpass_sigma)
             self._decode_pixels(distance_threshold = self._distance_threshold,
@@ -1239,8 +1247,10 @@ class PixelDecoder():
             self._extract_barcodes(minimum_pixels=minimum_pixels)
             self._save_barcodes(format='parquet')
             self._cleanup()
-            
-        self._load_all_barcodes(format='parquet')
+        
+        self._load_tile_decoding = True
+        self._load_all_barcodes()
+        self._load_tile_decoding = False
         self._verbose = 2
         self._filter_all_barcodes(fdr_target=fdr_target)
         self._verbose = 1
