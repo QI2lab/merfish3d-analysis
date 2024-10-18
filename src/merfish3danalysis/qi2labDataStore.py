@@ -413,9 +413,12 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["iterative_normalization_vector"], dtype=np.float32
-            )
+            try:
+                value = np.asarray(
+                    calib_zattrs["iterative_normalization_vector"], dtype=np.float32
+                )
+            except Exception:
+                value = None
 
             if value is None:
                 print("Iterative normalization vector not calculated.")
@@ -443,10 +446,12 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["iterative_background_vector"], dtype=np.float32
-            )
-
+            try:
+                value = np.asarray(
+                    calib_zattrs["iterative_background_vector"], dtype=np.float32
+                )
+            except Exception:
+                value = None
             if value is None:
                 print("Iterative background vector not calculated.")
                 return None

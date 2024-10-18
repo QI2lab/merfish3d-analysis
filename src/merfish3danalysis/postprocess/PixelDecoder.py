@@ -1201,10 +1201,15 @@ class PixelDecoder():
             if iteration > 0:
                 self._load_iterative_normalization_vectors()
             for tile_idx in iterable_tiles:
+                if iteration == 0:
+                    use_normalization = False
+                else:
+                    use_normalization = True
                 self.decode_one_tile(tile_idx=tile_idx,
                                     display_results=False,
                                     minimum_pixels = minimum_pixels,
-                                    ufish_threshold = ufish_threshold)
+                                    ufish_threshold = ufish_threshold,
+                                    use_normalization=use_normalization)
                 self._save_barcodes(format='parquet')
             self._load_all_barcodes()
             if self._verbose >= 1:
