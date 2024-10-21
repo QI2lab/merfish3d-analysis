@@ -90,36 +90,37 @@ def global_register_data():
         
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
+            
             _ = registration.register(
                 msims,
                 reg_channel_index=0,
                 transform_key="stage_metadata",
-                new_transform_key="translation_registered",
-                registration_binning={'z':4,'y':4,'x':4},
-                post_registration_do_quality_filter=True,
-                groupwise_resolution_kwargs={
-                'transform': 'translation',
-                }
+                new_transform_key="translation_registered_4x",
+                registration_binning={'z':4,'y':12,'x':12},
+                post_registration_do_quality_filter=False,
             )
-        
+            
             _ = registration.register(
                 msims,
                 reg_channel_index=0,
-                transform_key='translation_registered',
-                new_transform_key='affine_registered',
-                registration_binning={'z':4,'y':4,'x':4},
-                pairwise_reg_func=registration.registration_ANTsPy,
-                pairwise_reg_func_kwargs={
-                    'transform_types': ['Rigid', 'Affine'],
-                },
-                groupwise_resolution_kwargs={
-                    'transform': 'affine',
-                }
+                transform_key="translation_registered_4x",
+                new_transform_key="translation_registered_3x",
+                registration_binning={'z':3,'y':9,'x':9},
+                post_registration_do_quality_filter=True,
+            )
+            
+            _ = registration.register(
+                msims,
+                reg_channel_index=0,
+                transform_key="translation_registered_3x",
+                new_transform_key="translation_registered",
+                registration_binning={'z':1,'y':3,'x':3},
+                post_registration_do_quality_filter=True,
             )
 
     for tile_idx, msim in enumerate(msims):
         affine = msi_utils.get_transform_from_msim(
-            msim, transform_key="affine_registered"
+            msim, transform_key="translation_registered"
         ).data.squeeze()
         affine = np.round(affine, 2)
         origin = si_utils.get_origin_from_sim(
@@ -140,7 +141,7 @@ def global_register_data():
     with dask.config.set(**{'array.slicing.split_large_chunks': False}):
         fused_sim = fusion.fuse(
             [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in msims],
-            transform_key='affine_registered',
+            transform_key='translation_registered',
             output_spacing={
                 'z': voxel_zyx_um[0], 
                 'y': voxel_zyx_um[1]*np.round(voxel_zyx_um[0]/voxel_zyx_um[1],1), 
@@ -151,7 +152,7 @@ def global_register_data():
         )
             
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
-        affine = msi_utils.get_transform_from_msim(fused_msim, transform_key='affine_registered').data.squeeze()
+        affine = msi_utils.get_transform_from_msim(fused_msim, transform_key='translation_registered').data.squeeze()
         origin = si_utils.get_origin_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
         spacing = si_utils.get_spacing_from_sim(msi_utils.get_sim_from_msim(fused_msim), asarray=True)
         
@@ -173,5 +174,5 @@ def global_register_data():
     datastore.datastore_state = datastore_state
                     
 if __name__ == "__main__":
-    local_register_data()
+    #local_register_data()
     global_register_data()
