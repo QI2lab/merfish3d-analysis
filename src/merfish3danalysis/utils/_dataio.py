@@ -185,7 +185,8 @@ def create_mtx(baysor_output_path: Union[Path,str],
         feature_to_index[str(val)] = index
 
     # Find distinct set of cells. Discard the first entry which is 0 (non-cell)
-    cells = transcripts_df["cell"].dropna().unique()[1:]
+    cells = transcripts_df["cell"].dropna().unique()
+    cells = cells[cells != 0]
 
     # Create a cells x features data frame, initialized with 0
     matrix = pd.DataFrame(0, index=range(len(features)), columns=cells, dtype=np.int32)
@@ -199,7 +200,7 @@ def create_mtx(baysor_output_path: Union[Path,str],
         # Ignore transcript below user-specified cutoff
         if conf < confidence_cutoff:
             continue
-
+        
         # If cell is not 0 at this point, it means the transcript is associated with a cell
         if cell != 0:
             # Increment count in feature-cell matrix
