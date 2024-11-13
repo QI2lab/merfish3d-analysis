@@ -18,11 +18,12 @@ mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.08 c
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-## qi2lab MERFISH zarr layout v0.2
+## qi2lab MERFISH zarr layout v0.3
 <details>
 <summary>file format</summary>
   
 - /project_root
+  - datastore.json (information on state of datastore and paths to other programs (Baysor, Cellpose, Stardist))
   - /calibrations.zarr (calibration information)
     - .zattrs
       - <exp_codebook> (with blank codes)
