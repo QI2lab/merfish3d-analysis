@@ -16,7 +16,7 @@ authors = [
 dynamic = ["version"]
 dependencies = ["numpy", "tifffile", "zarr", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
-                "tqdm", "pandas",
+                "tqdm", "pandas", "ndstorage",
                 "scikit-image", "pyarrow", "tbb", "shapely",
                 "imbalanced-learn", "scikit-learn", "dask[array]", "rtree",
                 "ryomen", "tensorstore",
