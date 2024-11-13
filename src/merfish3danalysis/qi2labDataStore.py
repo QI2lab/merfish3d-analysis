@@ -41,10 +41,6 @@ class qi2labDataStore:
             "delete_existing": False,
         }
 
-        self._baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
-        self._julia_threads = 20
-        self._baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
-
         self._datastore_path = Path(datastore_path)
         if self._datastore_path.exists():
             self._parse_datastore()
@@ -563,8 +559,8 @@ class qi2labDataStore:
             "RefinedSpots": False,
             "mtxOutput": False,
             "BaysorPath": str(self._baysor_path),
-            "BaysorOptions:" str(self._baysor_options),
-            "JuliaThreads:", str(self._julia_threads)
+            "BaysorOptions": str(self._baysor_options),
+            "JuliaThreads": str(self._julia_threads)
         }
 
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
