@@ -47,9 +47,9 @@ class qi2labDataStore:
         else:
             self._init_datastore()
             
-        self._baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
-        self._julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
-        self._baysor_options = r"preview -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
+        self._baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
+        self._julia_threads = 20
+        self._baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
             
     @property
     def datastore_state(self) -> Optional[dict]:
@@ -365,17 +365,17 @@ class qi2labDataStore:
         return getattr(self,"_baysor_options",None)
     
     @baysor_options.setter
-    def baysor_options(self, value: str):
-        self._baysor_options = value
+    def baysor_options(self, value: Union[Path,str]):
+        self._baysor_options = Path(value)
 
     @property
-    def julia_threading(self) -> str:
-        """Julia threading options"""
-        return getattr(self,"_julia_threading",None)
+    def julia_threads(self) -> int:
+        """Julia thread number"""
+        return getattr(self,"_julia_threads",None)
     
-    @julia_threading.setter
-    def julia_threading(self, value: str):
-        self._julia_threading = value
+    @julia_threads.setter
+    def julia_threads(self, value: int):
+        self._julia_threads = value
         
     @property
     def global_normalization_vector(self) -> Optional[ArrayLike]:
@@ -3044,8 +3044,9 @@ class qi2labDataStore:
         baysor_input_path = self._datastore_path / Path("all_tiles_filtered_decoded_features") / Path("transcripts.parquet")
         baysor_output_path = self._datastore_path / Path("segmentation")
         
-           
-        command = self._julia_threading + str(self._baysor_path) + " " + self._baysor_options + " " +\
+        julia_threading = r"JULIA_NUM_THREADS="+str(self._julia_threads)+ " "
+        preview_baysor_options = r"preview -c " +str(self._baysor_options)
+        command = julia_threading + str(self._baysor_path) + " " + preview_baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path)
                     
         try:
@@ -3054,10 +3055,8 @@ class qi2labDataStore:
         except subprocess.CalledProcessError as e:
             print("Baysor failed with:", e)
         
-        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
-        baysor_options = r"run -p -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
-               
-        command = julia_threading + str(self._baysor_path) + " " + baysor_options + " " +\
+        run_baysor_options = r"run -p -c " +str(self._baysor_options)
+        command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
                     
         try:
