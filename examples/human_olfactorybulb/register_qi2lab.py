@@ -12,10 +12,15 @@ import gc
 
 from tqdm import tqdm
 
-def local_register_data():
-    # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
+def local_register_data(root_path):
+    """Register each tile across rounds in local coordinates.
 
+    Parameters
+    ----------
+    root_path: Path
+        path to experiment
+    """
+    
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -31,16 +36,20 @@ def local_register_data():
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
     
-def global_register_data():
+def global_register_data(root_path):
+    """Register all tiles in first round in global coordinates.
+
+    Parameters
+    ----------
+    root_path: Path
+        path to experiment
+    """
     
     from multiview_stitcher import spatial_image_utils as si_utils
     from multiview_stitcher import msi_utils, registration, fusion
     import dask.diagnostics
     import dask.array as da
     
-    # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
-
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -174,5 +183,6 @@ def global_register_data():
     datastore.datastore_state = datastore_state
                     
 if __name__ == "__main__":
-    #local_register_data()
+    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
+    local_register_data(root_path)
     global_register_data()
