@@ -3029,7 +3029,7 @@ class qi2labDataStore:
         julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
         baysor_options = r"preview -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
                
-        command = julia_threading + str(self.baysor_path) + " " + baysor_options + " " +\
+        command = julia_threading + str(self._baysor_path) + " " + baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path)
                     
         try:
