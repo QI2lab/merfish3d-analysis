@@ -263,12 +263,17 @@ class PixelDecoder():
         
         normalization_vector = self._datastore.iterative_normalization_vector
         background_vector = self._datastore.iterative_background_vector
+
         if normalization_vector is not None and background_vector is not None:
+            background_vector = np.nan_to_num(background_vector,0.0)
+            normalization_vector = np.nan_to_num(normalization_vector,1.0)
             self._iterative_normalization_vector = cp.asarray(normalization_vector)
             self._iterative_background_vector = cp.asarray(background_vector)
             self._iterative_normalization_loaded = True
         else:
             self._iterative_normalization_vectors()
+            
+        
     
     def _iterative_normalization_vectors(self):
         
@@ -300,6 +305,12 @@ class PixelDecoder():
         
         barcode_based_normalization_vector = np.round(df_barcode_intensities.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
         barcode_based_background_vector = np.round(df_barcode_background.median(skipna=True).to_numpy(dtype=np.float32,copy=True),1)
+        
+        barcode_based_normalization_vector = np.nan_to_num(barcode_based_normalization_vector,1.0)
+        barcode_based_normalization_vector = np.where(barcode_based_normalization_vector==0.0, 
+                                                      1.0,
+                                                      barcode_based_normalization_vector)
+        barcode_based_background_vector = np.nan_to_num(barcode_based_background_vector,0.0)
        
         if self._iterative_background_vector is None and self._iterative_normalization_vector is None:
             old_iterative_background_vector = np.round(cp.asnumpy(self._global_background_vector[0:self._n_merfish_bits]),1)
@@ -420,16 +431,22 @@ class PixelDecoder():
             if self._is_3D:
                 image_data_cp = cp.asarray(self._image_data[i,:],dtype=cp.float32)
                 max_image_data = cp.asnumpy(cp.max(image_data_cp,axis=(0,1,2))).astype(np.float32)
-                self._image_data_lp[i,:,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=sigma)).astype(np.float32)
-                max_image_data_lp = np.max(self._image_data_lp[i,:,:,:],axis=(0,1,2))
-                self._image_data_lp[i,:,:,:] = self._image_data_lp[i,:,:,:] * (max_image_data/max_image_data_lp)
+                if max_image_data == 0:
+                    self._image_data_lp[i,:,:,:] = 0
+                else:
+                    self._image_data_lp[i,:,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=sigma)).astype(np.float32)
+                    max_image_data_lp = np.max(self._image_data_lp[i,:,:,:],axis=(0,1,2))
+                    self._image_data_lp[i,:,:,:] = self._image_data_lp[i,:,:,:] * (max_image_data/max_image_data_lp)                    
             else:
                 for z_idx in range(self._image_data.shape[1]):
                     image_data_cp = cp.asarray(self._image_data[i,z_idx,:],dtype=cp.float32)
                     max_image_data = cp.asnumpy(cp.max(image_data_cp,axis=(0,1))).astype(np.float32)
-                    self._image_data_lp[i,z_idx,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=(sigma[1],sigma[2]))).astype(np.float32)
-                    max_image_data_lp = np.max(self._image_data_lp[i,z_idx,:,:],axis=(0,1))
-                    self._image_data_lp[i,z_idx,:,:] = self._image_data_lp[i,z_idx,:,:] * (max_image_data/max_image_data_lp)
+                    if max_image_data == 0:
+                        self._image_data_lp[i,z_idx,:,:] = 0
+                    else:
+                        self._image_data_lp[i,z_idx,:,:] = cp.asnumpy(gaussian_filter(image_data_cp,sigma=(sigma[1],sigma[2]))).astype(np.float32)
+                        max_image_data_lp = np.max(self._image_data_lp[i,z_idx,:,:],axis=(0,1))
+                        self._image_data_lp[i,z_idx,:,:] = self._image_data_lp[i,z_idx,:,:] * (max_image_data/max_image_data_lp)
                     
         self._filter_type = 'lp'
         

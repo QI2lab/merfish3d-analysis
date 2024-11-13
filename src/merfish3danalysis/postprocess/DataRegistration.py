@@ -27,8 +27,8 @@ from merfish3danalysis.utils._imageprocessing import (
 from ufish.api import UFish
 import torch
 import cupy as cp
-
-
+import builtins
+from tqdm import tqdm
 
 class DataRegistration:
     """Register 2D or 3D MERFISH data across rounds.
@@ -69,6 +69,7 @@ class DataRegistration:
         self._overwrite_registered = overwrite_registered
         self._decon_iters = decon_iters
         self._decon_background = decon_background
+        self._original_print = builtins.print
 
     # -----------------------------------
     # property access for class variables
@@ -127,7 +128,7 @@ class DataRegistration:
         self._overwrite_registered = value
         
     def register_all_tiles(self):
-        for tile_id in self._datastore.tile_ids:
+        for tile_id in tqdm(self._datastore.tile_ids,desc="tiles"):
             self.tile_id=tile_id
             self._load_raw_data()
             self._generate_registrations()
@@ -180,6 +181,7 @@ class DataRegistration:
             has_reg_decon_data = True
             
         if not (has_reg_decon_data) or self._overwrite_registered:
+
             ref_image_decon = chunked_cudadecon(
                 image=np.asarray(self._data_raw[0].result(),dtype=np.uint16),
                 psf=self._psfs[0, :],
@@ -193,6 +195,7 @@ class DataRegistration:
                 n_iters=self._decon_iters,
                 background=self._decon_background,
             )
+
             self._datastore.save_local_registered_image(
                 ref_image_decon,
                 tile=self._tile_id,
@@ -200,7 +203,7 @@ class DataRegistration:
                 round=self._round_ids[0]
             )
 
-        for r_idx, round_id in enumerate(self._round_ids[1:]):
+        for r_idx, round_id in enumerate(tqdm(self._round_ids[1:],desc="rounds")):
 
             test =  self._datastore.load_local_registered_image(
                 tile=self._tile_id,
@@ -240,6 +243,7 @@ class DataRegistration:
                     n_iters=self._decon_iters,
                     background=self._decon_background,
                 )
+
 
                 downsample_factor = 2
                 if downsample_factor > 1:
@@ -408,7 +412,7 @@ class DataRegistration:
         
         """
         
-        for bit_idx, bit_id in enumerate(self._bit_ids):
+        for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bits')):
 
             r_idx = self._datastore.load_local_round_linker(
                 tile=self._tile_id,
@@ -456,6 +460,7 @@ class DataRegistration:
                     n_iters=self._decon_iters,
                     background=self._decon_background,
                 )
+
 
                 if r_idx > 0:
                     rigid_xform_xyz_um = self._datastore.load_local_rigid_xform_xyz_px(
@@ -525,12 +530,14 @@ class DataRegistration:
                     
                 data_decon_registered[data_decon_registered<0.]=0.0
 
+                builtins.print = no_op
                 ufish = UFish(device="cuda")
                 ufish.load_weights_from_internet()
 
                 ufish_localization, ufish_data = ufish.predict(
                     data_decon_registered, axes="zyx", blend_3d=False, batch_size=1
                 )
+                builtins.print = self._original_print
 
                 ufish_localization = ufish_localization.rename(columns={"axis-0": "z"})
                 ufish_localization = ufish_localization.rename(columns={"axis-1": "y"})
@@ -607,3 +614,8 @@ class DataRegistration:
                     ufish_localization,
                 )
                 gc.collect()
+                
+                
+def no_op(*args, **kwargs):
+    """Function to monkey patch print to suppress output"""
+    pass
