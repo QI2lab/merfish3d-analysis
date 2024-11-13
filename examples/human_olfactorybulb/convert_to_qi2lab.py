@@ -1,11 +1,7 @@
 """
 Convert raw qi2lab WF MERFISH OB data to qi2labdatastore.
 
-Data found here: TO BE DEPOSISTED
-
-Download the "rawdata" folder.
-
-Change the path on line 23 to where the data is downloaded.
+Change path on line 287
 
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
@@ -21,10 +17,14 @@ from merfish3danalysis.utils._dataio import read_metadatafile
 from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
 from itertools import compress
 
-
-def convert_data():
-    # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
+def convert_data(root_path: Path):
+    """Convert qi2lab microscope data to qi2lab datastore.
+    
+    Parameters
+    ----------
+    root_path: Path
+        path to dataset
+    """
 
     # load codebook
     # --------------
@@ -45,6 +45,7 @@ def convert_data():
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
+    camera = metadata["camera"]
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
@@ -55,40 +56,42 @@ def convert_data():
         metadata["yellow_exposure"],
         metadata["red_exposure"],
     ]
-    channel_order = "reversed"
-    voxel_size_zyx_um = [0.310, 0.098, 0.098]
-    na = 1.35
-    ri = 1.51
+    channel_order = metadata["channels_reversed"]
+    voxel_size_zyx_um = [0.310, 0.098, 0.098] # in acq. metadata, will fix
+    na = 1.35 # in acq. metadata, will fix
+    ri = 1.51 # in acq. metadata, will fix
     ex_wavelengths_um = [0.488, 0.561, 0.635]
     em_wavelengths_um = [0.520, 0.580, 0.670]
     channel_idxs = [0, 1, 2]
     channels_in_data = list(compress(channel_idxs, channels_active))
+    # these are also in acquisition metadata, left over hard-coding here. 
     stage_flipped_x = True
     stage_flipped_y = True
     image_rotated = True
     image_flipped_y = True
     image_flipped_x = False
 
-    # camera gain and offset
-    # from Photometrics manual
-    # ----------------------
-    # e_per_ADU = 1.0
-    # offset = 100.0
-    # noise_map = None
-    
-    # camera gain and offset
-    # from flir calibration
-    # ----------------------
-    # e_per_ADU = .03
-    # offset = 0.0
-    # noise_map = imread(root_path / Path(r"flir_hot_pixel_image.tif"))
-    
-    # camera gain and offset
-    # from hamamatsu calibration
-    # ----------------------
-    e_per_ADU = .46
-    offset = 100.0
-    noise_map = offset * np.ones((2048,2048),dtype=np.uint16)
+    if camera == 'bsi':
+        # camera gain and offset
+        # from Photometrics manual
+        # ----------------------
+        e_per_ADU = 1.0
+        offset = 100.0
+        noise_map = None
+    elif camera == "flir":
+        # camera gain and offset
+        # from flir calibration
+        # ----------------------
+        e_per_ADU = .03
+        offset = 0.0
+        noise_map = imread(root_path / Path(r"flir_hot_pixel_image.tif"))
+    elif camera == "orcav3":
+        # camera gain and offset
+        # from hamamatsu calibration
+        # ----------------------
+        e_per_ADU = .46
+        offset = 100.0
+        noise_map = offset * np.ones((2048,2048),dtype=np.uint16)
 
     # generate PSFs
     # --------------
@@ -118,17 +121,18 @@ def convert_data():
     datastore.channels_in_data = ["alexa488", "atto565", "alexa647"]
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
-    datastore.microscope_type = "3D"
-    datastore.camera_model = "orcav3"
-    datastore.tile_overlap = 0.2
+    datastore.microscope_type = "3D" # this could be automatically determined from z steps
+    datastore.camera_model = camera
+    datastore.tile_overlap = 0.2 # in acq. metadata, will fix.
     datastore.e_per_ADU = e_per_ADU
     datastore.na = na
     datastore.ri = ri
-    datastore.binning = 1
+    datastore.binning = 1 # in acq. metadata, will fix.
     datastore.noise_map = noise_map
     datastore._shading_maps = np.ones((3, 2048, 2048), dtype=np.float32)
     datastore.channel_psfs = channel_psfs
     datastore.voxel_size_zyx_um = voxel_size_zyx_um
+    datastore.baysor_path = 
 
     # Update datastore state to note that calibrations are doen
     datastore_state = datastore.datastore_state
@@ -174,6 +178,15 @@ def convert_data():
 
             raw_image = imread(image_path)
             raw_image = np.swapaxes(raw_image,0,1)
+            if tile_idx == 0 and round_idx == 0:
+                correct_shape = raw_image.shape
+            if raw_image is None or raw_image.shape != correct_shape:
+                    print('\nround='+str(round_idx+1)+'; tile='+str(tile_idx+1))
+                    print('Found shape: '+str(raw_image.shape))
+                    print('Correct shape: '+str(correct_shape))
+                    print('Replacing data with zeros.\n')
+                    raw_image = np.zeros(correct_shape, dtype=np.uint16)
+                    
             if channel_order == "reversed":
                 raw_image = np.flip(raw_image,axis=0)
                 
@@ -187,11 +200,12 @@ def convert_data():
                 raw_image = np.flip(raw_image,axis=3)
                 
             # Correct for gain and offset
-            # raw_image = replace_hot_pixels(noise_map,raw_image)
-            # raw_image = replace_hot_pixels(
-            #     np.max(raw_image,axis=0),
-            #     raw_image,
-            #     threshold=10)
+            if camera == "flir":
+                raw_image = replace_hot_pixels(noise_map,raw_image)
+                raw_image = replace_hot_pixels(
+                    np.max(raw_image,axis=0),
+                    raw_image,
+                    threshold=100)
             
             raw_image = ((raw_image.astype(np.float32) - offset) * e_per_ADU)
             raw_image[raw_image < 0.0] = 0.0
@@ -277,4 +291,5 @@ def convert_data():
     datastore.datastore_state = datastore_state
     
 if __name__ == "__main__":
-    convert_data()
+    root_path = Path(r"/mnt/data/qi2lab/20241030_OB_22bit_MERFISH")
+    convert_data(root_path)
