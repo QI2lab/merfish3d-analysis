@@ -12,6 +12,7 @@ from numba import njit, prange
 from typing import Sequence, Tuple
 from pycudadecon import decon
 from ryomen import Slicer
+import builtins
 
 # GPU
 CUPY_AVIALABLE = True
@@ -356,6 +357,7 @@ def chunked_cudadecon(
         deconvolved image
 
     """
+    original_print = builtins.print
 
     image_padded, pad_z_before, pad_z_after = pad_z(image)
 
@@ -370,6 +372,7 @@ def chunked_cudadecon(
     )
 
     for crop, source, destination in slices:
+        builtins.print= no_op
         image_decon_padded[destination] = decon(
             images=crop,
             psf=psf,
@@ -385,6 +388,7 @@ def chunked_cudadecon(
             napodize=15,
             background=float(background),
         )[source]
+        builtins.print = original_print
 
     image_decon = remove_padding_z(image_decon_padded, pad_z_before, pad_z_after)
 
@@ -392,3 +396,7 @@ def chunked_cudadecon(
     gc.collect()
 
     return image_decon
+
+def no_op(*args, **kwargs):
+    """Function to monkey patch print to suppress output"""
+    pass

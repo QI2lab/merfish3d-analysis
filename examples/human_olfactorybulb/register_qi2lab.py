@@ -7,17 +7,14 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.postprocess.DataRegistration import DataRegistration
 from pathlib import Path
-from multiview_stitcher import spatial_image_utils as si_utils
-from multiview_stitcher import msi_utils, registration, fusion
 import numpy as np
 import gc
-import dask.diagnostics
-import dask.array as da
+
 from tqdm import tqdm
 
 def local_register_data():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240823_OB_22bit_2")
+    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
@@ -25,6 +22,7 @@ def local_register_data():
     registration_factory = DataRegistration(
         datastore=datastore,
         perform_optical_flow=True,
+        overwrite_registered=True
     )
 
     registration_factory.register_all_tiles()
@@ -35,31 +33,24 @@ def local_register_data():
     
 def global_register_data():
     
+    from multiview_stitcher import spatial_image_utils as si_utils
+    from multiview_stitcher import msi_utils, registration, fusion
+    import dask.diagnostics
+    import dask.array as da
+    
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240823_OB_22bit_2")
+    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     
-    
-    # find max y & x stage position. Need to reverse yx positions to match
-    # stage motion.
     for tile_idx, tile_id in enumerate(datastore.tile_ids):
         round_id = datastore.round_ids[0]
         tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
-        
-        if tile_idx == 0:
-            max_y = np.round(tile_position_zyx_um[1],2)
-            max_x = np.round(tile_position_zyx_um[2],2)
-        else:
-            if max_y < np.round(tile_position_zyx_um[1],2):
-                max_y = np.round(tile_position_zyx_um[1],2)
-            if max_x < np.round(tile_position_zyx_um[2],2):
-                max_x = np.round(tile_position_zyx_um[2],2)
-        
+                
     msims = []
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
         round_id = datastore.round_ids[0]
@@ -72,10 +63,11 @@ def global_register_data():
             tile_id, round_id
         )
 
+
         tile_grid_positions = {
             "z": np.round(tile_position_zyx_um[0],2),
-            "y": max_y - np.round(tile_position_zyx_um[1],2), # reverse y axis position
-            "x": max_x -np.round(tile_position_zyx_um[2],2), # reverse x  axis position
+            "y": np.round(tile_position_zyx_um[1],2),
+            "x": np.round(tile_position_zyx_um[2],2),
         }
 
         im_data = []
@@ -98,13 +90,32 @@ def global_register_data():
         
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
+            
             _ = registration.register(
                 msims,
                 reg_channel_index=0,
                 transform_key="stage_metadata",
+                new_transform_key="translation_registered_4x",
+                registration_binning={'z':4,'y':12,'x':12},
+                post_registration_do_quality_filter=False,
+            )
+            
+            _ = registration.register(
+                msims,
+                reg_channel_index=0,
+                transform_key="translation_registered_4x",
+                new_transform_key="translation_registered_3x",
+                registration_binning={'z':3,'y':9,'x':9},
+                post_registration_do_quality_filter=True,
+            )
+            
+            _ = registration.register(
+                msims,
+                reg_channel_index=0,
+                transform_key="translation_registered_3x",
                 new_transform_key="translation_registered",
-                registration_binning={"z": 4, "y": 4, "x": 4},
-                plot_summary=False,
+                registration_binning={'z':1,'y':3,'x':3},
+                post_registration_do_quality_filter=True,
             )
 
     for tile_idx, msim in enumerate(msims):
@@ -126,7 +137,7 @@ def global_register_data():
             tile=tile_idx,
         )
         
-        
+
     with dask.config.set(**{'array.slicing.split_large_chunks': False}):
         fused_sim = fusion.fuse(
             [msi_utils.get_sim_from_msim(msim, scale='scale0') for msim in msims],
@@ -136,8 +147,8 @@ def global_register_data():
                 'y': voxel_zyx_um[1]*np.round(voxel_zyx_um[0]/voxel_zyx_um[1],1), 
                 'x': voxel_zyx_um[2]*np.round(voxel_zyx_um[0]/voxel_zyx_um[2],1),
             },
-            output_chunksize=512,
-            overlap_in_pixels=256,
+            output_chunksize=128,
+            overlap_in_pixels=64,
         )
             
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
@@ -148,7 +159,7 @@ def global_register_data():
         del fused_msim
         
         datastore.save_global_fidicual_image(
-            fused_image=fused_sim.data.compute(scheduler='threads',num_workers=10),
+            fused_image=fused_sim.data.compute(scheduler='threads',num_workers=12),
             affine_zyx_um=affine,
             origin_zyx_um=origin,
             spacing_zyx_um=spacing

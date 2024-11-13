@@ -46,7 +46,9 @@ class qi2labDataStore:
             self._parse_datastore()
         else:
             self._init_datastore()
-
+            
+        self._baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
+            
     @property
     def datastore_state(self) -> Optional[dict]:
         """Datastore state."""
@@ -345,6 +347,16 @@ class qi2labDataStore:
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["voxel_size_zyx_um"] = value
         self._save_to_json(calib_zattrs, zattrs_path)
+        
+    @property
+    def baysor_path(self) -> Union[Path,str]:
+        """Baysor path"""
+        return getattr(self,"_baysor_path",None)
+    
+    @baysor_path.setter
+    def baysor_path(self, value: Union[Path,str]):
+        self._baysor_path = Path(value)
+    
 
     @property
     def global_normalization_vector(self) -> Optional[ArrayLike]:
@@ -413,9 +425,12 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["iterative_normalization_vector"], dtype=np.float32
-            )
+            try:
+                value = np.asarray(
+                    calib_zattrs["iterative_normalization_vector"], dtype=np.float32
+                )
+            except Exception:
+                value = None
 
             if value is None:
                 print("Iterative normalization vector not calculated.")
@@ -443,10 +458,12 @@ class qi2labDataStore:
         if value is None:
             zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
             calib_zattrs = self._load_from_json(zattrs_path)
-            value = np.asarray(
-                calib_zattrs["iterative_background_vector"], dtype=np.float32
-            )
-
+            try:
+                value = np.asarray(
+                    calib_zattrs["iterative_background_vector"], dtype=np.float32
+                )
+            except Exception:
+                value = None
             if value is None:
                 print("Iterative background vector not calculated.")
                 return None
@@ -3009,11 +3026,22 @@ class qi2labDataStore:
         baysor_output_path = self._datastore_path / Path("segmentation")
         
         # construct baysor command
-        baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
+        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
+        baysor_options = r"preview -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
+               
+        command = julia_threading + str(self.baysor_path) + " " + baysor_options + " " +\
+            str(baysor_input_path) + " -o " + str(baysor_output_path)
+                    
+        try:
+            result = subprocess.run(command, shell=True, check=True)
+            print("Baysor finished with return code:", result.returncode)
+        except subprocess.CalledProcessError as e:
+            print("Baysor failed with:", e)
+        
         julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
         baysor_options = r"run -p -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
                
-        command = julia_threading + str(baysor_path) + " " + baysor_options + " " +\
+        command = julia_threading + str(self._baysor_path) + " " + baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
                     
         try:

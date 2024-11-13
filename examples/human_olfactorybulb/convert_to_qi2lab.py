@@ -18,12 +18,13 @@ from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 from merfish3danalysis.utils._dataio import read_metadatafile
+from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
 from itertools import compress
 
 
 def convert_data():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
 
     # load codebook
     # --------------
@@ -62,13 +63,32 @@ def convert_data():
     em_wavelengths_um = [0.520, 0.580, 0.670]
     channel_idxs = [0, 1, 2]
     channels_in_data = list(compress(channel_idxs, channels_active))
+    stage_flipped_x = True
+    stage_flipped_y = True
+    image_rotated = True
+    image_flipped_y = True
+    image_flipped_x = False
 
     # camera gain and offset
     # from Photometrics manual
     # ----------------------
-    e_per_ADU = 1.0
+    # e_per_ADU = 1.0
+    # offset = 100.0
+    # noise_map = None
+    
+    # camera gain and offset
+    # from flir calibration
+    # ----------------------
+    # e_per_ADU = .03
+    # offset = 0.0
+    # noise_map = imread(root_path / Path(r"flir_hot_pixel_image.tif"))
+    
+    # camera gain and offset
+    # from hamamatsu calibration
+    # ----------------------
+    e_per_ADU = .46
     offset = 100.0
-    noise_map = None
+    noise_map = offset * np.ones((2048,2048),dtype=np.uint16)
 
     # generate PSFs
     # --------------
@@ -99,7 +119,7 @@ def convert_data():
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
     datastore.microscope_type = "3D"
-    datastore.camera_model = "bsi"
+    datastore.camera_model = "orcav3"
     datastore.tile_overlap = 0.2
     datastore.e_per_ADU = e_per_ADU
     datastore.na = na
@@ -114,6 +134,29 @@ def convert_data():
     datastore_state = datastore.datastore_state
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
+    
+    round_idx = 0
+    if stage_flipped_x or stage_flipped_y:
+        for tile_idx in range(num_tiles):
+            stage_position_path = root_path / Path(
+                root_name
+                + "_r"
+                + str(round_idx + 1).zfill(4)
+                + "_tile"
+                + str(tile_idx).zfill(4)
+                + "_stage_positions.csv"
+            )
+            stage_positions = read_metadatafile(stage_position_path)
+            stage_x = np.round(float(stage_positions["stage_x"]), 2)
+            stage_y = np.round(float(stage_positions["stage_y"]), 2)
+            if tile_idx == 0:
+                max_y = stage_y
+                max_x = stage_x
+            else:
+                if max_y < stage_y:
+                    max_y = stage_y
+                if max_x < stage_x:
+                    max_x = stage_x
 
     for round_idx in tqdm(range(num_rounds), desc="rounds"):
         for tile_idx in tqdm(range(num_tiles), desc="tile",leave=False):
@@ -133,11 +176,26 @@ def convert_data():
             raw_image = np.swapaxes(raw_image,0,1)
             if channel_order == "reversed":
                 raw_image = np.flip(raw_image,axis=0)
-
+                
+            if image_rotated:
+                raw_image = np.rot90(raw_image, k=-1, axes=(3, 2))
+                
+            if image_flipped_y:
+                raw_image = np.flip(raw_image,axis=2)
+                
+            if image_flipped_x:
+                raw_image = np.flip(raw_image,axis=3)
+                
             # Correct for gain and offset
-            raw_image = (raw_image).astype(np.float32) - offset
+            # raw_image = replace_hot_pixels(noise_map,raw_image)
+            # raw_image = replace_hot_pixels(
+            #     np.max(raw_image,axis=0),
+            #     raw_image,
+            #     threshold=10)
+            
+            raw_image = ((raw_image.astype(np.float32) - offset) * e_per_ADU)
             raw_image[raw_image < 0.0] = 0.0
-            raw_image = (raw_image * e_per_ADU).astype(np.uint16)
+            raw_image = raw_image.astype(np.uint16)
             
             # load stage position
             stage_position_path = (
@@ -148,7 +206,18 @@ def convert_data():
             stage_x = np.round(float(df_stage_positions['stage_x']),2)
             stage_y = np.round(float(df_stage_positions['stage_y']),2)
             stage_z = np.round(float(df_stage_positions['stage_z']),2)
-            stage_pos_zyx_um = np.asarray([stage_z,stage_y,stage_x],dtype=np.float32)
+            
+            if stage_flipped_x or stage_flipped_y:
+                if stage_flipped_y:
+                    corrected_y =  max_y - stage_y
+                else:
+                    corrected_y = stage_y
+                if stage_flipped_x:
+                    corrected_x = max_x - stage_x
+                else:
+                    corrected_x = stage_x
+                
+            stage_pos_zyx_um = np.asarray([stage_z,corrected_y,corrected_x],dtype=np.float32)
 
             # write fidicual data and metadata
             datastore.save_local_corrected_image(
@@ -156,7 +225,7 @@ def convert_data():
                 tile=tile_idx,
                 psf_idx=0,
                 gain_correction=True,
-                hotpixel_correction=False,
+                hotpixel_correction=True,
                 shading_correction=False,
                 round=round_idx,
             )
@@ -177,7 +246,7 @@ def convert_data():
                 tile=tile_idx,
                 psf_idx=1,
                 gain_correction=True,
-                hotpixel_correction=False,
+                hotpixel_correction=True,
                 shading_correction=False,
                 bit=int(experiment_order[round_idx,1])-1,
             )
@@ -193,7 +262,7 @@ def convert_data():
                 tile=tile_idx,
                 psf_idx=2,
                 gain_correction=True,
-                hotpixel_correction=False,
+                hotpixel_correction=True,
                 shading_correction=False,
                 bit=int(experiment_order[round_idx,2])-1,
             )

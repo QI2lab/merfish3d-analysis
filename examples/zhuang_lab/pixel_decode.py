@@ -13,18 +13,28 @@ def decode_pixels():
     
     decoder = PixelDecoder(
         datastore=datastore,
-        use_mask=False,
         merfish_bits=22,
-        verbose=1
     )
     
-    decoder.optimize_normalization_by_decoding(n_iterations=2,
-                                               n_random_tiles=50,
-                                               minimum_pixels=2.0)
-    decoder.decode_all_tiles(assign_to_cells=False,
-                             prep_for_baysor=False,
-                             minimum_pixels=2.0,
-                             fdr_target=.05)
+    decoder.decode_one_tile(tile_idx=0,
+                            lowpass_sigma=(1,1,1),
+                            minimum_pixels=2,
+                            ufish_threshold=0.6)
+    # Max: this threshold is applied to the ufish output before multiplying the data
+    # decoder.optimize_normalization_by_decoding(
+    #     n_iterations=4,
+    #     n_random_tiles=50,
+    #     minimum_pixels=2.0,
+    #     ufish_threshold=0.7
+    # )
+    
+    # decoder.decode_all_tiles(
+    #     assign_to_cells=False,
+    #     prep_for_baysor=False,
+    #     minimum_pixels=2.0,
+    #     fdr_target=.05,
+    #     ufish_threshold=0.6
+    # )
     
 if __name__ == "__main__":
     decode_pixels()
