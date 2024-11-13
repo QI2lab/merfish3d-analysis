@@ -41,13 +41,15 @@ class qi2labDataStore:
             "delete_existing": False,
         }
 
+        self._baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
+        self._julia_threads = 20
+        self._baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
+
         self._datastore_path = Path(datastore_path)
         if self._datastore_path.exists():
             self._parse_datastore()
         else:
             self._init_datastore()
-            
-        self._baysor_path = r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
             
     @property
     def datastore_state(self) -> Optional[dict]:
@@ -356,8 +358,25 @@ class qi2labDataStore:
     @baysor_path.setter
     def baysor_path(self, value: Union[Path,str]):
         self._baysor_path = Path(value)
-    
 
+    @property
+    def baysor_options(self) -> str:
+        """Baysor options"""
+        return getattr(self,"_baysor_options",None)
+    
+    @baysor_options.setter
+    def baysor_options(self, value: Union[Path,str]):
+        self._baysor_options = Path(value)
+
+    @property
+    def julia_threads(self) -> int:
+        """Julia thread number"""
+        return getattr(self,"_julia_threads",None)
+    
+    @julia_threads.setter
+    def julia_threads(self, value: int):
+        self._julia_threads = value
+        
     @property
     def global_normalization_vector(self) -> Optional[ArrayLike]:
         """Global normalization vector."""
@@ -543,6 +562,9 @@ class qi2labDataStore:
             "FilteredSpots": False,
             "RefinedSpots": False,
             "mtxOutput": False,
+            "BaysorPath": str(self._baysor_path),
+            "BaysorOptions:" str(self._baysor_options),
+            "JuliaThreads:", str(self._julia_threads)
         }
 
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
@@ -1138,6 +1160,10 @@ class qi2labDataStore:
                 or not (mtx_matrix_path.exists())
             ):
                 raise Exception("mtx output missing.")
+
+        self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
+        self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
+        self._julia_threads = Path(str(self._datastore_state["JuliaThreads"]))
 
     def load_codebook_parsed(
         self,
@@ -3025,11 +3051,9 @@ class qi2labDataStore:
         baysor_input_path = self._datastore_path / Path("all_tiles_filtered_decoded_features") / Path("transcripts.parquet")
         baysor_output_path = self._datastore_path / Path("segmentation")
         
-        # construct baysor command
-        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
-        baysor_options = r"preview -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
-               
-        command = julia_threading + str(self.baysor_path) + " " + baysor_options + " " +\
+        julia_threading = r"JULIA_NUM_THREADS="+str(self._julia_threads)+ " "
+        preview_baysor_options = r"preview -c " +str(self._baysor_options)
+        command = julia_threading + str(self._baysor_path) + " " + preview_baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path)
                     
         try:
@@ -3038,10 +3062,8 @@ class qi2labDataStore:
         except subprocess.CalledProcessError as e:
             print("Baysor failed with:", e)
         
-        julia_threading = "JULIA_NUM_THREADS="+str(20)+ " "
-        baysor_options = r"run -p -c /home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
-               
-        command = julia_threading + str(self._baysor_path) + " " + baysor_options + " " +\
+        run_baysor_options = r"run -p -c " +str(self._baysor_options)
+        command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
             str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
                     
         try:
