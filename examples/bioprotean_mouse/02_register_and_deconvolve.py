@@ -186,4 +186,4 @@ def global_register_data(root_path):
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
     local_register_data(root_path)
-    global_register_data()
+    global_register_data(root_path)

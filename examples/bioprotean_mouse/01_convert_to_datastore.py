@@ -122,11 +122,6 @@ def convert_data(
         metadata["yellow_active"],
         metadata["red_active"],
     ]
-    channels_exposure_ms = [
-        metadata["blue_exposure"],
-        metadata["yellow_exposure"],
-        metadata["red_exposure"],
-    ]
     channel_order = metadata["channels_reversed"]
     
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
