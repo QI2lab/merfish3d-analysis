@@ -1168,7 +1168,7 @@ class qi2labDataStore:
 
         self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
         self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
-        self._julia_threads = Path(str(self._datastore_state["JuliaThreads"]))
+        self._julia_threads = int(self._datastore_state["JuliaThreads"])
 
     def load_codebook_parsed(
         self,
