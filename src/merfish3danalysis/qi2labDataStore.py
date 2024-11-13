@@ -41,15 +41,15 @@ class qi2labDataStore:
             "delete_existing": False,
         }
 
+        self._baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
+        self._julia_threads = 20
+        self._baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
+
         self._datastore_path = Path(datastore_path)
         if self._datastore_path.exists():
             self._parse_datastore()
         else:
             self._init_datastore()
-            
-        self._baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
-        self._julia_threads = 20
-        self._baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
             
     @property
     def datastore_state(self) -> Optional[dict]:
@@ -562,6 +562,9 @@ class qi2labDataStore:
             "FilteredSpots": False,
             "RefinedSpots": False,
             "mtxOutput": False,
+            "BaysorPath": str(self._baysor_path),
+            "BaysorOptions:" str(self._baysor_options),
+            "JuliaThreads:", str(self._julia_threads)
         }
 
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
@@ -1157,6 +1160,10 @@ class qi2labDataStore:
                 or not (mtx_matrix_path.exists())
             ):
                 raise Exception("mtx output missing.")
+
+        self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
+        self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
+        self._julia_threads = Path(str(self._datastore_state["JuliaThreads"]))
 
     def load_codebook_parsed(
         self,
