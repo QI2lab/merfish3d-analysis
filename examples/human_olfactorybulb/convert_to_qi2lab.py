@@ -132,7 +132,9 @@ def convert_data(root_path: Path):
     datastore._shading_maps = np.ones((3, 2048, 2048), dtype=np.float32)
     datastore.channel_psfs = channel_psfs
     datastore.voxel_size_zyx_um = voxel_size_zyx_um
-    datastore.baysor_path = 
+    datastore.baysor_path = Path(r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor")
+    datastore.baysor_options = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml")
+    datastore.julia_threads = 20
 
     # Update datastore state to note that calibrations are doen
     datastore_state = datastore.datastore_state
