@@ -546,6 +546,9 @@ class qi2labDataStore:
         self._segmentation_root_path.mkdir()
         self._mtx_output_root_path = self._datastore_path / Path(r"mtx_output")
         self._mtx_output_root_path.mkdir()
+        self._baysor_path = r""
+        self._baysor_options = r""
+        self._julia_threads = 0
 
         # initialize datastore state
         self._datastore_state_json_path = self._datastore_path / Path(
