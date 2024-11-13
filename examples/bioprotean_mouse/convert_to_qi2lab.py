@@ -107,8 +107,8 @@ def convert_data(
             offset = float(ndtiff_metadata['Camera-CONVERSION FACTOR OFFSET'])
         else:
             camera = "flir"
-            e_per_ADU = .03
-            offset = 0.0
+            e_per_ADU = .03 # this comes from separate calibration
+            offset = 0.0 # this comes from separate calibration
         try:
             binning = metadata['binning']
         except Exception:
