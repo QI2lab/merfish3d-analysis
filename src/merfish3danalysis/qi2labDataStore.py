@@ -354,15 +354,19 @@ class qi2labDataStore:
     @baysor_path.setter
     def baysor_path(self, value: Union[Path,str]):
         self._baysor_path = Path(value)
+        self._datastore_state["BaysorPath"] = str(self._baysor_path)
+        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     @property
-    def baysor_options(self) -> str:
+    def baysor_options(self) -> Union[Path,str]:
         """Baysor options"""
         return getattr(self,"_baysor_options",None)
     
     @baysor_options.setter
     def baysor_options(self, value: Union[Path,str]):
         self._baysor_options = Path(value)
+        self._datastore_state["BaysorOptions"] = str(self._baysor_options)
+        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     @property
     def julia_threads(self) -> int:
@@ -372,6 +376,8 @@ class qi2labDataStore:
     @julia_threads.setter
     def julia_threads(self, value: int):
         self._julia_threads = value
+        self._datastore_state["JuliaThreads"] = str(self._julia_threads)
+        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
         
     @property
     def global_normalization_vector(self) -> Optional[ArrayLike]:
