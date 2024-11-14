@@ -225,7 +225,7 @@ def convert_data(
         try:
             image_flipped_x = metadata["image_flipped_x"]
         except Exception:
-            image_flipped_x = True
+            image_flipped_x = False
 
     # generate PSFs
     # --------------
