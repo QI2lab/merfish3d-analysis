@@ -102,6 +102,10 @@ class qi2labDataStore:
         calib_zattrs = self._load_from_json(zattrs_path)
         calib_zattrs["num_rounds"] = value
         self._save_to_json(calib_zattrs, zattrs_path)
+        
+    @property
+    def num_bits(self) -> int:
+        return getattr(self, "_num_bits", None)
 
     @property
     def num_tiles(self) -> Optional[int]:
