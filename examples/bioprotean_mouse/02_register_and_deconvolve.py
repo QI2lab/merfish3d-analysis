@@ -26,12 +26,16 @@ def local_register_data(root_path):
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
+    
+    # initialize registration class
     registration_factory = DataRegistration(
-        datastore=datastore, perform_optical_flow=True, overwrite_registered=True
+        datastore=datastore, perform_optical_flow=True, overwrite_registered=False
     )
 
+    # run local registration across rounds
     registration_factory.register_all_tiles()
 
+    # update datastore state
     datastore_state = datastore.datastore_state
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
@@ -55,12 +59,14 @@ def global_register_data(root_path):
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
 
+    # load tile positions
     for tile_idx, tile_id in enumerate(datastore.tile_ids):
         round_id = datastore.round_ids[0]
         tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
 
+    # convert local tiles from first round to multiscale spatial images
     msims = []
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
         round_id = datastore.round_ids[0]
@@ -97,6 +103,7 @@ def global_register_data(root_path):
         del im_data
         gc.collect()
 
+    # perform registration in three steps, from most downsampling to least.
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
             _ = registration.register(
@@ -126,6 +133,7 @@ def global_register_data(root_path):
                 post_registration_do_quality_filter=True,
             )
 
+    # extract and save transformations into datastore
     for tile_idx, msim in enumerate(msims):
         affine = msi_utils.get_transform_from_msim(
             msim, transform_key="translation_registered"
@@ -145,6 +153,7 @@ def global_register_data(root_path):
             tile=tile_idx,
         )
 
+    # perform and save downsampled fusion
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         fused_sim = fusion.fuse(
             [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
@@ -181,6 +190,7 @@ def global_register_data(root_path):
         del fused_sim
         gc.collect()
 
+    # update datastore state
     datastore_state = datastore.datastore_state
     datastore_state.update({"GlobalRegistered": True})
     datastore_state.update({"Fused": True})
@@ -188,6 +198,6 @@ def global_register_data(root_path):
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/qi2lab/20241012_OB_22bit_MERFISH")
+    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
     local_register_data(root_path)
     global_register_data(root_path)

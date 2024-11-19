@@ -769,6 +769,7 @@ class qi2labDataStore:
                 "ri",
                 "exp_order",
                 "codebook",
+                "num_bits"
             ]
             if self._datastore_state["Version"] == 0.3:
                 keys_to_check.append("microscope_type")
@@ -1170,9 +1171,14 @@ class qi2labDataStore:
             ):
                 raise Exception("mtx output missing.")
 
-        self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
-        self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
-        self._julia_threads = int(self._datastore_state["JuliaThreads"])
+        try:
+            self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
+            self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
+            self._julia_threads = int(self._datastore_state["JuliaThreads"])
+        except Exception:
+            self._baysor_path = r""
+            self._baysor_options = r""
+            self._julia_threads = 1
 
     def load_codebook_parsed(
         self,
