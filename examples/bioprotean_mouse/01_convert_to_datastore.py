@@ -483,7 +483,7 @@ if __name__ == "__main__":
         r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
     baysor_options_path = Path(
-        r"/home/qi2lab/Documents/github/merfish3d-analysis/qi2lab.toml"
+        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/bioprotean_mouse/bioprotean_mouse.toml"
     )
     julia_threads = 20
 

@@ -5,12 +5,11 @@ z = "z_location"
 gene = "feature_name"
 min_molecules_per_gene = 1
 exclude_genes = "Blank*"
-min_molecules_per_cell = 10
+min_molecules_per_cell = 20
 
 [segmentation]
-scale = 15.0
-scale_std = "25%" 
-iters = 2000
+unassigned_prior_label = "0"
+prior_segmentation_confidence = 0.7
 
 [plotting]
 min_pixels_per_cell = 15 # Number of pixels per cell of minimal size, used to estimate size of the final plot. For most protocols values around 7-30 give enough visualization quality. Default: 15

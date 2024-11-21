@@ -13,7 +13,7 @@ def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
     ufish_threshold: float = 0.5,
-    fdr_target: float = 0.05,
+    fdr_target: float = 0.2,
     run_baysor: bool = True,
 ):
     """Perform pixel decoding.
@@ -29,7 +29,7 @@ def decode_pixels(
     ufish_threshold : float
         threshold to accept ufish prediction. Deafult = 0.5
     fdr_target : float
-        false discovery rate (FDR) target. Default = .05
+        false discovery rate (FDR) target. Default = .2
     run_baysor : bool
         flag to run Baysor segmentation. Default = True
     """
@@ -55,7 +55,7 @@ def decode_pixels(
     )
 
     decoder.decode_all_tiles(
-        assign_to_cells=False,
+        assign_to_cells=True,
         prep_for_baysor=True,
         minimum_pixels=minimum_pixels_per_RNA,
         fdr_target=fdr_target,
