@@ -25,7 +25,6 @@ from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
 from itertools import compress
 from typing import Optional
 
-
 def convert_data(
     root_path: Path,
     baysor_binary_path: Path,
@@ -475,7 +474,6 @@ def convert_data(
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
-
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")

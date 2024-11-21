@@ -10,9 +10,7 @@ from merfish3danalysis.postprocess.DataRegistration import DataRegistration
 from pathlib import Path
 import numpy as np
 import gc
-
 from tqdm import tqdm
-
 
 def local_register_data(root_path):
     """Register each tile across rounds in local coordinates.
@@ -195,7 +193,6 @@ def global_register_data(root_path):
     datastore_state.update({"GlobalRegistered": True})
     datastore_state.update({"Fused": True})
     datastore.datastore_state = datastore_state
-
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")

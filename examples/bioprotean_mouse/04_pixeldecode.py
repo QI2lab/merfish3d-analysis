@@ -8,7 +8,6 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
 from pathlib import Path
 
-
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
@@ -37,9 +36,9 @@ def decode_pixels(
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    
     merfish_bits = datastore.num_bits
 
+    # initialize decodor class
     decoder = PixelDecoder(
         datastore=datastore, 
         use_mask=False, 
@@ -47,6 +46,7 @@ def decode_pixels(
         verbose=1
     )
 
+    # optimize normalization weights through iterative decoding and update
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=10,
         n_iterations=10,
@@ -54,6 +54,7 @@ def decode_pixels(
         ufish_threshold=ufish_threshold,
     )
 
+    # decode all tiles using iterative normalization weights
     decoder.decode_all_tiles(
         assign_to_cells=True,
         prep_for_baysor=True,
@@ -62,10 +63,10 @@ def decode_pixels(
         ufish_threshold=ufish_threshold,
     )
 
+    # resegment data using baysor and cellpose prior assignments
     if run_baysor:
         datastore.run_baysor()
         datastore.save_mtx()
-
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
