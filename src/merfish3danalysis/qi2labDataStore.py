@@ -2833,7 +2833,7 @@ class qi2labDataStore:
         except Exception:
             print("Error saving fused image.")
             return None
-
+        
     def load_local_decoded_spots(
         self,
         tile: Union[int, str],
@@ -3045,16 +3045,25 @@ class qi2labDataStore:
         except subprocess.CalledProcessError as e:
             print("Baysor failed with:", e)
         
-        run_baysor_options = r"run -p -c " +str(self._baysor_options)
-        command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
-            str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv :cell_id"
-                    
+        # first try to run Baysor assuming that prior segmentations are present               
         try:
+            run_baysor_options = r"run -p -c " +str(self._baysor_options)
+            command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
+                str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv :cell_id"
             result = subprocess.run(command, shell=True, check=True)
             print("Baysor finished with return code:", result.returncode)
-        except subprocess.CalledProcessError as e:
-            print("Baysor failed with:", e)
-
+        except subprocess.CalledProcessError:
+            # then fall back and run without prior segmentations.
+            # IMPORTANT: the .toml file has to be defined correctly for this to work!
+            try:
+                run_baysor_options = r"run -p -c " +str(self._baysor_options)
+                command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
+                    str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
+                result = subprocess.run(command, shell=True, check=True)
+                print("Baysor finished with return code:", result.returncode)
+            except subprocess.CalledProcessError as e:
+                print("Baysor failed with:", e)
+                
     def load_global_baysor_filtered_spots(
         self,
     ) -> Optional[pd.DataFrame]:
