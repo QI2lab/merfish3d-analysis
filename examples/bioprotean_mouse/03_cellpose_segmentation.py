@@ -7,8 +7,7 @@ helpful to see it split out for now.
 IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
 then fill in the dictionary at the bottom of the script.
 
-Shepherd 2024/11 - rework script to accept parameters
-Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
+Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore

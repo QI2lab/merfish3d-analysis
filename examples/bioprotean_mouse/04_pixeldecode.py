@@ -1,6 +1,7 @@
 """
-Decode using qi2lab GPU decoder
+Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
+Shepherd 2024/1 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
@@ -26,9 +27,13 @@ def decode_pixels(
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
     ufish_threshold : float
-        threshold to accept ufish prediction. Deafult = 0.5
+        threshold to accept ufish prediction. Default = 0.5
     fdr_target : float
         false discovery rate (FDR) target. Default = .2
+        NOTE: This is higher than usual, but we are finding that .05 is too 
+        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we 
+        have implemented. Ongoing effort to fully understand this issue using 
+        synthetic data.
     run_baysor : bool
         flag to run Baysor segmentation. Default = True
     """

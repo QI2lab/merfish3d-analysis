@@ -9,7 +9,7 @@ extract the correct parameters.
 
 Required user parameters for system dependent variables are at end of script.
 
-Shepherd 2024/11 - small changes to make versioning easier.
+Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 

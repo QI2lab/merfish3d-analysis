@@ -1,7 +1,8 @@
 """
-Perform registration on Human OB qi2labdatastore.
+Perform registration on Human OB qi2labdatastore. By default creates a max 
+projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
-Shepherd 2024/11 - rework script to accept parameters in registration functions
+Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
