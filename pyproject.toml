@@ -16,9 +16,9 @@ authors = [
 dynamic = ["version"]
 dependencies = ["numpy", "tifffile", "zarr", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
-                "tqdm", "pandas", "ndstorage",
+                "tqdm", "ndstorage",
                 "scikit-image", "pyarrow", "tbb", "shapely",
-                "imbalanced-learn", "scikit-learn", "dask[array]", "rtree",
+                "imbalanced-learn", "scikit-learn", "rtree",
                 "ryomen", "tensorstore",
                 "pycudadecon @ git+https://github.com/tlambert03/pycudadecon@main",
                 "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
