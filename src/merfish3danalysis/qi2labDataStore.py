@@ -357,8 +357,12 @@ class qi2labDataStore:
     
     @baysor_path.setter
     def baysor_path(self, value: Union[Path,str]):
-        self._baysor_path = Path(value)
-        self._datastore_state["BaysorPath"] = str(self._baysor_path)
+        if value is None:
+            self._baysor_path = None
+            self._datastore_state["BaysorPath"] = None
+        else:
+            self._baysor_path = Path(value)
+            self._datastore_state["BaysorPath"] = str(self._baysor_path)
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     @property
@@ -368,8 +372,12 @@ class qi2labDataStore:
     
     @baysor_options.setter
     def baysor_options(self, value: Union[Path,str]):
-        self._baysor_options = Path(value)
-        self._datastore_state["BaysorOptions"] = str(self._baysor_options)
+        if value is None:
+            self._baysor_path = None
+            self._datastore_state["BaysorPath"] = None
+        else:
+            self._baysor_options = Path(value)
+            self._datastore_state["BaysorOptions"] = str(self._baysor_options)
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     @property

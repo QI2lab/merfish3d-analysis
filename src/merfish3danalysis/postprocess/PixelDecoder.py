@@ -760,6 +760,7 @@ class PixelDecoder:
         origin: np.ndarray,
         affine: np.ndarray,
     ) -> np.ndarray:
+
         physical_space_point = pixel_space_point * spacing + origin
         registered_space_point = (
             np.array(affine) @ np.array(list(physical_space_point) + [1])
@@ -1535,13 +1536,14 @@ class PixelDecoder:
         self,
         n_random_tiles: int = 10,
         n_iterations: int = 10,
-        minimum_pixels: float = 9.0,
-        ufish_threshold: float = 0.6,
+        minimum_pixels: float = 3.0,
+        ufish_threshold: float = 0.25,
+        lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
     ):
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
 
-        if len(self._datastore.tile_ids) > n_random_tiles:
+        if len(self._datastore.tile_ids) > n_random_tiles and not(n_random_tiles==1):
             random_tiles = sample(range(len(self._datastore.tile_ids)), n_random_tiles)
         else:
             random_tiles = range(len(self._datastore.tile_ids))
@@ -1569,6 +1571,7 @@ class PixelDecoder:
                 self.decode_one_tile(
                     tile_idx=tile_idx,
                     display_results=False,
+                    lowpass_sigma=lowpass_sigma,
                     minimum_pixels=minimum_pixels,
                     ufish_threshold=ufish_threshold,
                     use_normalization=use_normalization,

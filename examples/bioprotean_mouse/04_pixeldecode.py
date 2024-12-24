@@ -75,4 +75,4 @@ def decode_pixels(
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    decode_pixels(root_path=root_path)
+    decode_pixels(root_path=root_path,run_baysor=False)
