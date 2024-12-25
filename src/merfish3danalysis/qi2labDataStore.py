@@ -55,6 +55,13 @@ class qi2labDataStore:
 
     @datastore_state.setter
     def datastore_state(self, value: dict):
+        """Set the datastore state.
+
+        Parameters
+        ----------
+        value : dict
+            New datastore state.
+        """
         if not hasattr(self, "_datastore_state") or self._datastore_state is None:
             self._datastore_state = value
         else:
@@ -69,6 +76,13 @@ class qi2labDataStore:
 
     @microscope_type.setter
     def microscope_type(self, value: str):
+        """Set the microscope type.
+
+        Parameters
+        ----------
+        value : str
+            New microscope type.
+        """
         self._microscope_type = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -83,6 +97,13 @@ class qi2labDataStore:
 
     @camera_model.setter
     def camera_model(self, value: str):
+        """Set the camera model.
+
+        Parameters
+        ----------
+        value : str
+            New camera model.
+        """
         self._camera_model = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -97,6 +118,13 @@ class qi2labDataStore:
 
     @num_rounds.setter
     def num_rounds(self, value: int):
+        """Set the number of rounds.
+
+        Parameters
+        ----------
+        value : int
+            New number of rounds.
+        """
         self._num_rounds = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -105,6 +133,7 @@ class qi2labDataStore:
         
     @property
     def num_bits(self) -> int:
+        """Number of bits."""
         return getattr(self, "_num_bits", None)
 
     @property
@@ -115,6 +144,13 @@ class qi2labDataStore:
 
     @num_tiles.setter
     def num_tiles(self, value: int):
+        """Set the number of tiles.
+
+        Parameters
+        ----------
+        value : int
+            New number of tiles.
+        """
         self._num_tiles = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -133,6 +169,13 @@ class qi2labDataStore:
 
     @channels_in_data.setter
     def channels_in_data(self, value: Collection[int]):
+        """Set the channels in the data.
+
+        Parameters
+        ----------
+        value : Collection[int]
+            New channels in data (int values starting from zero).
+        """
         self._channels_in_data = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -141,12 +184,25 @@ class qi2labDataStore:
 
     @property
     def tile_overlap(self) -> Optional[float]:
-        """XY tile overlap."""
+        """XY tile overlap.
+        
+        Returns
+        -------
+        tile_overlap : float
+            XY tile overlap.
+        """
 
         return getattr(self, "_tile_overlap", None)
 
     @tile_overlap.setter
     def tile_overlap(self, value: float):
+        """Set the tile overlap.
+
+        Parameters
+        ----------
+        value : float
+            New tile overlap.
+        """
         self._tile_overlap = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -155,12 +211,25 @@ class qi2labDataStore:
 
     @property
     def binning(self) -> Optional[int]:
-        """Camera binning."""
+        """Camera binning.
+        
+        Returns
+        -------
+        binning : int
+            Camera binning.
+        """
 
         return getattr(self, "_binning", None)
 
     @binning.setter
     def binning(self, value: int):
+        """Set the camera binning.
+
+        Parameters
+        ----------
+        value : int
+            New camera binning.
+        """
         self._binning = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -169,12 +238,24 @@ class qi2labDataStore:
 
     @property
     def e_per_ADU(self) -> Optional[float]:
-        """Electrons per camera ADU."""
+        """Electrons per camera ADU.
+        
+        Returns
+        -------
+        e_per_ADU : float
+            Electrons per camera ADU."""
 
         return getattr(self, "_e_per_ADU", None)
 
     @e_per_ADU.setter
     def e_per_ADU(self, value: float):
+        """Set the camera conversion (e- per ADU).
+
+        Parameters
+        ----------
+        value : float
+            New camera conversion (e- per ADU).
+        """
         self._e_per_ADU = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -183,12 +264,26 @@ class qi2labDataStore:
 
     @property
     def na(self) -> Optional[float]:
-        """Detection objective numerical aperture (NA)."""
+        """Detection objective numerical aperture (NA).
+        
+        Returns
+        -------
+        na : float
+            Detection objective numerical aperture (NA).
+        """
 
         return getattr(self, "_na", None)
 
     @na.setter
     def na(self, value: float):
+        """Set detection objective numerical aperture (NA).
+
+        Parameters
+        ----------
+        value: float
+            New detection objective numerical aperture (NA)
+        """
+
         self._na = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -197,12 +292,24 @@ class qi2labDataStore:
 
     @property
     def ri(self) -> Optional[float]:
-        """Detection objective refractive index (RI)."""
+        """Detection objective refractive index (RI).
+        
+        Returns
+        -------
+        ri : float
+            Detection objective refractive index (RI)."""
 
         return getattr(self, "_ri", None)
 
     @ri.setter
     def ri(self, value: float):
+        """Set detection objective refractive index (RI).
+
+        Parameters
+        ----------
+        value: float
+            New detection objective refractive index (RI)
+        """
         self._ri = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -211,12 +318,26 @@ class qi2labDataStore:
 
     @property
     def noise_map(self) -> Optional[ArrayLike]:
-        """Camera noise image."""
+        """Camera noise image.
+        
+        Returns
+        -------
+        noise_map : ArrayLike
+            Camera noise image.
+        """
 
         return getattr(self, "_noise_map", None)
 
     @noise_map.setter
     def noise_map(self, value: ArrayLike):
+        """Set the camera noise image.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New camera noise image.
+        """
+
         self._noise_map = value
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("noise_map"))
 
@@ -227,18 +348,31 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future=False,
             )
-        except Exception as e:
-            print(e)
+        except (IOError, OSError, zarr.errors.ZarrError):
             print(r"Could not access calibrations.zarr/noise_map")
 
     @property
     def channel_shading_maps(self) -> Optional[ArrayLike]:
-        """Channel shaiding images."""
+        """Channel shaiding images.
+        
+        Returns
+        -------
+        channel_shading_maps : ArrayLike
+            Channel shading images.
+        """
 
         return getattr(self, "_shading_maps", None)
 
     @channel_shading_maps.setter
     def channel_shading_maps(self, value: ArrayLike):
+        """Set the channel shading images.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New channel shading images.
+        """
+        
         self._shading_maps = value
         current_local_zarr_path = str(
             self._calibrations_zarr_path / Path("shading_maps")
@@ -251,16 +385,31 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future=False,
             )
-        except Exception:
+        except (IOError, OSError, zarr.errors.ZarrError):
             print(r"Could not access calibrations.zarr/shading_maps")
 
     @property
     def channel_psfs(self) -> Optional[ArrayLike]:
-        """Channel point spread functions (PSF)."""
+        """Channel point spread functions (PSF).
+        
+        Return
+        ------
+        channel_psfs : ArrayLike
+            Channel point spread functions (PSF).
+        """
+
         return getattr(self, "_psfs", None)
 
     @channel_psfs.setter
     def channel_psfs(self, value: ArrayLike):
+        """Set the channel point spread functions (PSF).
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New channel point spread functions (PSF).
+        """
+
         self._psfs = value
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("psf_data"))
 
@@ -271,17 +420,31 @@ class qi2labDataStore:
                 self._zarrv2_spec.copy(),
                 return_future=False,
             )
-        except Exception:
+        except (IOError, ValueError):
             print(r"Could not access calibrations.zarr/psf_data")
 
     @property
     def experiment_order(self) -> Optional[pd.DataFrame]:
-        """Round and bit order."""
+        """Round and bit order.
+        
+        Returns
+        -------
+        experiment_order : pd.DataFrame
+            Round and bit order.
+        """
 
         return getattr(self, "_experiment_order", None)
 
     @experiment_order.setter
     def experiment_order(self, value: Union[ArrayLike, pd.DataFrame]):
+        """Set the round and bit order.
+        
+        Parameters
+        ----------
+        value : Union[ArrayLike, pd.DataFrame]
+            New round and bit order.
+        """
+
         if isinstance(value, pd.DataFrame):
             self._experiment_order = value
         else:
@@ -317,7 +480,13 @@ class qi2labDataStore:
 
     @property
     def codebook(self) -> Optional[pd.DataFrame]:
-        """Codebook."""
+        """Codebook.
+        
+        Returns
+        -------
+        codebook : pd.DataFrame
+            Codebook.
+        """
 
         data = getattr(self, "_codebook", None)
 
@@ -330,6 +499,14 @@ class qi2labDataStore:
 
     @codebook.setter
     def codebook(self, value: pd.DataFrame):
+        """Set the codebook.
+        
+        Parameters
+        ----------
+        value : pd.DataFrame
+            New codebook.
+        """
+
         self._codebook = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -338,12 +515,26 @@ class qi2labDataStore:
 
     @property
     def voxel_size_zyx_um(self) -> Optional[ArrayLike]:
-        """Voxel size, zyx order (microns)."""
+        """Voxel size, zyx order (microns).
+        
+        Returns
+        -------
+        voxel_size_zyx_um : ArrayLike
+            Voxel size, zyx order (microns).
+        """
 
         return getattr(self, "_voxel_size_zyx_um", None)
 
     @voxel_size_zyx_um.setter
     def voxel_size_zyx_um(self, value: ArrayLike):
+        """Set the voxel size, zyx order (microns).
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New voxel size, zyx order (microns).
+        """
+        
         self._voxel_size_zyx_um = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -352,11 +543,26 @@ class qi2labDataStore:
         
     @property
     def baysor_path(self) -> Union[Path,str]:
-        """Baysor path"""
+        """Baysor path
+        
+        Returns
+        -------
+        baysor_path : Union[Path,str]
+            Baysor path.
+        """
+
         return getattr(self,"_baysor_path",None)
     
     @baysor_path.setter
     def baysor_path(self, value: Union[Path,str]):
+        """Set the baysor path.
+        
+        Parameters
+        ----------
+        value : Union[Path,str]
+            New baysor path.
+        """
+        
         if value is None:
             self._baysor_path = None
             self._datastore_state["BaysorPath"] = None
@@ -367,11 +573,25 @@ class qi2labDataStore:
 
     @property
     def baysor_options(self) -> Union[Path,str]:
-        """Baysor options"""
+        """Baysor options
+        
+        Returns
+        -------
+        baysor_options : Union[Path,str]
+            Baysor options.
+        """
         return getattr(self,"_baysor_options",None)
     
     @baysor_options.setter
     def baysor_options(self, value: Union[Path,str]):
+        """Set the baysor options.
+        
+        Parameters
+        ----------
+        value : Union[Path,str]
+            New baysor options.
+        """
+
         if value is None:
             self._baysor_path = None
             self._datastore_state["BaysorPath"] = None
@@ -382,18 +602,39 @@ class qi2labDataStore:
 
     @property
     def julia_threads(self) -> int:
-        """Julia thread number"""
+        """Julia thread number
+        
+        Returns
+        -------
+        julia_threads : int
+            Julia thread number.
+        """
+
         return getattr(self,"_julia_threads",None)
     
     @julia_threads.setter
     def julia_threads(self, value: int):
+        """Set the julia thread number.
+        
+        Parameters
+        ----------
+        value : int
+            New julia thread number.
+        """
+
         self._julia_threads = value
         self._datastore_state["JuliaThreads"] = str(self._julia_threads)
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
         
     @property
     def global_normalization_vector(self) -> Optional[ArrayLike]:
-        """Global normalization vector."""
+        """Global normalization vector.
+        
+        Returns
+        -------
+        global_normalization_vector : ArrayLike
+            Global normalization vector.
+        """
 
         value = getattr(self, "_global_normalization_vector", None)
         if value is None:
@@ -405,7 +646,7 @@ class qi2labDataStore:
                     calib_zattrs["global_normalization_vector"], dtype=np.float32
                 )
                 return value
-            except Exception:
+            except KeyError:
                 print("Global normalization vector not calculated.")
                 return None
         else:
@@ -413,6 +654,14 @@ class qi2labDataStore:
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike):
+        """Set the global normalization vector.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New global normalization vector.
+        """
+
         self._global_normalization_vector = np.asarray(value, dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -423,7 +672,13 @@ class qi2labDataStore:
 
     @property
     def global_background_vector(self) -> Optional[ArrayLike]:
-        """Global background vector."""
+        """Global background vector.
+        
+        Returns
+        -------
+        global_background_vector : ArrayLike
+            Global background vector.
+        """
 
         value = getattr(self, "_global_background_vector", None)
         if value is None:
@@ -434,7 +689,7 @@ class qi2labDataStore:
                     calib_zattrs["global_background_vector"], dtype=np.float32
                 )
                 return value
-            except Exception:
+            except KeyError:
                 print("Global background vector not calculated.")
                 return None
         else:
@@ -442,6 +697,14 @@ class qi2labDataStore:
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike):
+        """Set the global background vector.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New global background vector.
+        """
+
         self._global_background_vector = np.asarray(value, dtype=np.float32)
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -452,7 +715,13 @@ class qi2labDataStore:
 
     @property
     def iterative_normalization_vector(self) -> Optional[ArrayLike]:
-        """Iterative normalization vector."""
+        """Iterative normalization vector.
+        
+        Returns
+        -------
+        iterative_normalization_vector : ArrayLike
+            Iterative normalization vector.
+        """
 
         value = getattr(self, "_iterative_normalization_vector", None)
         if value is None:
@@ -462,7 +731,7 @@ class qi2labDataStore:
                 value = np.asarray(
                     calib_zattrs["iterative_normalization_vector"], dtype=np.float32
                 )
-            except Exception:
+            except KeyError:
                 value = None
 
             if value is None:
@@ -475,6 +744,14 @@ class qi2labDataStore:
 
     @iterative_normalization_vector.setter
     def iterative_normalization_vector(self, value: ArrayLike):
+        """Set the iterative normalization vector.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New iterative normalization vector.
+        """
+
         self._iterative_normalization_vector = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -485,7 +762,13 @@ class qi2labDataStore:
 
     @property
     def iterative_background_vector(self) -> Optional[ArrayLike]:
-        """Iterative background vector."""
+        """Iterative background vector.
+        
+        Returns
+        -------
+        iterative_background_vector : ArrayLike
+            Iterative background vector.
+        """
 
         value = getattr(self, "_iterative_background_vector", None)
         if value is None:
@@ -495,7 +778,7 @@ class qi2labDataStore:
                 value = np.asarray(
                     calib_zattrs["iterative_background_vector"], dtype=np.float32
                 )
-            except Exception:
+            except KeyError:
                 value = None
             if value is None:
                 print("Iterative background vector not calculated.")
@@ -507,6 +790,14 @@ class qi2labDataStore:
 
     @iterative_background_vector.setter
     def iterative_background_vector(self, value: ArrayLike):
+        """Set the iterative background vector.
+        
+        Parameters
+        ----------
+        value : ArrayLike
+            New iterative background vector.
+        """
+
         self._iterative_background_vector = value
         zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
         calib_zattrs = self._load_from_json(zattrs_path)
@@ -517,24 +808,45 @@ class qi2labDataStore:
 
     @property
     def tile_ids(self) -> Optional[Collection[str]]:
-        """Tile IDs."""
+        """Tile IDs.
+        
+        Returns
+        -------
+        tile_ids : Collection[str]
+            Tile IDs.
+        """
 
         return getattr(self, "_tile_ids", None)
 
     @property
     def round_ids(self) -> Optional[Collection[str]]:
-        """Round IDs."""
+        """Round IDs.
+        
+        Returns
+        -------
+        round_ids : Collection[str]
+            Round IDs.
+        """
 
         return getattr(self, "_round_ids", None)
 
     @property
     def bit_ids(self) -> Optional[Collection[str]]:
-        """Bit IDs."""
+        """Bit IDs.
+        
+        Returns
+        -------
+        bit_ids : Collection[str]
+            Bit IDs.
+        """
 
         return getattr(self, "_bit_ids", None)
 
     def _init_datastore(self):
-        """Initialize datastore."""
+        """Initialize datastore.
+        
+        Create directory structure and initialize datastore state.
+        """
 
         self._datastore_path.mkdir(parents=True)
         self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations.zarr")
@@ -588,7 +900,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _get_kvstore_key(path: Union[Path, str]) -> dict:
-        """Convert datastore location to tensorstore kvstore key"""
+        """Convert datastore location to tensorstore kvstore key.
+        
+        Parameters
+        ----------
+        path : Union[Path, str]
+            Datastore location.
+            
+        Returns
+        -------
+        kvstore_key : dict
+            Tensorstore kvstore key.
+        """
+
         path_str = str(path)
         if path_str.startswith("s3://") or "s3.amazonaws.com" in path_str:
             return {"driver": "s3", "path": path_str}
@@ -603,7 +927,18 @@ class qi2labDataStore:
 
     @staticmethod
     def _load_from_json(dictionary_path: Union[Path, str]) -> dict:
-        """Load json as dictionary."""
+        """Load json as dictionary.
+        
+        Parameters
+        ----------
+        dictionary_path : Union[Path, str]
+            Path to json file.
+            
+        Returns
+        -------
+        dictionary : dict
+            Dictionary from json file.
+        """
 
         try:
             with open(dictionary_path, "r") as f:
@@ -614,14 +949,33 @@ class qi2labDataStore:
 
     @staticmethod
     def _save_to_json(dictionary: dict, dictionary_path: Union[Path, str]):
-        """Save dictionary to json."""
+        """Save dictionary to json.
+
+        Parameters
+        ----------
+        data : dict
+            The data to be saved.
+        path : Union[Path,str]
+            The path to the JSON file where the data will be saved.
+        """
 
         with open(dictionary_path, "w") as file:
             json.dump(dictionary, file, indent=4)
 
     @staticmethod
     def _load_from_microjson(dictionary_path: Union[Path, str]) -> dict:
-        """Load cell outlines outlines microjson as dictionary"""
+        """Load cell outlines outlines microjson as dictionary.
+        
+        Parameters
+        ----------
+        dictionary_path : Union[Path, str]
+            Path to microjson file.
+        
+        Returns
+        -------
+        outlines : dict
+            Cell outlines dictionary.
+        """
 
         try:
             with open(dictionary_path, "r") as f:
@@ -637,7 +991,15 @@ class qi2labDataStore:
 
     @staticmethod
     def _check_for_zarr_array(kvstore: Union[Path, str], spec: dict):
-        """Check if zarr existing using tensortore."""
+        """Check if zarr array exists using Tensortore.
+        
+        Parameters
+        ----------
+        kvstore : Union[Path, str]
+            Datastore location.
+        spec : dict
+            Zarr specification.
+        """
 
         current_zarr = ts.open(
             {
@@ -655,6 +1017,20 @@ class qi2labDataStore:
         """Return tensorstore array from zarr
 
         Defaults to returning future result.
+
+        Parameters
+        ----------
+        kvstore : dict
+            Tensorstore kvstore specification.
+        spec : dict
+            Tensorstore zarr specification.
+        return_future : bool
+            Return future (True) or immediately read (False).
+
+        Returns
+        -------
+        array : ArrayLike
+            Delayed (future) or immediate array.
         """
 
         current_zarr = ts.open(
@@ -681,7 +1057,25 @@ class qi2labDataStore:
         """Save array to zarr using tensorstore.
 
         Defaults to returning future result.
+
+        Parameters
+        ----------
+        array : ArrayLike
+            Array to save.
+        kvstore : dict
+            Tensorstore kvstore specification.
+        spec : dict
+            Tensorstore zarr specification.
+        return_future : Optional[bool]
+            Return future (True) or immediately write (False).
+
+        Returns
+        -------
+        write_future : Optional[ArrayLike]
+            Delayed (future) if return_future is True.
         """
+
+        # check datatype
         if str(array.dtype) == "uint8":
             array_dtype = "<u1"
         elif str(array.dtype) == "uint16":
@@ -694,6 +1088,7 @@ class qi2labDataStore:
             print("Unsupported data type: " + str(array.dtype))
             return None
 
+        # check array dimension
         spec["metadata"]["shape"] = array.shape
         if len(array.shape) == 2:
             spec["metadata"]["chunks"] = [array.shape[0], array.shape[1]]
@@ -718,19 +1113,37 @@ class qi2labDataStore:
             else:
                 write_future.result()
                 return None
-        except Exception as e:
-            print(e)
+        except (IOError, OSError, concurrent.futures.TimeoutError):
             print("Error writing zarr array.")
 
     @staticmethod
     def _load_from_parquet(parquet_path: Union[Path, str]) -> pd.DataFrame:
-        """Load dataframe from parquet."""
+        """Load dataframe from parquet.
+        
+        Parameters
+        ----------
+        parquet_path : Union[Path, str]
+            Path to parquet file.
+            
+        Returns
+        -------
+        df : pd.DataFrame
+            Dataframe from parquet file.
+        """
 
         return pd.read_parquet(parquet_path)
 
     @staticmethod
     def _save_to_parquet(df: pd.DataFrame, parquet_path: Union[Path, str]):
-        """Save dataframe to parquet."""
+        """Save dataframe to parquet.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Dataframe to save.
+        parquet_path : Union[Path, str]
+            Path to parquet file.
+        """
 
         df.to_parquet(parquet_path)
 
@@ -1191,7 +1604,15 @@ class qi2labDataStore:
     def load_codebook_parsed(
         self,
     ) -> Optional[tuple[Collection[str], ArrayLike]]:
-        """Load and split codebook into gene_ids and codebook matrix."""
+        """Load and split codebook into gene_ids and codebook matrix.
+        
+        Returns
+        -------
+        gene_ids : Collection[str]
+            Gene IDs.
+        codebook_matrix : ArrayLike
+            Codebook matrix.
+        """
 
         try:
             data = getattr(self, "_codebook", None)
@@ -1214,7 +1635,13 @@ class qi2labDataStore:
         self,
         tile: Union[int, str],
     ):
-        """Initialize directory structure for a tile"""
+        """Initialize directory structure for a tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        """
 
         if getattr(self, "_experiment_order", None) is None:
             print("Assign experimental order before creating tiles.")
@@ -1295,7 +1722,20 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ) -> Optional[Sequence[int]]:
-        """Load readout bits linked to fidicual round for one tile."""
+        """Load readout bits linked to fidicual round for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+        
+        Returns
+        -------
+        bit_linker : Optional[Sequence[int]]
+            Readout bits linked to fidicual round for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1349,7 +1789,17 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ):
-        """Save readout bits linked to fidicual round for one tile."""
+        """Save readout bits linked to fidicual round for one tile.
+        
+        Parameters
+        ----------
+        bit_linker : Sequence[int]
+            Readout bits linked to fidicual round for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1403,7 +1853,20 @@ class qi2labDataStore:
         tile: Union[int, str],
         bit: Union[int, str],
     ) -> Optional[Sequence[int]]:
-        """Load fidicual round linked to readout bit for one tile."""
+        """Load fidicual round linked to readout bit for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        
+        Returns
+        -------
+        round_linker : Optional[Sequence[int]]
+            Fidicual round linked to readout bit for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1457,7 +1920,17 @@ class qi2labDataStore:
         tile: Union[int, str],
         bit: Union[int, str],
     ):
-        """Save fidicual round linker attribute to readout bit for one tile."""
+        """Save fidicual round linker attribute to readout bit for one tile.
+        
+        Parameters
+        ----------
+        round_linker : int
+            Fidicual round linked to readout bit for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1511,7 +1984,20 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ) -> Optional[ArrayLike]:
-        """Load tile stage position for one tile."""
+        """Load tile stage position for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+        
+        Returns
+        -------
+        stage_zyx_um : Optional[ArrayLike]
+            Tile stage position for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1565,7 +2051,22 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ):
-        """Save tile stage position for one tile."""
+        """Save tile stage position for one tile.
+        
+        Parameters
+        ----------
+        stage_zyx_um : ArrayLike
+            Tile stage position for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+        
+        Returns
+        -------
+        stage_zyx_um : Optional[ArrayLike]
+            Tile stage position for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -1620,7 +2121,22 @@ class qi2labDataStore:
         round: Optional[Union[int, str]] = None,
         bit: Optional[Union[int, str]] = None,
     ) -> Optional[tuple[float, float]]:
-        """Load wavelengths for fidicual OR readout bit for one tile."""
+        """Load wavelengths for fidicual OR readout bit for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Optional[Union[int, str]]   
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        
+        Returns
+        -------
+        wavelengths_um : Optional[tuple[float, float]]
+            Wavelengths for fidicual OR readout bit for one tile.
+        """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -1703,7 +2219,24 @@ class qi2labDataStore:
         round: Optional[Union[int, str]] = None,
         bit: Optional[Union[int, str]] = None,
     ) -> Optional[tuple[float, float]]:
-        """Save wavelengths for fidicual OR readout bit for one tile."""
+        """Save wavelengths for fidicual OR readout bit for one tile.
+        
+        Parameters
+        ----------
+        wavelengths_um : tuple[float, float]
+            Wavelengths for fidicual OR readout bit for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        
+        Returns
+        -------
+        wavelengths_um : Optional[tuple[float, float]]
+            Wavelengths for fidicual OR readout bit for one tile.
+        """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -1786,7 +2319,24 @@ class qi2labDataStore:
         bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
-        """Load gain and offset corrected image for fiducial OR readout bit for one tile."""
+        """Load gain and offset corrected image for fiducial OR readout bit for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        return_future : Optional[bool]
+            Return future array.
+            
+        Returns
+        -------
+        corrected_image : Optional[ArrayLike]
+            Gain and offset corrected image for fiducial OR readout bit for one tile.
+        """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -1883,7 +2433,29 @@ class qi2labDataStore:
         bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = False,
     ):
-        """Save gain and offset corrected image."""
+        """Save gain and offset corrected image.
+        
+        Parameters
+        ----------
+        image : ArrayLike
+            Local corrected image.
+        tile : Union[int, str]
+            Tile index or tile id.
+        gain_correction : bool
+            Gain correction applied (True) or not (False).
+        hotpixel_correction : bool
+            Hotpixel correction applied (True) or not (False).
+        shading_correction : bool
+            Shading correction applied (True) or not (False).
+        psf_idx : int
+            PSF index.
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        return_future : Optional[bool]
+            Return future array.
+   """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -1985,7 +2557,20 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ) -> Optional[ArrayLike]:
-        """Load calculated rigid registration transform for one round and tile."""
+        """Load calculated rigid registration transform for one round and tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+        
+        Returns
+        -------
+        rigid_xform_xyz_px : Optional[ArrayLike]
+            Local rigid registration transform for one round and tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2041,7 +2626,22 @@ class qi2labDataStore:
         tile: Union[int, str],
         round: Union[int, str],
     ) -> Optional[ArrayLike]:
-        """Save calculated rigid registration transform for one round and tile."""
+        """Save calculated rigid registration transform for one round and tile.
+        
+        Parameters
+        ----------
+        rigid_xform_xyz_px : ArrayLike
+            Local rigid registration transform for one round and tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Union[int, str]
+            Round index or round id.
+            
+        Returns
+        -------
+        rigid_xform_xyz_px : Optional[ArrayLike]
+            Local rigid registration transform for one round and tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2094,7 +2694,24 @@ class qi2labDataStore:
         round: Optional[Union[int, str]],
         return_future: Optional[bool] = True,
     ) -> Optional[tuple[ArrayLike, ArrayLike]]:
-        """Local fidicual optical flow matrix for one round and tile."""
+        """Local fidicual optical flow matrix for one round and tile.
+        
+        Parameters
+        ----------
+        tile : Optional[Union[int, str]]
+            Tile index or tile id.
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        return_future : Optional[bool]
+            Return future array.
+            
+        Returns
+        -------
+        of_xform_px : Optional[ArrayLike]
+            Local fidicual optical flow matrix for one round and tile.
+        downsampling : Optional[ArrayLike]
+            Downsampling factor.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2186,7 +2803,21 @@ class qi2labDataStore:
         round: Union[int, str],
         return_future: Optional[bool] = False,
     ):
-        """Save fidicual optical flow matrix for one round and tile."""
+        """Save fidicual optical flow matrix for one round and tile.
+        
+        Parameters
+        ----------
+        of_xform_px : ArrayLike
+            Local fidicual optical flow matrix for one round and tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        downsampling : Sequence[float]
+            Downsampling factor.
+        round : Union[int, str] 
+            Round index or round id.
+        return_future : Optional[bool]
+            Return future array.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2268,7 +2899,24 @@ class qi2labDataStore:
         bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
-        """Local registered, deconvolved image for fidiculial OR readout bit for one tile."""
+        """Local registered, deconvolved image for fidiculial OR readout bit for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        return_future : Optional[bool]
+            Return future array.
+            
+        Returns
+        -------
+        registered_decon_image : Optional[ArrayLike]
+            Registered, deconvolved image for fidiculial OR readout bit for one tile.
+        """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -2362,7 +3010,23 @@ class qi2labDataStore:
         bit: Optional[Union[int, str]] = None,
         return_future: Optional[bool] = False,
     ):
-        """Save registered, deconvolved image."""
+        """Save registered, deconvolved image.
+        
+        Parameters
+        ----------
+        registered_image : ArrayLike
+            Registered, deconvolved image.
+        tile : Union[int, str]
+            Tile index or tile id.
+        deconvolution : bool
+            Deconvolution applied (True) or not (False).
+        round : Optional[Union[int, str]]
+            Round index or round id.
+        bit : Optional[Union[int, str]]
+            Bit index or bit id.
+        return_future : Optional[bool]
+            Return future array.
+        """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -2463,7 +3127,21 @@ class qi2labDataStore:
         bit: Union[int, str],
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
-        """Load readout bit U-FISH prediction image for one tile."""
+        """Load readout bit U-FISH prediction image for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        return_future : Optional[bool]
+        
+        Returns
+        -------
+        registered_ufish_image : Optional[ArrayLike]
+            U-FISH prediction image for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2529,7 +3207,19 @@ class qi2labDataStore:
         bit: Union[int, str],
         return_future: Optional[bool] = False,
     ):
-        """Save U-FISH prediction image."""
+        """Save U-FISH prediction image.
+        
+        Parameters
+        ----------
+        ufish_image : ArrayLike
+            U-FISH prediction image.
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        return_future : Optional[bool]
+            Return future array.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2587,7 +3277,20 @@ class qi2labDataStore:
         tile: Union[int, str],
         bit: Union[int, str],
     ) -> Optional[pd.DataFrame]:
-        """Load U-FISH spot localizations and features for one tile."""
+        """Load U-FISH spot localizations and features for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        
+        Returns
+        -------
+        ufish_localizations : Optional[pd.DataFrame]
+            U-FISH localizations and features for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2642,7 +3345,17 @@ class qi2labDataStore:
         tile: Union[int, str],
         bit: Union[int, str],
     ):
-        """Save U-FISH localizations and features."""
+        """Save U-FISH localizations and features.
+        
+        Parameters
+        ----------
+        spot_df : pd.DataFrame
+            U-FISH localizations and features.
+        tile : Union[int, str]
+            Tile index or tile id.
+        bit : Union[int, str]
+            Bit index or bit id.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2696,7 +3409,22 @@ class qi2labDataStore:
         self,
         tile: Union[int, str],
     ) -> Optional[tuple[ArrayLike, ArrayLike, ArrayLike]]:
-        """Load global registration transform for one tile."""
+        """Load global registration transform for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+            
+        Returns
+        -------
+        affine_zyx_um : Optional[ArrayLike]
+            Global affine registration transform for one tile.
+        origin_zyx_um : Optional[ArrayLike]
+            Global origin registration transform for one tile.
+        spacing_zyx_um : Optional[ArrayLike]
+            Global spacing registration transform for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2738,6 +3466,19 @@ class qi2labDataStore:
         spacing_zyx_um: ArrayLike,
         tile: Union[int, str],
     ) -> None:
+        """Save global registration transform for one tile.
+        
+        Parameters
+        ----------
+        affine_zyx_um : ArrayLike
+            Global affine registration transform for one tile.
+        origin_zyx_um : ArrayLike
+            Global origin registration transform for one tile.
+        spacing_zyx_um : ArrayLike
+            Global spacing registration transform for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        """
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -2773,7 +3514,24 @@ class qi2labDataStore:
         self,
         return_future: Optional[bool] = True,
     ) -> Optional[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]]:
-        """Load downsampled, fused fidicual image."""
+        """Load downsampled, fused fidicual image.
+        
+        Parameters
+        ----------
+        return_future : Optional[bool]
+            Return future array.
+            
+        Returns
+        -------
+        fused_image : Optional[ArrayLike]
+            Downsampled, fused fidicual image.
+        affine_zyx_um : Optional[ArrayLike]
+            Global affine registration transform for fused image.
+        origin_zyx_um : Optional[ArrayLike]
+            Global origin registration transform for fused image.
+        spacing_zyx_um : Optional[ArrayLike]
+            Global spacing registration transform for fused image.
+        """
 
         current_local_zarr_path = str(
             self._fused_root_path / Path("fused.zarr") / Path("fused_polyDT_iso_zyx")
@@ -2809,7 +3567,23 @@ class qi2labDataStore:
         fusion_type: str = "polyDT",
         return_future: Optional[bool] = False,
     ):
-        """Save downsampled, fused fidicual image."""
+        """Save downsampled, fused fidicual image.
+        
+        Parameters
+        ----------
+        fused_image : ArrayLike
+            Downsampled, fused fidicual image.
+        affine_zyx_um : ArrayLike
+            Global affine registration transform for fused image.
+        origin_zyx_um : ArrayLike
+            Global origin registration transform for fused image.
+        spacing_zyx_um : ArrayLike
+            Global spacing registration transform for fused image.
+        fusion_type : str
+            Type of fusion (polyDT or all_channels).
+        return_future : Optional[bool]
+            Return future array.
+        """
 
         if fusion_type == "polyDT":
             filename = "fused_polyDT_iso_zyx"
@@ -2846,7 +3620,18 @@ class qi2labDataStore:
         self,
         tile: Union[int, str],
     ) -> Optional[pd.DataFrame]:
-        """Load decoded spots and features for one tile."""
+        """Load decoded spots and features for one tile.
+        
+        Parameters
+        ----------
+        tile : Union[int, str]
+            Tile index or tile id.
+        
+        Returns
+        -------
+        tile_features : Optional[pd.DataFrame]
+            Decoded spots and features for one tile.
+        """
 
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
@@ -2880,6 +3665,16 @@ class qi2labDataStore:
         features_df: pd.DataFrame,
         tile: Union[int, str],
     ) -> None:
+        """Save decoded spots and features for one tile.
+
+        Parameters
+        ----------
+        features_df : pd.DataFrame
+            Decoded spots and features for one tile.
+        tile : Union[int, str]
+            Tile index or tile id.
+        """
+
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -2905,7 +3700,13 @@ class qi2labDataStore:
     def load_global_filtered_decoded_spots(
         self,
     ) -> Optional[pd.DataFrame]:
-        """Load all decoded and filtered spots."""
+        """Load all decoded and filtered spots.
+        
+        Returns
+        -------
+        all_tiles_filtered : Optional[pd.DataFrame]
+            All decoded and filtered spots.
+        """
 
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
@@ -2927,6 +3728,14 @@ class qi2labDataStore:
         self,
         filtered_decoded_df: pd.DataFrame,
     ):
+        """Save all decoded and filtered spots.
+        
+        Parameters
+        ----------
+        filtered_decoded_df : pd.DataFrame
+            All decoded and filtered spots.
+        """
+
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
         )
@@ -2943,7 +3752,13 @@ class qi2labDataStore:
     def load_global_cellpose_outlines(
         self,
     ) -> Optional[dict]:
-        """Load Cellpose max projection cell outlines."""
+        """Load Cellpose max projection cell outlines.
+        
+        Returns
+        -------
+        cellpose_outlines : Optional[dict]
+            Cellpose cell mask outlines.
+        """
 
         current_cellpose_outlines_path = (
             self._segmentation_root_path / Path("cellpose") / Path("cell_outlines.json")
@@ -2962,7 +3777,18 @@ class qi2labDataStore:
         self,
         return_future: Optional[bool] = True,
     ) -> Optional[ArrayLike]:
-        """Load Cellpose max projection, downsampled segmentation image."""
+        """Load Cellpose max projection, downsampled segmentation image.
+        
+        Parameters
+        ----------
+        return_future : Optional[bool]
+            Return future array.
+            
+        Returns
+        -------
+        fused_image : Optional[ArrayLike]
+            Cellpose max projection, downsampled segmentation image.
+        """
 
         current_local_zarr_path = str(
             self._segmentation_root_path
@@ -2992,7 +3818,17 @@ class qi2labDataStore:
         downsampling: Sequence[float],
         return_future: Optional[bool] = False,
     ):
-        """Save Cellpose max projection, downsampled segmentation image"""
+        """Save Cellpose max projection, downsampled segmentation image.
+        
+        Parameters
+        ----------
+        cellpose_image : ArrayLike
+            Cellpose max projection, downsampled segmentation image.
+        downsampling : Sequence[float]
+            Downsample factors.
+        return_future : Optional[bool]
+            Return future array.
+        """
 
         current_local_zarr_path = str(
             self._segmentation_root_path
@@ -3023,6 +3859,14 @@ class qi2labDataStore:
             return None
 
     def save_spots_prepped_for_baysor(self, prepped_for_baysor_df: pd.DataFrame):
+        """Save spots prepped for Baysor.
+        
+        Parameters
+        ----------
+        prepped_for_baysor_df : pd.DataFrame
+            Spots prepped for Baysor.
+        """
+
         current_global_filtered_decoded_dir_path = self._datastore_path / Path(
             "all_tiles_filtered_decoded_features"
         )
@@ -3037,6 +3881,11 @@ class qi2labDataStore:
         self._save_to_parquet(prepped_for_baysor_df, current_global_filtered_decoded_path)
         
     def run_baysor(self):
+        """Run Baysor"
+        
+        Assumes that spots are prepped for Baysor and the Baysor path and options are set.
+        """
+
         import subprocess
         
         baysor_input_path = self._datastore_path / Path("all_tiles_filtered_decoded_features") / Path("transcripts.parquet")
@@ -3075,7 +3924,15 @@ class qi2labDataStore:
     def load_global_baysor_filtered_spots(
         self,
     ) -> Optional[pd.DataFrame]:
-        """Load Baysor re-assigned decoded RNA."""
+        """Load Baysor re-assigned decoded RNA.
+        
+        Assumes Baysor has been run.
+        
+        Returns
+        -------
+        baysor_filtered_genes : Optional[pd.DataFrame]
+            Baysor re-assigned decoded RNA.
+        """
 
         current_baysor_spots_path = (
             self._segmentation_root_path
@@ -3092,7 +3949,15 @@ class qi2labDataStore:
     def load_global_baysor_outlines(
         self,
     ) -> Optional[dict]:
-        """Load Baysor cell outlines."""
+        """Load Baysor cell outlines.
+        
+        Assumes Baysor has been run.
+        
+        Returns
+        -------
+        baysor_outlines : Optional[dict]
+            Baysor cell outlines.
+        """
 
         current_baysor_outlines_path = (
             self._segmentation_root_path /  Path("segmentation_polygons_3d.json")
@@ -3106,6 +3971,11 @@ class qi2labDataStore:
             return baysor_outlines
         
     def save_mtx(self):
+        """Save mtx file for downstream analysis.
+        
+        Assumes Baysor has been run.
+        """
+        
         from merfish3danalysis.utils._dataio import create_mtx
 
         baysor_output_path = self._datastore_path / Path("segmentation") / Path("segmentation.csv")
