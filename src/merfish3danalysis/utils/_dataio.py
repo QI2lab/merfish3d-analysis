@@ -1,6 +1,7 @@
 """
 Data I/O functions for qi2lab 3D MERFISH
 
+Shepherd 2024/12 - Docstrings
 Shepherd 2024/07 - Remove native NDTiff reading package and use tifffile/zarr.
                    Trying to remove as much dask dependence as possible.
 """
@@ -109,8 +110,10 @@ def read_fluidics_program(program_path: Union[Path,str]) -> pd.DataFrame:
 
     return df_fluidics
 
-def write_metadata(data_dict: dict, 
-                   save_path: Union[str,Path]) -> None:
+def write_metadata(
+    data_dict: dict, 
+    save_path: Union[str,Path]
+):
     """Write dictionary as CSV file.
 
     Parameters
@@ -119,11 +122,6 @@ def write_metadata(data_dict: dict,
         metadata dictionary
     save_path: Union[str,Path]
         path for file
-    
-    Returns
-    -------
-    None
-
     """
     
     pd.DataFrame([data_dict]).to_csv(save_path)
@@ -144,7 +142,7 @@ def return_data_zarr(dataset_path: Union[Path,str],
 
     Returns
     -------
-    data: NDArray
+    data: ArrayLike
         data stack
     """
     
@@ -161,11 +159,30 @@ def return_data_zarr(dataset_path: Union[Path,str],
     return np.squeeze(data)
     
 def time_stamp():
+    """Generate timestamp string.
+    
+    Returns
+    -------
+    timestamp: str
+        timestamp formatted as string
+    """
+
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
 def create_mtx(baysor_output_path: Union[Path,str], 
                output_dir_path: Union[Path,str], 
                confidence_cutoff: float = 0.7):
+    """Create a sparse matrix in MTX format from Baysor output.
+    
+    Parameters
+    ----------
+    baysor_output_path: Union[Path,str]
+        Path to Baysor output file
+    output_dir_path: Union[Path,str]
+        Path to output directory
+    confidence_cutoff: float
+        Confidence cutoff for transcript assignment
+    """
         
     # Read 5 columns from transcripts Parquet file
     transcripts_df = pd.read_csv(baysor_output_path,
@@ -213,14 +230,40 @@ def write_sparse_mtx(output_dir_path : Union[Path,str],
                      matrix: ArrayLike, 
                      cells: Sequence[str], 
                      features: Sequence[str]):
+    """Write sparse matrix in MTX format.
 
+    Parameters
+    ----------
+    output_dir_path: Union[Path,str]
+        Path to output directory
+    matrix: ArrayLike
+        Sparse matrix
+    cells: Sequence[str]
+        Cell names
+    features: Sequence[str]
+        Feature names
+    """
+    
     sparse_mat = sparse.coo_matrix(matrix.values)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
     write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
     write_tsv(output_dir_path / "features.tsv", [[str(f), str(f), "Blank Codeword" if str(f).startswith("Blank") else "Gene Expression"] for f in features])
     subprocess.run(f"gzip -f {str(output_dir_path)}/*", shell=True)
 
-def write_tsv(filename, data):
+def write_tsv(
+    filename: Union[str, Path], 
+    data: Sequence[Union[str, Sequence[str]]]
+):
+    """Write data to TSV file.
+    
+    Parameters
+    ----------
+    filename: Union[str, Path]
+        Filename
+    data: Sequence[Union[str, Sequence[str]]]
+        Data to write
+    """
+
     with open(filename, 'w', newline='') as tsvfile:
         writer = csv.writer(tsvfile, delimiter='\t', lineterminator='\n')
         for item in data:
