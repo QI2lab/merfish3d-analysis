@@ -28,6 +28,7 @@ import warnings
 import tempfile
 import shutil
 
+# filter warning from skimage
 warnings.filterwarnings(
     "ignore",
     message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
@@ -1547,7 +1548,7 @@ class PixelDecoder:
 
         try:
             rois = roiread(cellpose_roi_path)
-        except Exception as e:
+        except (FileNotFoundError, IOError, ValueError) as e:
             print(f"Failed to read ROIs: {e}")
             return
 
@@ -1561,7 +1562,7 @@ class PixelDecoder:
         for polygon_idx, polygon in enumerate(shapely_polygons):
             try:
                 rtree_index.insert(polygon_idx, polygon.bounds)
-            except Exception as e:
+            except RTreeError as e:
                 print(f"Failed to insert polygon into R-tree: {e}")
 
         def check_point(row):
@@ -1681,7 +1682,7 @@ class PixelDecoder:
                 del self._image_data_lp
             else:
                 del self._image_data
-        except Exception:
+        except AttributeError:
             pass
 
         try:
@@ -1691,12 +1692,12 @@ class PixelDecoder:
                 self._distance_image,
                 self._magnitude_image,
             )
-        except Exception:
+        except AttributeError:
             pass
 
         try:
             del self._df_barcodes
-        except Exception:
+        except AttributeError:
             pass
         if self._barcodes_filtered:
             del self._df_filtered_barcodes
