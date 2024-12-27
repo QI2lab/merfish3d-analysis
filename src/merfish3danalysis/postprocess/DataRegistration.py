@@ -290,7 +290,7 @@ class DataRegistration:
                     temp = ref_image_decon[0:1,0:1,0:1].astype(np.float32)
                     del temp
                     gc.collect()
-                except Exception:
+                except FileNotFoundError :
                     ref_image_decon = self._datastore.load_local_registered_image(
                         tile=self._tile_id,
                         round=self._round_ids[0],
@@ -695,5 +695,5 @@ def no_op(*args, **kwargs):
     **kwargs
         Arbitrary keyword arguments
     """
-    
+
     pass
