@@ -398,5 +398,14 @@ def chunked_cudadecon(
     return image_decon
 
 def no_op(*args, **kwargs):
-    """Function to monkey patch print to suppress output"""
+    """Function to monkey patch print to suppress output.
+    
+    Parameters
+    ----------
+    args: Any
+        positional arguments
+    kwargs: Any
+        keyword arguments
+    """
+    
     pass
