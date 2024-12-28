@@ -1,6 +1,7 @@
 """
 DataRegistration: Register qi2lab 3D MERFISH data using cross-correlation and optical flow
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/08 - swap to qi2labdatastore for data access
                    swap to numba accelerated downsampling
                    clean up numpy usage to allow for ryomen tiling later
@@ -15,12 +16,12 @@ from typing import Union, Optional
 import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils._registration import (
+from merfish3danalysis.utils.registration import (
     compute_optical_flow,
     apply_transform,
     compute_rigid_transform,
 )
-from merfish3danalysis.utils._imageprocessing import (
+from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
     downsample_image_isotropic,
 )

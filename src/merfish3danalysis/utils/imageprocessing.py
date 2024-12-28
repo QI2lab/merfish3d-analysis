@@ -1,6 +1,7 @@
 """
 Image processing functions for qi2lab 3D MERFISH
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/07 - add numba'ed downsampling, padding helper functions, and
                    chunked GPU deconvolution.
 """

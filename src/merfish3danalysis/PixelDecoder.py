@@ -1,6 +1,7 @@
 """
 PixelDecoder: Perform pixel-based decoding for qi2lab widefield MERFISH data using GPU acceleration.
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/03 - rework of GPU logic to reduce out-of-memory crashes
 Shepherd 2024/01 - updates for qi2lab MERFISH file format v1.0
 """

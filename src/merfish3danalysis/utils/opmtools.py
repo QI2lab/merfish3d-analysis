@@ -1,6 +1,7 @@
 """
 OPM specific data handling tools
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/07 - initial commit.
 """
 

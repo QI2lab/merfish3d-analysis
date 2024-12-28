@@ -7,6 +7,7 @@ create or interact with the qi2lab MERFISH datastore.
 The filestore structure are further described in the 
 merfish3d-analysis documentation.
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/12 - docstrings and exception types
 Shepherd 2024/07 - initial commit
 """
