@@ -15,7 +15,7 @@ from typing import Union, Optional
 import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess._registration import (
+from merfish3danalysis.utils._registration import (
     compute_optical_flow,
     apply_transform,
     compute_rigid_transform,
