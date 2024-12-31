@@ -88,6 +88,10 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
+
+    # this entry was not contained in pre-v8 microscope csv, it was instead stored
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
+    # access pattern easier.
     try:
         camera = metadata["camera"]
     except Exception:
@@ -133,7 +137,7 @@ def convert_data(
     channel_order = metadata["channels_reversed"]
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
@@ -152,7 +156,7 @@ def convert_data(
         del ndtiff_metadata, next_ndtiff_metadata, dataset
 
     # this entry was not contained in pre-v8 metadata csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         na = metadata["na"]
@@ -160,7 +164,7 @@ def convert_data(
         na = 1.35
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         ri = metadata["ri"]
@@ -178,7 +182,7 @@ def convert_data(
     # these entries were not contained in pre-v8 microscope csv. There were
     # instead stored in the imaging data itself.
     #
-    # We added it to > v8 metadata csv to make the access pattern easier.
+    # We added it to > v8 qi2lab-scope metadata csv to make the access pattern easier.
     # The defaults are the "known" defaults for this camera configuration.
 
     if camera == "flir":
