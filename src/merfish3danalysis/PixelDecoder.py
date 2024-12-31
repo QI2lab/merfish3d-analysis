@@ -1,6 +1,7 @@
 """
 PixelDecoder: Perform pixel-based decoding for qi2lab widefield MERFISH data using GPU acceleration.
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/03 - rework of GPU logic to reduce out-of-memory crashes
 Shepherd 2024/01 - updates for qi2lab MERFISH file format v1.0
 """
@@ -28,6 +29,7 @@ import warnings
 import tempfile
 import shutil
 
+# filter warning from skimage
 warnings.filterwarnings(
     "ignore",
     message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
@@ -116,7 +118,12 @@ class PixelDecoder:
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
 
     def _normalize_codebook(self, include_errors: bool = False):
-        """Normalize each codeword by L2 norm."""
+        """Normalize each codeword by L2 norm.
+        
+        Parameters
+        ----------
+        include_errors : bool = False
+            Include single-bit errors as unique barcodes in the decoding matrix."""
 
         self._barcode_set = cp.asarray(
             self._codebook_matrix[:, 0 : self._n_merfish_bits]
@@ -151,6 +158,7 @@ class PixelDecoder:
             return cp.asnumpy(all_barcodes)
 
     def _load_global_normalization_vectors(self):
+        """Load or calculate global normalization and background vectors."""
         normalization_vector = self._datastore.global_normalization_vector
         background_vector = self._datastore.global_background_vector
         if normalization_vector is not None and background_vector is not None:
@@ -166,6 +174,18 @@ class PixelDecoder:
         high_percentile_cut: float = 90.0,
         hot_pixel_threshold: int = 50000,
     ):
+        """Calculate global normalization and background vectors.
+        
+        Parameters
+        ----------
+        low_percentile_cut : float = 10.0
+            Lower percentile cut for background estimation.
+        high_percentile_cut : float = 90.0
+            Upper percentile cut for normalization estimation.
+        hot_pixel_threshold : int = 50000
+            Threshold for hot pixel removal.
+        """
+
         if len(self._datastore.tile_ids) > 5:
             random_tiles = sample(self._datastore.tile_ids, 5)
         else:
@@ -297,6 +317,7 @@ class PixelDecoder:
         self._global_normalization_loaded = True
 
     def _load_iterative_normalization_vectors(self):
+        """Load or calculate iterative normalization and background vectors."""
         normalization_vector = self._datastore.iterative_normalization_vector
         background_vector = self._datastore.iterative_background_vector
 
@@ -310,6 +331,7 @@ class PixelDecoder:
             self._iterative_normalization_vectors()
 
     def _iterative_normalization_vectors(self):
+        """Calculate iterative normalization and background vectors."""
         df_barcodes_loaded_no_blanks = self._df_barcodes_loaded[
             ~self._df_barcodes_loaded["gene_id"].str.startswith("Blank")
         ]
@@ -434,7 +456,15 @@ class PixelDecoder:
         del df_barcodes_loaded_no_blanks
         gc.collect()
 
-    def _load_bit_data(self, ufish_threshold: Optional[float] = 0.1):
+    def _load_bit_data(self, ufish_threshold: Optional[float] = 0.5):
+        """Load raw data for all bits in the tile.
+        
+        Parameters
+        ----------
+        ufish_threshold : Optional[float]
+            Threshold for ufish image. Default 0.5
+        """
+
         if self._verbose > 1:
             print("load raw data")
             iterable_bits = tqdm(
@@ -527,6 +557,14 @@ class PixelDecoder:
         gc.collect()
 
     def _lp_filter(self, sigma=(3, 1, 1)):
+        """Apply low-pass filter to the raw data.
+        
+        Parameters
+        ----------
+        sigma : Tuple[int, int, int]
+            Sigma values for Gaussian filter. Default (3, 1, 1).
+        """
+
         self._image_data_lp = self._image_data.copy()
 
         if self._verbose > 1:
@@ -594,6 +632,25 @@ class PixelDecoder:
         normalization_vector: Union[np.ndarray, cp.ndarray],
         merfish_bits=16,
     ) -> cp.ndarray:
+        """Scale pixel traces using background and normalization vectors.
+        
+        Parameters
+        ----------
+        pixel_traces : Union[np.ndarray, cp.ndarray]
+            Pixel traces to scale.
+        background_vector : Union[np.ndarray, cp.ndarray]
+            Background vector.
+        normalization_vector : Union[np.ndarray, cp.ndarray]
+            Normalization vector.
+        merfish_bits : int = 16
+            Number of MERFISH bits. Default 16. Assume MERFISH bits are [0, merfish_bits].
+        
+        Returns
+        -------
+        scaled_traces : cp.ndarray
+            Scaled pixel traces.
+        """
+
         if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
         if isinstance(background_vector, np.ndarray):
@@ -614,12 +671,44 @@ class PixelDecoder:
         clip_lower: float = 0.0,
         clip_upper: float = 1.0,
     ) -> cp.ndarray:
+        """Clip pixel traces to a range.
+
+        Parameters
+        ----------
+        pixel_traces : Union[np.ndarray, cp.ndarray]
+            Pixel traces to clip.
+        clip_lower : float = 0.0
+            clip lower bound. Default 0.0.
+        clip_upper : float = 1.0
+            clip upper bound. Default 1.0.
+
+        Returns
+        -------
+        clipped_traces : cp.ndarray
+            Clipped pixel traces.
+        """
+
         return cp.clip(pixel_traces, clip_lower, clip_upper, pixel_traces)
 
     @staticmethod
     def _normalize_pixel_traces(
         pixel_traces: Union[np.ndarray, cp.ndarray],
     ) -> Tuple[cp.ndarray, cp.ndarray]:
+        """Normalize pixel traces by L2 norm.
+
+        Parameters
+        ----------
+        pixel_traces : Union[np.ndarray, cp.ndarray]
+            Pixel traces to normalize.
+
+        Returns
+        -------
+        normalized_traces : cp.ndarray
+            Normalized pixel traces.
+        norms : cp.ndarray
+            L2 norms of pixel traces.    
+        """
+
         if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
 
@@ -628,10 +717,6 @@ class PixelDecoder:
         normalized_traces = pixel_traces / norms
         norms = cp.where(norms == np.inf, -1, norms)
 
-        # del pixel_traces
-        # gc.collect()
-        # cp.get_default_memory_pool().free_all_blocks()
-
         return normalized_traces, norms
 
     @staticmethod
@@ -639,6 +724,23 @@ class PixelDecoder:
         pixel_traces: Union[np.ndarray, cp.ndarray],
         codebook_matrix: Union[np.ndarray, cp.ndarray],
     ) -> Tuple[cp.ndarray, cp.ndarray]:
+        """Calculate distances between pixel traces and codebook matrix.
+
+        Parameters
+        ----------
+        pixel_traces : Union[np.ndarray, cp.ndarray]
+            Pixel traces.
+        codebook_matrix : Union[np.ndarray, cp.ndarray]
+            Codebook matrix.
+        
+        Returns
+        -------
+        min_distances : cp.ndarray
+            Minimum distances.
+        min_indices : cp.ndarray
+            Minimum indices.
+        """
+
         if isinstance(pixel_traces, np.ndarray):
             pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
         if isinstance(codebook_matrix, np.ndarray):
@@ -660,8 +762,19 @@ class PixelDecoder:
         return min_distances, min_indices
 
     def _decode_pixels(
-        self, distance_threshold: float = 0.5172, magnitude_threshold: float = 1.0
+        self, distance_threshold: float = 0.5172, 
+        magnitude_threshold: float = 1.0
     ):
+        """Decode pixels using the decoding matrix.
+
+        Parameters
+        ----------
+        distance_threshold : float
+            Distance threshold for decoding. Default 0.5172.
+        magnitude_threshold : float
+            Magnitude threshold for decoding. Default 1.0.
+        """
+
         if self._filter_type == "lp":
             original_shape = self._image_data_lp.shape
             self._decoded_image = np.zeros((original_shape[1:]), dtype=np.int16)
@@ -760,6 +873,24 @@ class PixelDecoder:
         origin: np.ndarray,
         affine: np.ndarray,
     ) -> np.ndarray:
+        """Warp pixel space point to physical space point.
+
+        Parameters
+        ----------
+        pixel_space_point : np.ndarray
+            Pixel space point.
+        spacing : np.ndarray
+            Spacing.
+        origin : np.ndarray
+            Origin.
+        affine : np.ndarray 
+            Affine transformation matrix.
+
+        Returns
+        -------
+        registered_space_point : np.ndarray
+            Registered space point.
+        """
 
         physical_space_point = pixel_space_point * spacing + origin
         registered_space_point = (
@@ -768,7 +899,21 @@ class PixelDecoder:
 
         return registered_space_point
 
-    def _extract_barcodes(self, minimum_pixels: int = 2, maximum_pixels: int = 200):
+    def _extract_barcodes(
+        self, 
+        minimum_pixels: int = 2, 
+        maximum_pixels: int = 200
+    ):
+        """Extract barcodes from decoded image.
+
+        Parameters
+        ----------
+        minimum_pixels : int
+            Minimum number of pixels for a barcode. Default 2.
+        maximum_pixels : int
+            Maximum number of pixels for a barcode. Default 200.
+        """
+
         if self._verbose > 1:
             print("extract barcodes")
         if self._verbose >= 1:
@@ -1047,7 +1192,9 @@ class PixelDecoder:
         gc.collect()
         cp.get_default_memory_pool().free_all_blocks()
 
-    def _save_barcodes(self, format: str = "csv"):
+    def _save_barcodes(self):
+        """Save barcodes to datastore."""
+
         if self._verbose > 1:
             print("save barcodes")
 
@@ -1069,6 +1216,8 @@ class PixelDecoder:
                 )
 
     def _reformat_barcodes_for_baysor(self):
+        """Reformat barcodes for Baysor and save to datastore."""
+
         if self._barcodes_filtered:
             missing_columns = [
                 col
@@ -1119,6 +1268,8 @@ class PixelDecoder:
             self._datastore.save_spots_prepped_for_baysor(baysor_df)
 
     def _load_all_barcodes(self):
+        """Load all barcodes from datastore."""
+
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
 
@@ -1146,7 +1297,35 @@ class PixelDecoder:
             self._barcodes_filtered = True
 
     @staticmethod
-    def calculate_fdr(df, threshold, blank_count, barcode_count, verbose):
+    def calculate_fdr(
+        df: pd.DataFrame, 
+        threshold: float, 
+        blank_count: int, 
+        barcode_count: int, 
+        verbose: bool = False) -> float:
+        """Calculate false discovery rate.
+        
+        (# noncoding found ) / (# noncoding in codebook) / (# coding found) / (# coding in codebook)
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Dataframe containing decoded spots.
+        threshold : float
+            Threshold for predicted probability.
+        blank_count : int
+            Number of blank barcodes.
+        barcode_count : int
+            Number of barcodes.
+        verbose : bool = False
+            Verbose output. Default False.
+
+        Returns
+        -------
+        fdr : float
+            False discovery rate.
+        """
+        
         if threshold >= 0:
             df["prediction"] = df["predicted_probability"] > threshold
 
@@ -1176,6 +1355,19 @@ class PixelDecoder:
         return fdr
 
     def _filter_all_barcodes(self, fdr_target: float = 0.05):
+        """Filter barcodes using a classifier and FDR target.
+        
+        Uses a MLP classifier to predict whether a barcode is a blank or not.
+
+        TO DO: evaluate other classifiers.
+
+        Parameters
+        ----------
+        fdr_target : float = 0.05
+            False discovery rate target. Default 0.05.
+        """
+
+
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
         from sklearn.neural_network import MLPClassifier
@@ -1344,23 +1536,9 @@ class PixelDecoder:
             self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
 
-    @staticmethod
-    def _load_microjson(filepath):
-        with open(filepath, "r") as f:
-            data = json.load(f)
-        outlines = {}
-
-        for feature in data["features"]:
-            cell_id = feature["properties"]["cell_id"]
-            coordinates = feature["geometry"]["coordinates"][0]
-            outlines[cell_id] = np.array(coordinates)
-        return outlines
-
-    @staticmethod
-    def _roi_to_shapely(roi):
-        return Polygon(roi.subpixel_coordinates[:, ::-1])
-
     def _assign_cells(self):
+        """Assign cells to barcodes using Cellpose ROIs."""
+
         cellpose_roi_path = (
             self._datastore._datastore_path
             / Path("segmentation")
@@ -1371,7 +1549,7 @@ class PixelDecoder:
 
         try:
             rois = roiread(cellpose_roi_path)
-        except Exception as e:
+        except (FileNotFoundError, IOError, ValueError) as e:
             print(f"Failed to read ROIs: {e}")
             return
 
@@ -1385,10 +1563,22 @@ class PixelDecoder:
         for polygon_idx, polygon in enumerate(shapely_polygons):
             try:
                 rtree_index.insert(polygon_idx, polygon.bounds)
-            except Exception as e:
+            except RTreeError as e:
                 print(f"Failed to insert polygon into R-tree: {e}")
 
         def check_point(row):
+            """Check if point is within a polygon.
+            
+            Parameters
+            ----------
+            row : pd.Series
+                Row containing global coordinates.
+                
+            Returns
+            -------
+            cell_id : int
+                Cell ID. Returns 0 if not found.
+            """
             point = Point(row["global_y"], row["global_x"])
 
             candidate_ids = list(rtree_index.intersection(point.bounds))
@@ -1402,6 +1592,14 @@ class PixelDecoder:
         )
 
     def _remove_duplicates_in_tile_overlap(self, radius: float = 0.75):
+        """Remove duplicates in tile overlap.
+
+        Parameters
+        ----------
+        radius : float
+            Radius for duplicate removal. Default 0.75 microns.
+        """
+
         self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
 
         coords = self._df_filtered_barcodes[["global_z", "global_y", "global_x"]].values
@@ -1438,6 +1636,8 @@ class PixelDecoder:
             print("Dropped points: " + str(dropped_count))
 
     def _display_results(self):
+        """Display results using Napari."""
+
         import napari
         from qtpy.QtWidgets import QApplication
 
@@ -1477,12 +1677,13 @@ class PixelDecoder:
         napari.run()
 
     def _cleanup(self):
+        """Cleanup memory."""
         try:
             if self._filter_type == "lp":
                 del self._image_data_lp
             else:
                 del self._image_data
-        except Exception:
+        except AttributeError:
             pass
 
         try:
@@ -1492,12 +1693,12 @@ class PixelDecoder:
                 self._distance_image,
                 self._magnitude_image,
             )
-        except Exception:
+        except AttributeError:
             pass
 
         try:
             del self._df_barcodes
-        except Exception:
+        except AttributeError:
             pass
         if self._barcodes_filtered:
             del self._df_filtered_barcodes
@@ -1508,12 +1709,32 @@ class PixelDecoder:
     def decode_one_tile(
         self,
         tile_idx: int = 0,
-        display_results: bool = True,
+        display_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        minimum_pixels: Optional[float] = 9.0,
+        minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
-        ufish_threshold: Optional[float] = 0.1,
+        ufish_threshold: Optional[float] = 0.5,
     ):
+        """Decode one tile.
+
+        Helper function to decode one tile. Can also display results in napari.
+
+        Parameters
+        ----------
+        tile_idx : int
+            Tile index.
+        display_results : bool
+            Display results in napari. Default False.
+        lowpass_sigma : Optional[Sequence[float]]
+            Lowpass sigma. Default (3, 1, 1).
+        minimum_pixels : Optional[float]
+            Minimum number of pixels for a barcode. Default 3.0.
+        use_normalization : Optional[bool]
+            Use normalization. Default True.
+        ufish_threshold : Optional[float]
+            Ufish threshold. Default 0.5.
+        """
+
         if use_normalization:
             self._load_iterative_normalization_vectors()
 
@@ -1537,9 +1758,27 @@ class PixelDecoder:
         n_random_tiles: int = 10,
         n_iterations: int = 10,
         minimum_pixels: float = 3.0,
-        ufish_threshold: float = 0.25,
+        ufish_threshold: float = 0.5,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
     ):
+        """Optimize normalization by decoding.
+
+        Helper function to iteratively optimize normalization by decoding.
+        
+        Parameters
+        ----------
+        n_random_tiles : int
+            Number of random tiles. Default 10.
+        n_iterations : int
+            Number of iterations. Default 10.
+        minimum_pixels : float
+            Minimum number of pixels for a barcode. Default 3.0.
+        ufish_threshold : float
+            Ufish threshold. Default 0.5.
+        lowpass_sigma : Optional[Sequence[float]]
+            Lowpass sigma. Default (3, 1, 1).
+        """
+
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
 
@@ -1593,9 +1832,29 @@ class PixelDecoder:
         prep_for_baysor: bool = True,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
         minimum_pixels: Optional[float] = 2.0,
-        ufish_threshold: Optional[float] = 0.6,
+        ufish_threshold: Optional[float] = 0.5,
         fdr_target: Optional[float] = 0.05,
     ):
+        """Decode all tiles.
+
+        Helper function to decode all tiles. Assumes iterative normalization has been performed.
+
+        Parameters
+        ----------
+        assign_to_cells : bool
+            Assign barcodes to cells. Default True.
+        prep_for_baysor : bool
+            Prepare barcodes for Baysor. Default True.
+        lowpass_sigma : Optional[Sequence[float]]
+            Lowpass sigma. Default (3, 1, 1).
+        minimum_pixels : Optional[float]    
+            Minimum number of pixels for a barcode. Default 2.0.
+        ufish_threshold : Optional[float]
+            Ufish threshold. Default 0.5.
+        fdr_target : Optional[float]
+            False discovery rate target. Default 0.05.
+        """
+
         if self._verbose >= 1:
             iterable_tile_id = enumerate(
                 tqdm(self._datastore.tile_ids, desc="tile", leave=False)
@@ -1642,6 +1901,20 @@ class PixelDecoder:
         prep_for_baysor: bool = True,
         fdr_target: Optional[float] = 0.05,
     ):
+        """Optimize filtering.
+
+        Helper function to opimize filtering for already decoded spots.
+
+        Parameters
+        ----------
+        assign_to_cells : bool
+            Assign barcodes to cells. Default False.
+        prep_for_baysor : bool
+            Prepare barcodes for Baysor. Default True.
+        fdr_target : Optional[float]
+            False discovery rate target. Default 0.05.
+        """
+
         self._load_tile_decoding = True
         self._load_all_barcodes()
         self._load_tile_decoding = False

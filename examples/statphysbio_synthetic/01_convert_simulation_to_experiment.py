@@ -12,25 +12,25 @@ Shepherd 2024/12 - create script based on metadata from Max in statphysbio lab.
 
 from pathlib import Path
 from tifffile import imread, imwrite
-from merfish3danalysis.utils._dataio import read_metadatafile
+from merfish3danalysis.utils.dataio import read_metadatafile, write_metadata
 from typing import Optional
 import numpy as np
 import pandas as pd
 import shutil
 
-def write_metadata(data_dict, save_path):
-    """
-
-    :param data_dict: dictionary of metadata entries
-    :param save_path:
-    :return:
-    """
-    pd.DataFrame([data_dict]).to_csv(save_path)
-
 def convert_simulation(
     root_path: Path,
     output_path: Optional[Path] = None
 ):
+    """Convert statphysbio simulation into a fake acquisition.
+    
+    Parameters
+    ----------
+    root_path: Path
+        path to simulation
+    output_path: Optional[Path]
+        path to save fake acquisition. Default = None
+    """
  
     # load metadata
     metadata_path = root_path / Path("scan_metadata.csv")

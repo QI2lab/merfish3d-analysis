@@ -20,8 +20,8 @@ import pandas as pd
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
-from merfish3danalysis.utils._dataio import read_metadatafile
-from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
+from merfish3danalysis.utils.dataio import read_metadatafile
+from merfish3danalysis.utils.imageprocessing import replace_hot_pixels
 from itertools import compress
 from typing import Optional
 

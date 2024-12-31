@@ -1,6 +1,7 @@
 """
 OPM specific data handling tools
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/07 - initial commit.
 """
 
@@ -169,7 +170,6 @@ def deskew(
                         + l_after * (1 - dz_before) * data[plane_before, pos_before, :]
                     ) / pixel_step
 
-    # return output
     return output
 
 
@@ -199,6 +199,7 @@ def lab2cam(
     stage_pos: int
         distance of leading edge of camera frame from the y-axis
     """
+
     xp = x
     stage_pos = y - z / np.tan(theta)
     yp = z / np.sin(theta)
@@ -243,6 +244,43 @@ def chunked_orthogonal_deskew(
     decon_iterations: int = 10,
     decon_chunks: int = 1024,
 ) -> ArrayLike:
+    """Chunked orthogonal deskew of oblique data.
+
+    Optionally performs deconvolution on each chunk.
+    
+    Parameters
+    ----------
+    oblique_image: ArrayLike
+        oblique image stack
+    psf_data: ArrayLike
+        PSF data for deconvolution
+    chunk_size: int
+        size of chunks
+    overlap_size: int
+        overlap size
+    scan_crop: int
+        crop size
+    camera_bkd: int
+        camera background
+    camera_cf: float
+        camera conversion factor
+    camera_qe: float
+        camera quantum efficiency
+    z_downsample_level: int
+        z downsample level
+    perform_decon: bool
+        perform deconvolution
+    decon_iterations: int
+        number of deconvolution iterations
+    decon_chunks: int
+        deconvolution chunk size
+    
+    Returns
+    -------
+    deskewed_image: ArrayLike
+        deskewed image stack
+    """
+
     output_shape = deskew_shape_estimator(oblique_image.shape)
     output_shape[0] = output_shape[0] // z_downsample_level
     output_shape[1] = output_shape[1] - scan_crop

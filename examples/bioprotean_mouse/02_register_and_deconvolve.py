@@ -7,7 +7,7 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.DataRegistration import DataRegistration
+from merfish3danalysis.DataRegistration import DataRegistration
 from pathlib import Path
 import numpy as np
 import gc

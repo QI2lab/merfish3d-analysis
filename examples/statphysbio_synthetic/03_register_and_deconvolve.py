@@ -5,7 +5,7 @@ Shepherd 2024/12 - create script to run on simulation.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.DataRegistration import DataRegistration
+from merfish3danalysis.DataRegistration import DataRegistration
 from pathlib import Path
 import numpy as np
 from tifffile import TiffWriter
