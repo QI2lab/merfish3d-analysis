@@ -101,22 +101,30 @@ def convert_data(
         channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
         ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
         camera_id = ndtiff_metadata["Camera-CameraName"]
-        if camera_id == "C13440-20CU":
+        camera_id_alt = ndtiff_metadata["Core-Camera"]
+        if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
             camera = "orcav3"
             e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
             offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-        else:
+        elif camera_id == "Blackfly S BFS-U3-200S6M" or camera_id_alt == "Blackfly S BFS-U3-200S6M":
             camera = "flir"
             e_per_ADU = 0.03  # this comes from separate calibration
             offset = 0.0  # this comes from separate calibration
         try:
             binning = metadata["binning"]
         except Exception:
-            binning_str = ndtiff_metadata["Camera-Binning"]
-            if binning_str == "1x1":
-                binning = 1
-            elif binning_str == "2x2":
-                binning = 2
+            if camera == "orcav3":
+                binning_str = ndtiff_metadata["Camera-Binning"]
+                if binning_str == "1x1":
+                    binning = 1
+                elif binning_str == "2x2":
+                    binning = 2
+            elif camera == "flir":
+                binning_str = ndtiff_metadata["Binning"]
+                if binning_str == "1":
+                    binning = 1
+                elif binning_str == "2":
+                    binning = 2
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
@@ -414,6 +422,10 @@ def convert_data(
                     corrected_x = max_x - stage_x
                 else:
                     corrected_x = stage_x
+            else:
+                corrected_y = stage_y
+                corrected_x = stage_x
+            
             stage_pos_zyx_um = np.asarray(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
