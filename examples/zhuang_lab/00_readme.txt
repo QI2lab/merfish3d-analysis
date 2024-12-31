@@ -2,7 +2,7 @@ See comments in each file for specifics.
 
 Order to run:
 
-1. convert_to_qi2lab.py
-2. register_local.py
-3. register_global.py
-4. pixel_decode.py
+01_convert_to_qi2lab.py
+02_register_local.py
+03_register_global.py
+04_pixel_decode.py
