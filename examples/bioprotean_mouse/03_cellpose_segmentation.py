@@ -7,6 +7,7 @@ helpful to see it split out for now.
 IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
 then fill in the dictionary at the bottom of the script.
 
+Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 

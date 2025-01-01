@@ -2,7 +2,7 @@
 
 _WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes. Examples of running the package are found in `/Examples`.
 
-GPU accelerated post-processing for 3D MERFISH data generated using qi2lab microscopes. This package currently **Linux only** due to RAPIDS.AI package availabilty.
+GPU accelerated post-processing for 3D MERFISH data. This package currently **Linux only** due to RAPIDS.AI package availabilty.
 
 ## Installation
 
@@ -18,7 +18,9 @@ mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.08 p
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-## qi2lab MERFISH zarr layout v0.3
+There are examples on how to convert data into our `Datastore` object in the examples folder. Additionally, there are two examples using publicly available data. One with a simulation (`statphysbio_synthetic`) and one from Brain Image Library data (`zhuang_lab`). 
+
+## qi2lab Datastore layout v0.3
 <details>
 <summary>file format</summary>
   

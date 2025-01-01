@@ -9,6 +9,8 @@ extract the correct parameters.
 
 Required user parameters for system dependent variables are at end of script.
 
+Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
+Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
@@ -501,9 +503,12 @@ if __name__ == "__main__":
     )
     julia_threads = 20
 
+    hot_pixel_image_path = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/hot_pixel_flir.tif")
+
     convert_data(
         root_path=root_path,
         baysor_binary_path=baysor_binary_path,
         baysor_options_path=baysor_options_path,
         julia_threads=julia_threads,
+        hot_pixel_image_path=hot_pixel_image_path
     )
