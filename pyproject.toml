@@ -43,6 +43,12 @@ dev = [
     "pytest",
     "pytest-mock"
 ]
+docs = [
+    "sphinx",
+    "sphnix-autobuild",
+    "sphinx-rtd-theme",
+    "sphinx-napoleon"
+]
 
 [project.urls]
 Source = "https://github.com/qi2lab/merfish3d-analysis"
