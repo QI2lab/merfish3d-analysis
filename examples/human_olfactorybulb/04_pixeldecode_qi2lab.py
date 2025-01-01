@@ -6,14 +6,14 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 5,
     ufish_threshold: float = 0.5,
-    fdr_target: float = 1.5,
+    fdr_target: float = .05,
     run_baysor: bool = True,
 ):
     """Perform pixel decoding.
@@ -73,4 +73,4 @@ def decode_pixels(
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/server2/qi2lab/20241212_OB_22bMERFISH_1")
-    decode_pixels(root_path=root_path,run_baysor=True)
+    decode_pixels(root_path=root_path,run_baysor=True,fdr_target=2.0)
