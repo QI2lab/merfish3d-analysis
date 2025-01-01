@@ -28,6 +28,7 @@ from scipy.spatial import cKDTree
 import warnings
 import tempfile
 import shutil
+import pylibraft
 
 # filter warning from skimage
 warnings.filterwarnings(
