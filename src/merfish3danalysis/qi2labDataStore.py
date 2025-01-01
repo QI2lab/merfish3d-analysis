@@ -21,7 +21,11 @@ import numpy as np
 import json
 from itertools import product
 from concurrent.futures import TimeoutError
-from zarr.errors import ZarrError
+# FALLBACK: what should the Zarr error be?
+try:
+    from zarr.errors import ZarrError
+except:
+    ZarrError = Exception
 
 class qi2labDataStore:
     """API to qi2lab MERFISH store.
