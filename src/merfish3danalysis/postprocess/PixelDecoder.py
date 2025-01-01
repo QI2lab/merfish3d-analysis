@@ -27,6 +27,7 @@ from scipy.spatial import cKDTree
 import warnings
 import tempfile
 import shutil
+import pylibraft
 
 warnings.filterwarnings(
     "ignore",
