@@ -1,10 +1,15 @@
 """
-Data I/O functions for qi2lab 3D MERFISH
+Data I/O functions for qi2lab 3D MERFISH.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/12 - Docstrings
-Shepherd 2024/07 - Remove native NDTiff reading package and use tifffile/zarr.
-                   Trying to remove as much dask dependence as possible.
+This module provides utilities for reading and writing data in various formats
+used by qi2lab 3D MERFISH datasets.
+
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/12**: Updated docstrings.
+- **2024/07**: Removed native NDTiff reading package; integrated tifffile/zarr.
+               Reduced dask dependencies.
 """
 
 import re

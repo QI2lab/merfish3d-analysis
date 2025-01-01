@@ -1,11 +1,17 @@
 """
 Image registration functions using cucim, scikit-image, and SimpleITK.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/07 - Prepping to remove all Dask usage and integrate these 
-                   functions into DataRegistration class as static_methods.
-Shepherd 2024/01 - Updates for qi2lab MERFISH file format v0.1
-Shepherd 2023/07 - initial commit.
+This module contains functions for image registration leveraging tools
+like cucim, scikit-image, and SimpleITK, optimized for use with
+qi2lab 3D MERFISH data.
+
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/07**: Prepared to remove all Dask usage and integrate functions
+               into the DataRegistration class as static methods.
+- **2024/01**: Updated for qi2lab MERFISH file format v0.1.
+- **2023/07**: Initial commit.
 """
 
 import numpy as np

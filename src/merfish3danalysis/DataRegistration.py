@@ -1,14 +1,20 @@
 """
-DataRegistration: Register qi2lab 3D MERFISH data using cross-correlation and optical flow
+Register qi2lab 3D MERFISH data using cross-correlation and optical flow.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/08 - swap to qi2labdatastore for data access
-                   swap to numba accelerated downsampling
-                   clean up numpy usage to allow for ryomen tiling later
-Shepherd 2024/07 - swap to pycudadecon and begin removing all Dask usage
-Shepherd 2024/04 - updates to use U-FISH and remove SPOTS3D
-Shepherd 2024/01 - updates for qi2lab MERFISH file format v0.1
-Shepherd 2023/09 - initial commit
+This module enables the registration of MERFISH datasets by utilizing
+cross-correlation and optical flow techniques.
+
+History:
+---------
+- **2024/12**: Refactor repo structure.
+- **2024/08**:
+    - Switched to qi2labdatastore for data access.
+    - Implemented numba-accelerated downsampling.
+    - Cleaned numpy usage for ryomen tiling.
+- **2024/07**: Integrated pycudadecon and removed Dask usage.
+- **2024/04**: Updated for U-FISH, removed SPOTS3D.
+- **2024/01**: Adjusted for qi2lab MERFISH file format v0.1.
+- **2023/09**: Initial commit.
 """
 
 import numpy as np
@@ -46,7 +52,6 @@ class DataRegistration:
         Deconvolution iterations
     decon_background: Optional[int]
         Background to substract during deconvolution
-        
     """
         
     def __init__(
