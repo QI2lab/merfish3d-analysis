@@ -2358,7 +2358,7 @@ class qi2labDataStore:
         try:
             attributes = self._load_from_json(zattrs_path)
             attributes["excitation_um"] = float(wavelengths_um[0])
-            attributeround: Optional[Union[int, str]] = None,avelengthsbit: Optional[Union[int, str]] = None,
+            attributes["emission_um"] = float(wavelengths_um[1])
             self._save_to_json(attributes, zattrs_path)
         except (FileNotFoundError, json.JSONDecodeError):
             print("Error writing wavelength attributes.")
