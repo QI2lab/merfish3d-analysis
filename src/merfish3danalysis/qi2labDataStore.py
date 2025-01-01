@@ -4028,7 +4028,7 @@ class qi2labDataStore:
         Assumes Baysor has been run.
         """
 
-        from merfish3danalysis.utils._dataio import create_mtx
+        from merfish3danalysis.utils.dataio import create_mtx
 
         baysor_output_path = self._datastore_path / Path("segmentation") / Path("segmentation.csv")
         mtx_output_path = self._datastore_path / Path("mtx_output")
