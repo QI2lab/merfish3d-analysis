@@ -53,3 +53,15 @@ docs = [
 [project.urls]
 Source = "https://github.com/qi2lab/merfish3d-analysis"
 Tracker = "https://github.com/qi2lab/merfish3d-analysis/issues"
+
+[tool.hatch.envs.docs]
+dependencies = [
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-gen-files",
+    "mkdocs-literate-nav",
+]
+commands = [
+    "mkdocs build",
+]

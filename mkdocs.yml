@@ -1,0 +1,21 @@
+
+site_name: MERFISH3D Analysis Documentation
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Examples:
+      - Example 1: examples/example1.md
+      - Example 2: examples/example2.md
+  - API Reference:
+      - MERFISH3D Analysis: reference/merfish3danalysis.md
+      - Utilities: reference/utils.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+markdown_extensions:
+  - toc:
+      permalink: true
