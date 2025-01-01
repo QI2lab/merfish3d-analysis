@@ -7,10 +7,12 @@ parameters are automatically extracted from the metadata written by qi2lab
 microscopes. For another microscope, you will need to write new code on how to
 extract the correct parameters.
 
+For statphysbio simulated data, we converted simulation into a one tile qi2lab
+acquistion to re-use existing conversion code.
+
 Required user parameters for system dependent variables are at end of script.
 
-Shepherd 2024/11 - rework script to accept parameters.
-Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
+Shepherd 2024/12 - create for simulated data
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -88,6 +90,7 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
+   
     try:
         camera = metadata["camera"]
     except Exception:
@@ -122,13 +125,22 @@ def convert_data(
         metadata["yellow_active"],
         metadata["red_active"],
     ]
-    channel_order = metadata["channels_reversed"]
+    try:
+        channels_reversed = metadata["channels_reversed"]
+        if channels_reversed:
+            channel_order = "reversed"
+        else:
+            channel_order = "forward"
+    except Exception:
+        channel_order = metadata["channel_order"]
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
     # in the imaging data itself. We added it to > v8 metadata csv to make the
     # access pattern easier.
     try:
         voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
+        z_pixel_um = voxel_size_zyx_um[0]
+        yx_pixel_um = voxel_size_zyx_um[1]
     except Exception:
         yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
         next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
@@ -224,6 +236,17 @@ def convert_data(
             image_flipped_x = metadata["image_flipped_x"]
         except Exception:
             image_flipped_x = False
+    elif camera == "simulated":
+        camera = "simulated"
+        e_per_ADU = 1. / float(metadata["gain"])
+        offset = float(metadata["offset"])
+        stage_flipped_x = bool(metadata["stage_flipped_x"])
+        stage_flipped_y = bool(metadata["stage_flipped_y"])
+        image_rotated = bool(metadata["image_rotated"])
+        image_flipped_y = bool(metadata["image_flipped_y"])
+        image_flipped_x = bool(metadata["image_flipped_x"])
+        binning = int(metadata["binning"])
+        noise_map = offset * np.ones((256, 256), dtype=np.uint16)
 
     # generate PSFs
     # --------------
@@ -414,6 +437,9 @@ def convert_data(
                     corrected_x = max_x - stage_x
                 else:
                     corrected_x = stage_x
+            else:
+                corrected_x = stage_x
+                corrected_y = stage_y
             stage_pos_zyx_um = np.asarray(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
@@ -476,13 +502,9 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    baysor_binary_path = Path(
-        r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
-    )
-    baysor_options_path = Path(
-        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/bioprotean_mouse/bioprotean_mouse.toml"
-    )
+    root_path = Path(r"/mnt/opm3/20241218_statphysbio/sim_acquisition")
+    baysor_binary_path = None
+    baysor_options_path = None
     julia_threads = 20
 
     convert_data(

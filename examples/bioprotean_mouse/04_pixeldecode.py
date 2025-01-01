@@ -6,7 +6,7 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 
 def decode_pixels(
@@ -75,4 +75,4 @@ def decode_pixels(
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    decode_pixels(root_path=root_path)
+    decode_pixels(root_path=root_path,run_baysor=False)

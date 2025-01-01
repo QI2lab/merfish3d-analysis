@@ -1,6 +1,7 @@
 """
 Image processing functions for qi2lab 3D MERFISH
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/07 - add numba'ed downsampling, padding helper functions, and
                    chunked GPU deconvolution.
 """
@@ -398,5 +399,14 @@ def chunked_cudadecon(
     return image_decon
 
 def no_op(*args, **kwargs):
-    """Function to monkey patch print to suppress output"""
+    """Function to monkey patch print to suppress output.
+    
+    Parameters
+    ----------
+    args: Any
+        positional arguments
+    kwargs: Any
+        keyword arguments
+    """
+    
     pass

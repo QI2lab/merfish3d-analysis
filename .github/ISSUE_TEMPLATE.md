@@ -1,4 +1,4 @@
-* merfish-3d version:
+* merfish3d-analysis version:
 * Python version:
 * Operating System:
 * Branch:

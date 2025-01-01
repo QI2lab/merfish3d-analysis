@@ -1,6 +1,7 @@
 """
 DataRegistration: Register qi2lab 3D MERFISH data using cross-correlation and optical flow
 
+Shepherd 2024/12 - refactor repo structure
 Shepherd 2024/08 - swap to qi2labdatastore for data access
                    swap to numba accelerated downsampling
                    clean up numpy usage to allow for ryomen tiling later
@@ -15,12 +16,12 @@ from typing import Union, Optional
 import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess._registration import (
+from merfish3danalysis.utils.registration import (
     compute_optical_flow,
     apply_transform,
     compute_rigid_transform,
 )
-from merfish3danalysis.utils._imageprocessing import (
+from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
     downsample_image_isotropic,
 )
@@ -76,6 +77,14 @@ class DataRegistration:
     # -----------------------------------
     @property
     def datastore(self):
+        """Return the qi2labDataStore object.
+        
+        Returns
+        -------
+        qi2labDataStore
+            qi2labDataStore object
+        """
+
         if self._dataset_path is not None:
             return self._datastore
         else:
@@ -84,11 +93,27 @@ class DataRegistration:
 
     @datastore.setter
     def dataset_path(self, value: qi2labDataStore):
+        """Set the qi2labDataStore object.
+        
+        Parameters
+        ----------
+        value : qi2labDataStore
+            qi2labDataStore object
+        """
+
         del self._datastore
         self._datastore = value
 
     @property
     def tile_id(self):
+        """Get the current tile id.
+        
+        Returns
+        -------
+        tile_id: Union[int,str]
+            Tile id
+        """
+
         if self._tile_id is not None:
             tile_id = self._tile_id
             return tile_id
@@ -98,6 +123,14 @@ class DataRegistration:
 
     @tile_id.setter
     def tile_id(self, value: Union[int,str]):
+        """Set the tile id.
+
+        Parameters
+        ----------
+        value : Union[int,str]
+            Tile id
+        """
+
         if isinstance(value, int):
             if value < 0 or value > self._datastore.num_tiles:
                 print("Set value index >=0 and <=" + str(self._datastore.num_tiles))
@@ -113,21 +146,54 @@ class DataRegistration:
                 
     @property
     def perform_optical_flow(self):
+        """Get the perform_optical_flow flag.
+        
+        Returns
+        -------
+        perform_optical_flow: bool
+            Perform optical flow registration
+        """
+
         return self._perform_optical_flow
     
     @perform_optical_flow.setter
     def perform_optical_flow(self, value: bool):
+        """Set the perform_optical_flow flag.
+        
+        Parameters
+        ----------
+        value : bool
+            Perform optical flow registration
+        """
+
         self._perform_optical_flow = value
 
     @property
     def overwrite_registered(self):
+        """Get the overwrite_registered flag.
+        
+        Returns
+        -------
+        overwrite_registered: bool
+            Overwrite existing registered data and registrations
+        """
+
         return self._overwrite_registered
     
     @overwrite_registered.setter
     def overwrite_registered(self, value: bool):
+        """Set the overwrite_registered flag.
+        
+        Parameters
+        ----------
+        value : bool
+            Overwrite existing registered data and registrations
+        """
+
         self._overwrite_registered = value
         
     def register_all_tiles(self):
+        """Helper function to register all tiles."""
         for tile_id in tqdm(self._datastore.tile_ids,desc="tiles"):
             self.tile_id=tile_id
             self._load_raw_data()
@@ -135,15 +201,21 @@ class DataRegistration:
             self._apply_registration_to_bits()
             
     def register_one_tile(self, tile_id: Union[int,str]):
+        """Helper function to register one tile.
+        
+        Parameters
+        ----------
+        tile_id : Union[int,str]
+            Tile id
+        """
+
         self.tile_id = tile_id
         self._load_raw_data()
         self._generate_registrations()
         self._apply_registration_to_bits()
 
     def _load_raw_data(self):
-        """
-        Load raw data across rounds for one tile,
-        """
+        """Load raw data across rounds for one tile."""
 
         self._data_raw = []
         stage_positions = []
@@ -219,7 +291,7 @@ class DataRegistration:
                     temp = ref_image_decon[0:1,0:1,0:1].astype(np.float32)
                     del temp
                     gc.collect()
-                except Exception:
+                except FileNotFoundError :
                     ref_image_decon = self._datastore.load_local_registered_image(
                         tile=self._tile_id,
                         round=self._round_ids[0],
@@ -408,9 +480,7 @@ class DataRegistration:
                 gc.collect()
 
     def _apply_registration_to_bits(self):
-        """Generate ufish + deconvolved, registered readout data and save to datastore.
-        
-        """
+        """Generate ufish + deconvolved, registered readout data and save to datastore."""
         
         for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bits')):
 
@@ -617,5 +687,14 @@ class DataRegistration:
                 
                 
 def no_op(*args, **kwargs):
-    """Function to monkey patch print to suppress output"""
+    """Function to monkey patch print to suppress output.
+    
+    Parameters
+    ----------
+    *args
+        Variable length argument list
+    **kwargs
+        Arbitrary keyword arguments
+    """
+
     pass
