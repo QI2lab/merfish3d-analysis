@@ -20,6 +20,8 @@ import pandas as pd
 import numpy as np
 import json
 from itertools import product
+from concurrent.futures import TimeoutError
+from zarr.errors import ZarrError
 
 class qi2labDataStore:
     """API to qi2lab MERFISH store.
@@ -407,7 +409,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future=False,
             )
-        except (IOError, OSError, zarr.errors.ZarrError):
+        except (IOError, OSError, ZarrError):
             print(r"Could not access calibrations.zarr/noise_map")
 
     @property
@@ -444,7 +446,7 @@ class qi2labDataStore:
                 self._zarrv2_spec,
                 return_future=False,
             )
-        except (IOError, OSError, zarr.errors.ZarrError):
+        except (IOError, OSError, ZarrError):
             print(r"Could not access calibrations.zarr/shading_maps")
 
     @property
@@ -1172,7 +1174,7 @@ class qi2labDataStore:
             else:
                 write_future.result()
                 return None
-        except (IOError, OSError, concurrent.futures.TimeoutError):
+        except (IOError, OSError, TimeoutError):
             print("Error writing zarr array.")
 
     @staticmethod
@@ -1272,7 +1274,7 @@ class qi2labDataStore:
                         spec=self._zarrv2_spec.copy(),
                     )
                 ).result()
-            except (IOError, OSError, zarr.errors.ZarrError):
+            except (IOError, OSError, ZarrError):
                 print("Calibration psfs missing.")
 
             del current_local_zarr_path
@@ -1381,7 +1383,7 @@ class qi2labDataStore:
                         self._get_kvstore_key(current_local_zarr_path),
                         self._zarrv2_spec.copy(),
                     )
-                except (IOError, OSError, zarr.errors.ZarrError):
+                except (IOError, OSError, ZarrError):
                     print(tile_id, round_id)
                     print("Corrected polyDT data missing.")
 
@@ -1420,7 +1422,7 @@ class qi2labDataStore:
                         self._get_kvstore_key(current_local_zarr_path),
                         self._zarrv2_spec.copy(),
                     )
-                except (IOError, OSError, zarr.errors.ZarrError):
+                except (IOError, OSError, ZarrError):
                     print(tile_id, bit_id)
                     print("Corrected readout data missing.")
 
@@ -1458,7 +1460,7 @@ class qi2labDataStore:
                             self._get_kvstore_key(current_local_zarr_path),
                             self._zarrv2_spec.copy(),
                         )
-                    except (IOError, OSError, zarr.errors.ZarrError):
+                    except (IOError, OSError, ZarrError):
                         print(tile_id, round_id)
                         print("Optical flow registration data missing.")
 
@@ -1474,7 +1476,7 @@ class qi2labDataStore:
                         self._get_kvstore_key(current_local_zarr_path),
                         self._zarrv2_spec.copy(),
                     )
-                except (IOError, OSError, zarr.errors.ZarrError):
+                except (IOError, OSError, ZarrError):
                     print(tile_id, round_id)
                     print("Registered polyDT data missing.")
 
@@ -1491,7 +1493,7 @@ class qi2labDataStore:
                         self._get_kvstore_key(current_local_zarr_path),
                         self._zarrv2_spec.copy(),
                     )
-                except (IOError, OSError, zarr.errors.ZarrError):
+                except (IOError, OSError, ZarrError):
                     print(tile_id, round_id)
                     print("Registered readout data missing.")
 
@@ -1507,7 +1509,7 @@ class qi2labDataStore:
                         self._get_kvstore_key(current_local_zarr_path),
                         self._zarrv2_spec.copy(),
                     )
-                except (IOError, OSError, zarr.errors.ZarrError):
+                except (IOError, OSError, ZarrError):
                     print(tile_id, round_id)
                     print("Registered ufish prediction missing.")
 
@@ -1574,7 +1576,7 @@ class qi2labDataStore:
                     self._get_kvstore_key(current_local_zarr_path),
                     self._zarrv2_spec.copy(),
                 )
-            except (IOError, OSError, zarr.errors.ZarrError):
+            except (IOError, OSError, ZarrError):
                 print("Fused data missing.")
 
         # check and validate cellpose segmentation
@@ -1591,7 +1593,7 @@ class qi2labDataStore:
                     self._get_kvstore_key(current_local_zarr_path),
                     self._zarrv2_spec.copy(),
                 )
-            except (IOError, OSError, zarr.errors.ZarrError):
+            except (IOError, OSError, ZarrError):
                 print("Cellpose data missing.")
 
             cell_outlines_path = (
@@ -2468,7 +2470,7 @@ class qi2labDataStore:
                 return_future,
             )
             return corrected_image
-        except (IOError, OSError, zarr.errors.ZarrError):
+        except (IOError, OSError, ZarrError):
             print("Error loading corrected image.")
             return None
 
@@ -2598,7 +2600,7 @@ class qi2labDataStore:
             attributes["shading_correction"] = (shading_correction,)
             attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
-        except (IOError, OSError, concurrent.futures.TimeoutError) as e:
+        except (IOError, OSError, TimeoutError) as e:
             print(e)
             print("Error saving corrected image.")
             return None
@@ -2841,7 +2843,7 @@ class qi2labDataStore:
             )
 
             return of_xform_px, downsampling
-        except (IOError, OSError, zarr.errors.ZarrError) as e:
+        except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error loading optical flow transform.")
             return None
@@ -2939,7 +2941,7 @@ class qi2labDataStore:
             attributes = self._load_from_json(current_local_zattrs_path)
             attributes["opticalflow_downsampling"] = downsampling
             self._save_to_json(attributes, current_local_zattrs_path)
-        except (IOError, OSError, concurrent.futures.TimeoutError):
+        except (IOError, OSError, TimeoutError):
             print("Error saving optical flow transform.")
             return None
 
@@ -3047,7 +3049,7 @@ class qi2labDataStore:
                 return_future,
             )
             return registered_decon_image
-        except (IOError, OSError, zarr.errors.ZarrError) as e:
+        except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error loading registered deconvolved image.")
             return None
@@ -3168,7 +3170,7 @@ class qi2labDataStore:
             attributes = self._load_from_json(current_local_zattrs_path)
             attributes["deconvolution"] = deconvolution
             self._save_to_json(attributes, current_local_zattrs_path)
-        except (IOError, OSError, concurrent.futures.TimeoutError):
+        except (IOError, OSError, TimeoutError):
             print("Error saving corrected image.")
             return None
 
@@ -3246,7 +3248,7 @@ class qi2labDataStore:
                 return_future,
             )
             return registered_ufish_image
-        except (IOError, OSError, zarr.errors.ZarrError) as e:
+        except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error loading U-FISH image.")
             return None
@@ -3318,7 +3320,7 @@ class qi2labDataStore:
                 self._zarrv2_spec.copy(),
                 return_future,
             )
-        except (IOError, OSError, zarr.errors.ZarrError) as e:
+        except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error saving U-Fish image.")
             return None
@@ -3606,7 +3608,7 @@ class qi2labDataStore:
             origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
             spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
             return fused_image, affine_zyx_um, origin_zyx_um, spacing_zyx_um
-        except (IOError, OSError, zarr.errors.ZarrError):
+        except (IOError, OSError, ZarrError):
             print("Error loading globally registered, fused image.")
             return None
 
@@ -3664,7 +3666,7 @@ class qi2labDataStore:
                 return_future,
             )
             self._save_to_json(attributes, current_local_zattrs_path)
-        except (IOError, OSError, concurrent.futures.TimeoutError):
+        except (IOError, OSError, TimeoutError):
             print("Error saving fused image.")
             return None
         
@@ -3860,7 +3862,7 @@ class qi2labDataStore:
                 return_future,
             )
             return fused_image
-        except (IOError, OSError, zarr.errors.ZarrError):
+        except (IOError, OSError, ZarrError):
             print("Error loading Cellpose image.")
             return None
 
@@ -3906,7 +3908,7 @@ class qi2labDataStore:
                 return_future,
             )
             self._save_to_json(attributes, current_local_zattrs_path)
-        except (IOError, OSError, concurrent.futures.TimeoutError):
+        except (IOError, OSError, TimeoutError):
             print("Error saving Cellpose image.")
             return None
 
