@@ -82,6 +82,7 @@ def replace_hot_pixels(
 
 
 def correct_shading(
+    noise_map: ArrayLike,
     darkfield_image: ArrayLike, 
     shading_image: ArrayLike, 
     data: ArrayLike

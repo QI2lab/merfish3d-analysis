@@ -52,9 +52,9 @@ def read_metadatafile(fname: Union[str,Path]) -> dict:
     # convert values to appropriate datatypes
     vals = scan_data_raw_lines[1].split(",")
     for ii in range(len(vals)):
-        if re.fullmatch("\d+", vals[ii]):
+        if re.fullmatch(r"\d+", vals[ii]):
             vals[ii] = int(vals[ii])
-        elif re.fullmatch("\d*.\d+", vals[ii]):
+        elif re.fullmatch(r"\d*.\d+", vals[ii]):
             vals[ii] = float(vals[ii])
         elif vals[ii].lower() == "False".lower():
             vals[ii] = False
@@ -139,7 +139,7 @@ def return_data_zarr(dataset_path: Union[Path,str],
 
     Parameters
     ----------
-    dataset: Dataset
+    dataset_path: Dataset
         pycromanager dataset object
     ch_idx: int
         channel index in ZarrTiffStore file

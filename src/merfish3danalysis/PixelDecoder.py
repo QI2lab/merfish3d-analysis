@@ -50,8 +50,8 @@ class PixelDecoder:
 
     Parameters
     ----------
-    dataset_path : Union[str, Path]
-        Path to Zarr dataset
+    datastore: qi2labDataStore
+        qi2labDataStore object
     use_mask: Optiona[bool] = False
         use mask stored in polyDT directory
     merfish_bits: int = 16

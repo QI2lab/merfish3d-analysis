@@ -247,9 +247,7 @@ def compute_rigid_transform(image1: ArrayLike,
 def warp_coordinates(coordinates: ArrayLike, 
                      tile_translation_transform: sitk.Transform,
                      voxel_size_zyx_um: ArrayLike,
-                     displacement_field_transform: Optional[sitk.Transform] = None,
-                     stage_translation_transform: Optional[sitk.Transform] = None,
-                     stage_refine_translation_transform: Optional[sitk.Transform] = None) -> ArrayLike:
+                     displacement_field_transform: Optional[sitk.Transform] = None) -> ArrayLike:
     """
     First apply a translation transform to the coordinates, then warp them using a given displacement field.
 
@@ -260,8 +258,6 @@ def warp_coordinates(coordinates: ArrayLike,
         MUST be in xyz order!
     voxel_size_zyx_um: ArrayLike
         physical pixel spacing
-    translation_transform: sitk Translation transform
-        simpleITK translation transform
     displacement_field_transform: sitk DisplacementField transform
         simpleITK displacement field transform
         

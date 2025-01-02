@@ -1,21 +1,31 @@
+site_name: MERFISH3D Analysis
 
-site_name: MERFISH3D Analysis Documentation
 theme:
-  name: material
+  name: material 
+
+markdown_extensions:
+  - toc:
+      permalink: true
+
 nav:
   - Home: index.md
-  - Examples:
-      - Example 1: examples/example1.md
-      - Example 2: examples/example2.md
-  - API Reference:
-      - MERFISH3D Analysis: reference/merfish3danalysis.md
-      - Utilities: reference/utils.md
+  - Reference:
+      - Overview: reference/index.md
+      - Classes:
+          - DataRegistration: reference/classes/DataRegistration.md
+          - PixelDecoder: reference/classes/PixelDecoder.md
+          - qi2labDataStore: reference/classes/qi2labDataStore.md
+      - Modules:
+          - dataio: reference/modules/dataio.md
+          - imageprocessing: reference/modules/imageprocessing.md
+          - registration: reference/modules/registration.md
+          - opmtools: reference/modules/opmtools.md
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
-          paths: [src]
-markdown_extensions:
-  - toc:
-      permalink: true
+          options:
+            docstring_style: numpy
+          setup_commands:
+            - import sys; sys.path.insert(0, "src/")

@@ -35,13 +35,13 @@ def deskew_shape_estimator(
 
     Parameters
     ----------
-    shape: Sequence[int]
+    input_shape: Sequence[int]
         shape of oblique array
     theta: float
         angle relative to coverslip
     distance: float
         step between image planes along coverslip
-    pizel_size: float
+    pixel_size: float
         in-plane camera pixel size in OPM coordinates
 
     Returns
@@ -85,7 +85,7 @@ def deskew(
         angle relative to coverslip
     distance: float
         step between image planes along coverslip
-    pizel_size: float
+    pixel_size: float
         in-plane camera pixel size in OPM coordinates
 
     Returns

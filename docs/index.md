@@ -9,4 +9,4 @@ MERFISH3D Analysis provides GPU-accelerated post-processing for MERFISH data.
 - Processing capabilities for widefield, standard, and skewed lightsheet data.
 - GPU-accelerated image processing and decoding.
 
-For more information, check out the [API Reference](reference/merfish3danalysis.md).
+For more information, check out the [API Reference](reference/index.md).

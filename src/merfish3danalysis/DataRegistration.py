@@ -605,7 +605,7 @@ class DataRegistration:
                     
                 data_decon_registered[data_decon_registered<0.]=0.0
 
-                builtins.print = no_op
+                builtins.print = _no_op
                 ufish = UFish(device="cuda")
                 ufish.load_weights_from_internet()
 
@@ -691,7 +691,7 @@ class DataRegistration:
                 gc.collect()
                 
                 
-def no_op(*args, **kwargs):
+def _no_op(*args, **kwargs):
     """Function to monkey patch print to suppress output.
     
     Parameters
