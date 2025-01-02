@@ -43,6 +43,13 @@ dev = [
     "pytest",
     "pytest-mock"
 ]
+docs = [
+    "mkdocs",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "mkdocs-gen-files",
+    "mkdocs-literate-nav",
+]
 
 [project.urls]
 Source = "https://github.com/qi2lab/merfish3d-analysis"

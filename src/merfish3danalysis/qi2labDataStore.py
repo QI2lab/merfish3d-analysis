@@ -1,15 +1,15 @@
 """
-qi2labDataStore: Interface to qi2lab MERFISH datastore.
+Interface to qi2lab MERFISH datastore.
 
-This module contains the methods and attributes to 
-create or interact with the qi2lab MERFISH datastore. 
+This module provides methods and attributes to create or interact with
+the qi2lab MERFISH datastore. The filestore structure is further described
+in the merfish3d-analysis documentation.
 
-The filestore structure are further described in the 
-merfish3d-analysis documentation.
-
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/12 - docstrings and exception types
-Shepherd 2024/07 - initial commit
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/12**: Updated docstrings and exception types.
+- **2024/07**: Initial commit.
 """
 
 from typing import Union, Optional, Sequence, Collection

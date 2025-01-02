@@ -18,6 +18,8 @@ mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.08 p
 
 Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
+To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is then available in your web browser at `http://127.0.0.1:8000/`.
+
 ## qi2lab MERFISH zarr layout v0.3
 <details>
 <summary>file format</summary>

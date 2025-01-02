@@ -1,9 +1,14 @@
 """
-PixelDecoder: Perform pixel-based decoding for qi2lab widefield MERFISH data using GPU acceleration.
+Perform pixel-based decoding for qi2lab widefield MERFISH data using GPU acceleration.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/03 - rework of GPU logic to reduce out-of-memory crashes
-Shepherd 2024/01 - updates for qi2lab MERFISH file format v1.0
+This module leverages GPU acceleration to decode pixel-based widefield
+MERFISH datasets efficiently.
+
+History:
+---------
+- **2024/12**: Refactor repo structure.
+- **2024/03**: Reworked GPU logic to reduce out-of-memory crashes.
+- **2024/01**: Updated for qi2lab MERFISH file format v1.0.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -45,8 +50,8 @@ class PixelDecoder:
 
     Parameters
     ----------
-    dataset_path : Union[str, Path]
-        Path to Zarr dataset
+    datastore: qi2labDataStore
+        qi2labDataStore object
     use_mask: Optiona[bool] = False
         use mask stored in polyDT directory
     merfish_bits: int = 16
@@ -1564,7 +1569,7 @@ class PixelDecoder:
         for polygon_idx, polygon in enumerate(shapely_polygons):
             try:
                 rtree_index.insert(polygon_idx, polygon.bounds)
-            except RTreeError as e:
+            except rtree.RTreeError as e:
                 print(f"Failed to insert polygon into R-tree: {e}")
 
         def check_point(row):

@@ -1,11 +1,17 @@
 """
 Image registration functions using cucim, scikit-image, and SimpleITK.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/07 - Prepping to remove all Dask usage and integrate these 
-                   functions into DataRegistration class as static_methods.
-Shepherd 2024/01 - Updates for qi2lab MERFISH file format v0.1
-Shepherd 2023/07 - initial commit.
+This module contains functions for image registration leveraging tools
+like cucim, scikit-image, and SimpleITK, optimized for use with
+qi2lab 3D MERFISH data.
+
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/07**: Prepared to remove all Dask usage and integrate functions
+               into the DataRegistration class as static methods.
+- **2024/01**: Updated for qi2lab MERFISH file format v0.1.
+- **2023/07**: Initial commit.
 """
 
 import numpy as np
@@ -241,9 +247,7 @@ def compute_rigid_transform(image1: ArrayLike,
 def warp_coordinates(coordinates: ArrayLike, 
                      tile_translation_transform: sitk.Transform,
                      voxel_size_zyx_um: ArrayLike,
-                     displacement_field_transform: Optional[sitk.Transform] = None,
-                     stage_translation_transform: Optional[sitk.Transform] = None,
-                     stage_refine_translation_transform: Optional[sitk.Transform] = None) -> ArrayLike:
+                     displacement_field_transform: Optional[sitk.Transform] = None) -> ArrayLike:
     """
     First apply a translation transform to the coordinates, then warp them using a given displacement field.
 
@@ -254,8 +258,6 @@ def warp_coordinates(coordinates: ArrayLike,
         MUST be in xyz order!
     voxel_size_zyx_um: ArrayLike
         physical pixel spacing
-    translation_transform: sitk Translation transform
-        simpleITK translation transform
     displacement_field_transform: sitk DisplacementField transform
         simpleITK displacement field transform
         
