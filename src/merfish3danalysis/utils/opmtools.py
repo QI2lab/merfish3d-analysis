@@ -1,11 +1,16 @@
 """
-OPM specific data handling tools
+OPM-specific data handling tools.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/07 - initial commit.
+This module provides tools and utilities specifically for handling
+orthogonal plane microscopy (OPM) data.
+
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/07**: Initial commit.
 """
 
-from merfish3danalysis.utils._imageprocessing import (
+from merfish3danalysis.utils.imageprocessing import (
     downsample_axis,
     pad_z,
     remove_padding_z,
@@ -30,13 +35,13 @@ def deskew_shape_estimator(
 
     Parameters
     ----------
-    shape: Sequence[int]
+    input_shape: Sequence[int]
         shape of oblique array
     theta: float
         angle relative to coverslip
     distance: float
         step between image planes along coverslip
-    pizel_size: float
+    pixel_size: float
         in-plane camera pixel size in OPM coordinates
 
     Returns
@@ -80,7 +85,7 @@ def deskew(
         angle relative to coverslip
     distance: float
         step between image planes along coverslip
-    pizel_size: float
+    pixel_size: float
         in-plane camera pixel size in OPM coordinates
 
     Returns

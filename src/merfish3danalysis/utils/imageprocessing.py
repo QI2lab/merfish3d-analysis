@@ -1,9 +1,14 @@
 """
-Image processing functions for qi2lab 3D MERFISH
+Image processing functions for qi2lab 3D MERFISH.
 
-Shepherd 2024/12 - refactor repo structure
-Shepherd 2024/07 - add numba'ed downsampling, padding helper functions, and
-                   chunked GPU deconvolution.
+This module includes various utilities for image processing, such as
+downsampling, padding, and chunked GPU-based deconvolution.
+
+History:
+---------
+- **2024/12**: Refactored repo structure.
+- **2024/07**: Added numba-accelerated downsampling, padding helper functions,
+               and chunked GPU deconvolution.
 """
 
 import numpy as np
@@ -77,6 +82,7 @@ def replace_hot_pixels(
 
 
 def correct_shading(
+    noise_map: ArrayLike,
     darkfield_image: ArrayLike, 
     shading_image: ArrayLike, 
     data: ArrayLike

@@ -2,25 +2,25 @@
 
 _WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes. Examples of running the package are found in `/Examples`.
 
-GPU accelerated post-processing for 3D MERFISH data. This package currently **Linux only** due to RAPIDS.AI package availabilty.
+GPU accelerated post-processing for 3D MERFISH data. This package currently **Linux only** due to RAPIDS.AI package availabilty. There are examples on how to convert data into our `Datastore` object in the examples folder. Additionally, there are two examples using publicly available data. One with a simulation (`statphysbio_synthetic`) and one from Brain Image Library data (`zhuang_lab`). 
 
 ## Installation
 
 Create a python 3.10 environment using your favorite package manager, e.g.
-```mamba create -n wf-merfish python=3.10```
+```mamba create -n merfish3d python=3.10```
 
 Activate the environment and install the GPU dependencies.
 
 ```
-mamba activate wf-merfish
+mamba activate merfish3d
 mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.08 pylibraft=24.08 raft-dask=24.08 cudadecon "cuda-version>=12.0,<=12.5" cudnn cutensor nccl onnx onnxruntime pytorch torchvision 'pytorch=*=*cuda*'
 ```
 
-Finally, repository using ```git clone https://github.com/QI2lab/wf-merfish``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
+Finally, repository using ```git clone https://github.com/QI2lab/merfish3d-analysis``` and then install using `pip install .` or for interactive editing use `pip install -e .`.
 
-There are examples on how to convert data into our `Datastore` object in the examples folder. Additionally, there are two examples using publicly available data. One with a simulation (`statphysbio_synthetic`) and one from Brain Image Library data (`zhuang_lab`). 
+To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is then available in your web browser at `http://127.0.0.1:8000/`.
 
-## qi2lab Datastore layout v0.3
+## qi2lab datastore zarr layout v0.3
 <details>
 <summary>file format</summary>
   
