@@ -321,7 +321,6 @@ class DataRegistration:
                     background=self._decon_background,
                 )
 
-
                 downsample_factor = 2
                 if downsample_factor > 1:
                     ref_image_decon_ds = downsample_image_isotropic(
@@ -393,7 +392,7 @@ class DataRegistration:
                     downsample_factor=downsample_factor,
                     projection=None,
                 )
-
+                
                 final_xyz_shift = (
                     np.asarray(initial_xy_shift)
                     + np.asarray(intial_z_shift)
@@ -410,7 +409,7 @@ class DataRegistration:
                 mov_image_decon = apply_transform(
                     ref_image_decon, mov_image_decon, xyz_transform_4x
                 )
-
+                
                 if self._perform_optical_flow:
                     downsample_factor = 3
                     if downsample_factor > 1:

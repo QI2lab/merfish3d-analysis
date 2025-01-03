@@ -30,7 +30,7 @@ def local_register_data(root_path: Path):
     
     # initialize registration class
     registration_factory = DataRegistration(
-        datastore=datastore, perform_optical_flow=True, overwrite_registered=False
+        datastore=datastore, perform_optical_flow=True, overwrite_registered=True
     )
 
     # run local registration across rounds
@@ -244,6 +244,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20241212_OB_22bMERFISH_1")
-    #local_register_data(root_path)
+    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=True)

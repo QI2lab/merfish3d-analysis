@@ -375,9 +375,13 @@ def convert_data(
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
-            raw_image = np.swapaxes(raw_image, 0, 1)
-            if tile_idx == 0 and round_idx == 0:
-                correct_shape = raw_image.shape
+            if camera == "orcav3":
+                raw_image = np.swapaxes(raw_image, 0, 1)
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
+            elif camera == "flir":
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
                 print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
                 print("Found shape: " + str(raw_image.shape))
