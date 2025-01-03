@@ -106,8 +106,12 @@ def convert_data(
         dataset = Dataset(str(dataset_path))
         channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
         ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-        camera_id = ndtiff_metadata["Camera-CameraName"]
-        camera_id_alt = ndtiff_metadata["Core-Camera"]
+        try:
+            camera_id = ndtiff_metadata["Camera-CameraName"]
+            camera_id_alt = None
+        except KeyError:
+            camera_id = None
+            camera_id_alt = ndtiff_metadata["Core-Camera"]
         if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
             camera = "orcav3"
             e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
@@ -136,7 +140,16 @@ def convert_data(
         metadata["yellow_active"],
         metadata["red_active"],
     ]
-    channel_order = metadata["channels_reversed"]
+    # this entry was not contained in pre-v8 microscope csv, it was instead stored
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
+    # access pattern easier.
+    try:
+        channel_order = metadata["channels_reversed"]
+    except KeyError:
+        if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
+            channel_order = "forward"
+        else:
+            channel_order = "reversed"
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
@@ -362,9 +375,13 @@ def convert_data(
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
-            raw_image = np.swapaxes(raw_image, 0, 1)
-            if tile_idx == 0 and round_idx == 0:
-                correct_shape = raw_image.shape
+            if camera == "orcav3":
+                raw_image = np.swapaxes(raw_image, 0, 1)
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
+            elif camera == "flir":
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
                 print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
                 print("Found shape: " + str(raw_image.shape))

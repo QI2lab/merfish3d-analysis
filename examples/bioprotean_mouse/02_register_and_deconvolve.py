@@ -2,7 +2,6 @@
 Perform registration on Human OB qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
-Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
@@ -31,7 +30,7 @@ def local_register_data(root_path: Path):
     
     # initialize registration class
     registration_factory = DataRegistration(
-        datastore=datastore, perform_optical_flow=True, overwrite_registered=False
+        datastore=datastore, perform_optical_flow=True, overwrite_registered=True
     )
 
     # run local registration across rounds
@@ -215,6 +214,8 @@ def global_register_data(
         del polyDT_fused
         
         filename = 'polyDT_max_projection.ome.tiff'
+        cellpose_path = datastore._datastore_path / Path("segmentation") / Path("cellpose")
+        cellpose_path.mkdir(exist_ok=True)
         filename_path = datastore._datastore_path / Path("segmentation") / Path("cellpose") / Path(filename)
         with TiffWriter(filename_path, bigtiff=True) as tif:
             metadata={
