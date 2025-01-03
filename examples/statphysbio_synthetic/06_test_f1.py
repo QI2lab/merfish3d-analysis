@@ -6,7 +6,7 @@ Shepherd 2024/12 - create script to run on simulation.
 
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 import pandas as pd
 from scipy.spatial import cKDTree

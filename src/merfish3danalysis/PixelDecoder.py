@@ -1541,6 +1541,186 @@ class PixelDecoder:
             self._df_filtered_barcodes["cell_id"] = -1
             self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
+            
+    def _filter_all_barcodes_LR(self, fdr_target: float = 0.05):
+        """Filter barcodes using a classifier and FDR target.
+
+        Uses a logistic regression classifier to predict whether a barcode is a blank or not.
+
+        Parameters
+        ----------
+        fdr_target : float = 0.05
+            False discovery rate target. Default 0.05.
+        """
+
+        from sklearn.model_selection import train_test_split
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import classification_report
+        from imblearn.over_sampling import SMOTE
+
+        self._df_barcodes_loaded["X"] = ~self._df_barcodes_loaded[
+            "gene_id"
+        ].str.startswith("Blank")
+
+        if self._is_3D:
+            columns = [
+                "X",
+                "area",
+                "signal_mean",
+                "s-b_mean",
+                "distance_mean",
+                "moments_normalized-0-0-2",
+                "moments_normalized-0-0-3",
+                "moments_normalized-0-1-1",
+                "moments_normalized-0-1-2",
+                "moments_normalized-0-1-3",
+                "moments_normalized-0-2-0",
+                "moments_normalized-0-2-1",
+                "moments_normalized-0-2-3",
+                "moments_normalized-0-3-0",
+                "moments_normalized-0-3-1",
+                "moments_normalized-0-3-2",
+                "moments_normalized-0-3-3",
+                "inertia_tensor_eigvals-0",
+                "inertia_tensor_eigvals-1",
+                "inertia_tensor_eigvals-2",
+            ]
+        else:
+            columns = [
+                "X",
+                "area",
+                "signal_mean",
+                "s-b_mean",
+                "distance_mean",
+                "moments_normalized-0-2",
+                "moments_normalized-0-3",
+                "moments_normalized-1-1",
+                "moments_normalized-1-2",
+                "moments_normalized-1-3",
+                "moments_normalized-2-0",
+                "moments_normalized-2-1",
+                "moments_normalized-2-2",
+                "moments_normalized-2-3",
+                "moments_normalized-3-0",
+                "moments_normalized-3-1",
+                "moments_normalized-3-2",
+                "moments_normalized-3-3",
+                "inertia_tensor_eigvals-0",
+                "inertia_tensor_eigvals-1",
+            ]
+
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns]
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns]
+        print("dataframe lengths")
+        print(len(df_true),len(df_false))
+
+        if len(df_false) > 0:
+            df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
+            df_combined = pd.concat([df_true_sampled, df_false])
+            x = df_combined.drop("X", axis=1)
+            y = df_combined["X"]
+            X_train, X_test, y_train, y_test = train_test_split(
+                x, y, test_size=0.1, random_state=42
+            )
+
+            if self._verbose > 1:
+                print("generating synthetic samples for class balance")
+            smote = SMOTE(random_state=42)
+            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+
+            if self._verbose > 1:
+                print("scaling features")
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train_resampled)
+            X_test_scaled = scaler.transform(X_test)
+
+            if self._verbose > 1:
+                print("training classifier")
+            logistic = LogisticRegression(solver='liblinear', random_state=42)
+            logistic.fit(X_train_scaled, y_train_resampled)
+            predictions = logistic.predict(X_test_scaled)
+
+            if self._verbose > 1:
+                print(classification_report(y_test, predictions))
+
+            if self._verbose > 1:
+                print("predicting on full data")
+
+            full_data_scaled = scaler.transform(self._df_barcodes_loaded[columns[1:]])
+            self._df_barcodes_loaded["predicted_probability"] = logistic.predict_proba(
+                full_data_scaled
+            )[:, 1]
+
+            if self._verbose > 1:
+                print("filtering blanks")
+
+            coarse_threshold = 0
+            for threshold in np.arange(0, 1, 0.1):
+                fdr = self.calculate_fdr(
+                    self._df_barcodes_loaded,
+                    threshold,
+                    self._blank_count,
+                    self._barcode_count,
+                    self._verbose,
+                )
+                if fdr <= fdr_target:
+                    coarse_threshold = threshold
+                    break
+
+            fine_threshold = coarse_threshold
+            for threshold in np.arange(
+                coarse_threshold - 0.1, coarse_threshold + 0.1, 0.01
+            ):
+                fdr = self.calculate_fdr(
+                    self._df_barcodes_loaded,
+                    threshold,
+                    self._blank_count,
+                    self._barcode_count,
+                    self._verbose,
+                )
+                if fdr <= fdr_target:
+                    fine_threshold = threshold
+                    break
+
+            df_above_threshold = self._df_barcodes_loaded[
+                self._df_barcodes_loaded["predicted_probability"] > fine_threshold
+            ]
+            self._df_filtered_barcodes = df_above_threshold[
+                [
+                    "tile_idx",
+                    "gene_id",
+                    "global_z",
+                    "global_y",
+                    "global_x",
+                    "distance_mean",
+                ]
+            ].copy()
+            self._df_filtered_barcodes["cell_id"] = -1
+            self._barcodes_filtered = True
+
+            if self._verbose > 1:
+                print(f"fdr : {fdr}")
+                print(f"retained barcodes: {len(self._df_filtered_barcodes)}")
+
+            del df_above_threshold, full_data_scaled
+            del (
+                logistic,
+                predictions,
+                X_train,
+                X_test,
+                y_test,
+                y_train,
+                X_train_scaled,
+                X_test_scaled,
+            )
+            del df_true, df_false, df_true_sampled, df_combined
+            gc.collect()
+        else:
+            self._df_filtered_barcodes = self._df_barcodes_loaded.copy()
+            self._df_filtered_barcodes["cell_id"] = -1
+            self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
+            self._barcodes_filtered = True
 
     def _assign_cells(self):
         """Assign cells to barcodes using Cellpose ROIs."""
@@ -1821,7 +2001,7 @@ class PixelDecoder:
                     ufish_threshold=ufish_threshold,
                     use_normalization=use_normalization,
                 )
-                self._save_barcodes(format="parquet")
+                self._save_barcodes()
             self._load_all_barcodes()
             if self._verbose >= 1:
                 print("---")
@@ -1884,19 +2064,19 @@ class PixelDecoder:
                 magnitude_threshold=self._magnitude_threshold,
             )
             self._extract_barcodes(minimum_pixels=minimum_pixels)
-            self._save_barcodes(format="parquet")
+            self._save_barcodes()
             self._cleanup()
 
         self._load_tile_decoding = True
         self._load_all_barcodes()
         self._load_tile_decoding = False
         self._verbose = 2
-        self._filter_all_barcodes(fdr_target=fdr_target)
+        self._filter_all_barcodes_LR(fdr_target=fdr_target)
         self._verbose = 1
         self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
-        self._save_barcodes(format="parquet")
+        self._save_barcodes()
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
         self._cleanup()
