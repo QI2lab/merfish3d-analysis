@@ -121,11 +121,11 @@ def compute_rigid_transform(image1: ArrayLike,
         reference image
     image2: ArrayLike
         moving image
-    use_mask: Optional[bool]
+    use_mask: Optional[bool], default False
         use mask for middle 1/3 of image
-    downsample_factor: Optional[float]
+    downsample_factor: Optional[float], default 4.0
         amount of downsampling applied before calling registration
-    projection: Optional[str]
+    projection: Optional[str], default None
         projection method to use
 
     Returns
@@ -258,7 +258,7 @@ def warp_coordinates(coordinates: ArrayLike,
         MUST be in xyz order!
     voxel_size_zyx_um: ArrayLike
         physical pixel spacing
-    displacement_field_transform: sitk DisplacementField transform
+    displacement_field_transform: Optional[sitk DisplacementField transform], default None
         simpleITK displacement field transform
         
     Returns
@@ -299,7 +299,7 @@ def make_flow_vectors(field: Union[ArrayLike,list[ArrayLike]],
     ----------
     field: ArrayLike or list[ArrayLike]
         Result from scikit-image or cucim ILK or TLV1 methods, or from DEEDS.
-    mask: ArrayLike
+    mask: ArrayLike, default None
         Boolean mask to select areas where the flow field needs to be computed.
     
     Returns
