@@ -9,6 +9,8 @@ extract the correct parameters.
 
 Required user parameters for system dependent variables are at end of script.
 
+Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
+Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
@@ -20,8 +22,8 @@ import pandas as pd
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
-from merfish3danalysis.utils._dataio import read_metadatafile
-from merfish3danalysis.utils._imageprocessing import replace_hot_pixels
+from merfish3danalysis.utils.dataio import read_metadatafile
+from merfish3danalysis.utils.imageprocessing import replace_hot_pixels
 from itertools import compress
 from typing import Optional
 
@@ -48,19 +50,19 @@ def convert_data(
         path to baysor options toml
     julia_threads: int
         number of threads to use for Julia
-    channel_names: list[str]
+    channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Optional[Path]
-        path to hot pixel map. Default is None
-    output_path: Optional[Path]
-        path to output directory. Default is None and will be created
+    hot_pixel_image_path: Optional[Path], default None
+        path to hot pixel map. Default of `None` will set it to all zeros.
+    output_path: Optional[Path], default None
+        path to output directory. Default of `None` and will be created
         within the root_path
-    codebook_path: Optional[Path]
-        path to codebook. Default is None and it assumed the file is in
+    codebook_path: Optional[Path], default None
+        path to codebook. Default of `None` assumes the file is in
         the root_path.
-    bit_order_path: Optional[Path]
+    bit_order_path: Optional[Path], default None
         path to bit order file. This file defines what bits are present in each
-        imaging round, in channel order. Default is None and it assumed
+        imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
     """
 
@@ -88,6 +90,10 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
+
+    # this entry was not contained in pre-v8 microscope csv, it was instead stored
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
+    # access pattern easier.
     try:
         camera = metadata["camera"]
     except Exception:
@@ -100,32 +106,53 @@ def convert_data(
         dataset = Dataset(str(dataset_path))
         channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
         ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-        camera_id = ndtiff_metadata["Camera-CameraName"]
-        if camera_id == "C13440-20CU":
+        try:
+            camera_id = ndtiff_metadata["Camera-CameraName"]
+            camera_id_alt = None
+        except KeyError:
+            camera_id = None
+            camera_id_alt = ndtiff_metadata["Core-Camera"]
+        if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
             camera = "orcav3"
             e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
             offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-        else:
+        elif camera_id == "Blackfly S BFS-U3-200S6M" or camera_id_alt == "Blackfly S BFS-U3-200S6M":
             camera = "flir"
             e_per_ADU = 0.03  # this comes from separate calibration
             offset = 0.0  # this comes from separate calibration
         try:
             binning = metadata["binning"]
         except Exception:
-            binning_str = ndtiff_metadata["Camera-Binning"]
-            if binning_str == "1x1":
-                binning = 1
-            elif binning_str == "2x2":
-                binning = 2
+            if camera == "orcav3":
+                binning_str = ndtiff_metadata["Camera-Binning"]
+                if binning_str == "1x1":
+                    binning = 1
+                elif binning_str == "2x2":
+                    binning = 2
+            elif camera == "flir":
+                binning_str = ndtiff_metadata["Binning"]
+                if binning_str == "1":
+                    binning = 1
+                elif binning_str == "2":
+                    binning = 2
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
         metadata["red_active"],
     ]
-    channel_order = metadata["channels_reversed"]
+    # this entry was not contained in pre-v8 microscope csv, it was instead stored
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
+    # access pattern easier.
+    try:
+        channel_order = metadata["channels_reversed"]
+    except KeyError:
+        if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
+            channel_order = "forward"
+        else:
+            channel_order = "reversed"
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
@@ -144,7 +171,7 @@ def convert_data(
         del ndtiff_metadata, next_ndtiff_metadata, dataset
 
     # this entry was not contained in pre-v8 metadata csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         na = metadata["na"]
@@ -152,7 +179,7 @@ def convert_data(
         na = 1.35
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 metadata csv to make the
+    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
         ri = metadata["ri"]
@@ -170,7 +197,7 @@ def convert_data(
     # these entries were not contained in pre-v8 microscope csv. There were
     # instead stored in the imaging data itself.
     #
-    # We added it to > v8 metadata csv to make the access pattern easier.
+    # We added it to > v8 qi2lab-scope metadata csv to make the access pattern easier.
     # The defaults are the "known" defaults for this camera configuration.
 
     if camera == "flir":
@@ -348,9 +375,13 @@ def convert_data(
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
-            raw_image = np.swapaxes(raw_image, 0, 1)
-            if tile_idx == 0 and round_idx == 0:
-                correct_shape = raw_image.shape
+            if camera == "orcav3":
+                raw_image = np.swapaxes(raw_image, 0, 1)
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
+            elif camera == "flir":
+                if tile_idx == 0 and round_idx == 0:
+                    correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
                 print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
                 print("Found shape: " + str(raw_image.shape))
@@ -414,6 +445,10 @@ def convert_data(
                     corrected_x = max_x - stage_x
                 else:
                     corrected_x = stage_x
+            else:
+                corrected_y = stage_y
+                corrected_x = stage_x
+            
             stage_pos_zyx_um = np.asarray(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
@@ -476,18 +511,21 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20241212_OB_22bMERFISH_1")
+    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
     baysor_binary_path = Path(
-        r"/home/dps/Documents/github/Baysor/bin/baysor/bin/./baysor"
+        r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
     baysor_options_path = Path(
-        r"/home/dps/Documents/github/merfish3d-analysis/examples/human_OB/qi2lab_humanOB.toml"
+        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/human_olfactorybulb/qi2lab_humanOB.toml"
     )
     julia_threads = 20
+
+    hot_pixel_image_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7/flir_hot_pixel_image.tif")
 
     convert_data(
         root_path=root_path,
         baysor_binary_path=baysor_binary_path,
         baysor_options_path=baysor_options_path,
         julia_threads=julia_threads,
+        hot_pixel_image_path=hot_pixel_image_path
     )

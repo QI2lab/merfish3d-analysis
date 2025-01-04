@@ -1474,15 +1474,15 @@ class qi2labDataStore:
                     / Path(round_id + ".zarr")
                     / Path("registered_decon_data")
                 )
-
-                try:
-                    self._check_for_zarr_array(
-                        self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec.copy(),
-                    )
-                except (IOError, OSError, ZarrError):
-                    print(tile_id, round_id)
-                    print("Registered polyDT data missing.")
+                if round_id is self._round_ids[0]:
+                    try:
+                        self._check_for_zarr_array(
+                            self._get_kvstore_key(current_local_zarr_path),
+                            self._zarrv2_spec.copy(),
+                        )
+                    except (IOError, OSError, ZarrError):
+                        print(tile_id, round_id)
+                        print("Registered polyDT data missing.")
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
                 current_local_zarr_path = str(

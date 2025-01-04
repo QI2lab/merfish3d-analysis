@@ -1,5 +1,7 @@
 See comments in each file for specifics.
 
+For Flir data, you need to have the camera hot pixel camera image.
+
 Order to run:
 
 01_convert_to_datastore.py (hours)
