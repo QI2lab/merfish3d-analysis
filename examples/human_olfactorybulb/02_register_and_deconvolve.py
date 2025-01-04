@@ -30,7 +30,10 @@ def local_register_data(root_path: Path):
     
     # initialize registration class
     registration_factory = DataRegistration(
-        datastore=datastore, perform_optical_flow=True, overwrite_registered=True
+        datastore=datastore, 
+        perform_optical_flow=True, 
+        overwrite_registered=True,
+        save_all_polyDT_registered=False
     )
 
     # run local registration across rounds
@@ -53,9 +56,8 @@ def global_register_data(
     root_path: Path
         path to experiment
     
-    create_max_proj_tiff: Optional[bool]
-        create max projection tiff in the segmentation/cellpose directory. 
-        Default = True
+    create_max_proj_tiff: Optional[bool], default True
+        create max projection tiff in the segmentation/cellpose directory.
     """
 
     from multiview_stitcher import spatial_image_utils as si_utils

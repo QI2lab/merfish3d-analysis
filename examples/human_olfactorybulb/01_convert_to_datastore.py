@@ -50,19 +50,19 @@ def convert_data(
         path to baysor options toml
     julia_threads: int
         number of threads to use for Julia
-    channel_names: list[str]
+    channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Optional[Path]
-        path to hot pixel map. Default is None
-    output_path: Optional[Path]
-        path to output directory. Default is None and will be created
+    hot_pixel_image_path: Optional[Path], default None
+        path to hot pixel map. Default of `None` will set it to all zeros.
+    output_path: Optional[Path], default None
+        path to output directory. Default of `None` and will be created
         within the root_path
-    codebook_path: Optional[Path]
-        path to codebook. Default is None and it assumed the file is in
+    codebook_path: Optional[Path], default None
+        path to codebook. Default of `None` assumes the file is in
         the root_path.
-    bit_order_path: Optional[Path]
+    bit_order_path: Optional[Path], default None
         path to bit order file. This file defines what bits are present in each
-        imaging round, in channel order. Default is None and it assumed
+        imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
     """
 
