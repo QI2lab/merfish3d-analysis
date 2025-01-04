@@ -44,13 +44,15 @@ class DataRegistration:
     ----------
     datastore : qi2labDataStore
         Initialized qi2labDataStore object
-    overwrite_registered: bool
+    overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
-    perform_optical_flow: bool
+    perform_optical_flow: bool, default False
         Perform optical flow registration
-    decon_iters : Optional[int]
+    save_all_polyDT_registered: bool, default True
+        Save fidicual polyDT rounds > 1. These are not used for analysis. 
+    decon_iters : Optional[int], default 10
         Deconvolution iterations
-    decon_background: Optional[int]
+    decon_background: Optional[float], default 50.0
         Background to substract during deconvolution
     """
         
@@ -59,6 +61,7 @@ class DataRegistration:
         datastore: qi2labDataStore,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = False,
+        save_all_polyDT_registered: bool = True,
         decon_iters: Optional[int] = 10,
         decon_background: Optional[float] = 50.0,
     ):
@@ -73,6 +76,7 @@ class DataRegistration:
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
+        self.save_all_polyDT_registered = save_all_polyDT_registered
         self._decon_iters = decon_iters
         self._decon_background = decon_background
         self._original_print = builtins.print
@@ -472,13 +476,14 @@ class DataRegistration:
                 else:
                     mov_image_decon[mov_image_decon < 0.0] = 0
                     data_registered = mov_image_decon.astype(np.uint16)
-
-                self._datastore.save_local_registered_image(
-                    registered_image=data_registered.astype(np.uint16),
-                    tile=self._tile_id,
-                    deconvolution=True,
-                    round=round_id
-                )
+                    
+                if self.save_all_polyDT_registered:
+                    self._datastore.save_local_registered_image(
+                        registered_image=data_registered.astype(np.uint16),
+                        tile=self._tile_id,
+                        deconvolution=True,
+                        round=round_id
+                    )
 
                 del data_registered
                 gc.collect()
