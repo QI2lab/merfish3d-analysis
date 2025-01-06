@@ -57,7 +57,7 @@ def decode_pixels(
 
     # decode all tiles using iterative normalization weights
     decoder.decode_all_tiles(
-        assign_to_cells=False,
+        assign_to_cells=True,
         prep_for_baysor=True,
         minimum_pixels=minimum_pixels_per_RNA,
         fdr_target=fdr_target,
@@ -70,5 +70,5 @@ def decode_pixels(
         datastore.save_mtx()
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20241212_OB_22bMERFISH_1")
+    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
     decode_pixels(root_path=root_path,run_baysor=True,fdr_target=.05)

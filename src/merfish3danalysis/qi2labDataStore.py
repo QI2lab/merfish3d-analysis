@@ -24,7 +24,7 @@ from concurrent.futures import TimeoutError
 # FALLBACK: what should the Zarr error be?
 try:
     from zarr.errors import ZarrError
-except:
+except Exception:
     ZarrError = Exception
 
 class qi2labDataStore:

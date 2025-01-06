@@ -1616,8 +1616,6 @@ class PixelDecoder:
 
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns] #noqa
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns] #noqa
-        print("dataframe lengths")
-        print(len(df_true),len(df_false))
 
         if len(df_false) > 0:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
@@ -1725,6 +1723,11 @@ class PixelDecoder:
             self._df_filtered_barcodes["cell_id"] = -1
             self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
+            print("Insufficient Blank barcodes called for filtering.")
+
+    @staticmethod
+    def _roi_to_shapely(roi):
+        return Polygon(roi.subpixel_coordinates[:, ::-1])
 
     def _assign_cells(self):
         """Assign cells to barcodes using Cellpose ROIs."""

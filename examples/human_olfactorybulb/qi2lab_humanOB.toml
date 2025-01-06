@@ -9,7 +9,7 @@ exclude_genes = "Blank*"
 min_molecules_per_cell = 20
 
 [segmentation]
-unassigned_prior_label = "0"
+unassigned_prior_label = "1"
 prior_segmentation_confidence = 0.7
 
 [plotting]
