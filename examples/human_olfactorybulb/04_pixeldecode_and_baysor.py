@@ -1,8 +1,7 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
-Shepherd 2024/12 - refactor
-Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
+Shepherd 2024/1 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
@@ -12,9 +11,9 @@ from pathlib import Path
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 9,
+    minimum_pixels_per_RNA: int = 5,
     ufish_threshold: float = 0.5,
-    fdr_target: float = 0.2,
+    fdr_target: float = .05,
     run_baysor: bool = True,
 ):
     """Perform pixel decoding.
@@ -25,24 +24,20 @@ def decode_pixels(
         path to experiment
     merfish_bits : int
         number of bits in codebook
-    minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 9.
-    ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.5
-    fdr_target : float
-        false discovery rate (FDR) target. Default = .2
-        NOTE: This is higher than usual, but we are finding that .05 is too 
-        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we 
-        have implemented. Ongoing effort to fully understand this issue using 
-        synthetic data.
-    run_baysor : bool
-        flag to run Baysor segmentation. Default = True
+    minimum_pixels_per_RNA : int, default = 9
+        minimum pixels with same barcode ID required to call a spot.
+    ufish_threshold : float, default = 0.5
+        threshold to accept ufish prediction. 
+    fdr_target : float, default = .05
+        false discovery rate (FDR) target. 
+    run_baysor : bool, default True
+        flag to run Baysor segmentation.
     """
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    merfish_bits = datastore.num_bits
+    merfish_bits = 16
 
     # initialize decodor class
     decoder = PixelDecoder(
@@ -75,5 +70,5 @@ def decode_pixels(
         datastore.save_mtx()
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    decode_pixels(root_path=root_path,run_baysor=False)
+    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    decode_pixels(root_path=root_path,run_baysor=True,fdr_target=.05)

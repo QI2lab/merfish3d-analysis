@@ -25,15 +25,14 @@ from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
 from random import sample
 from tqdm import tqdm
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon #noqa
 from roifile import roiread
-import json
+import json #noqa
 import rtree
 from scipy.spatial import cKDTree
 import warnings
 import tempfile
 import shutil
-import pylibraft
 
 # filter warning from skimage
 warnings.filterwarnings(
@@ -52,22 +51,27 @@ class PixelDecoder:
     ----------
     datastore: qi2labDataStore
         qi2labDataStore object
-    use_mask: Optiona[bool] = False
-        use mask stored in polyDT directory
-    merfish_bits: int = 16
+    merfish_bits: int, default 16
         number of merfish bits. Assumes that in codebook, MERFISH rounds are [0,merfish_bits].
-    verbose: int = 1
+    verbose: int, default 1
         control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
+    use_mask: Optiona[bool], default False
+        use mask stored in polyDT directory
+    z_range: Optional[Sequence[int]], default None
+        z range to analyze. In integer indices from [0,N] where N is number of
+        z planes.
+    include_blanks: Optional[bool], default True
+        Include Blank codewords in decoding process.
     """
 
     def __init__(
         self,
         datastore: qi2labDataStore,
+        merfish_bits: int = 16,
+        verbose: int = 1,
         use_mask: Optional[bool] = False,
         z_range: Optional[Sequence[int]] = None,
         include_blanks: Optional[bool] = True,
-        merfish_bits: int = 16,
-        verbose: int = 1,
     ):
         self._datastore = datastore
         self._verbose = verbose
@@ -128,7 +132,7 @@ class PixelDecoder:
         
         Parameters
         ----------
-        include_errors : bool = False
+        include_errors : bool, default False
             Include single-bit errors as unique barcodes in the decoding matrix."""
 
         self._barcode_set = cp.asarray(
@@ -184,11 +188,11 @@ class PixelDecoder:
         
         Parameters
         ----------
-        low_percentile_cut : float = 10.0
+        low_percentile_cut : float, default 10.0
             Lower percentile cut for background estimation.
-        high_percentile_cut : float = 90.0
+        high_percentile_cut : float, default 90.0
             Upper percentile cut for normalization estimation.
-        hot_pixel_threshold : int = 50000
+        hot_pixel_threshold : int, default 50000
             Threshold for hot pixel removal.
         """
 
@@ -467,8 +471,8 @@ class PixelDecoder:
         
         Parameters
         ----------
-        ufish_threshold : Optional[float]
-            Threshold for ufish image. Default 0.5
+        ufish_threshold : Optional[float], default 0.5
+            Threshold for ufish image.
         """
 
         if self._verbose > 1:
@@ -567,8 +571,8 @@ class PixelDecoder:
         
         Parameters
         ----------
-        sigma : Tuple[int, int, int]
-            Sigma values for Gaussian filter. Default (3, 1, 1).
+        sigma : Tuple[int, int, int], default [3,1,1]
+            Sigma values for Gaussian filter.
         """
 
         self._image_data_lp = self._image_data.copy()
@@ -683,10 +687,10 @@ class PixelDecoder:
         ----------
         pixel_traces : Union[np.ndarray, cp.ndarray]
             Pixel traces to clip.
-        clip_lower : float = 0.0
-            clip lower bound. Default 0.0.
-        clip_upper : float = 1.0
-            clip upper bound. Default 1.0.
+        clip_lower : float, default 0.0
+            clip lower bound.
+        clip_upper : float, default 1.0
+            clip upper bound.
 
         Returns
         -------
@@ -775,10 +779,11 @@ class PixelDecoder:
 
         Parameters
         ----------
-        distance_threshold : float
-            Distance threshold for decoding. Default 0.5172.
-        magnitude_threshold : float
-            Magnitude threshold for decoding. Default 1.0.
+        distance_threshold : float, default 0.5172.
+            Distance threshold for decoding. The default is for a 4-bit,
+            4-distance Hamming codebook.
+        magnitude_threshold : float, default 1.0.
+            Magnitude threshold for decoding. 
         """
 
         if self._filter_type == "lp":
@@ -908,16 +913,16 @@ class PixelDecoder:
     def _extract_barcodes(
         self, 
         minimum_pixels: int = 2, 
-        maximum_pixels: int = 200
+        maximum_pixels: int = 100
     ):
         """Extract barcodes from decoded image.
 
         Parameters
         ----------
-        minimum_pixels : int
-            Minimum number of pixels for a barcode. Default 2.
-        maximum_pixels : int
-            Maximum number of pixels for a barcode. Default 200.
+        minimum_pixels : int, default 2
+            Minimum number of pixels for a barcode. 
+        maximum_pixels : int, default 100
+            Maximum number of pixels for a barcode. 
         """
 
         if self._verbose > 1:
@@ -1369,10 +1374,9 @@ class PixelDecoder:
 
         Parameters
         ----------
-        fdr_target : float = 0.05
-            False discovery rate target. Default 0.05.
+        fdr_target : float, default 0.05
+            False discovery rate target. 
         """
-
 
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
@@ -1427,10 +1431,10 @@ class PixelDecoder:
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
             ]
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][ #noqa
             columns
         ]  # noqa
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][ #noqa
             columns
         ]  # noqa
 
@@ -1549,8 +1553,8 @@ class PixelDecoder:
 
         Parameters
         ----------
-        fdr_target : float = 0.05
-            False discovery rate target. Default 0.05.
+        fdr_target : float, default 0.05
+            False discovery rate target. 
         """
 
         from sklearn.model_selection import train_test_split
@@ -1610,10 +1614,8 @@ class PixelDecoder:
                 "inertia_tensor_eigvals-1",
             ]
 
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns]
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns]
-        print("dataframe lengths")
-        print(len(df_true),len(df_false))
+        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns] #noqa
+        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns] #noqa
 
         if len(df_false) > 0:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
@@ -1721,6 +1723,11 @@ class PixelDecoder:
             self._df_filtered_barcodes["cell_id"] = -1
             self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
+            print("Insufficient Blank barcodes called for filtering.")
+
+    @staticmethod
+    def _roi_to_shapely(roi):
+        return Polygon(roi.subpixel_coordinates[:, ::-1])
 
     def _assign_cells(self):
         """Assign cells to barcodes using Cellpose ROIs."""
@@ -1782,8 +1789,8 @@ class PixelDecoder:
 
         Parameters
         ----------
-        radius : float
-            Radius for duplicate removal. Default 0.75 microns.
+        radius : float, default 0.75 
+            3D radius, in microns, for duplicate removal. 
         """
 
         self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
@@ -1907,18 +1914,18 @@ class PixelDecoder:
 
         Parameters
         ----------
-        tile_idx : int
+        tile_idx : int, default 0
             Tile index.
-        display_results : bool
-            Display results in napari. Default False.
-        lowpass_sigma : Optional[Sequence[float]]
-            Lowpass sigma. Default (3, 1, 1).
-        minimum_pixels : Optional[float]
-            Minimum number of pixels for a barcode. Default 3.0.
-        use_normalization : Optional[bool]
-            Use normalization. Default True.
-        ufish_threshold : Optional[float]
-            Ufish threshold. Default 0.5.
+        display_results : bool, default False
+            Display results in napari. 
+        lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
+            Lowpass sigma. 
+        minimum_pixels : Optional[float], default 3.0
+            Minimum number of pixels for a barcode. 
+        use_normalization : Optional[bool], default True
+            Use normalization. 
+        ufish_threshold : Optional[float], default 0.5
+            Ufish threshold. 
         """
 
         if use_normalization:
@@ -1953,16 +1960,16 @@ class PixelDecoder:
         
         Parameters
         ----------
-        n_random_tiles : int
-            Number of random tiles. Default 10.
-        n_iterations : int
-            Number of iterations. Default 10.
-        minimum_pixels : float
-            Minimum number of pixels for a barcode. Default 3.0.
-        ufish_threshold : float
-            Ufish threshold. Default 0.5.
-        lowpass_sigma : Optional[Sequence[float]]
-            Lowpass sigma. Default (3, 1, 1).
+        n_random_tiles : int, default 10
+            Number of random tiles. 
+        n_iterations : int, default 10
+            Number of iterations. 
+        minimum_pixels : float, default 3.0
+            Minimum number of pixels for a barcode. 
+        ufish_threshold : float, default 0.5
+            Ufish threshold. 
+        lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
+            Lowpass sigma. 
         """
 
         self._optimize_normalization_weights = True
@@ -2027,18 +2034,18 @@ class PixelDecoder:
 
         Parameters
         ----------
-        assign_to_cells : bool
-            Assign barcodes to cells. Default True.
-        prep_for_baysor : bool
-            Prepare barcodes for Baysor. Default True.
-        lowpass_sigma : Optional[Sequence[float]]
-            Lowpass sigma. Default (3, 1, 1).
-        minimum_pixels : Optional[float]    
-            Minimum number of pixels for a barcode. Default 2.0.
-        ufish_threshold : Optional[float]
-            Ufish threshold. Default 0.5.
-        fdr_target : Optional[float]
-            False discovery rate target. Default 0.05.
+        assign_to_cells : bool, default True
+            Assign barcodes to cells. 
+        prep_for_baysor : bool, default True
+            Prepare barcodes for Baysor. 
+        lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
+            Lowpass sigma. 
+        minimum_pixels : Optional[float], default 2.0
+            Minimum number of pixels for a barcode. 
+        ufish_threshold : Optional[float], default 0.5
+            Ufish threshold. 
+        fdr_target : Optional[float], default 0.05
+            False discovery rate target. 
         """
 
         if self._verbose >= 1:
@@ -2093,12 +2100,12 @@ class PixelDecoder:
 
         Parameters
         ----------
-        assign_to_cells : bool
-            Assign barcodes to cells. Default False.
-        prep_for_baysor : bool
-            Prepare barcodes for Baysor. Default True.
-        fdr_target : Optional[float]
-            False discovery rate target. Default 0.05.
+        assign_to_cells : bool, default False
+            Assign barcodes to cells. 
+        prep_for_baysor : bool, default True
+            Prepare barcodes for Baysor. 
+        fdr_target : Optional[float], default 0.05
+            False discovery rate target. 
         """
 
         self._load_tile_decoding = True
