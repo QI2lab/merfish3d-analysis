@@ -10,7 +10,7 @@ To help efficiently handle the data complexity of 3D MERFISH experiments, we hav
 
 ## DataStore structure
 
-```text
+```plaintext
 /experiment 
 ├── raw_data/ 
 │ ├── <data> (raw experimental data and metadata)
