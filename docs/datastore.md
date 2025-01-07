@@ -10,8 +10,7 @@ To help efficiently handle the data complexity of 3D MERFISH experiments, we hav
 
 ## DataStore structure
 
-.. code-block:: bash
-
+```bash
     /experiment 
     ├── raw_data/ 
     │ ├── <data> (raw experimental data and metadata)
@@ -61,7 +60,7 @@ To help efficiently handle the data complexity of 3D MERFISH experiments, we hav
     | | ├── tileNNNN/
     |
     │ ├── readouts/ (raw and processed data for MERFISH bits)
-
+```
 ## DataStore API
 
 Nearly all parameters are accessible as class properties and all data has helper functions for reading and writing. The full API reference is available at [datastore](reference/classes/qi2labDataStore.md).
