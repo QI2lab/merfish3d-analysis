@@ -2,7 +2,7 @@
 
 _WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes. Examples of running the package are found in `/Examples`.
 
-GPU accelerated post-processing for 3D MERFISH data. This package currently **Linux only** due to RAPIDS.AI package availabilty. There are examples on how to convert data into our `Datastore` object in the examples folder. Additionally, there are two examples using publicly available data. One with a simulation (`statphysbio_synthetic`) and one from Brain Image Library data (`zhuang_lab`). 
+GPU accelerated post-processing for 3D MERFISH data. This package currently **Linux only** due to RAPIDS.AI package availabilty. Documentation is available at [documentation link here]().
 
 ## Installation
 
