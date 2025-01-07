@@ -6,7 +6,7 @@ The goal of this example is to retrieve a simulated 3D MERFISH experiment genera
 
 ## Preliminaries
 
-You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed, `Baysor` properly installed, and our human olfactory bulb 3D MERFISH dataset downloaded. The dataset is ~100 MB and you will need roughly another 100 MB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, global registration, segmentation, pixel decoding, filtering, and cell assignment.
+You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed, `Baysor` properly installed, and the synthetic dataset downloaded. The dataset is ~100 MB and you will need roughly another 100 MB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, global registration, segmentation, pixel decoding, filtering, and cell assignment.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Baysor](https://github.com/kharchenkolab/Baysor)

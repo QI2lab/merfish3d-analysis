@@ -6,9 +6,9 @@ The goal of this example is to run `merfish3d-analysis` on an existing 2D MERFIS
 
 ## Preliminaries
 
-You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed, `Baysor` properly installed, and our human olfactory bulb 3D MERFISH dataset downloaded. The dataset is ~??? GB and you will need roughly another ??? GB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, global registration, segmentation, pixel decoding, filtering, and cell assignment. 
+You need to make sure you have a working python environment with `merfish3d-analysis` properly installed, `Baysor` properly installed, and the Zhuang laboratory mouse brain 2D MERFISH dataset downloaded. The dataset is ~??? GB and you will need roughly another ??? GB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, global registration, segmentation, pixel decoding, filtering, and cell assignment. 
 
-We are only going to analyze one of their mouse brain slices, specifically `mouse001`.
+We are only going to analyze one of their mouse brain slices, specifically `mouse1_sample1_raw`.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Baysor](https://github.com/kharchenkolab/Baysor)
