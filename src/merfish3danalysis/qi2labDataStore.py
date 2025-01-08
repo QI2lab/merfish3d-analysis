@@ -19,6 +19,8 @@ import tensorstore as ts
 import pandas as pd
 import numpy as np
 import json
+from roifile import roiread, roiwrite, ImagejRoi
+from shapely.geometry import Point, Polygon #noqa
 from itertools import product
 from concurrent.futures import TimeoutError
 # FALLBACK: what should the Zarr error be?
@@ -3942,12 +3944,14 @@ class qi2labDataStore:
         """Run Baysor"
         
         Assumes that spots are prepped for Baysor and the Baysor path and options are set.
+        Reformats ROIs into ImageJ style ROIs for later use.
         """
 
         import subprocess
         
         baysor_input_path = self._datastore_path / Path("all_tiles_filtered_decoded_features") / Path("transcripts.parquet")
-        baysor_output_path = self._datastore_path / Path("segmentation")
+        baysor_output_path = self._segmentation_root_path / Path("baysor")
+        baysor_output_path.mkdir(exist_ok=True)
         
         julia_threading = r"JULIA_NUM_THREADS="+str(self._julia_threads)+ " "
         preview_baysor_options = r"preview -c " +str(self._baysor_options)
@@ -3975,6 +3979,42 @@ class qi2labDataStore:
                 command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
                     str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
                 result = subprocess.run(command, shell=True, check=True)
+                
+                ####
+                # Reformat Baysor 3D cell polygons into ImageJ ROI format
+                ####
+                
+                # Load the JSON file
+                baysor_segmentation = baysor_output_path / Path(r"segmentation_polygons_3d.json")
+                with open(baysor_segmentation, 'r') as file:
+                    data = json.load(file)
+                # Parse and group polygons by ID
+                cells = {}
+                for key, value in data.items():
+                    for feature in value.get("features", []):
+                        cell_id = feature["id"]
+                        polygon = feature["geometry"]["coordinates"][0]  # Assume single polygon
+                        z_position = float(key.split(",")[0][1:])  # Extract Z-plane
+
+                        if cell_id not in cells:
+                            cells[cell_id] = []
+                        cells[cell_id].append((z_position, polygon))
+
+                # Prepare ROIs for all cells
+                rois = []
+                for cell_id, polygons in cells.items():
+                    for z, polygon in sorted(polygons):
+                        # Create a 2D array of coordinates
+                        coords = np.array(polygon, dtype=np.float32)  # Shape (n_points, 2)
+                        
+                        # Create an ROI
+                        roi = ImagejRoi.frompoints(coords)
+                        roi.name = f"{cell_id}_z{int(z)}"  # Name the ROI
+                        rois.append(roi)
+
+                # Write all ROIs to a ZIP file   
+                output_file = baysor_output_path / Path(r"3d_cell_rois.zip")
+                roiwrite(output_file, rois)
                 print("Baysor finished with return code:", result.returncode)
             except subprocess.CalledProcessError as e:
                 print("Baysor failed with:", e)
@@ -3994,6 +4034,7 @@ class qi2labDataStore:
 
         current_baysor_spots_path = (
             self._segmentation_root_path
+            / Path("baysor")
             / Path("segmentation.csv")
         )
 
@@ -4018,15 +4059,137 @@ class qi2labDataStore:
         """
 
         current_baysor_outlines_path = (
-            self._segmentation_root_path /  Path("segmentation_polygons_3d.json")
+            self._segmentation_root_path 
+            / Path("baysor") 
+            / Path(r"3d_cell_rois.zip")
         )
 
         if not current_baysor_outlines_path.exists():
             print("Baysor outlines not found.")
             return None
         else:
-            baysor_outlines = self._load_from_microjson(current_baysor_outlines_path)
-            return baysor_outlines
+            baysor_rois = roiread(current_baysor_outlines_path)
+            return baysor_rois
+        
+    def reprocess_and_save_filtered_spots_with_baysor_outlines(self):
+        """Reprocess filtered spots using baysor cell outlines, then save.
+        
+        Loads the 3D cell outlines from Baysor, checks all points to see what 
+        (if any) cell outline that the spot falls within, and then saves the
+        data back to the datastore.
+        """
+        
+        baysor_rois = self.load_global_baysor_outlines()
+        filtered_spots_df = self.load_global_filtered_decoded_spots()
+        
+        parsed_spots_df = filtered_spots_df[
+                [
+                    "gene_id",
+                    "global_z",
+                    "global_y",
+                    "global_x",
+                    "cell_id",
+                    "tile_idx",
+                ]
+        ].copy()
+        parsed_spots_df.rename(
+            columns={
+                "global_x": "x",
+                "global_y": "y",
+                "global_z": "z",
+            },
+            inplace=True,
+        )
+        parsed_spots_df["transcript_id"] = pd.util.hash_pandas_object(
+            parsed_spots_df, index=False
+        )
+        
+        shapely_polygons = {}
+        for roi in baysor_rois:
+            # Extract Z-plane and ROI ID from the ROI name
+            name_parts = roi.name.split('_z')
+            cell_id = int(name_parts[0])  # Assuming ROI name format: "cellID_zZplane"
+            z_plane = float(name_parts[1])  # Continuous Z-plane coordinates
+
+            shapely_polygon = self._roi_to_shapely(roi)
+            if shapely_polygon:
+                if cell_id not in shapely_polygons:
+                    shapely_polygons[cell_id] = []
+                shapely_polygons[cell_id].append((z_plane, shapely_polygon))
+
+        # Interpolate polygons across continuous Z planes for each cell
+        interpolated_polygons = {}
+        for cell_id, polygons in shapely_polygons.items():
+            # Sort polygons by Z-plane
+            polygons = sorted(polygons, key=lambda x: x[0])
+            z_planes, original_polygons = zip(*polygons)
+
+            # Interpolation function for polygon vertices
+            def interpolate_polygon(z):
+                # Find the neighboring Z planes
+                lower_idx = max(i for i in range(len(z_planes)) if z_planes[i] <= z)
+                upper_idx = min(i for i in range(len(z_planes)) if z_planes[i] >= z)
+                if lower_idx == upper_idx:
+                    # Exact match for a Z plane
+                    return original_polygons[lower_idx]
+
+                lower_polygon = original_polygons[lower_idx]
+                upper_polygon = original_polygons[upper_idx]
+                fraction = (z - z_planes[lower_idx]) / (z_planes[upper_idx] - z_planes[lower_idx])
+
+                # Interpolate polygon vertices
+                interpolated_coords = []
+                for lp, up in zip(lower_polygon.exterior.coords, upper_polygon.exterior.coords):
+                    interpolated_coords.append([
+                        lp[0] + fraction * (up[0] - lp[0]),  # Interpolate X
+                        lp[1] + fraction * (up[1] - lp[1])   # Interpolate Y
+                    ])
+
+                return Polygon(interpolated_coords)
+
+            # Store the interpolation function
+            interpolated_polygons[cell_id] = interpolate_polygon
+
+        def check_point(row):
+            """Check if a point is within a polygon in 3D.
+
+            Parameters
+            ----------
+            row : pd.Series
+                Row containing global coordinates.
+
+            Returns
+            -------
+            cell_id : int
+                Cell ID. Returns 0 if not found.
+            """
+            
+            point = Point(row["global_y"], row["global_x"])
+            z_coord = row["global_z"]
+
+            for cell_id, interpolate in interpolated_polygons.items():
+                # Interpolate polygon at the Z-coordinate
+                polygon = interpolate(z_coord)
+                if polygon.contains(point):
+                    return cell_id
+            return 0
+
+        parsed_spots_df["cell_id"] = parsed_spots_df.apply(
+            check_point, axis=1
+        )
+        
+        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
+            "baysor_segmented"
+        )
+
+        if not current_global_filtered_decoded_dir_path.exists():
+            current_global_filtered_decoded_dir_path.mkdir()
+
+        current_global_filtered_decoded_path = (
+            current_global_filtered_decoded_dir_path / Path("transcripts.parquet")
+        )
+
+        self._save_to_parquet(parsed_spots_df, current_global_filtered_decoded_path)
         
     def save_mtx(self):
         """Save mtx file for downstream analysis.

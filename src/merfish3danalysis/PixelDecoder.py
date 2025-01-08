@@ -27,7 +27,6 @@ from random import sample
 from tqdm import tqdm
 from shapely.geometry import Point, Polygon #noqa
 from roifile import roiread
-import json #noqa
 import rtree
 from scipy.spatial import cKDTree
 import warnings
@@ -1783,7 +1782,7 @@ class PixelDecoder:
         self._df_filtered_barcodes["cell_id"] = self._df_filtered_barcodes.apply(
             check_point, axis=1
         )
-
+        
     def _remove_duplicates_in_tile_overlap(self, radius: float = 0.75):
         """Remove duplicates in tile overlap.
 
