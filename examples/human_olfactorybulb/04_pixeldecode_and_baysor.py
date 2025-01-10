@@ -1,7 +1,9 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
-Shepherd 2024/1 - modified script to accept parameters with sensible defaults.
+Baysor re-segmentation is performed without OR genes to avoid biasing results.
+
+Shepherd 2024/01 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
@@ -9,7 +11,7 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 
-def decode_pixels(
+def pixeldecode_and_baysor(
     root_path: Path,
     minimum_pixels_per_RNA: int = 5,
     ufish_threshold: float = 0.5,
@@ -64,11 +66,13 @@ def decode_pixels(
         ufish_threshold=ufish_threshold,
     )
 
-    # resegment data using baysor and cellpose prior assignments
+    # # resegment data using baysor and cellpose prior assignments
     if run_baysor:
         datastore.run_baysor()
-        datastore.save_mtx()
+        datastore.reformat_baysor_3D_oultines()
+        datastore.reprocess_and_save_filtered_spots_with_baysor_outlines()
+        datastore.save_mtx(spots_source="resegmented")
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
-    decode_pixels(root_path=root_path,run_baysor=True,fdr_target=.05)
+    pixeldecode_and_baysor(root_path=root_path,run_baysor=True,fdr_target=.05)

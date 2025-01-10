@@ -19,8 +19,9 @@ import tensorstore as ts
 import pandas as pd
 import numpy as np
 import json
-from roifile import roiread, roiwrite, ImagejRoi
-from shapely.geometry import Point, Polygon #noqa
+from roifile import roiread, roiwrite, ImagejRoi, ROI_TYPE
+from shapely.geometry import Point, Polygon
+from collections import defaultdict
 from itertools import product
 from concurrent.futures import TimeoutError
 # FALLBACK: what should the Zarr error be?
@@ -1634,7 +1635,7 @@ class qi2labDataStore:
             baysor_spots_path = (
                 self._segmentation_root_path
                 / Path("baysor")
-                / Path("baysor_filtered_genes.parquet")
+                / Path("segmentation.csv")
             )
 
             if not (baysor_spots_path.exists()):
@@ -3968,7 +3969,8 @@ class qi2labDataStore:
         try:
             run_baysor_options = r"run -p -c " +str(self._baysor_options)
             command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
-                str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv :cell_id"
+                str(baysor_input_path) + " -o " + str(baysor_output_path) + \
+                " --polygon-format GeometryCollectionLegacy --count-matrix-format tsv :cell_id"
             result = subprocess.run(command, shell=True, check=True)
             print("Baysor finished with return code:", result.returncode)
         except subprocess.CalledProcessError:
@@ -3979,46 +3981,70 @@ class qi2labDataStore:
                 command = julia_threading + str(self._baysor_path) + " " + run_baysor_options + " " +\
                     str(baysor_input_path) + " -o " + str(baysor_output_path) + " --count-matrix-format tsv"
                 result = subprocess.run(command, shell=True, check=True)
-                
-                ####
-                # Reformat Baysor 3D cell polygons into ImageJ ROI format
-                ####
-                
-                # Load the JSON file
-                baysor_segmentation = baysor_output_path / Path(r"segmentation_polygons_3d.json")
-                with open(baysor_segmentation, 'r') as file:
-                    data = json.load(file)
-                # Parse and group polygons by ID
-                cells = {}
-                for key, value in data.items():
-                    for feature in value.get("features", []):
-                        cell_id = feature["id"]
-                        polygon = feature["geometry"]["coordinates"][0]  # Assume single polygon
-                        z_position = float(key.split(",")[0][1:])  # Extract Z-plane
-
-                        if cell_id not in cells:
-                            cells[cell_id] = []
-                        cells[cell_id].append((z_position, polygon))
-
-                # Prepare ROIs for all cells
-                rois = []
-                for cell_id, polygons in cells.items():
-                    for z, polygon in sorted(polygons):
-                        # Create a 2D array of coordinates
-                        coords = np.array(polygon, dtype=np.float32)  # Shape (n_points, 2)
-                        
-                        # Create an ROI
-                        roi = ImagejRoi.frompoints(coords)
-                        roi.name = f"{cell_id}_z{int(z)}"  # Name the ROI
-                        rois.append(roi)
-
-                # Write all ROIs to a ZIP file   
-                output_file = baysor_output_path / Path(r"3d_cell_rois.zip")
-                roiwrite(output_file, rois)
                 print("Baysor finished with return code:", result.returncode)
             except subprocess.CalledProcessError as e:
                 print("Baysor failed with:", e)
                 
+    def reformat_baysor_3D_oultines(self):
+        """Reformat baysor 3D json file into ImageJ ROIs."""
+        import re
+        
+        # Load the JSON file
+        baysor_output_path = self._segmentation_root_path / Path("baysor")
+        baysor_segmentation = baysor_output_path / Path(r"segmentation_polygons_3d.json")
+        with open(baysor_segmentation, 'r') as file:
+            data = json.load(file)
+            
+                
+        # Dictionary to group polygons by cell ID
+        cell_polygons = defaultdict(list)
+        
+        def parse_z_range(z_range):
+            cleaned_range = re.sub(r"[^\d.,-]", "", z_range)  # Remove non-numeric, non-period, non-comma, non-dash characters
+            return map(float, cleaned_range.split(","))
+
+        # Iterate through each z-plane and corresponding polygons
+        for z_range, details in data.items():
+            z_start, z_end = parse_z_range(z_range)
+
+            for geometry in details["geometries"]:
+                coordinates = geometry["coordinates"][0]  # Assuming the outer ring of the polygon
+                cell_id = geometry["cell"]  # Get the cell ID
+
+                # Store the polygon with its z-range
+                cell_polygons[cell_id].append({
+                    "z_start": z_start,
+                    "z_end": z_end,
+                    "coordinates": coordinates
+                })
+
+        rois = []
+
+        # Process each cell ID to create 3D ROIs
+        for cell_id, polygons in cell_polygons.items():
+            for idx, polygon in enumerate(polygons):
+                x_coords = [point[0] for point in polygon["coordinates"]]
+                y_coords = [point[1] for point in polygon["coordinates"]]
+                
+                
+                z_start = polygon["z_start"]
+                z_end = polygon["z_end"]
+
+                try:
+                    # Create an ImageJRoi object for the polygon using frompoints
+                    coords = list(zip(x_coords, y_coords))  # List of (x, y) tuples
+                    roi = ImagejRoi.frompoints(coords)
+                    roi.roitype = ROI_TYPE.POLYGON  # Set the ROI type to Polygon
+                    roi.coordinates = coords  # Explicitly assign coordinates to the ROI
+                    roi.name = f"cell_{str(cell_id)}_zstart_{str(z_start)}_zend_{str(z_end)}"  # Ensure unique name
+                    rois.append(roi)
+                except Exception as e:
+                    print(f"Error while creating ROI for cell ID {cell_id}: {e}")
+
+        # Write all ROIs to a ZIP file   
+        output_file = baysor_output_path / Path(r"3d_cell_rois.zip")
+        roiwrite(output_file, rois,mode='w')
+        
     def load_global_baysor_filtered_spots(
         self,
     ) -> Optional[pd.DataFrame]:
@@ -4071,6 +4097,10 @@ class qi2labDataStore:
             baysor_rois = roiread(current_baysor_outlines_path)
             return baysor_rois
         
+    @staticmethod
+    def _roi_to_shapely(roi):
+        return Polygon(roi.subpixel_coordinates[:, ::-1])
+        
     def reprocess_and_save_filtered_spots_with_baysor_outlines(self):
         """Reprocess filtered spots using baysor cell outlines, then save.
         
@@ -4078,8 +4108,10 @@ class qi2labDataStore:
         (if any) cell outline that the spot falls within, and then saves the
         data back to the datastore.
         """
+        from rtree import index
+        import re
         
-        baysor_rois = self.load_global_baysor_outlines()
+        rois = self.load_global_baysor_outlines()
         filtered_spots_df = self.load_global_filtered_decoded_spots()
         
         parsed_spots_df = filtered_spots_df[
@@ -4097,6 +4129,8 @@ class qi2labDataStore:
                 "global_x": "x",
                 "global_y": "y",
                 "global_z": "z",
+                "gene_id" : "gene",
+                "cell_id" : "cell",
             },
             inplace=True,
         )
@@ -4104,105 +4138,74 @@ class qi2labDataStore:
             parsed_spots_df, index=False
         )
         
-        shapely_polygons = {}
-        for roi in baysor_rois:
-            # Extract Z-plane and ROI ID from the ROI name
-            name_parts = roi.name.split('_z')
-            cell_id = int(name_parts[0])  # Assuming ROI name format: "cellID_zZplane"
-            z_plane = float(name_parts[1])  # Continuous Z-plane coordinates
-
-            shapely_polygon = self._roi_to_shapely(roi)
-            if shapely_polygon:
-                if cell_id not in shapely_polygons:
-                    shapely_polygons[cell_id] = []
-                shapely_polygons[cell_id].append((z_plane, shapely_polygon))
-
-        # Interpolate polygons across continuous Z planes for each cell
-        interpolated_polygons = {}
-        for cell_id, polygons in shapely_polygons.items():
-            # Sort polygons by Z-plane
-            polygons = sorted(polygons, key=lambda x: x[0])
-            z_planes, original_polygons = zip(*polygons)
-
-            # Interpolation function for polygon vertices
-            def interpolate_polygon(z):
-                # Find the neighboring Z planes
-                lower_idx = max(i for i in range(len(z_planes)) if z_planes[i] <= z)
-                upper_idx = min(i for i in range(len(z_planes)) if z_planes[i] >= z)
-                if lower_idx == upper_idx:
-                    # Exact match for a Z plane
-                    return original_polygons[lower_idx]
-
-                lower_polygon = original_polygons[lower_idx]
-                upper_polygon = original_polygons[upper_idx]
-                fraction = (z - z_planes[lower_idx]) / (z_planes[upper_idx] - z_planes[lower_idx])
-
-                # Interpolate polygon vertices
-                interpolated_coords = []
-                for lp, up in zip(lower_polygon.exterior.coords, upper_polygon.exterior.coords):
-                    interpolated_coords.append([
-                        lp[0] + fraction * (up[0] - lp[0]),  # Interpolate X
-                        lp[1] + fraction * (up[1] - lp[1])   # Interpolate Y
-                    ])
-
-                return Polygon(interpolated_coords)
-
-            # Store the interpolation function
-            interpolated_polygons[cell_id] = interpolate_polygon
-
-        def check_point(row):
-            """Check if a point is within a polygon in 3D.
-
-            Parameters
-            ----------
-            row : pd.Series
-                Row containing global coordinates.
-
-            Returns
-            -------
-            cell_id : int
-                Cell ID. Returns 0 if not found.
-            """
-            
-            point = Point(row["global_y"], row["global_x"])
-            z_coord = row["global_z"]
-
-            for cell_id, interpolate in interpolated_polygons.items():
-                # Interpolate polygon at the Z-coordinate
-                polygon = interpolate(z_coord)
-                if polygon.contains(point):
-                    return cell_id
-            return 0
-
-        parsed_spots_df["cell_id"] = parsed_spots_df.apply(
-            check_point, axis=1
-        )
+        parsed_spots_df["assignment_confidence"] = 1.0
         
-        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
-            "baysor_segmented"
-        )
+        # Create spatial index for ROIs
+        roi_index = index.Index()
+        roi_map = {}  # Map index IDs to ROIs
 
-        if not current_global_filtered_decoded_dir_path.exists():
-            current_global_filtered_decoded_dir_path.mkdir()
+        for idx, roi in enumerate(rois):
+            # Ensure roi.coordinates contains the polygon points
+            coords = roi.coordinates()
 
+            # Insert the polygon bounds into the spatial index
+            polygon = Polygon(coords)
+            roi_index.insert(idx, polygon.bounds)  # Use polygon bounds for indexing
+            roi_map[idx] = roi
+
+        # Function to check a single point
+        def point_in_roi(row):
+            point = Point(row["x"], row["y"])
+            candidate_indices = list(roi_index.intersection(point.bounds))  # Search spatial index
+            for idx in candidate_indices:
+                roi = roi_map[idx]
+                match = re.search(r"zstart_([-\d.]+)_zend_([-\d.]+)", roi.name)
+                if match:
+                    z_start = float(match.group(1))
+                    z_end = float(match.group(2))
+                    if z_start <= row["z"] <= z_end:
+                        polygon = Polygon(roi.coordinates())
+                        if polygon.contains(point):
+                            return str(roi.name.split("_")[1]) 
+            return -1
+
+        # Apply optimized spatial lookup
+        parsed_spots_df["cell"] = parsed_spots_df.apply(point_in_roi, axis=1)
+        parsed_spots_df = parsed_spots_df.loc[parsed_spots_df["cell"] != -1]
+                
         current_global_filtered_decoded_path = (
-            current_global_filtered_decoded_dir_path / Path("transcripts.parquet")
+            self._datastore_path 
+            / Path("all_tiles_filtered_decoded_features")
+            / Path("refined_transcripts.parquet")
         )
 
         self._save_to_parquet(parsed_spots_df, current_global_filtered_decoded_path)
         
-    def save_mtx(self):
+    def save_mtx(self, spots_source: str = ""):
         """Save mtx file for downstream analysis.
+        
+        Parameters
+        ----------
+        spots_source: str, default "baysor"
+            source of spots. "baysor" or "resegmented".
         
         Assumes Baysor has been run.
         """
 
         from merfish3danalysis.utils.dataio import create_mtx
 
-        baysor_output_path = self._datastore_path / Path("segmentation") / Path("segmentation.csv")
+        if spots_source == "baysor":
+            spots_path = self._datastore_path / Path("segmentation") / Path("baysor") / Path("segmentation.csv")
+        elif spots_source == "resegmented":
+            spots_path = (
+                self._datastore_path 
+                / Path("all_tiles_filtered_decoded_features")
+                / Path("refined_transcripts.parquet")
+            )
+
         mtx_output_path = self._datastore_path / Path("mtx_output")
         
         create_mtx(
-            baysor_output_path=baysor_output_path,
+            spots_path=spots_path,
             output_dir_path=mtx_output_path,
         )
