@@ -175,15 +175,17 @@ def time_stamp():
 
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
-def create_mtx(baysor_output_path: Union[Path,str], 
-               output_dir_path: Union[Path,str], 
-               confidence_cutoff: float = 0.7):
+def create_mtx(
+    spots_path: Union[Path,str], 
+    output_dir_path: Union[Path,str], 
+    confidence_cutoff: float = 0.7
+):
     """Create a sparse matrix in MTX format from Baysor output.
     
     Parameters
     ----------
-    baysor_output_path: Union[Path,str]
-        Path to Baysor output file
+    spots_path: Union[Path,str]
+        Path to spots file
     output_dir_path: Union[Path,str]
         Path to output directory
     confidence_cutoff: float
@@ -191,12 +193,19 @@ def create_mtx(baysor_output_path: Union[Path,str],
     """
         
     # Read 5 columns from transcripts Parquet file
-    transcripts_df = pd.read_csv(baysor_output_path,
-                                usecols=["gene",
-                                        "cell",
-                                        "assignment_confidence"])
+    if spots_path.suffix == ".csv":
+        transcripts_df = pd.read_csv(spots_path,
+                                    usecols=["gene",
+                                            "cell",
+                                            "assignment_confidence"])
+        transcripts_df['cell'] = transcripts_df['cell'].replace('', pd.NA).dropna().str.split('-').str[1]
+    else:
+        transcripts_df = pd.read_parquet(spots_path,
+                            columns=["gene",
+                                    "cell",
+                                    "assignment_confidence"])
     
-    transcripts_df['cell'] = transcripts_df['cell'].replace('', pd.NA).dropna().str.split('-').str[1]
+    
     transcripts_df['cell'] = pd.to_numeric(transcripts_df['cell'], errors='coerce').fillna(0).astype(int)
 
     # Find distinct set of features.
