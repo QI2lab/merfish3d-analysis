@@ -49,6 +49,7 @@ docs = [
     "mkdocstrings[python]",
     "mkdocs-gen-files",
     "mkdocs-literate-nav",
+    "mkdocs-minify-plugin"
 ]
 
 [project.urls]

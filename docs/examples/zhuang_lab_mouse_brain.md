@@ -19,6 +19,7 @@ We are only going to analyze one of their samples, specifically `mouse1_sample1_
 
 All of the required code to process this data is in the [examples/zhuang_lab](https://github.com/QI2lab/merfish3d-analysis/tree/main/examples/zhuang_lab) folder on `merfish3d-analysis` github repo. After downloading the data from BIL, there should be the following data structure on the disk:
 
+```bash
 /mop
   ├── mouse1_sample1_raw/
     ├── aligned_images1.tif
@@ -33,6 +34,7 @@ All of the required code to process this data is in the [examples/zhuang_lab](ht
       └── mouse1_sample1.txt
   └── zhuang_decoded_codewords/
     └── spots_mouse1sample1.csv
+```
 
 ## Processing non-qi2lab data
 
