@@ -1,4 +1,7 @@
-site_name: merfish3d-analysis
+site_name: "merfish3d-analysis"
+site_description: "GPU-accelerated 2D/3D MERFISH data processing"
+site_author: "Quantitative Imaging and Inference Lab"
+site_url: "https://qi2lab.github.io/merfish3d-analysis/"
 
 theme:
   name: material 
@@ -28,6 +31,10 @@ nav:
       - opmtools: reference/modules/opmtools.md
   - Contributing: contributing.md
 
+exclude:
+  - "*.tmp"
+  - "*.log"
+
 plugins:
   - search
   - mkdocstrings:
@@ -38,3 +45,7 @@ plugins:
             show_private_members: true
           setup_commands:
             - import sys; sys.path.insert(0, "src/")
+  - minify:
+      minify_html: true
+
+site_dir: site
