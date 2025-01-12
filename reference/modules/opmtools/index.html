@@ -1,0 +1,754 @@
+<!doctype html><html lang=en class=no-js> <head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="GPU-accelerated 2D/3D MERFISH data processing"><meta name=author content="Quantitative Imaging and Inference Lab"><link href=https://qi2lab.github.io/merfish3d-analysis/reference/modules/opmtools/ rel=canonical><link href=../registration/ rel=prev><link href=../../../contributing/ rel=next><link rel=icon href=../../../assets/images/favicon.png><meta name=generator content="mkdocs-1.6.1, mkdocs-material-9.5.49"><title>opmtools - merfish3d-analysis</title><link rel=stylesheet href=../../../assets/stylesheets/main.6f8fc17f.min.css><link rel=preconnect href=https://fonts.gstatic.com crossorigin><link rel=stylesheet href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback"><style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style><link rel=stylesheet href=../../../assets/_mkdocstrings.css><script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script></head> <body dir=ltr> <input class=md-toggle data-md-toggle=drawer type=checkbox id=__drawer autocomplete=off> <input class=md-toggle data-md-toggle=search type=checkbox id=__search autocomplete=off> <label class=md-overlay for=__drawer></label> <div data-md-component=skip> <a href=#opm-tools-module class=md-skip> Skip to content </a> </div> <div data-md-component=announce> </div> <header class="md-header md-header--shadow" data-md-component=header> <nav class="md-header__inner md-grid" aria-label=Header> <a href=../../.. title=merfish3d-analysis class="md-header__button md-logo" aria-label=merfish3d-analysis data-md-component=logo> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg> </a> <label class="md-header__button md-icon" for=__drawer> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg> </label> <div class=md-header__title data-md-component=header-title> <div class=md-header__ellipsis> <div class=md-header__topic> <span class=md-ellipsis> merfish3d-analysis </span> </div> <div class=md-header__topic data-md-component=header-topic> <span class=md-ellipsis> opmtools </span> </div> </div> </div> <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script> <label class="md-header__button md-icon" for=__search> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg> </label> <div class=md-search data-md-component=search role=dialog> <label class=md-search__overlay for=__search></label> <div class=md-search__inner role=search> <form class=md-search__form name=search> <input type=text class=md-search__input name=query aria-label=Search placeholder=Search autocapitalize=off autocorrect=off autocomplete=off spellcheck=false data-md-component=search-query required> <label class="md-search__icon md-icon" for=__search> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg> </label> <nav class=md-search__options aria-label=Search> <button type=reset class="md-search__icon md-icon" title=Clear aria-label=Clear tabindex=-1> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg> </button> </nav> </form> <div class=md-search__output> <div class=md-search__scrollwrap tabindex=0 data-md-scrollfix> <div class=md-search-result data-md-component=search-result> <div class=md-search-result__meta> Initializing search </div> <ol class=md-search-result__list role=presentation></ol> </div> </div> </div> </div> </div> </nav> </header> <div class=md-container data-md-component=container> <main class=md-main data-md-component=main> <div class="md-main__inner md-grid"> <div class="md-sidebar md-sidebar--primary" data-md-component=sidebar data-md-type=navigation> <div class=md-sidebar__scrollwrap> <div class=md-sidebar__inner> <nav class="md-nav md-nav--primary" aria-label=Navigation data-md-level=0> <label class=md-nav__title for=__drawer> <a href=../../.. title=merfish3d-analysis class="md-nav__button md-logo" aria-label=merfish3d-analysis data-md-component=logo> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg> </a> merfish3d-analysis </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../../.. class=md-nav__link> <span class=md-ellipsis> Home </span> </a> </li> <li class=md-nav__item> <a href=../../../installation/ class=md-nav__link> <span class=md-ellipsis> Installation </span> </a> </li> <li class=md-nav__item> <a href=../../../datastore/ class=md-nav__link> <span class=md-ellipsis> DataStore </span> </a> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_4> <label class=md-nav__link for=__nav_4 id=__nav_4_label tabindex=0> <span class=md-ellipsis> Examples </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=1 aria-labelledby=__nav_4_label aria-expanded=false> <label class=md-nav__title for=__nav_4> <span class="md-nav__icon md-icon"></span> Examples </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../../../examples/statphysbio_synthetic/ class=md-nav__link> <span class=md-ellipsis> Synthetic data </span> </a> </li> <li class=md-nav__item> <a href=../../../examples/zhuang_lab_mouse_brain/ class=md-nav__link> <span class=md-ellipsis> Zhuang laboratory mouse brain </span> </a> </li> <li class=md-nav__item> <a href=../../../examples/qi2lab_human_olfactory_bulb/ class=md-nav__link> <span class=md-ellipsis> qi2lab human olfactory bulb </span> </a> </li> </ul> </nav> </li> <li class="md-nav__item md-nav__item--active md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5 checked> <label class=md-nav__link for=__nav_5 id=__nav_5_label tabindex=0> <span class=md-ellipsis> Reference </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=1 aria-labelledby=__nav_5_label aria-expanded=true> <label class=md-nav__title for=__nav_5> <span class="md-nav__icon md-icon"></span> Reference </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../../ class=md-nav__link> <span class=md-ellipsis> Overview </span> </a> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5_2> <label class=md-nav__link for=__nav_5_2 id=__nav_5_2_label tabindex=0> <span class=md-ellipsis> Classes </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=2 aria-labelledby=__nav_5_2_label aria-expanded=false> <label class=md-nav__title for=__nav_5_2> <span class="md-nav__icon md-icon"></span> Classes </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../../classes/DataRegistration/ class=md-nav__link> <span class=md-ellipsis> DataRegistration </span> </a> </li> <li class=md-nav__item> <a href=../../classes/PixelDecoder/ class=md-nav__link> <span class=md-ellipsis> PixelDecoder </span> </a> </li> <li class=md-nav__item> <a href=../../classes/qi2labDataStore/ class=md-nav__link> <span class=md-ellipsis> qi2labDataStore </span> </a> </li> </ul> </nav> </li> <li class="md-nav__item md-nav__item--active md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5_3 checked> <label class=md-nav__link for=__nav_5_3 id=__nav_5_3_label tabindex=0> <span class=md-ellipsis> Modules </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=2 aria-labelledby=__nav_5_3_label aria-expanded=true> <label class=md-nav__title for=__nav_5_3> <span class="md-nav__icon md-icon"></span> Modules </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../dataio/ class=md-nav__link> <span class=md-ellipsis> dataio </span> </a> </li> <li class=md-nav__item> <a href=../imageprocessing/ class=md-nav__link> <span class=md-ellipsis> imageprocessing </span> </a> </li> <li class=md-nav__item> <a href=../registration/ class=md-nav__link> <span class=md-ellipsis> registration </span> </a> </li> <li class="md-nav__item md-nav__item--active"> <input class="md-nav__toggle md-toggle" type=checkbox id=__toc> <label class="md-nav__link md-nav__link--active" for=__toc> <span class=md-ellipsis> opmtools </span> <span class="md-nav__icon md-icon"></span> </label> <a href=./ class="md-nav__link md-nav__link--active"> <span class=md-ellipsis> opmtools </span> </a> <nav class="md-nav md-nav--secondary" aria-label="Table of contents"> <label class=md-nav__title for=__toc> <span class="md-nav__icon md-icon"></span> Table of contents </label> <ul class=md-nav__list data-md-component=toc data-md-scrollfix> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools class=md-nav__link> <span class=md-ellipsis> opmtools </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.chunk_indices class=md-nav__link> <span class=md-ellipsis> chunk_indices </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.chunked_orthogonal_deskew class=md-nav__link> <span class=md-ellipsis> chunked_orthogonal_deskew </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.deskew class=md-nav__link> <span class=md-ellipsis> deskew </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.deskew_shape_estimator class=md-nav__link> <span class=md-ellipsis> deskew_shape_estimator </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.lab2cam class=md-nav__link> <span class=md-ellipsis> lab2cam </span> </a> </li> </ul> </nav> </li> </ul> </nav> </li> </ul> </nav> </li> <li class=md-nav__item> <a href=../../../contributing/ class=md-nav__link> <span class=md-ellipsis> Contributing </span> </a> </li> </ul> </nav> </div> </div> </div> <div class="md-sidebar md-sidebar--secondary" data-md-component=sidebar data-md-type=toc> <div class=md-sidebar__scrollwrap> <div class=md-sidebar__inner> <nav class="md-nav md-nav--secondary" aria-label="Table of contents"> <label class=md-nav__title for=__toc> <span class="md-nav__icon md-icon"></span> Table of contents </label> <ul class=md-nav__list data-md-component=toc data-md-scrollfix> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools class=md-nav__link> <span class=md-ellipsis> opmtools </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.chunk_indices class=md-nav__link> <span class=md-ellipsis> chunk_indices </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.chunked_orthogonal_deskew class=md-nav__link> <span class=md-ellipsis> chunked_orthogonal_deskew </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.deskew class=md-nav__link> <span class=md-ellipsis> deskew </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.deskew_shape_estimator class=md-nav__link> <span class=md-ellipsis> deskew_shape_estimator </span> </a> </li> <li class=md-nav__item> <a href=#merfish3danalysis.utils.opmtools.lab2cam class=md-nav__link> <span class=md-ellipsis> lab2cam </span> </a> </li> </ul> </nav> </div> </div> </div> <div class=md-content data-md-component=content> <article class="md-content__inner md-typeset"> <h1 id=opm-tools-module>OPM Tools Module<a class=headerlink href=#opm-tools-module title="Permanent link">&para;</a></h1> <div class="doc doc-object doc-module"> <a id=merfish3danalysis.utils.opmtools></a> <div class="doc doc-contents first"> <p>OPM-specific data handling tools.</p> <p>This module provides tools and utilities specifically for handling orthogonal plane microscopy (OPM) data.</p> <details class=history: open> <summary>History:</summary> <ul> <li><strong>2024/12</strong>: Refactored repo structure.</li> <li><strong>2024/07</strong>: Initial commit.</li> </ul> </details> <div class="doc doc-children"> <div class="doc doc-object doc-function"> <h2 id=merfish3danalysis.utils.opmtools.chunk_indices class="doc doc-heading"> <code class="highlight language-python"><span class=n>chunk_indices</span><span class=p>(</span><span class=n>length</span><span class=p>,</span> <span class=n>chunk_size</span><span class=p>)</span></code> <a href=#merfish3danalysis.utils.opmtools.chunk_indices class=headerlink title="Permanent link">&para;</a></h2> <div class="doc doc-contents "> <p>Calculate indices for evenly distributed chunks.</p> <p><span class=doc-section-title>Parameters:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> <th>Default</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td> <code>length</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>axis array length</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>chunk_size</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>size of chunks</p> </div> </td> <td> <em>required</em> </td> </tr> </tbody> </table> <p><span class=doc-section-title>Returns:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td><code>indices</code></td> <td> <code><span title="typing.Sequence">Sequence</span>[int, ...]</code> </td> <td> <div class=doc-md-description> <p>chunk indices</p> </div> </td> </tr> </tbody> </table> <details class=quote> <summary>Source code in <code>src/merfish3danalysis/utils/opmtools.py</code></summary> <div class=highlight><table class=highlighttable><tr><td class=linenos><div class=linenodiv><pre><span></span><span class=normal>214</span>
+<span class=normal>215</span>
+<span class=normal>216</span>
+<span class=normal>217</span>
+<span class=normal>218</span>
+<span class=normal>219</span>
+<span class=normal>220</span>
+<span class=normal>221</span>
+<span class=normal>222</span>
+<span class=normal>223</span>
+<span class=normal>224</span>
+<span class=normal>225</span>
+<span class=normal>226</span>
+<span class=normal>227</span>
+<span class=normal>228</span>
+<span class=normal>229</span>
+<span class=normal>230</span>
+<span class=normal>231</span>
+<span class=normal>232</span>
+<span class=normal>233</span>
+<span class=normal>234</span>
+<span class=normal>235</span></pre></div></td><td class=code><div><pre><span></span><code><span class=k>def</span> <span class=nf>chunk_indices</span><span class=p>(</span><span class=n>length</span><span class=p>:</span> <span class=nb>int</span><span class=p>,</span> <span class=n>chunk_size</span><span class=p>:</span> <span class=nb>int</span><span class=p>)</span> <span class=o>-&gt;</span> <span class=n>Sequence</span><span class=p>[</span><span class=nb>int</span><span class=p>]:</span>
+<span class=w>    </span><span class=sd>&quot;&quot;&quot;Calculate indices for evenly distributed chunks.</span>
+
+<span class=sd>    Parameters</span>
+<span class=sd>    ----------</span>
+<span class=sd>    length: int</span>
+<span class=sd>        axis array length</span>
+<span class=sd>    chunk_size: int</span>
+<span class=sd>        size of chunks</span>
+
+<span class=sd>    Returns</span>
+<span class=sd>    -------</span>
+<span class=sd>    indices: Sequence[int,...]</span>
+<span class=sd>        chunk indices</span>
+<span class=sd>    &quot;&quot;&quot;</span>
+
+    <span class=n>indices</span> <span class=o>=</span> <span class=p>[]</span>
+    <span class=k>for</span> <span class=n>i</span> <span class=ow>in</span> <span class=nb>range</span><span class=p>(</span><span class=mi>0</span><span class=p>,</span> <span class=n>length</span> <span class=o>-</span> <span class=n>chunk_size</span><span class=p>,</span> <span class=n>chunk_size</span><span class=p>):</span>
+        <span class=n>indices</span><span class=o>.</span><span class=n>append</span><span class=p>((</span><span class=n>i</span><span class=p>,</span> <span class=n>i</span> <span class=o>+</span> <span class=n>chunk_size</span><span class=p>))</span>
+    <span class=k>if</span> <span class=n>length</span> <span class=o>%</span> <span class=n>chunk_size</span> <span class=o>!=</span> <span class=mi>0</span><span class=p>:</span>
+        <span class=n>indices</span><span class=o>.</span><span class=n>append</span><span class=p>((</span><span class=n>length</span> <span class=o>-</span> <span class=n>chunk_size</span><span class=p>,</span> <span class=n>length</span><span class=p>))</span>
+    <span class=k>return</span> <span class=n>indices</span>
+</code></pre></div></td></tr></table></div> </details> </div> </div> <div class="doc doc-object doc-function"> <h2 id=merfish3danalysis.utils.opmtools.chunked_orthogonal_deskew class="doc doc-heading"> <code class="highlight language-python"><span class=n>chunked_orthogonal_deskew</span><span class=p>(</span><span class=n>oblique_image</span><span class=p>,</span> <span class=n>psf_data</span><span class=p>,</span> <span class=n>chunk_size</span><span class=o>=</span><span class=mi>15000</span><span class=p>,</span> <span class=n>overlap_size</span><span class=o>=</span><span class=mi>550</span><span class=p>,</span> <span class=n>scan_crop</span><span class=o>=</span><span class=mi>700</span><span class=p>,</span> <span class=n>camera_bkd</span><span class=o>=</span><span class=mi>100</span><span class=p>,</span> <span class=n>camera_cf</span><span class=o>=</span><span class=mf>0.24</span><span class=p>,</span> <span class=n>camera_qe</span><span class=o>=</span><span class=mf>0.9</span><span class=p>,</span> <span class=n>z_downsample_level</span><span class=o>=</span><span class=mi>2</span><span class=p>,</span> <span class=n>perform_decon</span><span class=o>=</span><span class=kc>True</span><span class=p>,</span> <span class=n>decon_iterations</span><span class=o>=</span><span class=mi>10</span><span class=p>,</span> <span class=n>decon_chunks</span><span class=o>=</span><span class=mi>1024</span><span class=p>)</span></code> <a href=#merfish3danalysis.utils.opmtools.chunked_orthogonal_deskew class=headerlink title="Permanent link">&para;</a></h2> <div class="doc doc-contents "> <p>Chunked orthogonal deskew of oblique data.</p> <p>Optionally performs deconvolution on each chunk.</p> <p><span class=doc-section-title>Parameters:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> <th>Default</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td> <code>oblique_image</code> </td> <td> <code><span title="numpy.typing.ArrayLike">ArrayLike</span></code> </td> <td> <div class=doc-md-description> <p>oblique image stack</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>psf_data</code> </td> <td> <code><span title="numpy.typing.ArrayLike">ArrayLike</span></code> </td> <td> <div class=doc-md-description> <p>PSF data for deconvolution</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>chunk_size</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>size of chunks</p> </div> </td> <td> <code>15000</code> </td> </tr> <tr class=doc-section-item> <td> <code>overlap_size</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>overlap size</p> </div> </td> <td> <code>550</code> </td> </tr> <tr class=doc-section-item> <td> <code>scan_crop</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>crop size</p> </div> </td> <td> <code>700</code> </td> </tr> <tr class=doc-section-item> <td> <code>camera_bkd</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>camera background</p> </div> </td> <td> <code>100</code> </td> </tr> <tr class=doc-section-item> <td> <code>camera_cf</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>camera conversion factor</p> </div> </td> <td> <code>0.24</code> </td> </tr> <tr class=doc-section-item> <td> <code>camera_qe</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>camera quantum efficiency</p> </div> </td> <td> <code>0.9</code> </td> </tr> <tr class=doc-section-item> <td> <code>z_downsample_level</code> </td> <td> </td> <td> <div class=doc-md-description> <p>z downsample level</p> </div> </td> <td> <code>2</code> </td> </tr> <tr class=doc-section-item> <td> <code>perform_decon</code> </td> <td> <code>bool</code> </td> <td> <div class=doc-md-description> <p>perform deconvolution</p> </div> </td> <td> <code>True</code> </td> </tr> <tr class=doc-section-item> <td> <code>decon_iterations</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>number of deconvolution iterations</p> </div> </td> <td> <code>10</code> </td> </tr> <tr class=doc-section-item> <td> <code>decon_chunks</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>deconvolution chunk size</p> </div> </td> <td> <code>1024</code> </td> </tr> </tbody> </table> <p><span class=doc-section-title>Returns:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td><code>deskewed_image</code></td> <td> <code><span title="numpy.typing.ArrayLike">ArrayLike</span></code> </td> <td> <div class=doc-md-description> <p>deskewed image stack</p> </div> </td> </tr> </tbody> </table> <details class=quote> <summary>Source code in <code>src/merfish3danalysis/utils/opmtools.py</code></summary> <div class=highlight><table class=highlighttable><tr><td class=linenos><div class=linenodiv><pre><span></span><span class=normal>238</span>
+<span class=normal>239</span>
+<span class=normal>240</span>
+<span class=normal>241</span>
+<span class=normal>242</span>
+<span class=normal>243</span>
+<span class=normal>244</span>
+<span class=normal>245</span>
+<span class=normal>246</span>
+<span class=normal>247</span>
+<span class=normal>248</span>
+<span class=normal>249</span>
+<span class=normal>250</span>
+<span class=normal>251</span>
+<span class=normal>252</span>
+<span class=normal>253</span>
+<span class=normal>254</span>
+<span class=normal>255</span>
+<span class=normal>256</span>
+<span class=normal>257</span>
+<span class=normal>258</span>
+<span class=normal>259</span>
+<span class=normal>260</span>
+<span class=normal>261</span>
+<span class=normal>262</span>
+<span class=normal>263</span>
+<span class=normal>264</span>
+<span class=normal>265</span>
+<span class=normal>266</span>
+<span class=normal>267</span>
+<span class=normal>268</span>
+<span class=normal>269</span>
+<span class=normal>270</span>
+<span class=normal>271</span>
+<span class=normal>272</span>
+<span class=normal>273</span>
+<span class=normal>274</span>
+<span class=normal>275</span>
+<span class=normal>276</span>
+<span class=normal>277</span>
+<span class=normal>278</span>
+<span class=normal>279</span>
+<span class=normal>280</span>
+<span class=normal>281</span>
+<span class=normal>282</span>
+<span class=normal>283</span>
+<span class=normal>284</span>
+<span class=normal>285</span>
+<span class=normal>286</span>
+<span class=normal>287</span>
+<span class=normal>288</span>
+<span class=normal>289</span>
+<span class=normal>290</span>
+<span class=normal>291</span>
+<span class=normal>292</span>
+<span class=normal>293</span>
+<span class=normal>294</span>
+<span class=normal>295</span>
+<span class=normal>296</span>
+<span class=normal>297</span>
+<span class=normal>298</span>
+<span class=normal>299</span>
+<span class=normal>300</span>
+<span class=normal>301</span>
+<span class=normal>302</span>
+<span class=normal>303</span>
+<span class=normal>304</span>
+<span class=normal>305</span>
+<span class=normal>306</span>
+<span class=normal>307</span>
+<span class=normal>308</span>
+<span class=normal>309</span>
+<span class=normal>310</span>
+<span class=normal>311</span>
+<span class=normal>312</span>
+<span class=normal>313</span>
+<span class=normal>314</span>
+<span class=normal>315</span>
+<span class=normal>316</span>
+<span class=normal>317</span>
+<span class=normal>318</span>
+<span class=normal>319</span>
+<span class=normal>320</span>
+<span class=normal>321</span>
+<span class=normal>322</span>
+<span class=normal>323</span>
+<span class=normal>324</span>
+<span class=normal>325</span>
+<span class=normal>326</span>
+<span class=normal>327</span>
+<span class=normal>328</span>
+<span class=normal>329</span>
+<span class=normal>330</span>
+<span class=normal>331</span>
+<span class=normal>332</span>
+<span class=normal>333</span>
+<span class=normal>334</span>
+<span class=normal>335</span>
+<span class=normal>336</span>
+<span class=normal>337</span>
+<span class=normal>338</span>
+<span class=normal>339</span>
+<span class=normal>340</span>
+<span class=normal>341</span>
+<span class=normal>342</span>
+<span class=normal>343</span>
+<span class=normal>344</span>
+<span class=normal>345</span>
+<span class=normal>346</span>
+<span class=normal>347</span>
+<span class=normal>348</span>
+<span class=normal>349</span>
+<span class=normal>350</span>
+<span class=normal>351</span>
+<span class=normal>352</span>
+<span class=normal>353</span>
+<span class=normal>354</span>
+<span class=normal>355</span>
+<span class=normal>356</span>
+<span class=normal>357</span>
+<span class=normal>358</span>
+<span class=normal>359</span>
+<span class=normal>360</span>
+<span class=normal>361</span>
+<span class=normal>362</span>
+<span class=normal>363</span>
+<span class=normal>364</span>
+<span class=normal>365</span>
+<span class=normal>366</span>
+<span class=normal>367</span>
+<span class=normal>368</span>
+<span class=normal>369</span>
+<span class=normal>370</span>
+<span class=normal>371</span>
+<span class=normal>372</span>
+<span class=normal>373</span>
+<span class=normal>374</span>
+<span class=normal>375</span>
+<span class=normal>376</span>
+<span class=normal>377</span>
+<span class=normal>378</span>
+<span class=normal>379</span>
+<span class=normal>380</span>
+<span class=normal>381</span>
+<span class=normal>382</span>
+<span class=normal>383</span>
+<span class=normal>384</span>
+<span class=normal>385</span>
+<span class=normal>386</span>
+<span class=normal>387</span>
+<span class=normal>388</span>
+<span class=normal>389</span>
+<span class=normal>390</span>
+<span class=normal>391</span>
+<span class=normal>392</span>
+<span class=normal>393</span>
+<span class=normal>394</span>
+<span class=normal>395</span>
+<span class=normal>396</span>
+<span class=normal>397</span>
+<span class=normal>398</span>
+<span class=normal>399</span>
+<span class=normal>400</span>
+<span class=normal>401</span>
+<span class=normal>402</span>
+<span class=normal>403</span>
+<span class=normal>404</span>
+<span class=normal>405</span>
+<span class=normal>406</span>
+<span class=normal>407</span>
+<span class=normal>408</span>
+<span class=normal>409</span>
+<span class=normal>410</span>
+<span class=normal>411</span>
+<span class=normal>412</span>
+<span class=normal>413</span></pre></div></td><td class=code><div><pre><span></span><code><span class=k>def</span> <span class=nf>chunked_orthogonal_deskew</span><span class=p>(</span>
+    <span class=n>oblique_image</span><span class=p>:</span> <span class=n>ArrayLike</span><span class=p>,</span>
+    <span class=n>psf_data</span><span class=p>:</span> <span class=n>ArrayLike</span><span class=p>,</span>
+    <span class=n>chunk_size</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>15000</span><span class=p>,</span>
+    <span class=n>overlap_size</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>550</span><span class=p>,</span>
+    <span class=n>scan_crop</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>700</span><span class=p>,</span>
+    <span class=n>camera_bkd</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>100</span><span class=p>,</span>
+    <span class=n>camera_cf</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.24</span><span class=p>,</span>
+    <span class=n>camera_qe</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.9</span><span class=p>,</span>
+    <span class=n>z_downsample_level</span><span class=o>=</span><span class=mi>2</span><span class=p>,</span>
+    <span class=n>perform_decon</span><span class=p>:</span> <span class=nb>bool</span> <span class=o>=</span> <span class=kc>True</span><span class=p>,</span>
+    <span class=n>decon_iterations</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>10</span><span class=p>,</span>
+    <span class=n>decon_chunks</span><span class=p>:</span> <span class=nb>int</span> <span class=o>=</span> <span class=mi>1024</span><span class=p>,</span>
+<span class=p>)</span> <span class=o>-&gt;</span> <span class=n>ArrayLike</span><span class=p>:</span>
+<span class=w>    </span><span class=sd>&quot;&quot;&quot;Chunked orthogonal deskew of oblique data.</span>
+
+<span class=sd>    Optionally performs deconvolution on each chunk.</span>
+
+<span class=sd>    Parameters</span>
+<span class=sd>    ----------</span>
+<span class=sd>    oblique_image: ArrayLike</span>
+<span class=sd>        oblique image stack</span>
+<span class=sd>    psf_data: ArrayLike</span>
+<span class=sd>        PSF data for deconvolution</span>
+<span class=sd>    chunk_size: int</span>
+<span class=sd>        size of chunks</span>
+<span class=sd>    overlap_size: int</span>
+<span class=sd>        overlap size</span>
+<span class=sd>    scan_crop: int</span>
+<span class=sd>        crop size</span>
+<span class=sd>    camera_bkd: int</span>
+<span class=sd>        camera background</span>
+<span class=sd>    camera_cf: float</span>
+<span class=sd>        camera conversion factor</span>
+<span class=sd>    camera_qe: float</span>
+<span class=sd>        camera quantum efficiency</span>
+<span class=sd>    z_downsample_level: int</span>
+<span class=sd>        z downsample level</span>
+<span class=sd>    perform_decon: bool</span>
+<span class=sd>        perform deconvolution</span>
+<span class=sd>    decon_iterations: int</span>
+<span class=sd>        number of deconvolution iterations</span>
+<span class=sd>    decon_chunks: int</span>
+<span class=sd>        deconvolution chunk size</span>
+
+<span class=sd>    Returns</span>
+<span class=sd>    -------</span>
+<span class=sd>    deskewed_image: ArrayLike</span>
+<span class=sd>        deskewed image stack</span>
+<span class=sd>    &quot;&quot;&quot;</span>
+
+    <span class=n>output_shape</span> <span class=o>=</span> <span class=n>deskew_shape_estimator</span><span class=p>(</span><span class=n>oblique_image</span><span class=o>.</span><span class=n>shape</span><span class=p>)</span>
+    <span class=n>output_shape</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=o>=</span> <span class=n>output_shape</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=o>//</span> <span class=n>z_downsample_level</span>
+    <span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>=</span> <span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>-</span> <span class=n>scan_crop</span>
+    <span class=n>deskewed_image</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>zeros</span><span class=p>(</span><span class=n>output_shape</span><span class=p>,</span> <span class=n>dtype</span><span class=o>=</span><span class=n>np</span><span class=o>.</span><span class=n>uint16</span><span class=p>)</span>
+
+    <span class=k>if</span> <span class=n>chunk_size</span> <span class=o>&lt;</span> <span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]:</span>
+        <span class=n>idxs</span> <span class=o>=</span> <span class=n>chunk_indices</span><span class=p>(</span><span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>],</span> <span class=n>chunk_size</span><span class=p>)</span>
+    <span class=k>else</span><span class=p>:</span>
+        <span class=n>idxs</span> <span class=o>=</span> <span class=p>[(</span><span class=mi>0</span><span class=p>,</span> <span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>])]</span>
+        <span class=n>overlap_size</span> <span class=o>=</span> <span class=mi>0</span>
+
+    <span class=k>for</span> <span class=n>idx</span> <span class=ow>in</span> <span class=n>tqdm</span><span class=p>(</span><span class=n>idxs</span><span class=p>):</span>
+        <span class=k>if</span> <span class=n>idx</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=o>&gt;</span> <span class=mi>0</span><span class=p>:</span>
+            <span class=n>tile_px_start</span> <span class=o>=</span> <span class=n>idx</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=o>-</span> <span class=n>overlap_size</span>
+            <span class=n>crop_start</span> <span class=o>=</span> <span class=kc>True</span>
+        <span class=k>else</span><span class=p>:</span>
+            <span class=n>tile_px_start</span> <span class=o>=</span> <span class=n>idx</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span>
+            <span class=n>crop_start</span> <span class=o>=</span> <span class=kc>False</span>
+
+        <span class=k>if</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>&lt;</span> <span class=n>output_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]:</span>
+            <span class=n>tile_px_end</span> <span class=o>=</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>+</span> <span class=n>overlap_size</span>
+            <span class=n>crop_end</span> <span class=o>=</span> <span class=kc>True</span>
+        <span class=k>else</span><span class=p>:</span>
+            <span class=k>if</span> <span class=n>overlap_size</span> <span class=o>==</span> <span class=mi>0</span><span class=p>:</span>
+                <span class=n>tile_px_end</span> <span class=o>=</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>+</span> <span class=n>scan_crop</span>
+                <span class=n>crop_end</span> <span class=o>=</span> <span class=kc>False</span>
+            <span class=k>else</span><span class=p>:</span>
+                <span class=n>tile_px_end</span> <span class=o>=</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span>
+                <span class=n>crop_end</span> <span class=o>=</span> <span class=kc>False</span>
+
+        <span class=n>xp</span><span class=p>,</span> <span class=n>yp</span><span class=p>,</span> <span class=n>sp_start</span> <span class=o>=</span> <span class=n>lab2cam</span><span class=p>(</span>
+            <span class=n>oblique_image</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>2</span><span class=p>],</span> <span class=n>tile_px_start</span><span class=p>,</span> <span class=mi>0</span><span class=p>,</span> <span class=mf>30.0</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mf>180.0</span>
+        <span class=p>)</span>
+
+        <span class=n>xp</span><span class=p>,</span> <span class=n>yp</span><span class=p>,</span> <span class=n>sp_stop</span> <span class=o>=</span> <span class=n>lab2cam</span><span class=p>(</span>
+            <span class=n>oblique_image</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>2</span><span class=p>],</span> <span class=n>tile_px_end</span><span class=p>,</span> <span class=mi>0</span><span class=p>,</span> <span class=mf>30.0</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mf>180.0</span>
+        <span class=p>)</span>
+        <span class=n>scan_px_start</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>maximum</span><span class=p>(</span><span class=mi>0</span><span class=p>,</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>sp_start</span> <span class=o>*</span> <span class=p>(</span><span class=mf>0.115</span> <span class=o>/</span> <span class=mf>0.4</span><span class=p>))))</span>
+        <span class=n>scan_px_stop</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>minimum</span><span class=p>(</span>
+            <span class=n>oblique_image</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>0</span><span class=p>],</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>sp_stop</span> <span class=o>*</span> <span class=p>(</span><span class=mf>0.115</span> <span class=o>/</span> <span class=mf>0.4</span><span class=p>)))</span>
+        <span class=p>)</span>
+
+        <span class=n>raw_data</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>array</span><span class=p>(</span><span class=n>oblique_image</span><span class=p>[</span><span class=n>scan_px_start</span><span class=p>:</span><span class=n>scan_px_stop</span><span class=p>,</span> <span class=p>:])</span><span class=o>.</span><span class=n>astype</span><span class=p>(</span>
+            <span class=n>np</span><span class=o>.</span><span class=n>float32</span>
+        <span class=p>)</span>
+        <span class=n>raw_data</span> <span class=o>=</span> <span class=n>raw_data</span> <span class=o>-</span> <span class=n>camera_bkd</span>
+        <span class=n>raw_data</span><span class=p>[</span><span class=n>raw_data</span> <span class=o>&lt;</span> <span class=mf>0.0</span><span class=p>]</span> <span class=o>=</span> <span class=mf>0.0</span>
+        <span class=n>raw_data</span> <span class=o>=</span> <span class=p>((</span><span class=n>raw_data</span> <span class=o>*</span> <span class=n>camera_cf</span><span class=p>)</span> <span class=o>/</span> <span class=n>camera_qe</span><span class=p>)</span><span class=o>.</span><span class=n>astype</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>uint16</span><span class=p>)</span>
+
+        <span class=k>if</span> <span class=n>perform_decon</span><span class=p>:</span>
+            <span class=kn>from</span> <span class=nn>pycudadecon</span> <span class=kn>import</span> <span class=n>decon</span>
+
+            <span class=n>data_padded</span><span class=p>,</span> <span class=n>pad_z_before</span><span class=p>,</span> <span class=n>pad_z_after</span> <span class=o>=</span> <span class=n>pad_z</span><span class=p>(</span><span class=n>raw_data</span><span class=p>)</span>
+
+            <span class=k>del</span> <span class=n>raw_data</span>
+            <span class=n>gc</span><span class=o>.</span><span class=n>collect</span><span class=p>()</span>
+            <span class=n>data_decon_padded</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>zeros_like</span><span class=p>(</span><span class=n>data_padded</span><span class=p>)</span>
+
+            <span class=n>slices</span> <span class=o>=</span> <span class=n>Slicer</span><span class=p>(</span>
+                <span class=n>data_padded</span><span class=p>,</span>
+                <span class=n>crop_size</span><span class=o>=</span><span class=p>(</span><span class=n>decon_chunks</span><span class=p>,</span> <span class=mi>384</span><span class=p>,</span> <span class=mi>1200</span><span class=p>),</span>
+                <span class=n>overlap</span><span class=o>=</span><span class=p>(</span><span class=mi>32</span><span class=p>,</span> <span class=mi>32</span><span class=p>,</span> <span class=mi>32</span><span class=p>),</span>
+                <span class=n>batch_size</span><span class=o>=</span><span class=mi>1</span><span class=p>,</span>
+                <span class=n>pad</span><span class=o>=</span><span class=kc>True</span><span class=p>,</span>
+            <span class=p>)</span>
+
+            <span class=k>for</span> <span class=n>crop</span><span class=p>,</span> <span class=n>source</span><span class=p>,</span> <span class=n>destination</span> <span class=ow>in</span> <span class=n>slices</span><span class=p>:</span>
+                <span class=n>data_decon_padded</span><span class=p>[</span><span class=n>destination</span><span class=p>]</span> <span class=o>=</span> <span class=n>decon</span><span class=p>(</span>
+                    <span class=n>images</span><span class=o>=</span><span class=n>crop</span><span class=p>,</span>
+                    <span class=n>psf</span><span class=o>=</span><span class=n>psf_data</span><span class=p>,</span>
+                    <span class=n>otf_bgrd</span><span class=o>=</span><span class=mf>0.0</span><span class=p>,</span>
+                    <span class=n>background</span><span class=o>=</span><span class=mf>0.0</span><span class=p>,</span>
+                    <span class=n>dzpsf</span><span class=o>=</span><span class=mf>0.400</span><span class=p>,</span>
+                    <span class=n>dxpsf</span><span class=o>=</span><span class=mf>0.115</span><span class=p>,</span>
+                    <span class=n>dzdata</span><span class=o>=</span><span class=mf>0.400</span><span class=p>,</span>
+                    <span class=n>dxdata</span><span class=o>=</span><span class=mf>0.115</span><span class=p>,</span>
+                    <span class=n>wavelength</span><span class=o>=</span><span class=mi>670</span><span class=p>,</span>
+                    <span class=n>na</span><span class=o>=</span><span class=mf>1.3</span><span class=p>,</span>
+                    <span class=n>nimm</span><span class=o>=</span><span class=mf>1.4</span><span class=p>,</span>
+                    <span class=n>n_iters</span><span class=o>=</span><span class=n>decon_iterations</span><span class=p>,</span>
+                    <span class=n>napodize</span><span class=o>=</span><span class=mi>30</span><span class=p>,</span>
+                    <span class=n>skewed_decon</span><span class=o>=</span><span class=kc>True</span><span class=p>,</span>
+                    <span class=n>cleanup_otf</span><span class=o>=</span><span class=kc>True</span><span class=p>,</span>
+                <span class=p>)[</span><span class=n>source</span><span class=p>]</span>
+
+            <span class=n>data_decon</span> <span class=o>=</span> <span class=n>remove_padding_z</span><span class=p>(</span><span class=n>data_decon_padded</span><span class=p>,</span> <span class=n>pad_z_before</span><span class=p>,</span> <span class=n>pad_z_after</span><span class=p>)</span>
+            <span class=k>del</span> <span class=n>data_padded</span><span class=p>,</span> <span class=n>data_decon_padded</span>
+            <span class=n>gc</span><span class=o>.</span><span class=n>collect</span><span class=p>()</span>
+
+            <span class=n>temp_deskew</span> <span class=o>=</span> <span class=n>deskew</span><span class=p>(</span><span class=n>data_decon</span><span class=p>)</span><span class=o>.</span><span class=n>astype</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>uint16</span><span class=p>)</span>
+
+        <span class=k>else</span><span class=p>:</span>
+            <span class=n>temp_deskew</span> <span class=o>=</span> <span class=n>deskew</span><span class=p>(</span><span class=n>raw_data</span><span class=p>)</span><span class=o>.</span><span class=n>astype</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>uint16</span><span class=p>)</span>
+
+        <span class=k>if</span> <span class=n>crop_start</span> <span class=ow>and</span> <span class=n>crop_end</span><span class=p>:</span>
+            <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=n>overlap_size</span><span class=p>:</span><span class=o>-</span><span class=n>overlap_size</span><span class=p>,</span> <span class=p>:]</span>
+        <span class=k>elif</span> <span class=n>crop_start</span><span class=p>:</span>
+            <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=n>overlap_size</span><span class=p>:</span><span class=o>-</span><span class=mi>1</span><span class=p>,</span> <span class=p>:]</span>
+        <span class=k>elif</span> <span class=n>crop_end</span><span class=p>:</span>
+            <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=mi>0</span><span class=p>:</span><span class=o>-</span><span class=n>overlap_size</span><span class=p>,</span> <span class=p>:]</span>
+        <span class=k>else</span><span class=p>:</span>
+            <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=mi>0</span><span class=p>:</span><span class=o>-</span><span class=n>scan_crop</span><span class=p>,</span> <span class=p>:]</span>
+
+        <span class=k>if</span> <span class=n>crop_deskew</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>&gt;</span> <span class=p>(</span><span class=n>chunk_size</span><span class=p>):</span>
+            <span class=n>diff</span> <span class=o>=</span> <span class=n>crop_deskew</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>-</span> <span class=p>(</span><span class=n>chunk_size</span><span class=p>)</span>
+            <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>crop_deskew</span><span class=p>[:,</span> <span class=p>:</span><span class=o>-</span><span class=n>diff</span><span class=p>,</span> <span class=p>:]</span>
+        <span class=k>elif</span> <span class=n>crop_deskew</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>&lt;</span> <span class=p>(</span><span class=n>chunk_size</span><span class=p>):</span>
+            <span class=n>diff</span> <span class=o>=</span> <span class=p>(</span><span class=n>chunk_size</span><span class=p>)</span> <span class=o>-</span> <span class=n>crop_deskew</span><span class=o>.</span><span class=n>shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span>
+
+            <span class=k>if</span> <span class=n>crop_start</span> <span class=ow>and</span> <span class=n>crop_end</span><span class=p>:</span>
+                <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=n>overlap_size</span> <span class=p>:</span> <span class=o>-</span><span class=n>overlap_size</span> <span class=o>+</span> <span class=n>diff</span><span class=p>,</span> <span class=p>:]</span>
+            <span class=k>elif</span> <span class=n>crop_start</span><span class=p>:</span>
+                <span class=n>crop_deskew</span> <span class=o>=</span> <span class=n>temp_deskew</span><span class=p>[:,</span> <span class=n>overlap_size</span> <span class=o>-</span> <span class=n>diff</span> <span class=p>:</span> <span class=o>-</span><span class=mi>1</span><span class=p>,</span> <span class=p>:]</span>
+
+        <span class=k>if</span> <span class=n>z_downsample_level</span> <span class=o>&gt;</span> <span class=mi>1</span><span class=p>:</span>
+            <span class=n>deskewed_image</span><span class=p>[:,</span> <span class=n>idx</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=p>:</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>],</span> <span class=p>:]</span> <span class=o>=</span> <span class=n>downsample_axis</span><span class=p>(</span>
+                <span class=n>image</span><span class=o>=</span><span class=n>crop_deskew</span><span class=p>,</span> <span class=n>level</span><span class=o>=</span><span class=n>z_downsample_level</span><span class=p>,</span> <span class=n>axis</span><span class=o>=</span><span class=mi>0</span>
+            <span class=p>)</span>
+        <span class=k>else</span><span class=p>:</span>
+            <span class=n>deskewed_image</span><span class=p>[:,</span> <span class=n>idx</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=p>:</span> <span class=n>idx</span><span class=p>[</span><span class=mi>1</span><span class=p>],</span> <span class=p>:]</span> <span class=o>=</span> <span class=n>crop_deskew</span>
+
+    <span class=k>del</span> <span class=n>temp_deskew</span><span class=p>,</span> <span class=n>oblique_image</span>
+    <span class=n>gc</span><span class=o>.</span><span class=n>collect</span><span class=p>()</span>
+
+    <span class=k>return</span> <span class=n>deskewed_image</span>
+</code></pre></div></td></tr></table></div> </details> </div> </div> <div class="doc doc-object doc-function"> <h2 id=merfish3danalysis.utils.opmtools.deskew class="doc doc-heading"> <code class="highlight language-python"><span class=n>deskew</span><span class=p>(</span><span class=n>data</span><span class=p>,</span> <span class=n>theta</span><span class=o>=</span><span class=mf>30.0</span><span class=p>,</span> <span class=n>distance</span><span class=o>=</span><span class=mf>0.4</span><span class=p>,</span> <span class=n>pixel_size</span><span class=o>=</span><span class=mf>0.115</span><span class=p>)</span></code> <a href=#merfish3danalysis.utils.opmtools.deskew class=headerlink title="Permanent link">&para;</a></h2> <div class="doc doc-contents "> <p>Numba accelerated orthogonal interpolation for oblique data.</p> <p><span class=doc-section-title>Parameters:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> <th>Default</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td> <code>data</code> </td> <td> <code><span title="numpy.typing.ArrayLike">ArrayLike</span></code> </td> <td> <div class=doc-md-description> <p>image stack of uniformly spaced OPM planes</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>theta</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>angle relative to coverslip</p> </div> </td> <td> <code>30.0</code> </td> </tr> <tr class=doc-section-item> <td> <code>distance</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>step between image planes along coverslip</p> </div> </td> <td> <code>0.4</code> </td> </tr> <tr class=doc-section-item> <td> <code>pixel_size</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>in-plane camera pixel size in OPM coordinates</p> </div> </td> <td> <code>0.115</code> </td> </tr> </tbody> </table> <p><span class=doc-section-title>Returns:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td><code>output</code></td> <td> <code><span title="numpy.typing.ArrayLike">ArrayLike</span></code> </td> <td> <div class=doc-md-description> <p>image stack of deskewed OPM planes on uniform grid</p> </div> </td> </tr> </tbody> </table> <details class=quote> <summary>Source code in <code>src/merfish3danalysis/utils/opmtools.py</code></summary> <div class=highlight><table class=highlighttable><tr><td class=linenos><div class=linenodiv><pre><span></span><span class=normal> 71</span>
+<span class=normal> 72</span>
+<span class=normal> 73</span>
+<span class=normal> 74</span>
+<span class=normal> 75</span>
+<span class=normal> 76</span>
+<span class=normal> 77</span>
+<span class=normal> 78</span>
+<span class=normal> 79</span>
+<span class=normal> 80</span>
+<span class=normal> 81</span>
+<span class=normal> 82</span>
+<span class=normal> 83</span>
+<span class=normal> 84</span>
+<span class=normal> 85</span>
+<span class=normal> 86</span>
+<span class=normal> 87</span>
+<span class=normal> 88</span>
+<span class=normal> 89</span>
+<span class=normal> 90</span>
+<span class=normal> 91</span>
+<span class=normal> 92</span>
+<span class=normal> 93</span>
+<span class=normal> 94</span>
+<span class=normal> 95</span>
+<span class=normal> 96</span>
+<span class=normal> 97</span>
+<span class=normal> 98</span>
+<span class=normal> 99</span>
+<span class=normal>100</span>
+<span class=normal>101</span>
+<span class=normal>102</span>
+<span class=normal>103</span>
+<span class=normal>104</span>
+<span class=normal>105</span>
+<span class=normal>106</span>
+<span class=normal>107</span>
+<span class=normal>108</span>
+<span class=normal>109</span>
+<span class=normal>110</span>
+<span class=normal>111</span>
+<span class=normal>112</span>
+<span class=normal>113</span>
+<span class=normal>114</span>
+<span class=normal>115</span>
+<span class=normal>116</span>
+<span class=normal>117</span>
+<span class=normal>118</span>
+<span class=normal>119</span>
+<span class=normal>120</span>
+<span class=normal>121</span>
+<span class=normal>122</span>
+<span class=normal>123</span>
+<span class=normal>124</span>
+<span class=normal>125</span>
+<span class=normal>126</span>
+<span class=normal>127</span>
+<span class=normal>128</span>
+<span class=normal>129</span>
+<span class=normal>130</span>
+<span class=normal>131</span>
+<span class=normal>132</span>
+<span class=normal>133</span>
+<span class=normal>134</span>
+<span class=normal>135</span>
+<span class=normal>136</span>
+<span class=normal>137</span>
+<span class=normal>138</span>
+<span class=normal>139</span>
+<span class=normal>140</span>
+<span class=normal>141</span>
+<span class=normal>142</span>
+<span class=normal>143</span>
+<span class=normal>144</span>
+<span class=normal>145</span>
+<span class=normal>146</span>
+<span class=normal>147</span>
+<span class=normal>148</span>
+<span class=normal>149</span>
+<span class=normal>150</span>
+<span class=normal>151</span>
+<span class=normal>152</span>
+<span class=normal>153</span>
+<span class=normal>154</span>
+<span class=normal>155</span>
+<span class=normal>156</span>
+<span class=normal>157</span>
+<span class=normal>158</span>
+<span class=normal>159</span>
+<span class=normal>160</span>
+<span class=normal>161</span>
+<span class=normal>162</span>
+<span class=normal>163</span>
+<span class=normal>164</span>
+<span class=normal>165</span>
+<span class=normal>166</span>
+<span class=normal>167</span>
+<span class=normal>168</span>
+<span class=normal>169</span>
+<span class=normal>170</span>
+<span class=normal>171</span>
+<span class=normal>172</span>
+<span class=normal>173</span>
+<span class=normal>174</span>
+<span class=normal>175</span>
+<span class=normal>176</span>
+<span class=normal>177</span>
+<span class=normal>178</span></pre></div></td><td class=code><div><pre><span></span><code><span class=nd>@njit</span><span class=p>(</span><span class=n>parallel</span><span class=o>=</span><span class=kc>True</span><span class=p>)</span>
+<span class=k>def</span> <span class=nf>deskew</span><span class=p>(</span>
+    <span class=n>data</span><span class=p>:</span> <span class=n>ArrayLike</span><span class=p>,</span>
+    <span class=n>theta</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>30.0</span><span class=p>,</span>
+    <span class=n>distance</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.4</span><span class=p>,</span>
+    <span class=n>pixel_size</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.115</span><span class=p>,</span>
+<span class=p>):</span>
+<span class=w>    </span><span class=sd>&quot;&quot;&quot;Numba accelerated orthogonal interpolation for oblique data.</span>
+
+<span class=sd>    Parameters</span>
+<span class=sd>    ----------</span>
+<span class=sd>    data: ArrayLike</span>
+<span class=sd>        image stack of uniformly spaced OPM planes</span>
+<span class=sd>    theta: float</span>
+<span class=sd>        angle relative to coverslip</span>
+<span class=sd>    distance: float</span>
+<span class=sd>        step between image planes along coverslip</span>
+<span class=sd>    pixel_size: float</span>
+<span class=sd>        in-plane camera pixel size in OPM coordinates</span>
+
+<span class=sd>    Returns</span>
+<span class=sd>    -------</span>
+<span class=sd>    output: ArrayLike</span>
+<span class=sd>        image stack of deskewed OPM planes on uniform grid</span>
+<span class=sd>    &quot;&quot;&quot;</span>
+
+    <span class=c1># unwrap parameters</span>
+    <span class=p>[</span><span class=n>num_images</span><span class=p>,</span> <span class=n>ny</span><span class=p>,</span> <span class=n>nx</span><span class=p>]</span> <span class=o>=</span> <span class=n>data</span><span class=o>.</span><span class=n>shape</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># change step size from physical space (nm) to camera space (pixels)</span>
+    <span class=n>pixel_step</span> <span class=o>=</span> <span class=n>distance</span> <span class=o>/</span> <span class=n>pixel_size</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># calculate the number of pixels scanned during stage scan</span>
+    <span class=n>scan_end</span> <span class=o>=</span> <span class=n>num_images</span> <span class=o>*</span> <span class=n>pixel_step</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># calculate properties for final image</span>
+    <span class=n>final_ny</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span>
+        <span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>scan_end</span> <span class=o>+</span> <span class=n>ny</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>cos</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>
+    <span class=p>)</span>  <span class=c1># (pixels)</span>
+    <span class=n>final_nz</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>ny</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>sin</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>)))</span>  <span class=c1># (pixels)</span>
+    <span class=n>final_nx</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>nx</span><span class=p>)</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># create final image</span>
+    <span class=n>output</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>zeros</span><span class=p>(</span>
+        <span class=p>(</span><span class=n>final_nz</span><span class=p>,</span> <span class=n>final_ny</span><span class=p>,</span> <span class=n>final_nx</span><span class=p>),</span> <span class=n>dtype</span><span class=o>=</span><span class=n>np</span><span class=o>.</span><span class=n>float32</span>
+    <span class=p>)</span>  <span class=c1># (time, pixels,pixels,pixels - data is float32)</span>
+
+    <span class=c1># precalculate trig functions for scan angle</span>
+    <span class=n>tantheta</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>float32</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>tan</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>  <span class=c1># (float32)</span>
+    <span class=n>sintheta</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>float32</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>sin</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>  <span class=c1># (float32)</span>
+    <span class=n>costheta</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>float32</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>cos</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>  <span class=c1># (float32)</span>
+
+    <span class=c1># perform orthogonal interpolation</span>
+
+    <span class=c1># loop through output z planes</span>
+    <span class=c1># defined as parallel loop in numba</span>
+    <span class=k>for</span> <span class=n>z</span> <span class=ow>in</span> <span class=n>prange</span><span class=p>(</span><span class=mi>0</span><span class=p>,</span> <span class=n>final_nz</span><span class=p>):</span>
+        <span class=c1># calculate range of output y pixels to populate</span>
+        <span class=n>y_range_min</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>minimum</span><span class=p>(</span><span class=mi>0</span><span class=p>,</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>floor</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>float32</span><span class=p>(</span><span class=n>z</span><span class=p>)</span> <span class=o>/</span> <span class=n>tantheta</span><span class=p>)))</span>
+        <span class=n>y_range_max</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>maximum</span><span class=p>(</span>
+            <span class=n>final_ny</span><span class=p>,</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>scan_end</span> <span class=o>+</span> <span class=n>np</span><span class=o>.</span><span class=n>float32</span><span class=p>(</span><span class=n>z</span><span class=p>)</span> <span class=o>/</span> <span class=n>tantheta</span> <span class=o>+</span> <span class=mi>1</span><span class=p>))</span>
+        <span class=p>)</span>
+
+        <span class=c1># loop through final y pixels</span>
+        <span class=c1># defined as parallel loop in numba</span>
+        <span class=k>for</span> <span class=n>y</span> <span class=ow>in</span> <span class=n>prange</span><span class=p>(</span><span class=n>y_range_min</span><span class=p>,</span> <span class=n>y_range_max</span><span class=p>):</span>
+            <span class=c1># find the virtual tilted plane that intersects the interpolated plane</span>
+            <span class=n>virtual_plane</span> <span class=o>=</span> <span class=n>y</span> <span class=o>-</span> <span class=n>z</span> <span class=o>/</span> <span class=n>tantheta</span>
+
+            <span class=c1># find raw data planes that surround the virtual plane</span>
+            <span class=n>plane_before</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>floor</span><span class=p>(</span><span class=n>virtual_plane</span> <span class=o>/</span> <span class=n>pixel_step</span><span class=p>))</span>
+            <span class=n>plane_after</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>plane_before</span> <span class=o>+</span> <span class=mi>1</span><span class=p>)</span>
+
+            <span class=c1># continue if raw data planes are within the data range</span>
+            <span class=k>if</span> <span class=p>(</span><span class=n>plane_before</span> <span class=o>&gt;=</span> <span class=mi>0</span><span class=p>)</span> <span class=ow>and</span> <span class=p>(</span><span class=n>plane_after</span> <span class=o>&lt;</span> <span class=n>num_images</span><span class=p>):</span>
+                <span class=c1># find distance of a point on the  interpolated plane to plane_before and plane_after</span>
+                <span class=n>l_before</span> <span class=o>=</span> <span class=n>virtual_plane</span> <span class=o>-</span> <span class=n>plane_before</span> <span class=o>*</span> <span class=n>pixel_step</span>
+                <span class=n>l_after</span> <span class=o>=</span> <span class=n>pixel_step</span> <span class=o>-</span> <span class=n>l_before</span>
+
+                <span class=c1># determine location of a point along the interpolated plane</span>
+                <span class=n>za</span> <span class=o>=</span> <span class=n>z</span> <span class=o>/</span> <span class=n>sintheta</span>
+                <span class=n>virtual_pos_before</span> <span class=o>=</span> <span class=n>za</span> <span class=o>+</span> <span class=n>l_before</span> <span class=o>*</span> <span class=n>costheta</span>
+                <span class=n>virtual_pos_after</span> <span class=o>=</span> <span class=n>za</span> <span class=o>-</span> <span class=n>l_after</span> <span class=o>*</span> <span class=n>costheta</span>
+
+                <span class=c1># determine nearest data points to interpoloated point in raw data</span>
+                <span class=n>pos_before</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>floor</span><span class=p>(</span><span class=n>virtual_pos_before</span><span class=p>))</span>
+                <span class=n>pos_after</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>floor</span><span class=p>(</span><span class=n>virtual_pos_after</span><span class=p>))</span>
+
+                <span class=c1># continue if within data bounds</span>
+                <span class=k>if</span> <span class=p>(</span>
+                    <span class=p>(</span><span class=n>pos_before</span> <span class=o>&gt;=</span> <span class=mi>0</span><span class=p>)</span>
+                    <span class=ow>and</span> <span class=p>(</span><span class=n>pos_after</span> <span class=o>&gt;=</span> <span class=mi>0</span><span class=p>)</span>
+                    <span class=ow>and</span> <span class=p>(</span><span class=n>pos_before</span> <span class=o>&lt;</span> <span class=n>ny</span> <span class=o>-</span> <span class=mi>1</span><span class=p>)</span>
+                    <span class=ow>and</span> <span class=p>(</span><span class=n>pos_after</span> <span class=o>&lt;</span> <span class=n>ny</span> <span class=o>-</span> <span class=mi>1</span><span class=p>)</span>
+                <span class=p>):</span>
+                    <span class=c1># determine points surrounding interpolated point on the virtual plane</span>
+                    <span class=n>dz_before</span> <span class=o>=</span> <span class=n>virtual_pos_before</span> <span class=o>-</span> <span class=n>pos_before</span>
+                    <span class=n>dz_after</span> <span class=o>=</span> <span class=n>virtual_pos_after</span> <span class=o>-</span> <span class=n>pos_after</span>
+
+                    <span class=c1># compute final image plane using orthogonal interpolation</span>
+                    <span class=n>output</span><span class=p>[</span><span class=n>z</span><span class=p>,</span> <span class=n>y</span><span class=p>,</span> <span class=p>:]</span> <span class=o>=</span> <span class=p>(</span>
+                        <span class=n>l_before</span> <span class=o>*</span> <span class=n>dz_after</span> <span class=o>*</span> <span class=n>data</span><span class=p>[</span><span class=n>plane_after</span><span class=p>,</span> <span class=n>pos_after</span> <span class=o>+</span> <span class=mi>1</span><span class=p>,</span> <span class=p>:]</span>
+                        <span class=o>+</span> <span class=n>l_before</span> <span class=o>*</span> <span class=p>(</span><span class=mi>1</span> <span class=o>-</span> <span class=n>dz_after</span><span class=p>)</span> <span class=o>*</span> <span class=n>data</span><span class=p>[</span><span class=n>plane_after</span><span class=p>,</span> <span class=n>pos_after</span><span class=p>,</span> <span class=p>:]</span>
+                        <span class=o>+</span> <span class=n>l_after</span> <span class=o>*</span> <span class=n>dz_before</span> <span class=o>*</span> <span class=n>data</span><span class=p>[</span><span class=n>plane_before</span><span class=p>,</span> <span class=n>pos_before</span> <span class=o>+</span> <span class=mi>1</span><span class=p>,</span> <span class=p>:]</span>
+                        <span class=o>+</span> <span class=n>l_after</span> <span class=o>*</span> <span class=p>(</span><span class=mi>1</span> <span class=o>-</span> <span class=n>dz_before</span><span class=p>)</span> <span class=o>*</span> <span class=n>data</span><span class=p>[</span><span class=n>plane_before</span><span class=p>,</span> <span class=n>pos_before</span><span class=p>,</span> <span class=p>:]</span>
+                    <span class=p>)</span> <span class=o>/</span> <span class=n>pixel_step</span>
+
+    <span class=k>return</span> <span class=n>output</span>
+</code></pre></div></td></tr></table></div> </details> </div> </div> <div class="doc doc-object doc-function"> <h2 id=merfish3danalysis.utils.opmtools.deskew_shape_estimator class="doc doc-heading"> <code class="highlight language-python"><span class=n>deskew_shape_estimator</span><span class=p>(</span><span class=n>input_shape</span><span class=p>,</span> <span class=n>theta</span><span class=o>=</span><span class=mf>30.0</span><span class=p>,</span> <span class=n>distance</span><span class=o>=</span><span class=mf>0.4</span><span class=p>,</span> <span class=n>pixel_size</span><span class=o>=</span><span class=mf>0.115</span><span class=p>)</span></code> <a href=#merfish3danalysis.utils.opmtools.deskew_shape_estimator class=headerlink title="Permanent link">&para;</a></h2> <div class="doc doc-contents "> <p>Generate shape of orthogonal interpolation output array.</p> <p><span class=doc-section-title>Parameters:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> <th>Default</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td> <code>input_shape</code> </td> <td> <code><span title="typing.Sequence">Sequence</span>[int]</code> </td> <td> <div class=doc-md-description> <p>shape of oblique array</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>theta</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>angle relative to coverslip</p> </div> </td> <td> <code>30.0</code> </td> </tr> <tr class=doc-section-item> <td> <code>distance</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>step between image planes along coverslip</p> </div> </td> <td> <code>0.4</code> </td> </tr> <tr class=doc-section-item> <td> <code>pixel_size</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>in-plane camera pixel size in OPM coordinates</p> </div> </td> <td> <code>0.115</code> </td> </tr> </tbody> </table> <p><span class=doc-section-title>Returns:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td><code>output_shape</code></td> <td> <code><span title="typing.Sequence">Sequence</span>[int]</code> </td> <td> <div class=doc-md-description> <p>shape of deskewed array</p> </div> </td> </tr> </tbody> </table> <details class=quote> <summary>Source code in <code>src/merfish3danalysis/utils/opmtools.py</code></summary> <div class=highlight><table class=highlighttable><tr><td class=linenos><div class=linenodiv><pre><span></span><span class=normal>27</span>
+<span class=normal>28</span>
+<span class=normal>29</span>
+<span class=normal>30</span>
+<span class=normal>31</span>
+<span class=normal>32</span>
+<span class=normal>33</span>
+<span class=normal>34</span>
+<span class=normal>35</span>
+<span class=normal>36</span>
+<span class=normal>37</span>
+<span class=normal>38</span>
+<span class=normal>39</span>
+<span class=normal>40</span>
+<span class=normal>41</span>
+<span class=normal>42</span>
+<span class=normal>43</span>
+<span class=normal>44</span>
+<span class=normal>45</span>
+<span class=normal>46</span>
+<span class=normal>47</span>
+<span class=normal>48</span>
+<span class=normal>49</span>
+<span class=normal>50</span>
+<span class=normal>51</span>
+<span class=normal>52</span>
+<span class=normal>53</span>
+<span class=normal>54</span>
+<span class=normal>55</span>
+<span class=normal>56</span>
+<span class=normal>57</span>
+<span class=normal>58</span>
+<span class=normal>59</span>
+<span class=normal>60</span>
+<span class=normal>61</span>
+<span class=normal>62</span>
+<span class=normal>63</span>
+<span class=normal>64</span>
+<span class=normal>65</span>
+<span class=normal>66</span>
+<span class=normal>67</span>
+<span class=normal>68</span></pre></div></td><td class=code><div><pre><span></span><code><span class=nd>@njit</span>
+<span class=k>def</span> <span class=nf>deskew_shape_estimator</span><span class=p>(</span>
+    <span class=n>input_shape</span><span class=p>:</span> <span class=n>Sequence</span><span class=p>[</span><span class=nb>int</span><span class=p>],</span>
+    <span class=n>theta</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>30.0</span><span class=p>,</span>
+    <span class=n>distance</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.4</span><span class=p>,</span>
+    <span class=n>pixel_size</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>0.115</span><span class=p>,</span>
+<span class=p>):</span>
+<span class=w>    </span><span class=sd>&quot;&quot;&quot;Generate shape of orthogonal interpolation output array.</span>
+
+<span class=sd>    Parameters</span>
+<span class=sd>    ----------</span>
+<span class=sd>    input_shape: Sequence[int]</span>
+<span class=sd>        shape of oblique array</span>
+<span class=sd>    theta: float</span>
+<span class=sd>        angle relative to coverslip</span>
+<span class=sd>    distance: float</span>
+<span class=sd>        step between image planes along coverslip</span>
+<span class=sd>    pixel_size: float</span>
+<span class=sd>        in-plane camera pixel size in OPM coordinates</span>
+
+<span class=sd>    Returns</span>
+<span class=sd>    -------</span>
+<span class=sd>    output_shape: Sequence[int]</span>
+<span class=sd>        shape of deskewed array</span>
+<span class=sd>    &quot;&quot;&quot;</span>
+
+    <span class=c1># change step size from physical space (nm) to camera space (pixels)</span>
+    <span class=n>pixel_step</span> <span class=o>=</span> <span class=n>distance</span> <span class=o>/</span> <span class=n>pixel_size</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># calculate the number of pixels scanned during stage scan</span>
+    <span class=n>scan_end</span> <span class=o>=</span> <span class=n>input_shape</span><span class=p>[</span><span class=mi>0</span><span class=p>]</span> <span class=o>*</span> <span class=n>pixel_step</span>  <span class=c1># (pixels)</span>
+
+    <span class=c1># calculate properties for final image</span>
+    <span class=n>final_ny</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span>
+        <span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>scan_end</span> <span class=o>+</span> <span class=n>input_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>cos</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>
+    <span class=p>)</span>  <span class=c1># (pixels)</span>
+    <span class=n>final_nz</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span>
+        <span class=n>np</span><span class=o>.</span><span class=n>ceil</span><span class=p>(</span><span class=n>input_shape</span><span class=p>[</span><span class=mi>1</span><span class=p>]</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>sin</span><span class=p>(</span><span class=n>theta</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mi>180</span><span class=p>))</span>
+    <span class=p>)</span>  <span class=c1># (pixels)</span>
+    <span class=n>final_nx</span> <span class=o>=</span> <span class=n>np</span><span class=o>.</span><span class=n>int64</span><span class=p>(</span><span class=n>input_shape</span><span class=p>[</span><span class=mi>2</span><span class=p>])</span>
+
+    <span class=k>return</span> <span class=p>[</span><span class=n>final_nz</span><span class=p>,</span> <span class=n>final_ny</span><span class=p>,</span> <span class=n>final_nx</span><span class=p>]</span>
+</code></pre></div></td></tr></table></div> </details> </div> </div> <div class="doc doc-object doc-function"> <h2 id=merfish3danalysis.utils.opmtools.lab2cam class="doc doc-heading"> <code class="highlight language-python"><span class=n>lab2cam</span><span class=p>(</span><span class=n>x</span><span class=p>,</span> <span class=n>y</span><span class=p>,</span> <span class=n>z</span><span class=p>,</span> <span class=n>theta</span><span class=o>=</span><span class=mf>30.0</span> <span class=o>*</span> <span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mf>180.0</span><span class=p>)</span></code> <a href=#merfish3danalysis.utils.opmtools.lab2cam class=headerlink title="Permanent link">&para;</a></h2> <div class="doc doc-contents "> <p>Convert xyz coordinates to camera coordinates sytem, x', y', and stage position.</p> <p><span class=doc-section-title>Parameters:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> <th>Default</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td> <code>x</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>coverslip x coordinate</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>y</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>coverslip y coordinate</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>z</code> </td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>coverslip z coordinate</p> </div> </td> <td> <em>required</em> </td> </tr> <tr class=doc-section-item> <td> <code>theta</code> </td> <td> <code>float</code> </td> <td> <div class=doc-md-description> <p>OPM angle in radians</p> </div> </td> <td> <code>30.0 * <span title="numpy.pi">pi</span> / 180.0</code> </td> </tr> </tbody> </table> <p><span class=doc-section-title>Returns:</span></p> <table> <thead> <tr> <th>Name</th> <th>Type</th> <th>Description</th> </tr> </thead> <tbody> <tr class=doc-section-item> <td><code>xp</code></td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>xp coordinate</p> </div> </td> </tr> <tr class=doc-section-item> <td><code>yp</code></td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>yp coordinate</p> </div> </td> </tr> <tr class=doc-section-item> <td><code>stage_pos</code></td> <td> <code>int</code> </td> <td> <div class=doc-md-description> <p>distance of leading edge of camera frame from the y-axis</p> </div> </td> </tr> </tbody> </table> <details class=quote> <summary>Source code in <code>src/merfish3danalysis/utils/opmtools.py</code></summary> <div class=highlight><table class=highlighttable><tr><td class=linenos><div class=linenodiv><pre><span></span><span class=normal>181</span>
+<span class=normal>182</span>
+<span class=normal>183</span>
+<span class=normal>184</span>
+<span class=normal>185</span>
+<span class=normal>186</span>
+<span class=normal>187</span>
+<span class=normal>188</span>
+<span class=normal>189</span>
+<span class=normal>190</span>
+<span class=normal>191</span>
+<span class=normal>192</span>
+<span class=normal>193</span>
+<span class=normal>194</span>
+<span class=normal>195</span>
+<span class=normal>196</span>
+<span class=normal>197</span>
+<span class=normal>198</span>
+<span class=normal>199</span>
+<span class=normal>200</span>
+<span class=normal>201</span>
+<span class=normal>202</span>
+<span class=normal>203</span>
+<span class=normal>204</span>
+<span class=normal>205</span>
+<span class=normal>206</span>
+<span class=normal>207</span>
+<span class=normal>208</span>
+<span class=normal>209</span>
+<span class=normal>210</span>
+<span class=normal>211</span></pre></div></td><td class=code><div><pre><span></span><code><span class=k>def</span> <span class=nf>lab2cam</span><span class=p>(</span>
+    <span class=n>x</span><span class=p>:</span> <span class=nb>int</span><span class=p>,</span> <span class=n>y</span><span class=p>:</span> <span class=nb>int</span><span class=p>,</span> <span class=n>z</span><span class=p>:</span> <span class=nb>int</span><span class=p>,</span> <span class=n>theta</span><span class=p>:</span> <span class=nb>float</span> <span class=o>=</span> <span class=mf>30.0</span> <span class=o>*</span> <span class=p>(</span><span class=n>np</span><span class=o>.</span><span class=n>pi</span> <span class=o>/</span> <span class=mf>180.0</span><span class=p>)</span>
+<span class=p>)</span> <span class=o>-&gt;</span> <span class=n>Tuple</span><span class=p>[</span><span class=nb>int</span><span class=p>,</span> <span class=nb>int</span><span class=p>,</span> <span class=nb>int</span><span class=p>]:</span>
+<span class=w>    </span><span class=sd>&quot;&quot;&quot;Convert xyz coordinates to camera coordinates sytem, x&#39;, y&#39;, and stage position.</span>
+
+<span class=sd>    Parameters</span>
+<span class=sd>    ----------</span>
+<span class=sd>    x: int</span>
+<span class=sd>        coverslip x coordinate</span>
+<span class=sd>    y: int</span>
+<span class=sd>        coverslip y coordinate</span>
+<span class=sd>    z: int</span>
+<span class=sd>        coverslip z coordinate</span>
+<span class=sd>    theta: float</span>
+<span class=sd>        OPM angle in radians</span>
+
+
+<span class=sd>    Returns</span>
+<span class=sd>    -------</span>
+<span class=sd>    xp: int</span>
+<span class=sd>        xp coordinate</span>
+<span class=sd>    yp: int</span>
+<span class=sd>        yp coordinate</span>
+<span class=sd>    stage_pos: int</span>
+<span class=sd>        distance of leading edge of camera frame from the y-axis</span>
+<span class=sd>    &quot;&quot;&quot;</span>
+
+    <span class=n>xp</span> <span class=o>=</span> <span class=n>x</span>
+    <span class=n>stage_pos</span> <span class=o>=</span> <span class=n>y</span> <span class=o>-</span> <span class=n>z</span> <span class=o>/</span> <span class=n>np</span><span class=o>.</span><span class=n>tan</span><span class=p>(</span><span class=n>theta</span><span class=p>)</span>
+    <span class=n>yp</span> <span class=o>=</span> <span class=n>z</span> <span class=o>/</span> <span class=n>np</span><span class=o>.</span><span class=n>sin</span><span class=p>(</span><span class=n>theta</span><span class=p>)</span>
+    <span class=k>return</span> <span class=n>xp</span><span class=p>,</span> <span class=n>yp</span><span class=p>,</span> <span class=n>stage_pos</span>
+</code></pre></div></td></tr></table></div> </details> </div> </div> </div> </div> </div> </article> </div> <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script> </div> </main> <footer class=md-footer> <div class="md-footer-meta md-typeset"> <div class="md-footer-meta__inner md-grid"> <div class=md-copyright> Made with <a href=https://squidfunk.github.io/mkdocs-material/ target=_blank rel=noopener> Material for MkDocs </a> </div> </div> </div> </footer> </div> <div class=md-dialog data-md-component=dialog> <div class="md-dialog__inner md-typeset"></div> </div> <script id=__config type=application/json>{"base": "../../..", "features": [], "search": "../../../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script> <script src=../../../assets/javascripts/bundle.88dd0f4e.min.js></script> </body> </html>

@@ -1,0 +1,160 @@
+<!doctype html><html lang=en class=no-js> <head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="GPU-accelerated 2D/3D MERFISH data processing"><meta name=author content="Quantitative Imaging and Inference Lab"><link href=https://qi2lab.github.io/merfish3d-analysis/datastore/ rel=canonical><link href=../installation/ rel=prev><link href=../examples/statphysbio_synthetic/ rel=next><link rel=icon href=../assets/images/favicon.png><meta name=generator content="mkdocs-1.6.1, mkdocs-material-9.5.49"><title>DataStore - merfish3d-analysis</title><link rel=stylesheet href=../assets/stylesheets/main.6f8fc17f.min.css><link rel=preconnect href=https://fonts.gstatic.com crossorigin><link rel=stylesheet href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback"><style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style><link rel=stylesheet href=../assets/_mkdocstrings.css><script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script></head> <body dir=ltr> <input class=md-toggle data-md-toggle=drawer type=checkbox id=__drawer autocomplete=off> <input class=md-toggle data-md-toggle=search type=checkbox id=__search autocomplete=off> <label class=md-overlay for=__drawer></label> <div data-md-component=skip> <a href=#qi2lab-datastore-overview class=md-skip> Skip to content </a> </div> <div data-md-component=announce> </div> <header class="md-header md-header--shadow" data-md-component=header> <nav class="md-header__inner md-grid" aria-label=Header> <a href=.. title=merfish3d-analysis class="md-header__button md-logo" aria-label=merfish3d-analysis data-md-component=logo> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg> </a> <label class="md-header__button md-icon" for=__drawer> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg> </label> <div class=md-header__title data-md-component=header-title> <div class=md-header__ellipsis> <div class=md-header__topic> <span class=md-ellipsis> merfish3d-analysis </span> </div> <div class=md-header__topic data-md-component=header-topic> <span class=md-ellipsis> DataStore </span> </div> </div> </div> <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script> <label class="md-header__button md-icon" for=__search> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg> </label> <div class=md-search data-md-component=search role=dialog> <label class=md-search__overlay for=__search></label> <div class=md-search__inner role=search> <form class=md-search__form name=search> <input type=text class=md-search__input name=query aria-label=Search placeholder=Search autocapitalize=off autocorrect=off autocomplete=off spellcheck=false data-md-component=search-query required> <label class="md-search__icon md-icon" for=__search> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg> </label> <nav class=md-search__options aria-label=Search> <button type=reset class="md-search__icon md-icon" title=Clear aria-label=Clear tabindex=-1> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg> </button> </nav> </form> <div class=md-search__output> <div class=md-search__scrollwrap tabindex=0 data-md-scrollfix> <div class=md-search-result data-md-component=search-result> <div class=md-search-result__meta> Initializing search </div> <ol class=md-search-result__list role=presentation></ol> </div> </div> </div> </div> </div> </nav> </header> <div class=md-container data-md-component=container> <main class=md-main data-md-component=main> <div class="md-main__inner md-grid"> <div class="md-sidebar md-sidebar--primary" data-md-component=sidebar data-md-type=navigation> <div class=md-sidebar__scrollwrap> <div class=md-sidebar__inner> <nav class="md-nav md-nav--primary" aria-label=Navigation data-md-level=0> <label class=md-nav__title for=__drawer> <a href=.. title=merfish3d-analysis class="md-nav__button md-logo" aria-label=merfish3d-analysis data-md-component=logo> <svg xmlns=http://www.w3.org/2000/svg viewbox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg> </a> merfish3d-analysis </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=.. class=md-nav__link> <span class=md-ellipsis> Home </span> </a> </li> <li class=md-nav__item> <a href=../installation/ class=md-nav__link> <span class=md-ellipsis> Installation </span> </a> </li> <li class="md-nav__item md-nav__item--active"> <input class="md-nav__toggle md-toggle" type=checkbox id=__toc> <label class="md-nav__link md-nav__link--active" for=__toc> <span class=md-ellipsis> DataStore </span> <span class="md-nav__icon md-icon"></span> </label> <a href=./ class="md-nav__link md-nav__link--active"> <span class=md-ellipsis> DataStore </span> </a> <nav class="md-nav md-nav--secondary" aria-label="Table of contents"> <label class=md-nav__title for=__toc> <span class="md-nav__icon md-icon"></span> Table of contents </label> <ul class=md-nav__list data-md-component=toc data-md-scrollfix> <li class=md-nav__item> <a href=#philosophy class=md-nav__link> <span class=md-ellipsis> Philosophy </span> </a> </li> <li class=md-nav__item> <a href=#important-considerations class=md-nav__link> <span class=md-ellipsis> Important considerations </span> </a> </li> <li class=md-nav__item> <a href=#general-use class=md-nav__link> <span class=md-ellipsis> General use </span> </a> </li> <li class=md-nav__item> <a href=#datastore-structure class=md-nav__link> <span class=md-ellipsis> DataStore structure </span> </a> </li> <li class=md-nav__item> <a href=#datastore-api class=md-nav__link> <span class=md-ellipsis> DataStore API </span> </a> </li> </ul> </nav> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_4> <label class=md-nav__link for=__nav_4 id=__nav_4_label tabindex=0> <span class=md-ellipsis> Examples </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=1 aria-labelledby=__nav_4_label aria-expanded=false> <label class=md-nav__title for=__nav_4> <span class="md-nav__icon md-icon"></span> Examples </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../examples/statphysbio_synthetic/ class=md-nav__link> <span class=md-ellipsis> Synthetic data </span> </a> </li> <li class=md-nav__item> <a href=../examples/zhuang_lab_mouse_brain/ class=md-nav__link> <span class=md-ellipsis> Zhuang laboratory mouse brain </span> </a> </li> <li class=md-nav__item> <a href=../examples/qi2lab_human_olfactory_bulb/ class=md-nav__link> <span class=md-ellipsis> qi2lab human olfactory bulb </span> </a> </li> </ul> </nav> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5> <label class=md-nav__link for=__nav_5 id=__nav_5_label tabindex=0> <span class=md-ellipsis> Reference </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=1 aria-labelledby=__nav_5_label aria-expanded=false> <label class=md-nav__title for=__nav_5> <span class="md-nav__icon md-icon"></span> Reference </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../reference/ class=md-nav__link> <span class=md-ellipsis> Overview </span> </a> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5_2> <label class=md-nav__link for=__nav_5_2 id=__nav_5_2_label tabindex=0> <span class=md-ellipsis> Classes </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=2 aria-labelledby=__nav_5_2_label aria-expanded=false> <label class=md-nav__title for=__nav_5_2> <span class="md-nav__icon md-icon"></span> Classes </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../reference/classes/DataRegistration/ class=md-nav__link> <span class=md-ellipsis> DataRegistration </span> </a> </li> <li class=md-nav__item> <a href=../reference/classes/PixelDecoder/ class=md-nav__link> <span class=md-ellipsis> PixelDecoder </span> </a> </li> <li class=md-nav__item> <a href=../reference/classes/qi2labDataStore/ class=md-nav__link> <span class=md-ellipsis> qi2labDataStore </span> </a> </li> </ul> </nav> </li> <li class="md-nav__item md-nav__item--nested"> <input class="md-nav__toggle md-toggle " type=checkbox id=__nav_5_3> <label class=md-nav__link for=__nav_5_3 id=__nav_5_3_label tabindex=0> <span class=md-ellipsis> Modules </span> <span class="md-nav__icon md-icon"></span> </label> <nav class=md-nav data-md-level=2 aria-labelledby=__nav_5_3_label aria-expanded=false> <label class=md-nav__title for=__nav_5_3> <span class="md-nav__icon md-icon"></span> Modules </label> <ul class=md-nav__list data-md-scrollfix> <li class=md-nav__item> <a href=../reference/modules/dataio/ class=md-nav__link> <span class=md-ellipsis> dataio </span> </a> </li> <li class=md-nav__item> <a href=../reference/modules/imageprocessing/ class=md-nav__link> <span class=md-ellipsis> imageprocessing </span> </a> </li> <li class=md-nav__item> <a href=../reference/modules/registration/ class=md-nav__link> <span class=md-ellipsis> registration </span> </a> </li> <li class=md-nav__item> <a href=../reference/modules/opmtools/ class=md-nav__link> <span class=md-ellipsis> opmtools </span> </a> </li> </ul> </nav> </li> </ul> </nav> </li> <li class=md-nav__item> <a href=../contributing/ class=md-nav__link> <span class=md-ellipsis> Contributing </span> </a> </li> </ul> </nav> </div> </div> </div> <div class="md-sidebar md-sidebar--secondary" data-md-component=sidebar data-md-type=toc> <div class=md-sidebar__scrollwrap> <div class=md-sidebar__inner> <nav class="md-nav md-nav--secondary" aria-label="Table of contents"> <label class=md-nav__title for=__toc> <span class="md-nav__icon md-icon"></span> Table of contents </label> <ul class=md-nav__list data-md-component=toc data-md-scrollfix> <li class=md-nav__item> <a href=#philosophy class=md-nav__link> <span class=md-ellipsis> Philosophy </span> </a> </li> <li class=md-nav__item> <a href=#important-considerations class=md-nav__link> <span class=md-ellipsis> Important considerations </span> </a> </li> <li class=md-nav__item> <a href=#general-use class=md-nav__link> <span class=md-ellipsis> General use </span> </a> </li> <li class=md-nav__item> <a href=#datastore-structure class=md-nav__link> <span class=md-ellipsis> DataStore structure </span> </a> </li> <li class=md-nav__item> <a href=#datastore-api class=md-nav__link> <span class=md-ellipsis> DataStore API </span> </a> </li> </ul> </nav> </div> </div> </div> <div class=md-content data-md-component=content> <article class="md-content__inner md-typeset"> <h1 id=qi2lab-datastore-overview>qi2lab DataStore overview<a class=headerlink href=#qi2lab-datastore-overview title="Permanent link">&para;</a></h1> <h2 id=philosophy>Philosophy<a class=headerlink href=#philosophy title="Permanent link">&para;</a></h2> <p>To help efficiently handle the data complexity of 3D MERFISH experiments, we have created a dedicated <a href=https://zarr.dev/ >zarr</a> based datastore, using <a href=https://google.github.io/tensorstore/ >TensorStore</a> for efficient reading and writing of image data and <a href=https://parquet.apache.org/docs/ >Parquet</a> for tabular data. </p> <h2 id=important-considerations>Important considerations<a class=headerlink href=#important-considerations title="Permanent link">&para;</a></h2> <p>To create a <code>qi2labDataStore</code>, we need to know the following metadata: - the effective xy pixel size and z step - the objective numerical aperture - the immersion media refractive index - the global stage zyx position at each tile - the camera orientation with respect to the stage orientation - the direction of stage motion with respect the camera view - the bits that were collected in each round - the acquisition order in each tile (channel,z) or (z,channel) - the excitation and emission wavelengths for each channel</p> <p>Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in <a href=https://github.com/multiview-stitcher/napari-stitcher>napari-stitcher</a> and explore different orientations of the images and stage direction.</p> <p>Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientaton such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the <a href=../examples/zhuang_lab_mouse_brain/ >Zhuang lab examples</a>, we show how to determine the camera and stage orientations when the metadata is not available.</p> <h2 id=general-use>General use<a class=headerlink href=#general-use title="Permanent link">&para;</a></h2> <p>Here, we use a hypothetical dataset that only has one round with two bits. We assume the data is already gain, offset, and hot pixel corrected.</p> <p>Tiles and rounds are indexed from 0, keeping with python conventions. However, we always index rounds and codebook bits from 1, to avoid confusion.</p> <pre><code class=language-python>from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from pathlib import Path
+
+# define the datastore directory and create the datastore
+root_path = Path(r&quot;/path/to/dataset/&quot;)
+datastore = qi2labDataStore(root_path / Path(&quot;qi2labdatastore&quot;))
+
+# required metadata
+datastore.channels_in_data = [&quot;alexa488&quot;,&quot;alexa561&quot;,&quot;alexa647&quot;]
+datastore.baysor_path = Path(r&quot;/path/to/Baysor/bin/baysor/bin/./baysor&quot;)
+datastore.baysor_options = Path(r&quot;/path/to/baysor_options.toml&quot;)
+datastore.julia_threads = 8
+datastore.num_rounds = 1
+datastore.codebook = Path(r&quot;/path/to/dataset/raw_data/codebook.csv&quot;)
+datastore.experiment_order = Path(r&quot;/path/to/dataset/raw_data/exp_order.csv&quot;)
+datastore.num_tiles = 1
+datastore.microscope_type = &quot;3D&quot;
+datastore.tile_overlap = 0.2
+datastore.e_per_ADU = 0.51
+datastore.na = 1.35
+datastore.ri = 1.51
+datastore.binning = 1
+datastore.noise_map = None
+datastore.channel_psfs = channel_psfs # either experimental or theoretical PSFs
+datastore.voxel_size_zyx_um = [.31,.098,.098]
+
+# Update datastore state that Calibration are created
+datastore_state = datastore.datastore_state
+datastore_state.update({&quot;Calibrations&quot;: True})
+datastore.datastore_state = datastore_state
+
+# initialize the tile
+datastore.initialize_tile(tile_idx)
+
+# save image data for tile = 0, round = 0, polyDT
+datastore.save_local_corrected_image(
+    polyDT_data,
+    tile=0,
+    psf_idx=0,
+    gain_correction=True,
+    hotpixel_correction=True,
+    shading_correction=False,
+    round=0,
+)
+
+# save stage position for tile = 0, round = 0, polyDT
+datastore.save_local_stage_position_zyx_um(
+    [1000., 200., 500.], tile=0, round=0
+)
+
+# save excitation and emission wavelengths for tile = 0, round = 0, polyDT
+# this position is used for any bits linked to this round
+datastore.save_local_wavelengths_um(
+    (.488, .520),
+    tile=0,
+    round=0,
+)
+
+# save first readout channel for tile = 0, bit_idx = 1
+datastore.save_local_corrected_image(
+    bit001_data,
+    tile=0,
+    psf_idx=1,
+    gain_correction=True,
+    hotpixel_correction=True,
+    shading_correction=False,
+    bit=1,
+)
+
+# save excitation and emission wavelengths for tile = 0, bit_idx = 1
+datastore.save_local_wavelengths_um(
+    (.561, .590),
+    tile=0,
+    bit=1,
+)
+
+# save second readout channel for tile = 0, bit_idx = 2
+datastore.save_local_corrected_image(
+    bit002_data,
+    tile=0,
+    psf_idx=2,
+    gain_correction=True,
+    hotpixel_correction=True,
+    shading_correction=False,
+    bit=2,
+)
+
+# save excitation and emission wavelengths for tile = 0, bit_idx = 2
+datastore.save_local_wavelengths_um(
+    (.635, .670),
+    tile=0,
+    bit=2,
+)
+
+# update datastore state that corrected data is saved 
+datastore_state = datastore.datastore_state
+datastore_state.update({&quot;Corrected&quot;: True})
+datastore.datastore_state = datastore_state
+</code></pre> <h2 id=datastore-structure>DataStore structure<a class=headerlink href=#datastore-structure title="Permanent link">&para;</a></h2> <pre><code class=language-bash>/experiment 
+├── raw_data/ 
+  └── &lt;data&gt; (raw experimental data and metadata)
+├── qi2labdatastore/ 
+    ├── datastore.json (information on the state of the datastore)
+    ├── calibrations.zarr/ (calibration information)
+    ├── .zattrs
+      ├── &lt;exp_codebook&gt;
+      ├── &lt;exp_order&gt;
+      └── &lt;exp_codebook&gt;
+    ├── camera_noise_map/ (camera noise map array)
+    └── psf_data/ (psf arrays)
+  ├── polyDT/ (raw and processed data for polyDT label)
+    ├── tile0000/
+      ├── round0000.zarr/
+        ├── .zattrs
+          ├── &lt;stage_zyx_um&gt; (global stage position in zyx order; unit: microns)
+          ├── &lt;wavelengths_um&gt; (wavelength in (excitation,emission) order; unit: microns)
+          ├── &lt;voxel_size_zyx_um&gt; (voxel size in zyx order; unit: microns)
+          ├── &lt;bit_linker&gt; (what codebook bits are linked to this fidicual image)
+          ├── &lt;affine_zyx_um&gt; (4x4 affine matrix generated during global registration; unit: microns)
+          ├── &lt;origin_zyx_um&gt; (tile origin generated during global registration; unit: microns)
+          └── &lt;spacing_zyx_um&gt; (voxel size used during global registration, this must match &lt;voxel_size_zyx_um&gt;; unit: microns)
+        ├── camera_data/ (gain and offset corrected data in zyx order)
+        ├── corrected_data/ (gain and offset corrected data in zyx order)
+        └── registered_decon_data/ (deconvolved data in zyx order)
+      ├── round0001.zarr
+        ├── .zattrs
+          ├── &lt;stage_zyx_um&gt; (global stage position in zyx order; unit: microns)
+          ├── &lt;wavelengths_um&gt; (wavelength in (excitation,emission) order; unit: microns)
+          ├── &lt;voxel_size_zyx_um&gt; (voxel size in zyx order; unit: microns)
+          ├── &lt;bit_linker&gt; (what codebook bits are linked to this fidicual image)
+          ├── &lt;affine_zyx_um&gt; (4x4 affine matrix generated during global registration; unit: microns)
+          ├── &lt;origin_zyx_um&gt; (tile origin generated during global registration; unit: microns)
+          └── &lt;spacing_zyx_um&gt; (voxel size used during global registration, this must match &lt;voxel_size_zyx_um&gt;; unit: microns)
+        ├── camera_data/ (gain and offset corrected data in zyx order)
+        ├── corrected_data/ (gain and offset corrected data in zyx order)
+        ├── of_xyz_3x_downsample/ (3x downsampled optical flow field for round 0 alginment in pixels)
+        ├── registered_decon_data/ (deconvolved, registered back to round 0 image data in zyx order)
+        ├── ... 
+        └── roundNNNN.zarr/
+    ├── tile0001/
+    ├── tile0002/
+    ├── ...
+    └── tileNNNN/
+  ├── readouts/ (raw and processed data for MERFISH bits)
+    ├── tile0001/
+      ├── bit000.zarr/
+        ├── .zattrs
+          ├── &lt;stage_zyx_um&gt; (global stage position in zyx order; unit: microns)
+          ├── &lt;wavelengths_um&gt; (wavelength in (excitation,emission) order; unit: microns)
+          ├── &lt;voxel_size_zyx_um&gt; (voxel size in zyx order; unit: microns)
+          └── &lt;round_linker&gt; (what fidicual round is linked to this bit image) 
+        ├── camera_data/
+        ├── correcte_data/
+        ├── registered_decon_data/
+        └── registered_ufish_data/
+      ├── bit001.zarr/
+      ├── ...
+      └── bitNNN.zarr/
+
+</code></pre> <h2 id=datastore-api>DataStore API<a class=headerlink href=#datastore-api title="Permanent link">&para;</a></h2> <p>Nearly all parameters are accessible as class properties and all data has helper functions for reading and writing. The full API reference is available at <a href=../reference/classes/qi2labDataStore/ >qi2labDataStore</a>.</p> </article> </div> <script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script> </div> </main> <footer class=md-footer> <div class="md-footer-meta md-typeset"> <div class="md-footer-meta__inner md-grid"> <div class=md-copyright> Made with <a href=https://squidfunk.github.io/mkdocs-material/ target=_blank rel=noopener> Material for MkDocs </a> </div> </div> </div> </footer> </div> <div class=md-dialog data-md-component=dialog> <div class="md-dialog__inner md-typeset"></div> </div> <script id=__config type=application/json>{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.6ce7567c.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script> <script src=../assets/javascripts/bundle.88dd0f4e.min.js></script> </body> </html>
