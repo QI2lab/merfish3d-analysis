@@ -4182,14 +4182,12 @@ class qi2labDataStore:
         self._save_to_parquet(parsed_spots_df, current_global_filtered_decoded_path)
         
     def save_mtx(self, spots_source: str = ""):
-        """Save mtx file for downstream analysis.
+        """Save mtx file for downstream analysis. Assumes Baysor has been run.
         
         Parameters
         ----------
         spots_source: str, default "baysor"
             source of spots. "baysor" or "resegmented".
-        
-        Assumes Baysor has been run.
         """
 
         from merfish3danalysis.utils.dataio import create_mtx

@@ -12,7 +12,7 @@ nav:
   - Installation: installation.md
   - DataStore: datastore.md
   - Examples:
-    - Synthetic data: examples/synthetic_data.md
+    - Synthetic data: examples/statphysbio_synthetic.md
     - Zhuang laboratory mouse brain: examples/zhuang_lab_mouse_brain.md
     - qi2lab human olfactory bulb: examples/qi2lab_human_olfactory_bulb.md
   - Reference:
