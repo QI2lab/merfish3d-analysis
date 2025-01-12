@@ -27,7 +27,7 @@ All of the required code to process this data is in the BIL download. There shou
 │ ├── codebook.csv
 │ ├── bit_order.csv
 │ ├── hot_pixel_flir.tiff
-│ ├── scan_metadata.csv
+│ └── scan_metadata.csv
 ├── processing_code/ 
 │ ├── 00_readme.txt 
 │ └── 01_convert_to_datastore.py
@@ -75,7 +75,7 @@ Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and
 
 Once `02_register_and_deconolve.py` is finished, you will need to create the correct cellpose settings. We have found that initially peforming cellpose segmentation on a downsampled and maximum Z projected polyDT image is sufficient to seed Baysor for segmentation refinement.
 
-Here, we embed a short screen recoding here on how to optimize cellpose parameters. If the standard "cyto3" model does not work for you data, you may need to retrain the cellpose model and pass that to the code. Please see the API documentation for how to perform that step. Given satisfactory cellpose settings, you fill them in at the bottom of `03_cell_segmentation.py`,
+ If the standard "cyto3" model does not work for you data, you may need to retrain the cellpose model according the cellpose documentation and pass that to the code. Please see the API documentation for how to perform that step. Given satisfactory cellpose settings, you fill them in at the bottom of `03_cell_segmentation.py`,
 
 ```python
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - Introduction: introduction.md
   - DataStore: datastore.md
   - Examples:
     - Synthetic data: examples/synthetic_data.md

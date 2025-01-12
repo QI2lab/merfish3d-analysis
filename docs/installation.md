@@ -22,3 +22,7 @@ mamba activate merfish3d
 mamba activate merfish3d
 pip install merfish3d-analysis
 ```
+
+## Installing Baysor
+
+Please follow the [Baysor documentation](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation) to install for Linux.
