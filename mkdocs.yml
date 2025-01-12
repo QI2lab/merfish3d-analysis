@@ -1,4 +1,4 @@
-site_name: MERFISH3D Analysis
+site_name: merfish3d-analysis
 
 theme:
   name: material 
@@ -9,17 +9,25 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Installation: installation.md
+  - DataStore: datastore.md
+  - Examples:
+    - Synthetic data: examples/synthetic_data.md
+    - Zhuang laboratory mouse brain: examples/zhuang_lab_mouse_brain.md
+    - qi2lab human olfactory bulb: examples/qi2lab_human_olfactory_bulb.md
   - Reference:
-      - Overview: reference/index.md
-      - Classes:
-          - DataRegistration: reference/classes/DataRegistration.md
-          - PixelDecoder: reference/classes/PixelDecoder.md
-          - qi2labDataStore: reference/classes/qi2labDataStore.md
-      - Modules:
-          - dataio: reference/modules/dataio.md
-          - imageprocessing: reference/modules/imageprocessing.md
-          - registration: reference/modules/registration.md
-          - opmtools: reference/modules/opmtools.md
+    - Overview: reference/index.md
+    - Classes:
+      - DataRegistration: reference/classes/DataRegistration.md
+      - PixelDecoder: reference/classes/PixelDecoder.md
+      - qi2labDataStore: reference/classes/qi2labDataStore.md
+    - Modules:
+      - dataio: reference/modules/dataio.md
+      - imageprocessing: reference/modules/imageprocessing.md
+      - registration: reference/modules/registration.md
+      - opmtools: reference/modules/opmtools.md
+  - Contributing: contributing.md
+
 plugins:
   - search
   - mkdocstrings:
