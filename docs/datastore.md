@@ -196,4 +196,4 @@ datastore.datastore_state = datastore_state
 
 ## DataStore API
 
-Nearly all parameters are accessible as class properties and all data has helper functions for reading and writing. The full API reference is available at [datastore](reference/classes/qi2labDataStore.md).
+Nearly all parameters are accessible as class properties and all data has helper functions for reading and writing. The full API reference is available at [qi2labDataStore](reference/classes/qi2labDataStore.md).

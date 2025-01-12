@@ -1,6 +1,8 @@
 # Welcome to merfish3d-analysis Documentation
 
-merfish3d-analysis provides GPU-accelerated post-processing for MERFISH data.
+GPU accelerated post-processing for 2D or 3D iterative barcoded FISH data. This package currently **Nvidia only** and **Linux only** due to RAPIDS.AI package availabilty.
+
+_WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes.
 
 ## Motivation
 
