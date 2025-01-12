@@ -1,7 +1,7 @@
 site_name: merfish3d-analysis
 
 theme:
-  name: readthedocs 
+  name: material 
 
 markdown_extensions:
   - toc:
