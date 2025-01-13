@@ -30,7 +30,7 @@ We expect these to be in `.csv` or `.tsv` format.
 
 For example, a 16-bit codebook `codebook.tsv` should have the following structure:
 
-| gene | bit01 | bit02 | bit03 | bit04 | bit05 | bit06 | bit07 | bit08 | bit09 | bit10 | bit11 | bit12 | bit13 | bit14 | bit15 | bit16 |
+| codeword # | bit01 | bit02 | bit03 | bit04 | bit05 | bit06 | bit07 | bit08 | bit09 | bit10 | bit11 | bit12 | bit13 | bit14 | bit15 | bit16 |
 | ---- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
 | codeword 1 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
 | codeword 2 | 0 | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
