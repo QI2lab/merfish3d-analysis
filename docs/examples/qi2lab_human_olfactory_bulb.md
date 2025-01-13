@@ -1,6 +1,8 @@
-# qi2lab human olfactory bubl example
+# qi2lab human olfactory bulb example
 
 ## Overview
+
+**Important: The data for this example is still processing on the Brain Image Library (BIL) and is not available yet. The example will be updated once it is posted.**
 
 The goal of this example is to retrieve a 3D MERFISH experiment generate by the qi2lab at ASU from the Brain Image Library and run merfish3d-analysis through quantifying transcripts and assigning transcripts to cells. This is a 119-gene MERFISH and 2-gene smFISH experiment on post-mortem human olfactory bulb tissue.
 
@@ -10,7 +12,7 @@ You need to make sure you have a working python enviornment with `merfish3d-anal
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Baysor](https://github.com/kharchenkolab/Baysor)
-- [Raw 3D MERFISH data](https://www.bil.com)
+- [Not yet available: Raw 3D MERFISH data]()
 
 ## Downloaded data
 
@@ -37,11 +39,11 @@ All of the required code to process this data is in the BIL download. There shou
 │ └── qi2lab_humanOB.toml
 └── results/
 │ └── transcripts.parquet
-│ └── cell_outlines.gzip
+│ └── cell_outlines.zip
 │ |── mtx/
-| │ └── .gzip
-| │ └── .gzip
-| │ └── .gzip
+| │ └── barcodes.tsv.gzip
+| │ └── features.tsv.gzip
+| │ └── matrix.mtx.gzip
 
 ## Processing steps
 
@@ -71,9 +73,9 @@ if __name__ == "__main__":
 
 For all of the files in `processing_code`, you'll set the `root_path` to `root_path = Path(r"/path/to/download/raw_data")`. The package automatically places the datastore within that directory.
 
-Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconolve.py` without any interactions. Depending on your computing hardware, you should expect 1-2 hours for `01_convert_to_datastore.py` and a couple days for `02_register_and_deconolve.py`. The second file is compute intensive, because it deconvolves 3 channel z-stacks at each tile over 9 hours, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for 2 MERFISH (or smFISH) channel at each tile, performs a rigid, affine, and optical flow field registration across imaging rounds, and globally registers the fidicual channel.
+Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconolve.py` without any interactions. Depending on your computing hardware, you should expect 1-2 hours for `01_convert_to_datastore.py` and a couple days for `02_register_and_deconvolve.py`. The second file is compute intensive, because it deconvolves 3 channel z-stacks at each tile over 9 hours, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for 2 MERFISH (or smFISH) channel at each tile, performs a rigid, affine, and optical flow field registration across imaging rounds, and globally registers the fidicual channel.
 
-Once `02_register_and_deconolve.py` is finished, you will need to create the correct cellpose settings. We have found that initially peforming cellpose segmentation on a downsampled and maximum Z projected polyDT image is sufficient to seed Baysor for segmentation refinement.
+Once `02_register_and_deconvolve.py` is finished, you will need to create the correct cellpose settings. We have found that initially peforming cellpose segmentation on a downsampled and maximum Z projected polyDT image is sufficient to seed Baysor for segmentation refinement.
 
  If the standard "cyto3" model does not work for you data, you may need to retrain the cellpose model according the cellpose documentation and pass that to the code. Please see the API documentation for how to perform that step. Given satisfactory cellpose settings, you fill them in at the bottom of `03_cell_segmentation.py`,
 
@@ -98,4 +100,4 @@ For this dataset, we labeled a number of olfactory receptors. We exclude these g
 
 ## Ensuring a sucessful run
 
-We have included the proper output of the `merfish3d-analysis` package for this dataset on the BIL servers in the `results` directory. You should be able to compare your obtained results to ours to ensure that there were no computation errors. One common issue we have run into is if the optical flow registration fails due to processor specific instructions (specifically older processors that lack AVX2). Please contact us if you have this issue, we have a workaround during installation that we can provide to you. 
+In progress...
