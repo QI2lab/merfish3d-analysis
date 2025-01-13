@@ -2,11 +2,12 @@
 
 ## Philosophy
 
-To help efficiently handle the data complexity of 3D MERFISH experiments, we have created a dedicated [zarr](https://zarr.dev/) based datastore, using [TensorStore](https://google.github.io/tensorstore/) for efficient reading and writing of image data and [Parquet](https://parquet.apache.org/docs/) for tabular data. 
+To help efficiently handle the data complexity of 3D MERFISH experiments, we have created a dedicated [Zarr](https://zarr.dev/) based datastore, using [TensorStore](https://google.github.io/tensorstore/) for efficient reading and writing of image data and [Parquet](https://parquet.apache.org/docs/) for tabular data. 
 
 ## Important considerations
 
 To create a `qi2labDataStore`, we need to know the following metadata:
+
 - the effective xy pixel size and z step
 - the objective numerical aperture
 - the immersion media refractive index
