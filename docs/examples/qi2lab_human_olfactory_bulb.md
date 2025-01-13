@@ -12,38 +12,33 @@ You need to make sure you have a working python enviornment with `merfish3d-anal
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Baysor](https://github.com/kharchenkolab/Baysor)
-- [Not yet available: Raw 3D MERFISH data]()
+- Not yet available! ~~[Raw 3D MERFISH data]()~~
 
 ## Downloaded data
 
-All of the required code to process this data is in the BIL download. There should be three top-level directories in the downloaded folder, `raw_data`, `processing_code`, and `results`. The directory structure is as follows:
+All of the required code to process this data is in the BIL download. There should be three top-level directories in the downloaded folder, `raw_data` and `results`. The directory structure is as follows:
 
-/ 
+```bash
+/path/to/download/ 
 ├── raw_data/ 
-│ ├── data_r0001_tile000_xyz/
-│ ├── data_r0001_tile000_xyz.csv
-| ...
-| ...
-│ ├── data_r0009_tile041_xyz/
-│ ├── data_r0009_tile041_xyz.csv
-│ ├── codebook.csv
-│ ├── bit_order.csv
-│ ├── hot_pixel_flir.tiff
-│ └── scan_metadata.csv
-├── processing_code/ 
-│ ├── 00_readme.txt 
-│ └── 01_convert_to_datastore.py
-│ └── 02_register_and_deconvolve.py
-│ └── 03_cellpose_segmentation.py
-│ └── 04_pixeldecode_and_baysor.py
-│ └── qi2lab_humanOB.toml
-└── results/
-│ └── transcripts.parquet
-│ └── cell_outlines.zip
-│ |── mtx/
-| │ └── barcodes.tsv.gzip
-| │ └── features.tsv.gzip
-| │ └── matrix.mtx.gzip
+  ├── data_r0001_tile000_xyz/
+  ├── data_r0001_tile000_xyz.csv
+  ...
+  ...
+  ├── data_r0009_tile041_xyz/
+  ├── data_r0009_tile041_xyz.csv
+  ├── codebook.csv
+  ├── bit_order.csv
+  ├── hot_pixel_flir.tiff
+  └── scan_metadata.csv
+├── results/
+  ├── transcripts.parquet
+  ├── cell_outlines.zip
+  |── mtx/
+    ├── barcodes.tsv.gzip
+    ├── features.tsv.gzip
+    └── matrix.mtx.gzip
+```
 
 ## Processing steps
 
@@ -56,7 +51,7 @@ if __name__ == "__main__":
         r"/path/to/Baysor/bin/baysor/bin/./baysor"
     )
     baysor_options_path = Path(
-        r"/path/to/download/processing_code/qi2lab_humanOB.toml"
+        r"/path/to/merfish3d-analysis/examples/human_olfactorybulb/qi2lab_humanOB.toml"
     )
     julia_threads = 20 # replace with number of threads to use.
 
@@ -73,7 +68,7 @@ if __name__ == "__main__":
 
 For all of the files in `processing_code`, you'll set the `root_path` to `root_path = Path(r"/path/to/download/raw_data")`. The package automatically places the datastore within that directory.
 
-Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconolve.py` without any interactions. Depending on your computing hardware, you should expect 1-2 hours for `01_convert_to_datastore.py` and a couple days for `02_register_and_deconvolve.py`. The second file is compute intensive, because it deconvolves 3 channel z-stacks at each tile over 9 hours, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for 2 MERFISH (or smFISH) channel at each tile, performs a rigid, affine, and optical flow field registration across imaging rounds, and globally registers the fidicual channel.
+Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconvolve.py` without any interactions. Depending on your computing hardware, you should expect 1-2 hours for `01_convert_to_datastore.py` and a couple days for `02_register_and_deconvolve.py`. The second file is compute intensive, because it deconvolves 3 channel z-stacks at each tile over 9 hours, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for 2 MERFISH (or smFISH) channel at each tile, performs a rigid, affine, and optical flow field registration across imaging rounds, and globally registers the fidicual channel.
 
 Once `02_register_and_deconvolve.py` is finished, you will need to create the correct cellpose settings. We have found that initially peforming cellpose segmentation on a downsampled and maximum Z projected polyDT image is sufficient to seed Baysor for segmentation refinement.
 
