@@ -26,10 +26,10 @@ Because there are so many different microscopes and microscope acquisition softw
 
 For iterative multiplexing, we need to know the codebook, which connects genes and codewords, and the experiment order, which connects rounds and bits.
 
-We expect these to be in `.csv` format. For example, at 16-bit codebook should have the following structure:
+We expect these to be in `.csv` or `.tsv` format. 
 
-`codebook.csv`
-```bash
+For example, a 16-bit codebook `codebook.tsv` should have the following structure:
+
 | gene| bit01 |	bit02	| bit03	| bit04	| bit05 |	bit06	| bit07 |	bit08	| bit09 |	bit10	| bit11 |	bit12	| bit13 |	bit14 |	bit15 |	bit16 |
 | ALDOC	| 0	|	0	|	0	|	0	|	1	|	1	|	1	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	1	|	0	|	0	|	0	|
 | APOLD1 | 0 | 0 |	0	|	0	|	1	|	0	|	1	|	0	|	0	|	0	| 0	|	1	|	0	|	0	|	0	|	1	|	0	|	0	|
@@ -37,13 +37,11 @@ We expect these to be in `.csv` format. For example, at 16-bit codebook should h
 | BRINP3 |	0	|	0	|	1	|	0	|	1	|	0	|	1	| 1	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|
 |  ----  | - | -	|	-	|	-	| -	|	-	|	-	| -	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|
 | Blank21 |	0 |	1 |	0 |	0 |	0 |	0 |	0 |	0 |	1 |	1 |	0	| 0 |	0 |	1 |	0 |	0 |	0	 | 0 |
-```
 
-`exp_order.csv` should have N columns. The first column is the round, starting from `1`. The remaining columns are the readout bits in the codebook, in order of acquisition. **Important: we assume that each tile has a fiducial channel. If there is not, this software package will not work for your experiment.**
+`exp_order` should have N columns. The first column is the round, starting from `1`. The remaining columns are the readout bits in the codebook, in order of acquisition. **Important: we assume that each tile has a fiducial channel. If there is not, this software package will not work for your experiment.**
 
-For a 16-bit codebook, where we acquire the bits in sequential order within rounds and across rounds, the experiment file will look like:
+For a 16-bit codebook, where we acquire the bits in sequential order within rounds and across rounds, the `exp_order.tsv` will look like:
 
-```bash
 | round | readout 1 | readout 2 |
 | ----- | --------- | --------- |
 |   1   |     1     |     2     |
@@ -54,7 +52,6 @@ For a 16-bit codebook, where we acquire the bits in sequential order within roun
 |   6   |     11    |     12    |
 |   7   |     13    |     14    |
 |   8   |     15    |     16    |
-```
 
 ## General use
 
