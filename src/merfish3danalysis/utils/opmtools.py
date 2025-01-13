@@ -2,7 +2,7 @@
 OPM-specific data handling tools.
 
 This module provides tools and utilities specifically for handling
-orthogonal plane microscopy (OPM) data.
+oblique plane microscopy (OPM) data.
 
 History:
 ---------
