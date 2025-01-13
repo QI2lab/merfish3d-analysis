@@ -1,6 +1,6 @@
 # Welcome to merfish3d-analysis Documentation
 
-GPU accelerated post-processing for 2D or 3D iterative barcoded FISH data. This package currently **Nvidia only** and **Linux only** due to RAPIDS.AI package availabilty.
+GPU accelerated post-processing for 2D or 3D iterative barcoded FISH data. This package currently **Nvidia only** and **Linux only** due to [RAPIDS.AI](https://rapids.ai/) package availabilty.
 
 _WARNING: alpha software._ We are sharing this early in case it is useful to other groups. Please expect breaking changes.
 
@@ -15,15 +15,15 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
 ## Features
 
 - Decode both 2D and 3D iterative barcoded experiments that use a codebook. Our focus on 3D MERFISH, but this library can be extended to any iterative imaging and barcoded RNA imaging approach.
-- Datastore optimized for large-scale imaging data.
-  - Read/Write compressed Zarr v2 using Tensorstore library for performance.
+- [Datastore](datastore.md) optimized for large-scale imaging data.
+    - Read and write compressed Zarr v2 using Tensorstore library for performance.
 - Processing capabilities for widefield, standard light-sheet, and skewed light-sheet data.
 - Rigid, affine, and deformable local tile registration.
-  - GPU-accelerated registration estimation combined with ITK for image warping.
+    - GPU-accelerated registration estimation combined with ITK for image warping.
 - Rigid and affine global registration using [multiview-stitcher](https://multiview-stitcher.github.io/multiview-stitcher/main/)
 - GPU-accelerated image processing and decoding.
-  - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels. All non-GPU accelerated functions are [Numba](https://numba.pydata.org/) accelerated.
-  - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
+    - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels. All non-GPU accelerated functions are [Numba](https://numba.pydata.org/) accelerated.
+    - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
 - Iterative estimation of background and normalization vectors across codebook bits to remove subjective normalization by user that often leads to non-optimal decoding solutions.
 - Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Baysor](https://kharchenkolab.github.io/Baysor/dev/), and [U-FISH](https://github.com/UFISH-Team/U-FISH).
 

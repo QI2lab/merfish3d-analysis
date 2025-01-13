@@ -528,22 +528,28 @@ class qi2labDataStore:
         calib_zattrs["exp_order"] = self._experiment_order.values.tolist()
         self._save_to_json(calib_zattrs, zattrs_path)
 
-        self._num_rounds = int(value[-1, 0])
+        if self.num_rounds is None: 
+            self.num_rounds = int(value[-1, 0])
+        else:
+            assert self.num_rounds == int(value[-1, 0]), "Number of rounds does not match experiment order file."
         calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["num_round"] = self._num_rounds
+        calib_zattrs["num_round"] = self.num_rounds
         self._save_to_json(calib_zattrs, zattrs_path)
 
-        self._num_bits = int(np.max(value[:, 1:]))
+        if self.num_bits is None:
+            self.num_bits = int(np.max(value[:, 1:]))
+        else:
+            assert self.num_bits == int(np.max(value[:, 1:])), "Number of bits does not match experiment order file."
         calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["num_bits"] = self._num_bits
+        calib_zattrs["num_bits"] = self.num_bits
         self._save_to_json(calib_zattrs, zattrs_path)
 
         self._round_ids = []
-        for round_idx in range(self._num_rounds):
+        for round_idx in range(self.num_rounds):
             self._round_ids.append("round" + str(round_idx + 1).zfill(3))
 
         self._bit_ids = []
-        for bit_idx in range(self._num_bits):
+        for bit_idx in range(self.num_bits):
             self._bit_ids.append("bit" + str(bit_idx + 1).zfill(3))
 
     @property
