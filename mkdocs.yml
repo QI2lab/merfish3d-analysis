@@ -38,7 +38,8 @@ plugins:
         python:
           options:
             docstring_style: numpy
-            show_private_members: true
+            filters: []
+            summary: true
           setup_commands:
             - import sys; sys.path.insert(0, "src/")
   - minify:
