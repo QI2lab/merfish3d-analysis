@@ -18,9 +18,43 @@ To create a `qi2labDataStore`, we need to know the following metadata:
 - the acquisition order in each tile (channel,z) or (z,channel)
 - the excitation and emission wavelengths for each channel
 
-Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in [napari-stitcher](https://github.com/multiview-stitcher/napari-stitcher) and explore different orientations of the images and stage direction.
+Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in [napari](https://github.com/napari) and explore different orientations of the images and stage direction.
 
 Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientaton such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the [Zhuang lab examples](examples/zhuang_lab_mouse_brain.md), we show how to determine the camera and stage orientations when the metadata is not available.
+
+## Codebook and Experiment Order files
+
+For iterative multiplexing, we need to know the codebook, which connects genes and codewords, and the experiment order, which connects rounds and bits.
+
+We expect these to be in `.csv` format. For example, at 16-bit codebook should have the following structure:
+
+`codebook.csv`
+```bash
+| gene| bit01 |	bit02	| bit03	| bit04	| bit05 |	bit06	| bit07 |	bit08	| bit09 |	bit10	| bit11 |	bit12	| bit13 |	bit14 |	bit15 |	bit16 |
+| ALDOC	| 0	|	0	|	0	|	0	|	1	|	1	|	1	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	1	|	0	|	0	|	0	|
+| APOLD1 | 0 | 0 |	0	|	0	|	1	|	0	|	1	|	0	|	0	|	0	| 0	|	1	|	0	|	0	|	0	|	1	|	0	|	0	|
+| B3GAT2 | 1 | 0	|	0	|	0	|	1	|	0	|	1	|	0	|	0	| 0	| 0	|	0	|	1	|	0	|	0	|	0	|	0	|	0	|
+| BRINP3 |	0	|	0	|	1	|	0	|	1	|	0	|	1	| 1	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|	0	|
+|  ----  | - | -	|	-	|	-	| -	|	-	|	-	| -	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|	-	|
+| Blank21 |	0 |	1 |	0 |	0 |	0 |	0 |	0 |	0 |	1 |	1 |	0	| 0 |	0 |	1 |	0 |	0 |	0	 | 0 |
+```
+
+`exp_order.csv` should have N columns. The first column is the round, starting from `1`. The remaining columns are the readout bits in the codebook, in order of acquisition. **Important: we assume that each tile has a fiducial channel. If there is not, this software package will not work for your experiment.**
+
+For a 16-bit codebook, where we acquire the bits in sequential order within rounds and across rounds, the experiment file will look like:
+
+```bash
+| round | readout 1 | readout 2 |
+| ----- | --------- | --------- |
+|   1   |     1     |     2     |
+|   2   |     3     |     4     |
+|   3   |     5     |     6     |
+|   4   |     7     |     8     |
+|   5   |     9     |     10    |
+|   6   |     11    |     12    |
+|   7   |     13    |     14    |
+|   8   |     15    |     16    |
+```
 
 ## General use
 
@@ -63,6 +97,10 @@ datastore.datastore_state = datastore_state
 # initialize the tile
 datastore.initialize_tile(tile_idx)
 
+# code to read image tile here
+# Assume the images are of shape [n_channels,nz,nx,ny]
+polyDT_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[0,:]
+
 # save image data for tile = 0, round = 0, polyDT
 datastore.save_local_corrected_image(
     polyDT_data,
@@ -87,6 +125,10 @@ datastore.save_local_wavelengths_um(
     round=0,
 )
 
+# code to read image tile here
+# Assume the images are of shape [n_channels,nz,nx,ny]
+bit001_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[1,:]
+
 # save first readout channel for tile = 0, bit_idx = 1
 datastore.save_local_corrected_image(
     bit001_data,
@@ -104,6 +146,10 @@ datastore.save_local_wavelengths_um(
     tile=0,
     bit=1,
 )
+
+# code to read image tile here
+# Assume the images are of shape [n_channels,nz,nx,ny]
+bit002_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[2,:]
 
 # save second readout channel for tile = 0, bit_idx = 2
 datastore.save_local_corrected_image(
@@ -186,7 +232,7 @@ datastore.datastore_state = datastore_state
           ├── <voxel_size_zyx_um> (voxel size in zyx order; unit: microns)
           └── <round_linker> (what fidicual round is linked to this bit image) 
         ├── camera_data/
-        ├── correcte_data/
+        ├── corrected_data/
         ├── registered_decon_data/
         └── registered_ufish_data/
       ├── bit001.zarr/
