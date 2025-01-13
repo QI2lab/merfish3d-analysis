@@ -32,12 +32,12 @@ For example, a 16-bit codebook `codebook.tsv` should have the following structur
 
 | gene | bit01 | bit02 | bit03 | bit04 | bit05 | bit06 | bit07 | bit08 | bit09 | bit10 | bit11 | bit12 | bit13 | bit14 | bit15 | bit16 |
 | ---- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
-| ALDOC	 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| APOLD1 | 0 | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
-| B3GAT2 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| BRINP3 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| ----   | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - |
-| Blank21 |	0 |	1 |	0 |	0 |	0 |	0 |	0 |	0 |	1 |	1 |	0	| 0 |	0 |	1 |	0 |	0 |
+| codeword 1 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| codeword 2 | 0 | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 |
+| codeword 3 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| codeword 4 | 0 | 0 | 1 | 0 | 1 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+|  --------  | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - |
+| codeword N | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 0 |
 
 `exp_order` should have N columns. The first column is the round, starting from `1`. The remaining columns are the readout bits in the codebook, in order of acquisition. **Important: we assume that each tile has a fiducial channel. If there is not, this software package will not work for your experiment.**
 
