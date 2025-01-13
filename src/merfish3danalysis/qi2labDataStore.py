@@ -1021,9 +1021,9 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        data : dict
+        dictionary : dict
             The data to be saved.
-        path : Union[Path,str]
+        dictionary_path : Union[Path,str]
             The path to the JSON file where the data will be saved.
         """
 
