@@ -2,62 +2,62 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/contributing/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/datastore/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/installation/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/examples/qi2lab_human_olfactory_bulb/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/examples/zhuang_lab_mouse_brain/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/classes/DataRegistration/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/classes/PixelDecoder/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/classes/qi2labDataStore/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/modules/dataio/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/modules/imageprocessing/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/modules/opmtools/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
     <url>
          <loc>https://qi2lab.github.io/merfish3d-analysis/reference/modules/registration/</loc>
-         <lastmod>2025-01-13</lastmod>
+         <lastmod>2025-01-17</lastmod>
     </url>
 </urlset>
