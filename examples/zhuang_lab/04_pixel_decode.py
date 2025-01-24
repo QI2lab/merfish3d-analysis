@@ -1,40 +1,76 @@
-"""Decode using qi2lab GPU decoder
+"""
+Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
+Baysor re-segmentation is performed without OR genes to avoid biasing results.
+
+Shepherd 2024/01 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.postprocess.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 
-def decode_pixels():
-    datastore_path = Path(r"/mnt/data/zhuang/mop/mouse_sample1_raw/processed_v3")
-    datastore = qi2labDataStore(datastore_path=datastore_path)
-    
+def pixeldecode_and_baysor(
+    root_path: Path,
+    minimum_pixels_per_RNA: int = 2,
+    ufish_threshold: float = 0.5,
+    fdr_target: float = .05,
+    run_baysor: bool = True,
+):
+    """Perform pixel decoding.
+
+    Parameters
+    ----------
+    root_path: Path
+        path to experiment
+    merfish_bits : int
+        number of bits in codebook
+    minimum_pixels_per_RNA : int, default = 9
+        minimum pixels with same barcode ID required to call a spot.
+    ufish_threshold : float, default = 0.5
+        threshold to accept ufish prediction. 
+    fdr_target : float, default = .05
+        false discovery rate (FDR) target. 
+    run_baysor : bool, default True
+        flag to run Baysor segmentation.
+    """
+
+    # initialize datastore
+    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore = qi2labDataStore(datastore_path)
+    merfish_bits = 22
+
+    # initialize decodor class
     decoder = PixelDecoder(
-        datastore=datastore,
-        merfish_bits=22,
+        datastore=datastore, 
+        use_mask=False, 
+        merfish_bits=merfish_bits, 
+        verbose=1
     )
-    
-    decoder.decode_one_tile(tile_idx=0,
-                            lowpass_sigma=(1,1,1),
-                            minimum_pixels=2,
-                            ufish_threshold=0.6)
-    # Max: this threshold is applied to the ufish output before multiplying the data
-    # decoder.optimize_normalization_by_decoding(
-    #     n_iterations=4,
-    #     n_random_tiles=50,
-    #     minimum_pixels=2.0,
-    #     ufish_threshold=0.7
-    # )
-    
-    # decoder.decode_all_tiles(
-    #     assign_to_cells=False,
-    #     prep_for_baysor=False,
-    #     minimum_pixels=2.0,
-    #     fdr_target=.05,
-    #     ufish_threshold=0.6
-    # )
-    
+
+    # optimize normalization weights through iterative decoding and update
+    decoder.optimize_normalization_by_decoding(
+        n_random_tiles=50,
+        n_iterations=10,
+        minimum_pixels=minimum_pixels_per_RNA,
+        ufish_threshold=ufish_threshold,
+    )
+
+    # decode all tiles using iterative normalization weights
+    decoder.decode_all_tiles(
+        assign_to_cells=True,
+        prep_for_baysor=True,
+        minimum_pixels=minimum_pixels_per_RNA,
+        fdr_target=fdr_target,
+        ufish_threshold=ufish_threshold,
+    )
+
+    # # resegment data using baysor and cellpose prior assignments
+    if run_baysor:
+        datastore.run_baysor()
+        datastore.save_mtx(spots_source="baysor")
+
 if __name__ == "__main__":
-    decode_pixels()
+    root_path = Path(r"/mnt/data/zhuang/")
+    pixeldecode_and_baysor(root_path=root_path,run_baysor=True,fdr_target=.05)
