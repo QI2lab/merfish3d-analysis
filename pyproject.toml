@@ -6,18 +6,25 @@ build-backend = "hatchling.build"
 # https://peps.python.org/pep-0621/
 [project]
 name = "merfish3d-analysis"
-description = "qi2lab 3D MERFISH GPU processing"
+description = "GPU-accelerated MERFISH processing"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BSD 3-Clause License" }
+license = { text = "BSD 3-Clause License", file = "LICENSE" }
 authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+    "License :: OSI Approved :: BSD License"
+]
 dynamic = ["version"]
-dependencies = ["numpy", "tifffile", "zarr", "numba",
+dependencies = ["numpy", "tifffile", "zarr<=2", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "ndstorage",
-                "scikit-image", "pyarrow", "tbb", "shapely",
+                "pyarrow", "tbb", "shapely",
                 "imbalanced-learn", "scikit-learn", "rtree",
                 "ryomen", "tensorstore",
                 "pycudadecon @ git+https://github.com/tlambert03/pycudadecon@main",
