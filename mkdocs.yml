@@ -3,8 +3,38 @@ site_description: "GPU-accelerated 2D/3D MERFISH data processing"
 site_author: "Quantitative Imaging and Inference Lab"
 site_url: "https://qi2lab.github.io/merfish3d-analysis/"
 
+repo_name: merfish3d-analysis
+repo_url: https://github.com/qi2lab/merfish3d-analysis
+
 theme:
-  name: material 
+  name: material
+  features:
+    - content.tabs.link
+    - content.code.annotate
+    - content.code.copy
+    # - navigation.tabs
+    - navigation.footer  # next/previous links in footer
+    - navigation.instant
+    - navigation.instant.progress
+  icon:
+    repo: "fontawesome/brands/github"
+  palette:
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: white
+      accent: dark blue
+      toggle:
+        icon: material/lightbulb-outline
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: grey
+      accent: light blue
+      toggle:
+        icon: material/lightbulb
+        name: Switch to light mode
 
 markdown_extensions:
   - toc:
@@ -13,7 +43,8 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - DataStore: datastore.md
+  - DataStore overview: datastore.md
+  - Workflow chart: workflow.md
   - Examples:
     - Synthetic data: examples/statphysbio_synthetic.md
     - Zhuang laboratory mouse brain: examples/zhuang_lab_mouse_brain.md
@@ -44,5 +75,34 @@ plugins:
             - import sys; sys.path.insert(0, "src/")
   - minify:
       minify_html: true
+  - mermaid2:
+      version: 11.3.0
+      arguments:
+        securityLevel: 'loose'
 
 site_dir: site
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  # https://squidfunk.github.io/mkdocs-material/reference/admonitions
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js
+
+extra_css:
+  - https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.css
