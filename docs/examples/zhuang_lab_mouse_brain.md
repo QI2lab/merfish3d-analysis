@@ -141,6 +141,6 @@ and then run `03_cell_segmentation.py`. This will only take a an hour or so to g
 
 Next, you'll run `04_pixeldecode_and_baysor.py` to first optimize the pixel-based decoding parameters on a subset of tiles, then perform pixel-based decoding for all tiles, filter the data to limit false positives, remove overlapping spots in adajacent spatial tiles, and finally re-segment the cell boundaries in 3D using Baysor. This step should take ~0.5-1 week, depending on your hard disk and GPU configuration.
 
-## Ensuring a sucessful run
+<!-- ## Ensuring a sucessful run
 
-Finally, we can calculate the F1 score for both the "spots per cell" and "all spots" matrices between the deposisted results in `zhuang_decoded_codewords/spots_mouse1sample1.csv` and `qi2labdatastore/segmentation/baysor/segmentation_counts.tsv`.
+Finally, we can calculate the F1 score for both the "spots per cell" and "all spots" matrices between the deposisted results in `zhuang_decoded_codewords/spots_mouse1sample1.csv` and `qi2labdatastore/segmentation/baysor/segmentation_counts.tsv`. -->
