@@ -60,16 +60,18 @@ flowchart TD
  subgraph s1["Local preprocessing"]
         s2
         s3
+        n1["Local tile registrations back to round 1"]
   end
   n13["qi2labdatastore"]
 
-
-    s3 --&gt; s2
+    s3 --&gt; n1
+    n1 --&gt; n2
     s1 &lt;--&gt; n13
     n14 --&gt; n15
     n15 --&gt; n16
     n17 --&gt; n18
     n18 --&gt; n19
+    n1@{ shape: notch-rect}
     n13@{ shape: lin-cyl}
     n14@{ shape: procs}
     n15@{ shape: procs}
