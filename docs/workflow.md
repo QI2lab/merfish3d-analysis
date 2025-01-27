@@ -97,10 +97,10 @@ flowchart TD
     n19@{ shape: procs}
 ```
 
-### Global registration and fusion of first fiducial round
+## Global registration and fusion of first fiducial round
 
-### Cell segmentation of fused first fiducial round
+## Cell segmentation of fused first fiducial round
 
-### Pixel decoding
+## Pixel decoding
 
-### 3D segmentation based on decoded RNA
+## 3D segmentation based on decoded RNA
