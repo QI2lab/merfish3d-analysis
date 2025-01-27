@@ -44,7 +44,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - DataStore overview: datastore.md
-  - Workflow chart: workflow.md
+  - Workflow overview: workflow.md
   - Examples:
     - Synthetic data: examples/statphysbio_synthetic.md
     - Zhuang laboratory mouse brain: examples/zhuang_lab_mouse_brain.md
