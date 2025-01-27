@@ -2483,7 +2483,8 @@ class qi2labDataStore:
                 return_future,
             )
             return corrected_image
-        except (IOError, OSError, ZarrError):
+        except (IOError, OSError, ZarrError) as e:
+            print(e)
             print("Error loading corrected image.")
             return None
 
