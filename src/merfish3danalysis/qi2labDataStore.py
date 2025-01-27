@@ -2472,7 +2472,9 @@ class qi2labDataStore:
 
         if not Path(current_local_zarr_path).exists():
             print("Corrected image not found.")
-            return None
+            #return None
+            print(current_local_zarr_path)
+            raise Exception
 
         try:
             spec = self._zarrv2_spec.copy()
@@ -2486,7 +2488,8 @@ class qi2labDataStore:
         except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error loading corrected image.")
-            return None
+            #return None
+            raise Exception
 
     def save_local_corrected_image(
         self,
