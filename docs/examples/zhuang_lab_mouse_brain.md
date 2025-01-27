@@ -12,8 +12,7 @@ We are only going to analyze one of their samples, specifically `mouse1_sample1_
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Baysor](https://github.com/kharchenkolab/Baysor)
-- [Raw 2D MERFISH data](https://download.brainimagelibrary.org/cf/1c/cf1c1a431ef8d021/)
-    - Download the `additional_files/` folder, `mouse1_sample1_raw/` folder, and `processed_data/spots_mouse1sample1.csv`.
+- [Raw 2D MERFISH data](https://download.brainimagelibrary.org/cf/1c/cf1c1a431ef8d021/). Download the `additional_files/` folder, `mouse1_sample1_raw/` folder, and `processed_data/spots_mouse1sample1.csv`.
 
 ## Downloading the data
 
@@ -119,7 +118,7 @@ if __name__ == "__main__":
 
 For all of the files in `processing_code`, you'll set the `root_path` to `root_path = Path(r"/path/to/download/mop")`. The package automatically places the datastore within that directory, `/path/to/download/mop/qi2labdatastore`.
 
-Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconvolve.py` without any interactions. Depending on your computing hardware, you should expect ~12 hours for `01_convert_to_datastore.py` and less than a week for `02_register_and_deconvolve.py`. The second file is extremely compute intensive, because performs 2D deconvolution each z-plane of the 3 channel z-stacks at each tile, registers the polyDT channel back to the first round, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for the MERFISH bits in each tile, and finally performs global registration for all polyDT tiles in the first round. On a 12-core/24-thread AMD CPU workstation with 128 GB RAM and an Nvidia RTX 4080 24 GB GPU this step takes about 4 days to complete for all 441 tiles of shape `[40,6,2048,2408]` in the dataset.
+Once that is done, you can run `01_convert_to_datastore.py` and `02_register_and_deconvolve.py` without any interactions. Depending on your computing hardware, you should expect ~12 hours for `01_convert_to_datastore.py` and about a week for `02_register_and_deconvolve.py`. The second file is extremely compute intensive, because performs 2D deconvolution each z-plane of the 3 channel z-stacks at each tile, registers the polyDT channel back to the first round, runs [U-FISH](https://github.com/UFISH-Team/U-FISH) for the MERFISH bits in each tile, and finally performs global registration for all polyDT tiles in the first round. On a 12-core/24-thread AMD CPU workstation with 128 GB RAM and an Nvidia RTX 3090 24 GB GPU this step takes about 8 days to complete for all 441 tiles of shape `[40,7,2048,2408]` in the dataset.
 
 Once `02_register_and_deconvolve.py` is finished, you will need to create the correct cellpose settings. We have found that initially peforming cellpose segmentation on a downsampled and maximum Z projected polyDT image is sufficient to seed Baysor for segmentation refinement.
 
@@ -138,10 +137,10 @@ if __name__ == "__main__":
     run_cellpose(root_path, cellpose_parameters)
 ```
 
-and then run `03_cell_segmentation.py`. This will only take a few minutes to generate the initial 2D segmentation guess. We rewrite the cell outlines using the ImageJ ROI file structure in global coordinates.
+and then run `03_cell_segmentation.py`. This will only take a an hour or so to generate the initial 2D segmentation guess. Our package rewrites the cell outlines using the ImageJ ROI file structure in global coordinates.
 
-Next, you'll run `04_pixeldecode_and_baysor.py` to first optimize the pixel-based decoding parameters on a subset of tiles, then perform pixel-based decoding for all tiles, filter the data to limit false positives, remove overlapping spots in adajacent spatial tiles, and finally re-segment the cell boundaries in 3D using Baysor. This step should take ~1 day, depending on your hard disk and GPU configuration.
+Next, you'll run `04_pixeldecode_and_baysor.py` to first optimize the pixel-based decoding parameters on a subset of tiles, then perform pixel-based decoding for all tiles, filter the data to limit false positives, remove overlapping spots in adajacent spatial tiles, and finally re-segment the cell boundaries in 3D using Baysor. This step should take ~0.5-1 week, depending on your hard disk and GPU configuration.
 
 ## Ensuring a sucessful run
 
-In progress.
+Finally, we can calculate the F1 score for both the "spots per cell" and "all spots" matrices between the deposisted results in `zhuang_decoded_codewords/spots_mouse1sample1.csv` and `qi2labdatastore/segmentation/baysor/segmentation_counts.tsv`.
