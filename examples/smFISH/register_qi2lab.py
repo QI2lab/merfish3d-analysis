@@ -23,7 +23,7 @@ def local_register_data():
     datastore = qi2labDataStore(datastore_path)
     registration_factory = DataRegistration(
         datastore=datastore,
-        perform_optical_flow=True,
+        perform_optical_flow=False,
     )
 
     registration_factory.register_all_tiles()
