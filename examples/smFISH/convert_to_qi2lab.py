@@ -17,12 +17,12 @@ import pandas as pd
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
-from merfish3danalysis.utils._dataio import read_metadatafile
+from merfish3danalysis.utils.dataio import read_metadatafile
 from itertools import compress
 
 def convert_data():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    root_path = Path(r"/data/smFISH/12062024_Bartelle24hrcryo_sample2")
 
     # load codebook
     # --------------

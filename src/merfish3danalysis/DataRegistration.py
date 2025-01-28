@@ -608,13 +608,15 @@ class DataRegistration:
                     gc.collect()
                     
                 data_decon_registered[data_decon_registered<0.]=0.0
+                
+                print(np.mean(data_decon_registered))
 
                 builtins.print = _no_op
                 ufish = UFish(device="cuda")
                 ufish.load_weights_from_internet()
 
                 ufish_localization, ufish_data = ufish.predict(
-                    data_decon_registered, axes="zyx", blend_3d=False, batch_size=8
+                    data_decon_registered, axes="zyx", blend_3d=False, batch_size=1
                 )
                 builtins.print = self._original_print
 
