@@ -24,8 +24,8 @@ def local_register_data():
     registration_factory = DataRegistration(
         datastore=datastore,
         perform_optical_flow=False,
+        overwrite_registered=True
     )
-
     registration_factory.register_all_tiles()
     
     datastore_state = datastore.datastore_state
