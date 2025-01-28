@@ -95,6 +95,7 @@ def convert_data():
     datastore.num_rounds = num_rounds
     datastore.codebook = codebook
     datastore.channels_in_data = ["alexa488", "atto565", "alexa647"]
+    print(datastore.experiment_order)
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
     datastore.microscope_type = "3D"
