@@ -26,12 +26,12 @@ def convert_data():
 
     # load codebook
     # --------------
-    codebook_path = root_path / Path("codebook.csv")
+    codebook_path = root_path / Path("/home/mauri/codebook_smFISH.csv")
     codebook = pd.read_csv(codebook_path)
 
     # load experimental order
     # -----------------------
-    experiment_order_path = root_path / Path("bit_order.csv")
+    experiment_order_path = root_path / Path("/home/mauri/bit_order_smFISH.csv")
     df_experiment_order = pd.read_csv(experiment_order_path)
     experiment_order = df_experiment_order.values
 
