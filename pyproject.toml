@@ -9,7 +9,7 @@ name = "merfish3d-analysis"
 description = "GPU-accelerated MERFISH processing"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BSD 3-Clause License", file = "LICENSE" }
+license = { file = "LICENSE" }
 authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
@@ -56,7 +56,7 @@ docs = [
     "mkdocstrings[python]",
     "mkdocs-gen-files",
     "mkdocs-literate-nav",
-    "mkdocs-minify-plugin"
+    "mkdocs-minify-plugin",
     "mkdocs-mermaid2-plugin"
 ]
 
