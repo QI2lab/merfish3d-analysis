@@ -17,21 +17,21 @@ import pandas as pd
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
-from merfish3danalysis.utils._dataio import read_metadatafile
+from merfish3danalysis.utils.dataio import read_metadatafile
 from itertools import compress
 
 def convert_data():
     # root data folder
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    root_path = Path(r"/data/smFISH/12062024_Bartelle24hrcryo_sample2")
 
     # load codebook
     # --------------
-    codebook_path = root_path / Path("codebook.csv")
+    codebook_path = root_path / Path("/home/mauri/codebook_smFISH.csv")
     codebook = pd.read_csv(codebook_path)
 
     # load experimental order
     # -----------------------
-    experiment_order_path = root_path / Path("bit_order.csv")
+    experiment_order_path = root_path / Path("/home/mauri/bit_order_smFISH.csv")
     df_experiment_order = pd.read_csv(experiment_order_path)
     experiment_order = df_experiment_order.values
 
@@ -95,6 +95,7 @@ def convert_data():
     datastore.num_rounds = num_rounds
     datastore.codebook = codebook
     datastore.channels_in_data = ["alexa488", "atto565", "alexa647"]
+    print(datastore.experiment_order)
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
     datastore.microscope_type = "3D"
