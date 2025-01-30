@@ -9,7 +9,7 @@ name = "merfish3d-analysis"
 description = "GPU-accelerated MERFISH processing"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "BSD 3-Clause License", file = "LICENSE" }
+license = { file = "LICENSE" }
 authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
@@ -21,7 +21,7 @@ classifiers = [
     "License :: OSI Approved :: BSD License"
 ]
 dynamic = ["version"]
-dependencies = ["numpy", "tifffile", "zarr<=2", "numba",
+dependencies = ["numpy", "tifffile", "zarr<=3.0", "numba",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "ndstorage",
                 "pyarrow", "tbb", "shapely",
@@ -56,7 +56,7 @@ docs = [
     "mkdocstrings[python]",
     "mkdocs-gen-files",
     "mkdocs-literate-nav",
-    "mkdocs-minify-plugin"
+    "mkdocs-minify-plugin",
     "mkdocs-mermaid2-plugin"
 ]
 
