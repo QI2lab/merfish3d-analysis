@@ -185,6 +185,21 @@ class qi2labDataStore:
         """
         return getattr(self, "_num_bits", None)
 
+    @num_bits.setter
+    def num_bits(self, value: int):
+        """Set the number of bits.
+        
+        Parameters
+        -------
+        num_bits : int
+            Number of bits.
+        """
+        self._num_bits = value
+        zattrs_path = self._calibrations_zarr_path / Path(".zattrs")
+        calib_zattrs = self._load_from_json(zattrs_path)
+        calib_zattrs["num_bits"] = value
+        self._save_to_json(calib_zattrs, zattrs_path)
+
     @property
     def num_tiles(self) -> Optional[int]:
         """Number of tiles.
@@ -532,17 +547,11 @@ class qi2labDataStore:
             self.num_rounds = int(value[-1, 0])
         else:
             assert self.num_rounds == int(value[-1, 0]), "Number of rounds does not match experiment order file."
-        calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["num_round"] = self.num_rounds
-        self._save_to_json(calib_zattrs, zattrs_path)
 
         if self.num_bits is None:
             self.num_bits = int(np.max(value[:, 1:]))
         else:
             assert self.num_bits == int(np.max(value[:, 1:])), "Number of bits does not match experiment order file."
-        calib_zattrs = self._load_from_json(zattrs_path)
-        calib_zattrs["num_bits"] = self.num_bits
-        self._save_to_json(calib_zattrs, zattrs_path)
 
         self._round_ids = []
         for round_idx in range(self.num_rounds):
