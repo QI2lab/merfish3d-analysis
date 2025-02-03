@@ -31,7 +31,7 @@ def local_register_data(root_path: Path):
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore, 
-        perform_optical_flow=True, 
+        perform_optical_flow=False, 
         overwrite_registered=True,
         save_all_polyDT_registered=False
     )
@@ -56,9 +56,8 @@ def global_register_data(
     root_path: Path
         path to experiment
     
-    create_max_proj_tiff: Optional[bool]
-        create max projection tiff in the segmentation/cellpose directory. 
-        Default = True
+    create_max_proj_tiff: Optional[bool], default True
+        create max projection tiff in the segmentation/cellpose directory.
     """
 
     from multiview_stitcher import spatial_image_utils as si_utils
@@ -247,6 +246,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
+    root_path = Path(r"/mnt/data2/bioprotean/20241206_Bartelle24hrcryo_sample2")
     local_register_data(root_path)
-    global_register_data(root_path)
+    global_register_data(root_path,create_max_proj_tiff=True)

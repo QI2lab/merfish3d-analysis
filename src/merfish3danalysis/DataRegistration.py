@@ -614,7 +614,7 @@ class DataRegistration:
                 ufish.load_weights_from_internet()
 
                 ufish_localization, ufish_data = ufish.predict(
-                    data_decon_registered, axes="zyx", blend_3d=False, batch_size=8
+                    data_decon_registered, axes="zyx", blend_3d=False, batch_size=1
                 )
                 builtins.print = self._original_print
 
