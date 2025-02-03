@@ -91,35 +91,32 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
    
-    try:
-        camera = metadata["camera"]
-    except Exception:
-        from ndstorage import Dataset
+    from ndstorage import Dataset
 
-        # load first tile to get experimental metadata
-        dataset_path = root_path / Path(
-            root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
-        )
-        dataset = Dataset(str(dataset_path))
-        channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
-        ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-        camera_id = ndtiff_metadata["Camera-CameraName"]
-        if camera_id == "C13440-20CU":
-            camera = "orcav3"
-            e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
-            offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-        else:
-            camera = "flir"
-            e_per_ADU = 0.03  # this comes from separate calibration
-            offset = 0.0  # this comes from separate calibration
-        try:
-            binning = metadata["binning"]
-        except Exception:
-            binning_str = ndtiff_metadata["Camera-Binning"]
-            if binning_str == "1x1":
-                binning = 1
-            elif binning_str == "2x2":
-                binning = 2
+    # load first tile to get experimental metadata
+    dataset_path = root_path / Path(
+        root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
+    )
+    dataset = Dataset(str(dataset_path))
+    channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
+    ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
+    camera_id = ndtiff_metadata["Camera-CameraName"]
+    if camera_id == "C13440-20CU":
+        camera = "orcav3"
+        e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
+        offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
+    else:
+        camera = "flir"
+        e_per_ADU = 0.03  # this comes from separate calibration
+        offset = 0.0  # this comes from separate calibration
+    try:
+        binning = metadata["binning"]
+    except Exception:
+        binning_str = ndtiff_metadata["Camera-Binning"]
+        if binning_str == "1x1":
+            binning = 1
+        elif binning_str == "2x2":
+            binning = 2
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
