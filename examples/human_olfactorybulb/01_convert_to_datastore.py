@@ -91,50 +91,44 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
 
-    # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
-    try:
-        camera = metadata["camera"]
-    except Exception:
-        from ndstorage import Dataset
+    from ndstorage import Dataset
 
-        # load first tile to get experimental metadata
-        dataset_path = root_path / Path(
-            root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
-        )
-        dataset = Dataset(str(dataset_path))
-        channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
-        ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-        try:
-            camera_id = ndtiff_metadata["Camera-CameraName"]
-            camera_id_alt = None
-        except KeyError:
-            camera_id = None
-            camera_id_alt = ndtiff_metadata["Core-Camera"]
-        if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
-            camera = "orcav3"
-            e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
-            offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-        elif camera_id == "Blackfly S BFS-U3-200S6M" or camera_id_alt == "Blackfly S BFS-U3-200S6M":
-            camera = "flir"
-            e_per_ADU = 0.03  # this comes from separate calibration
-            offset = 0.0  # this comes from separate calibration
-        try:
-            binning = metadata["binning"]
-        except Exception:
-            if camera == "orcav3":
-                binning_str = ndtiff_metadata["Camera-Binning"]
-                if binning_str == "1x1":
-                    binning = 1
-                elif binning_str == "2x2":
-                    binning = 2
-            elif camera == "flir":
-                binning_str = ndtiff_metadata["Binning"]
-                if binning_str == "1":
-                    binning = 1
-                elif binning_str == "2":
-                    binning = 2
+    # load first tile to get experimental metadata
+    dataset_path = root_path / Path(
+        root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
+    )
+    dataset = Dataset(str(dataset_path))
+    channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
+    ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
+    try:
+        camera_id = ndtiff_metadata["Camera-CameraName"]
+        camera_id_alt = None
+    except KeyError:
+        camera_id = None
+        camera_id_alt = ndtiff_metadata["Core-Camera"]
+    if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
+        camera = "orcav3"
+        e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
+        offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
+    elif camera_id == "Blackfly S BFS-U3-200S6M" or camera_id_alt == "Blackfly S BFS-U3-200S6M":
+        camera = "flir"
+        e_per_ADU = 0.03  # this comes from separate calibration
+        offset = 0.0  # this comes from separate calibration
+    try:
+        binning = metadata["binning"]
+    except Exception:
+        if camera == "orcav3":
+            binning_str = ndtiff_metadata["Camera-Binning"]
+            if binning_str == "1x1":
+                binning = 1
+            elif binning_str == "2x2":
+                binning = 2
+        elif camera == "flir":
+            binning_str = ndtiff_metadata["Binning"]
+            if binning_str == "1":
+                binning = 1
+            elif binning_str == "2":
+                binning = 2
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
@@ -144,7 +138,11 @@ def convert_data(
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
-        channel_order = metadata["channels_reversed"]
+        channel_order_bool = metadata["channels_reversed"]
+        if channel_order_bool:
+            channel_order = "reversed"
+        else:
+            channel_order = "forward"
     except KeyError:
         if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
             channel_order = "forward"
@@ -511,7 +509,7 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    root_path = Path(r"/mnt/data2/bioprotean/20241206_Bartelle24hrcryo_sample2")
     baysor_binary_path = Path(
         r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
@@ -520,7 +518,8 @@ if __name__ == "__main__":
     )
     julia_threads = 20
 
-    hot_pixel_image_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7/flir_hot_pixel_image.tif")
+    hot_pixel_image_path = None
+    #hot_pixel_image_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7/flir_hot_pixel_image.tif")
 
     convert_data(
         root_path=root_path,
