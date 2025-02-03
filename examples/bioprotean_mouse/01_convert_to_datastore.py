@@ -144,7 +144,11 @@ def convert_data(
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
-        channel_order = metadata["channels_reversed"]
+        channel_order_bool = metadata["channels_reversed"]
+        if channel_order_bool:
+            channel_order = "reversed"
+        else:
+            channel_order = "forward"
     except KeyError:
         if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
             channel_order = "forward"
