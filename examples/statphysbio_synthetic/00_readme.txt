@@ -1,6 +1,6 @@
 See comments in each file for specifics.
 
-Download data from: https://drive.google.com/file/d/12D0VjfFSGjTsUAJdM0DUTvIdU0ReNGgG/view?usp=sharing
+Download data from: https://drive.google.com/file/d/12D0VjfFSGjTsUAJdM0DUTvIdU0ReNGgG/view?usp=drive_link
 
 At the bottom of each python file, change the path to where you unzipped the data.
 
