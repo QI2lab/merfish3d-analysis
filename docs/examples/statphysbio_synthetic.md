@@ -9,7 +9,7 @@ The goal of this example is to retrieve a simulated 3D MERFISH experiment genera
 You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed and the synthetic dataset downloaded. The dataset is ~20 MB and you will need roughly another 20 MB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, pixel decoding, filtering, and cell assignment.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
-- [Synthetic 3D MERFISH data](https://drive.google.com/file/d/1sKKJWsOR85PUzX1x9c1isWWKPat-VFXA/view?usp=drive_link)
+- [Synthetic 3D MERFISH data](https://drive.google.com/file/d/12D0VjfFSGjTsUAJdM0DUTvIdU0ReNGgG/view?usp=drive_link)
 
 ## Downloading the data
 
