@@ -18,4 +18,9 @@ mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy cucim=24.08 p
 
 Finally, clone the repository using ```git clone https://github.com/QI2lab/merfish3d-analysis``` and install using `pip install .`. For interactive editing use `pip install -e .`.
 
+### (Optional) Baysor installation
+If you plan on re-segmenting cells using decoded RNA, please follow the [Baysor installation instructions](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation).
+
+## Documentation
+
 To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.

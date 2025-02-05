@@ -15,7 +15,6 @@ from tifffile import imread, imwrite
 from merfish3danalysis.utils.dataio import read_metadatafile, write_metadata
 from typing import Optional
 import numpy as np
-import pandas as pd
 import shutil
 
 def convert_simulation(
