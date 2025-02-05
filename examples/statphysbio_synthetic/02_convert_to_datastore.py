@@ -370,7 +370,29 @@ def convert_data(
 
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
-            raw_image = imread(image_path)
+            try:
+                raw_image = imread(image_path)
+            except Exception:
+                image_path = (
+                    root_path
+                    / Path(
+                        root_name
+                        + "_r"
+                        + str(round_idx + 1).zfill(4)
+                        + "_tile"
+                        + str(tile_idx).zfill(4)
+                        + "_1"
+                    )
+                    / Path(
+                        root_name
+                        + "_r"
+                        + str(round_idx + 1).zfill(4)
+                        + "_tile"
+                        + str(tile_idx).zfill(4)
+                        + ".tif"
+                    )
+                )
+                raw_image = imread(image_path)
             raw_image = np.swapaxes(raw_image, 0, 1)
             if tile_idx == 0 and round_idx == 0:
                 correct_shape = raw_image.shape

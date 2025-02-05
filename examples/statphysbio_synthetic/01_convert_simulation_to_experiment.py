@@ -74,7 +74,7 @@ def convert_simulation(
     for r_idx in range(num_rounds):
         tile_path = simulated_acq_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+"_1")
         tile_path.mkdir(exist_ok=True)
-        image_path = tile_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+"_NDTiffStack.tif")
+        image_path = tile_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+".tif")
         imwrite(
             image_path,
             np.squeeze(reshaped_simulation_data[r_idx,:,:,:]).astype(np.uint16)
