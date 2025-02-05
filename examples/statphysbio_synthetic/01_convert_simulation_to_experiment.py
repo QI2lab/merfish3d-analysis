@@ -43,6 +43,7 @@ def convert_simulation(
     gain = metadata["mean gain"]
     offset = metadata["mean offset"]
     
+    
     # load simulated data
     simulation_data_path = root_path / Path("aligned_1.tiff")
     simulation_data = imread(simulation_data_path)
@@ -93,7 +94,7 @@ def convert_simulation(
                         'scan_type': "synthetic",
                         "exp_type" : "3D",
                         'camera' : "simulated",
-                        'channel_order' : "reversed",
+                        "channels_reversed" : True,
                         'stage_flipped_x' : False,
                         'stage_flipped_y' : False,
                         'image_rotated' : False,
