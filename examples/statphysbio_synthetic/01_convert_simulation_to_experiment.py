@@ -15,7 +15,6 @@ from tifffile import imread, imwrite
 from merfish3danalysis.utils.dataio import read_metadatafile, write_metadata
 from typing import Optional
 import numpy as np
-import pandas as pd
 import shutil
 
 def convert_simulation(
@@ -43,6 +42,7 @@ def convert_simulation(
     z_pixel_um = metadata["axial_step_size [micron]"]
     gain = metadata["mean gain"]
     offset = metadata["mean offset"]
+    
     
     # load simulated data
     simulation_data_path = root_path / Path("aligned_1.tiff")
@@ -74,7 +74,7 @@ def convert_simulation(
     for r_idx in range(num_rounds):
         tile_path = simulated_acq_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+"_1")
         tile_path.mkdir(exist_ok=True)
-        image_path = tile_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+"_NDTiffStack.tif")
+        image_path = tile_path / Path("data_r"+str(r_idx+1).zfill(4)+"_tile"+str(fake_tile_id).zfill(4)+".tif")
         imwrite(
             image_path,
             np.squeeze(reshaped_simulation_data[r_idx,:,:,:]).astype(np.uint16)
@@ -94,7 +94,7 @@ def convert_simulation(
                         'scan_type': "synthetic",
                         "exp_type" : "3D",
                         'camera' : "simulated",
-                        'channel_order' : "reversed",
+                        "channels_reversed" : True,
                         'stage_flipped_x' : False,
                         'stage_flipped_y' : False,
                         'image_rotated' : False,
