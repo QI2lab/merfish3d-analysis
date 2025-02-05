@@ -90,33 +90,39 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
-   
-    from ndstorage import Dataset
-
-    # load first tile to get experimental metadata
-    dataset_path = root_path / Path(
-        root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
-    )
-    dataset = Dataset(str(dataset_path))
-    channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
-    ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-    camera_id = ndtiff_metadata["Camera-CameraName"]
-    if camera_id == "C13440-20CU":
-        camera = "orcav3"
-        e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
-        offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-    else:
-        camera = "flir"
-        e_per_ADU = 0.03  # this comes from separate calibration
-        offset = 0.0  # this comes from separate calibration
+    
     try:
-        binning = metadata["binning"]
+        camera = metadata["camera"]
     except Exception:
-        binning_str = ndtiff_metadata["Camera-Binning"]
-        if binning_str == "1x1":
-            binning = 1
-        elif binning_str == "2x2":
-            binning = 2
+        camera = None
+        
+    if not(camera == "simulated"):
+        from ndstorage import Dataset
+
+        # load first tile to get experimental metadata
+        dataset_path = root_path / Path(
+            root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
+        )
+        dataset = Dataset(str(dataset_path))
+        channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
+        ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
+        camera_id = ndtiff_metadata["Camera-CameraName"]
+        if camera_id == "C13440-20CU":
+            camera = "orcav3"
+            e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
+            offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
+        else:
+            camera = "flir"
+            e_per_ADU = 0.03  # this comes from separate calibration
+            offset = 0.0  # this comes from separate calibration
+        try:
+            binning = metadata["binning"]
+        except Exception:
+            binning_str = ndtiff_metadata["Camera-Binning"]
+            if binning_str == "1x1":
+                binning = 1
+            elif binning_str == "2x2":
+                binning = 2
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
@@ -129,10 +135,11 @@ def convert_data(
         else:
             channel_order = "forward"
     except KeyError:
-        if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
-            channel_order = "forward"
-        else:
-            channel_order = "reversed"
+        if not(camera=="simulated"):
+            if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
+                channel_order = "forward"
+            else:
+                channel_order = "reversed"
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
     # in the imaging data itself. We added it to > v8 metadata csv to make the
@@ -142,18 +149,19 @@ def convert_data(
         z_pixel_um = voxel_size_zyx_um[0]
         yx_pixel_um = voxel_size_zyx_um[1]
     except Exception:
-        yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
-        next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
-        z_pixel_um = np.round(
-            np.abs(
-                float(next_ndtiff_metadata["ZPosition_um_Intended"])
-                - float(ndtiff_metadata["ZPosition_um_Intended"])
-            ),
-            3,
-        )
-        voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
+        if not(camera=="simulated"):
+            yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
+            next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
+            z_pixel_um = np.round(
+                np.abs(
+                    float(next_ndtiff_metadata["ZPosition_um_Intended"])
+                    - float(ndtiff_metadata["ZPosition_um_Intended"])
+                ),
+                3,
+            )
+            voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
 
-        del ndtiff_metadata, next_ndtiff_metadata, dataset
+            del ndtiff_metadata, next_ndtiff_metadata, dataset
 
     # this entry was not contained in pre-v8 metadata csv, it was instead stored
     # in the imaging data itself. We added it to > v8 metadata csv to make the
