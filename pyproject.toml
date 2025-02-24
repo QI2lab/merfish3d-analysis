@@ -26,7 +26,7 @@ dependencies = ["numpy", "tifffile", "zarr<=3.0", "numba",
                 "tqdm", "ndstorage",
                 "pyarrow", "tbb", "shapely",
                 "imbalanced-learn", "scikit-learn", "rtree",
-                "ryomen", "tensorstore",
+                "ryomen", "tensorstore", "basicpy", "jax[cuda12]"
                 "pycudadecon @ git+https://github.com/tlambert03/pycudadecon@main",
                 "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
                 "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",

@@ -19,6 +19,7 @@ from typing import Sequence, Tuple
 from pycudadecon import decon
 from ryomen import Slicer
 import builtins
+from basicpy import BaSiC
 
 # GPU
 CUPY_AVIALABLE = True
@@ -80,60 +81,33 @@ def replace_hot_pixels(
 
     return data
 
-
-def correct_shading(
-    noise_map: ArrayLike,
-    darkfield_image: ArrayLike, 
-    shading_image: ArrayLike, 
-    data: ArrayLike
+def estimate_shading(
+    images: ArrayLike
 ) -> ArrayLike:
-    """Perform illumination shading correction.
-
-    I_corrected = (I_raw - I_dark) / (I_bright - I_dark).
-    Here, we assume I_bright is not normalized or background corrected.
-
+    """Estimate shading using stack of images and BaSiCPy.
+    
     Parameters
     ----------
-    noise_map: ArrayLike
-        darkfield image collected at long exposure time to get hot pixels
-    darkfield_image: ArrayLike
-        darkfield image collected at data's exposure time
-    shading_image: ArrayLike
-        illumination shading correction
-    data: ArrayLike
-        ND data [broadcast_dim,z,y,x]
-
+    images: ArrayLike
+        4D image stack [p,z,y,x]
+        
     Returns
     -------
-    data: ArrayLike
-        shading corrected data
+    shading_image: ArrayLike
+        estimated shading image
     """
 
-    darkfield_image = xp.squeeze(xp.asarray(darkfield_image, dtype=xp.float32))
-    shading_image = xp.squeeze(xp.asarray(shading_image, dtype=xp.float32))
-    noise_map = xp.squeeze(xp.asarray(shading_image, dtype=xp.float32))
-    data = xp.asarray(data, astype=xp.float32)
+    maxz_images = xp.squeeze(xp.max(images,axis=1))
 
-    shading_image = replace_hot_pixels(noise_map, (shading_image - darkfield_image))
-    shading_image = xp.asarray(shading_image, dtype=xp.float32)
-    shading_image = shading_image / xp.max(shading_image, axis=(0, 1))
+    original_print = builtins.print
+    builtins.print = no_op
+    basic = BaSiC(get_darkfield=False, smoothness_flatfield=1)
+    basic.autotune(maxz_images[:])
+    basic.fit(maxz_images[:])
+    builtins.print = original_print
+    shading_correction = basic.flatfield.astype(np.float32)
 
-    data = replace_hot_pixels(noise_map, (data - darkfield_image))
-    data = xp.asarray(data, dtype=xp.float32)
-
-    for z_idx in range(data.shape[0]):
-        data[z_idx, :] = data[z_idx, :] / shading_image
-
-    if CUPY_AVIALABLE:
-        data = xp.asnumpy(data).astype(np.uint16)
-        gc.collect()
-        cp.clear_memo()
-        cp._default_memory_pool.free_all_blocks()
-    else:
-        data = data.astype(np.uint16)
-
-    return data
-
+    return shading_correction
 
 def downsample_image_isotropic(image: ArrayLike, level: int = 2) -> ArrayLike:
     """Numba accelerated isotropic downsampling

@@ -23,7 +23,7 @@ from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 from merfish3danalysis.utils.dataio import read_metadatafile
-from merfish3danalysis.utils.imageprocessing import replace_hot_pixels
+from merfish3danalysis.utils.imageprocessing import replace_hot_pixels, estimate_shading
 from itertools import compress
 from typing import Optional
 
@@ -526,6 +526,81 @@ def convert_data(
                 tile=tile_idx,
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
+
+        # Calculate and apply flatfield corrections
+
+        for round_idx in tqdm(range(num_rounds), desc="rounds"):
+            for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
+                n_flatfield_images = 50
+                sample_indices = np.random.choice(num_tiles, size=n_flatfield_images, replace=False)
+                data_camera_corrected = []
+
+                # calculate fiducial correction
+                for tile_idx in sample_indices:
+                    data_camera_corrected.append(
+                        datastore.load_local_corrected_image(
+                            tile=tile_idx,
+                            round=0,
+                        )
+                    )
+                fidicual_correction = estimate_shading(data_camera_corrected.result())
+                data_camera_corrected = datastore.load_local_corrected_image(
+                    tile=tile_idx,
+                    round=0,
+                    return_future=False)
+                data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
+                datastore.save_local_corrected_image(
+                    data_camera_corrected,
+                    tile=tile_idx,
+                    psf_idx=0,
+                    gain_correction=gain_corrected,
+                    hotpixel_correction=hot_pixel_corrected,
+                    shading_correction=True,
+                    round=round_idx,
+                )
+        
+        bit_ids = datastore.bit_ids
+        for bit_id in tqdm(range(bit_ids), desc="rounds"):
+            for tile_idx in tqdm(range(num_tiles), desc="bit", leave=False):
+                n_flatfield_images = 50
+                sample_indices = np.random.choice(num_tiles, size=n_flatfield_images, replace=False)
+                data_camera_corrected = []
+
+                # calculate fiducial correction
+                for tile_idx in sample_indices:
+                    data_camera_corrected.append(
+                        datastore.load_local_corrected_image(
+                            tile=tile_idx,
+                            bit=bit_id,
+                        )
+                    )
+                fidicual_correction = estimate_shading(data_camera_corrected.result())
+                data_camera_corrected = datastore.load_local_corrected_image(
+                    tile=tile_idx,
+                    bit=bit_id,
+                    return_future=False).astype(np.float32)
+                data_camera_corrected = (data_camera_corrected / fidicual_correction).clip(0,2**16-1).astype(np.uint16)
+
+                ex_wavelength_um, em_wavelength_um = datastore.load_local_wavelengths_um(
+                    tile=tile_idx,
+                    bit=bit_id
+                )
+                
+                # TO DO: hacky fix. Need to come up with a better way.
+                if ex_wavelength_um < 600:
+                    psf_idx = 1
+                else:
+                    psf_idx = 2
+
+                datastore.save_local_corrected_image(
+                    data_camera_corrected.astype(np.uint16),
+                    tile=tile_idx,
+                    psf_idx=psf_idx,
+                    gain_correction=gain_corrected,
+                    hotpixel_correction=hot_pixel_corrected,
+                    shading_correction=True,
+                    bit=bit_id
+                )
 
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
