@@ -428,9 +428,7 @@ def convert_data(
                 raw_image = np.flip(raw_image, axis=3)
 
             # Correct for known camera gain and offset
-            raw_image = (raw_image.astype(np.float32) - offset) * e_per_ADU
-            raw_image[raw_image < 0.0] = 0.0
-            raw_image = raw_image.astype(np.uint16)
+            raw_image = ((raw_image.astype(np.float32) - offset) * e_per_ADU).clip(0,2**16-1).astype(np.uint16)
             gain_corrected = True
 
             # Correct for known hot pixel map
@@ -578,8 +576,8 @@ def convert_data(
                 data_camera_corrected = datastore.load_local_corrected_image(
                     tile=tile_idx,
                     bit=bit_id,
-                    return_future=False).astype(np.float32)
-                data_camera_corrected = (data_camera_corrected / fidicual_correction).clip(0,2**16-1).astype(np.uint16)
+                    return_future=False)
+                data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
 
                 ex_wavelength_um, em_wavelength_um = datastore.load_local_wavelengths_um(
                     tile=tile_idx,
