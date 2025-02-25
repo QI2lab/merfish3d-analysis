@@ -27,6 +27,7 @@ from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import replace_hot_pixels, estimate_shading
 from itertools import compress
 from typing import Optional
+import gc
 
 def convert_data(
     root_path: Path,
@@ -504,81 +505,89 @@ def convert_data(
                 tile=tile_idx,
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
+    
+    datastore_state = datastore.datastore_state
+    datastore_state.update({"Corrected": True})
+    datastore.datastore_state = datastore_state
+    del datastore
+    gc.collect()
+    
+    # Calculate and apply flatfield corrections
+    datastore = qi2labDataStore(datastore_path)
+    n_flatfield_images = 50
+    sample_indices = np.asarray(np.random.choice(num_tiles, size=n_flatfield_images, replace=False))
+    for round_idx in tqdm(range(num_rounds), desc="rounds"):     
+        data_camera_corrected = []
 
-        # Calculate and apply flatfield corrections
-
-        for round_idx in tqdm(range(num_rounds), desc="rounds"):
-            for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
-                n_flatfield_images = 50
-                sample_indices = np.random.choice(num_tiles, size=n_flatfield_images, replace=False)
-                data_camera_corrected = []
-
-                # calculate fiducial correction
-                for tile_idx in sample_indices:
-                    data_camera_corrected.append(
-                        datastore.load_local_corrected_image(
-                            tile=tile_idx,
-                            round=0,
-                        )
-                    )
-                fidicual_correction = estimate_shading(data_camera_corrected.result())
-                data_camera_corrected = datastore.load_local_corrected_image(
-                    tile=tile_idx,
-                    round=0,
-                    return_future=False)
-                data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
-                datastore.save_local_corrected_image(
-                    data_camera_corrected,
-                    tile=tile_idx,
-                    psf_idx=0,
-                    gain_correction=gain_corrected,
-                    hotpixel_correction=hot_pixel_corrected,
-                    shading_correction=True,
+        # calculate fiducial correction
+        for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
+            data_camera_corrected.append(
+                datastore.load_local_corrected_image(
+                    tile=int(rand_tile_idx),
                     round=round_idx,
                 )
-        
-        bit_ids = datastore.bit_ids
-        for bit_id in tqdm(range(bit_ids), desc="rounds"):
-            for tile_idx in tqdm(range(num_tiles), desc="bit", leave=False):
-                n_flatfield_images = 50
-                sample_indices = np.random.choice(num_tiles, size=n_flatfield_images, replace=False)
-                data_camera_corrected = []
+            )
+        fidicual_correction = estimate_shading(data_camera_corrected)
+        del data_camera_corrected
+        gc.collect()
+        for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
+            data_camera_corrected = datastore.load_local_corrected_image(
+                tile=tile_idx,
+                round=round_idx,
+                return_future=False)
+            data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
+            datastore.save_local_corrected_image(
+                data_camera_corrected,
+                tile=tile_idx,
+                psf_idx=0,
+                gain_correction=True,
+                hotpixel_correction=False,
+                shading_correction=True,
+                round=round_idx,
+            )
+    
+    bit_ids = datastore.bit_ids
+    for bit_id in tqdm(range(bit_ids), desc="rounds"):
+        data_camera_corrected = []
 
-                # calculate fiducial correction
-                for tile_idx in sample_indices:
-                    data_camera_corrected.append(
-                        datastore.load_local_corrected_image(
-                            tile=tile_idx,
-                            bit=bit_id,
-                        )
-                    )
-                fidicual_correction = estimate_shading(data_camera_corrected.result())
-                data_camera_corrected = datastore.load_local_corrected_image(
-                    tile=tile_idx,
+        # calculate fiducial correction
+        for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
+            data_camera_corrected.append(
+                datastore.load_local_corrected_image(
+                    tile=rand_tile_idx,
                     bit=bit_id,
-                    return_future=False)
-                data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
-
-                ex_wavelength_um, em_wavelength_um = datastore.load_local_wavelengths_um(
-                    tile=tile_idx,
-                    bit=bit_id
                 )
-                
-                # TO DO: hacky fix. Need to come up with a better way.
-                if ex_wavelength_um < 600:
-                    psf_idx = 1
-                else:
-                    psf_idx = 2
+            )
+        fidicual_correction = estimate_shading(data_camera_corrected.result())
+        del data_camera_corrected
+        gc.collect()
+        for tile_idx in tqdm(range(num_tiles), desc="bit", leave=False):
+            data_camera_corrected = datastore.load_local_corrected_image(
+                tile=tile_idx,
+                bit=bit_id,
+                return_future=False)
+            data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_correction.astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
 
-                datastore.save_local_corrected_image(
-                    data_camera_corrected.astype(np.uint16),
-                    tile=tile_idx,
-                    psf_idx=psf_idx,
-                    gain_correction=gain_corrected,
-                    hotpixel_correction=hot_pixel_corrected,
-                    shading_correction=True,
-                    bit=bit_id
-                )
+            ex_wavelength_um, em_wavelength_um = datastore.load_local_wavelengths_um(
+                tile=tile_idx,
+                bit=bit_id
+            )
+            
+            # TO DO: hacky fix. Need to come up with a better way.
+            if ex_wavelength_um < 600:
+                psf_idx = 1
+            else:
+                psf_idx = 2
+
+            datastore.save_local_corrected_image(
+                data_camera_corrected.astype(np.uint16),
+                tile=tile_idx,
+                psf_idx=psf_idx,
+                gain_correction=True,
+                hotpixel_correction=False,
+                shading_correction=True,
+                bit=bit_id
+            )
 
 
     datastore_state = datastore.datastore_state

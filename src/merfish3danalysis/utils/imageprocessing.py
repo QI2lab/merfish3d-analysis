@@ -82,7 +82,7 @@ def replace_hot_pixels(
     return data
 
 def estimate_shading(
-    images: ArrayLike
+    images: list[ArrayLike]
 ) -> ArrayLike:
     """Estimate shading using stack of images and BaSiCPy.
     
@@ -96,8 +96,18 @@ def estimate_shading(
     shading_image: ArrayLike
         estimated shading image
     """
+    maxz_images = []
+    for image in images:
+        maxz_images.append(xp.squeeze(xp.max(image.result(),axis=0)))    
 
-    maxz_images = xp.squeeze(xp.max(images,axis=1))
+    if CUPY_AVIALABLE:
+        maxz_images = xp.asnumpy(maxz_images).astype(np.uint16)
+        gc.collect()
+        cp.clear_memo()
+        cp._default_memory_pool.free_all_blocks()
+    else:
+        maxz_images = maxz_images.astype(np.uint16)
+
 
     original_print = builtins.print
     builtins.print = no_op
@@ -106,7 +116,13 @@ def estimate_shading(
     basic.fit(maxz_images[:])
     builtins.print = original_print
     shading_correction = basic.flatfield.astype(np.float32)
-
+    
+    del basic
+    gc.collect()
+    if CUPY_AVIALABLE:
+        cp.clear_memo()
+        cp._default_memory_pool.free_all_blocks()
+    
     return shading_correction
 
 def downsample_image_isotropic(image: ArrayLike, level: int = 2) -> ArrayLike:
