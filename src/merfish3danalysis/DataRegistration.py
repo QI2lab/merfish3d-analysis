@@ -29,9 +29,7 @@ from merfish3danalysis.utils.registration import (
 )
 from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
-    downsample_image_isotropic,
-    estimate_shading,
-    correct_shading
+    downsample_image_isotropic
 )
 from ufish.api import UFish
 import torch
