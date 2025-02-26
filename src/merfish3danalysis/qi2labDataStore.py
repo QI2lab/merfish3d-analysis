@@ -2124,6 +2124,7 @@ class qi2labDataStore:
     def save_local_stage_position_zyx_um(
         self,
         stage_zyx_um: ArrayLike,
+        affine_zyx_px: ArrayLike,
         tile: Union[int, str],
         round: Union[int, str],
     ):
@@ -2133,15 +2134,12 @@ class qi2labDataStore:
         ----------
         stage_zyx_um : ArrayLike
             Tile stage position for one tile.
+        affine_zyx_px; ArrayLike
+            4x4 homogeneous affine matrix for stage transformation
         tile : Union[int, str]
             Tile index or tile id.
         round : Union[int, str]
             Round index or round id.
-        
-        Returns
-        -------
-        stage_zyx_um : Optional[ArrayLike]
-            Tile stage position for one tile.
         """
 
         if isinstance(tile, int):
@@ -2185,6 +2183,7 @@ class qi2labDataStore:
             )
             attributes = self._load_from_json(zattrs_path)
             attributes["stage_zyx_um"] = stage_zyx_um.tolist()
+            attributes["affine_zyx_px"] = affine_zyx_px.tolist()
             self._save_to_json(attributes, zattrs_path)
         except (FileNotFoundError, json.JSONDecodeError):
             print(tile_id, round_id)

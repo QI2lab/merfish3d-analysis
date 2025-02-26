@@ -111,11 +111,11 @@ def estimate_shading(
 
     original_print = builtins.print
     builtins.print = no_op
-    basic = BaSiC(get_darkfield=False, smoothness_flatfield=1)
+    basic = BaSiC(get_darkfield=False)
     basic.autotune(maxz_images[:])
     basic.fit(maxz_images[:])
     builtins.print = original_print
-    shading_correction = basic.flatfield.astype(np.float32)
+    shading_correction = basic.flatfield.astype(np.float32) / np.max(basic.flatfield.astype(np.float32),axis=(0,1))
     
     del basic
     gc.collect()
