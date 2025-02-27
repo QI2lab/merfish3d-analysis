@@ -2,6 +2,7 @@
 Perform registration on Human OB qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
+Shepherd 2025/02 - update to use camera to stage affine mapping
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
@@ -31,7 +32,7 @@ def local_register_data(root_path: Path):
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore, 
-        perform_optical_flow=False, 
+        perform_optical_flow=True, 
         overwrite_registered=True,
         save_all_polyDT_registered=False
     )
@@ -69,13 +70,6 @@ def global_register_data(
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
 
-    # load tile positions
-    for tile_idx, tile_id in enumerate(datastore.tile_ids):
-        round_id = datastore.round_ids[0]
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
-            tile_id, round_id
-        )
-
     # convert local tiles from first round to multiscale spatial images
     msims = []
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
@@ -85,7 +79,7 @@ def global_register_data(
 
         scale = {"z": voxel_zyx_um[0], "y": voxel_zyx_um[1], "x": voxel_zyx_um[2]}
 
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
+        tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
 
@@ -105,6 +99,7 @@ def global_register_data(
             dims=("c", "z", "y", "x"),
             scale=scale,
             translation=tile_grid_positions,
+            affine=affine_zyx_px,
             transform_key="stage_metadata",
         )
 
@@ -246,6 +241,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data2/bioprotean/20241206_Bartelle24hrcryo_sample2")
+    root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
     local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=True)

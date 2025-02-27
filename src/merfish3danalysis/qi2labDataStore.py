@@ -2073,6 +2073,8 @@ class qi2labDataStore:
         -------
         stage_zyx_um : Optional[ArrayLike]
             Tile stage position for one tile.
+        affine_zyx_um: Optional[ArrayLike]
+            Affine transformation between stage and camera
         """
 
         if isinstance(tile, int):
@@ -2115,7 +2117,8 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
             attributes = self._load_from_json(zattrs_path)
-            return np.asarray(attributes["stage_zyx_um"], dtype=np.float32)
+            return np.asarray(attributes["stage_zyx_um"], dtype=np.float32),\
+                np.asarray(attributes["affine_zyx_px"], dtype=np.float32)
         except FileNotFoundError:
             print(tile_id, round_id)
             print("Stage position attribute not found.")
