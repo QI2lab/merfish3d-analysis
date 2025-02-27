@@ -2621,7 +2621,7 @@ class qi2labDataStore:
             attributes = self._load_from_json(current_local_zattrs_path)
             attributes["gain_correction"] = (gain_correction,)
             attributes["hotpixel_correction"] = (hotpixel_correction,)
-            attributes["shading_correction"] = (shading_correction,)
+            attributes["shading_correction"] = (shading_correction)
             attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
         except (IOError, OSError, TimeoutError) as e:
