@@ -245,7 +245,7 @@ def convert_data(
         channel_psfs.append(psf)
     channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
 
-    # # initialize datastore
+    # initialize datastore
     if output_path is None:
         datastore_path = root_path / Path(r"qi2labdatastore")
         datastore = qi2labDataStore(datastore_path)
@@ -465,20 +465,21 @@ def convert_data(
     datastore = qi2labDataStore(datastore_path)
     n_flatfield_images = 100
     sample_indices = np.asarray(np.random.choice(num_tiles, size=n_flatfield_images, replace=False))
-    for round_idx in tqdm(range(num_rounds), desc="rounds"):     
-        data_camera_corrected = []
+    data_camera_corrected = []
 
-        # calculate fiducial correction
-        for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
-            data_camera_corrected.append(
-                datastore.load_local_corrected_image(
-                    tile=int(rand_tile_idx),
-                    round=round_idx,
-                )
+    # calculate fiducial correction
+    for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
+        data_camera_corrected.append(
+            datastore.load_local_corrected_image(
+                tile=int(rand_tile_idx),
+                round=round_idx,
             )
-        fidicual_illumination = estimate_shading(data_camera_corrected)
-        del data_camera_corrected
-        gc.collect()
+        )    
+    fidicual_illumination = estimate_shading(data_camera_corrected)
+    del data_camera_corrected
+    gc.collect()
+    
+    for round_idx in tqdm(range(num_rounds), desc="rounds"):     
         for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
             data_camera_corrected = datastore.load_local_corrected_image(
                 tile=tile_idx,
@@ -495,22 +496,21 @@ def convert_data(
                 round=round_idx,
             )
     
-    bit_ids = datastore.bit_ids
-    for bit_id in tqdm(range(bit_ids), desc="rounds"):
+    for bit_id in tqdm(datastore.bit_ids, desc="bit"):
         data_camera_corrected = []
 
         # calculate fiducial correction
         for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
             data_camera_corrected.append(
                 datastore.load_local_corrected_image(
-                    tile=rand_tile_idx,
+                    tile=int(rand_tile_idx),
                     bit=bit_id,
                 )
             )
-        readout_illumimation = estimate_shading(data_camera_corrected.result())
+        readout_illumimation = estimate_shading(data_camera_corrected)
         del data_camera_corrected
         gc.collect()
-        for tile_idx in tqdm(range(num_tiles), desc="bit", leave=False):
+        for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
             data_camera_corrected = datastore.load_local_corrected_image(
                 tile=tile_idx,
                 bit=bit_id,
