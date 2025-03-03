@@ -15,6 +15,10 @@ import gc
 from tqdm import tqdm
 from tifffile import TiffWriter
 from typing import Optional
+from multiview_stitcher import spatial_image_utils as si_utils
+from multiview_stitcher import msi_utils, registration, fusion, vis_utils
+import dask.diagnostics
+import dask.array as da
 
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
@@ -44,6 +48,9 @@ def local_register_data(root_path: Path):
     datastore_state = datastore.datastore_state
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
+    
+    del datastore, registration_factory
+    gc.collect()
 
 
 def global_register_data(
@@ -61,11 +68,6 @@ def global_register_data(
         create max projection tiff in the segmentation/cellpose directory.
     """
 
-    from multiview_stitcher import spatial_image_utils as si_utils
-    from multiview_stitcher import msi_utils, registration, fusion
-    import dask.diagnostics
-    import dask.array as da
-
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -82,6 +84,10 @@ def global_register_data(
         tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
+        
+        # per marvin's suggestion on issues with affine
+        affine_zyx_px[1,1] = 0
+        affine_zyx_px[2,2] = 0
 
         tile_grid_positions = {
             "z": np.round(tile_position_zyx_um[0], 2),
@@ -89,7 +95,6 @@ def global_register_data(
             "x": np.round(tile_position_zyx_um[2], 2),
         }
 
-        im_data = []
         im_data = datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
         )
@@ -107,7 +112,7 @@ def global_register_data(
         msims.append(msim)
         del im_data
         gc.collect()
-
+        
     # perform registration in three steps, from most downsampling to least.
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
@@ -135,6 +140,7 @@ def global_register_data(
                 transform_key="translation_registered_3x",
                 new_transform_key="translation_registered",
                 registration_binning={"z": 1, "y": 3, "x": 3},
+                groupwise_resolution_method="shortest_paths",
                 post_registration_do_quality_filter=True,
             )
 
@@ -242,5 +248,5 @@ def global_register_data(
     
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
-    local_register_data(root_path)
+    #local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=True)
