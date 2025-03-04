@@ -16,7 +16,7 @@ from tqdm import tqdm
 from tifffile import TiffWriter
 from typing import Optional
 from multiview_stitcher import spatial_image_utils as si_utils
-from multiview_stitcher import msi_utils, registration, fusion, vis_utils
+from multiview_stitcher import msi_utils, registration, fusion
 import dask.diagnostics
 import dask.array as da
 
@@ -85,9 +85,10 @@ def global_register_data(
             tile_id, round_id
         )
         
-        # per marvin's suggestion on issues with affine
-        affine_zyx_px[1,1] = 0
-        affine_zyx_px[2,2] = 0
+        # per marvin's suggestion on issue with affine matrix containing rotation
+        # https://github.com/multiview-stitcher/multiview-stitcher/issues/51
+        # affine_zyx_px[1,1] = 0
+        # affine_zyx_px[2,2] = 0
 
         tile_grid_positions = {
             "z": np.round(tile_position_zyx_um[0], 2),
@@ -120,34 +121,16 @@ def global_register_data(
                 msims,
                 reg_channel_index=0,
                 transform_key="stage_metadata",
-                new_transform_key="translation_registered_4x",
-                registration_binning={"z": 4, "y": 12, "x": 12},
-                post_registration_do_quality_filter=False,
-            )
-
-            _ = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="translation_registered_4x",
-                new_transform_key="translation_registered_3x",
-                registration_binning={"z": 3, "y": 9, "x": 9},
-                post_registration_do_quality_filter=True,
-            )
-
-            _ = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="translation_registered_3x",
-                new_transform_key="translation_registered",
-                registration_binning={"z": 1, "y": 3, "x": 3},
-                groupwise_resolution_method="shortest_paths",
+                new_transform_key="affine_registered",
+                pre_registration_pruning_method="keep_axis_aligned",
+                registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
             )
 
     # extract and save transformations into datastore
     for tile_idx, msim in enumerate(msims):
         affine = msi_utils.get_transform_from_msim(
-            msim, transform_key="translation_registered"
+            msim, transform_key="affine_registered"
         ).data.squeeze()
         affine = np.round(affine, 2)
         origin = si_utils.get_origin_from_sim(
@@ -168,19 +151,19 @@ def global_register_data(
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         fused_sim = fusion.fuse(
             [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
-            transform_key="translation_registered",
+            transform_key="affine_registered",
             output_spacing={
                 "z": voxel_zyx_um[0],
                 "y": voxel_zyx_um[1] * np.round(voxel_zyx_um[0] / voxel_zyx_um[1], 1),
                 "x": voxel_zyx_um[2] * np.round(voxel_zyx_um[0] / voxel_zyx_um[2], 1),
             },
-            output_chunksize=128,
+            output_chunksize=512,
             overlap_in_pixels=64,
         )
 
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
         affine = msi_utils.get_transform_from_msim(
-            fused_msim, transform_key="translation_registered"
+            fused_msim, transform_key="affine_registered"
         ).data.squeeze()
         origin = si_utils.get_origin_from_sim(
             msi_utils.get_sim_from_msim(fused_msim), asarray=True
