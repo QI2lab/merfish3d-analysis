@@ -7,13 +7,13 @@ GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This p
 ## Installation
 
 Create a python 3.12 environment using your favorite package manager, e.g.
-```mamba create -n merfish3d python=3.11```
+```mamba create -n merfish3d python=3.12```
 
 Activate the environment and install the GPU dependencies. This install method assumes an Nvidia GPU capable of running CUDA 12.8.
 
 ```
 mamba activate merfish3d
-mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy=13.4 cucim=25.02 cuvs=25.02 pycudadecon "cuda-version>=12.0,<=12.8" cudnn cutensor nccl onnx onnxruntime pytorch torchvision 'pytorch=*=*cuda*'
+mamba install -c conda-forge -c nvidia -c pytorch -c rapidsai cupy=13.4 cucim=25.02 cuvs=25.02 pycudadecon "cuda-version>=12.0,<=12.8" cudnn cutensor nccl onnx onnxruntime pytorch torchvision 'pytorch=*=*cuda*' cellpose
 ```
 
 Next, clone the repository using ```git clone https://github.com/QI2lab/merfish3d-analysis``` and install using `pip install .`. For interactive editing use `pip install -e .`.
