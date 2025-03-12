@@ -2073,6 +2073,8 @@ class qi2labDataStore:
         -------
         stage_zyx_um : Optional[ArrayLike]
             Tile stage position for one tile.
+        affine_zyx_um: Optional[ArrayLike]
+            Affine transformation between stage and camera
         """
 
         if isinstance(tile, int):
@@ -2115,7 +2117,8 @@ class qi2labDataStore:
                 / Path(".zattrs")
             )
             attributes = self._load_from_json(zattrs_path)
-            return np.asarray(attributes["stage_zyx_um"], dtype=np.float32)
+            return np.asarray(attributes["stage_zyx_um"], dtype=np.float32),\
+                np.asarray(attributes["affine_zyx_px"], dtype=np.float32)
         except FileNotFoundError:
             print(tile_id, round_id)
             print("Stage position attribute not found.")
@@ -2124,6 +2127,7 @@ class qi2labDataStore:
     def save_local_stage_position_zyx_um(
         self,
         stage_zyx_um: ArrayLike,
+        affine_zyx_px: ArrayLike,
         tile: Union[int, str],
         round: Union[int, str],
     ):
@@ -2133,15 +2137,12 @@ class qi2labDataStore:
         ----------
         stage_zyx_um : ArrayLike
             Tile stage position for one tile.
+        affine_zyx_px; ArrayLike
+            4x4 homogeneous affine matrix for stage transformation
         tile : Union[int, str]
             Tile index or tile id.
         round : Union[int, str]
             Round index or round id.
-        
-        Returns
-        -------
-        stage_zyx_um : Optional[ArrayLike]
-            Tile stage position for one tile.
         """
 
         if isinstance(tile, int):
@@ -2185,6 +2186,7 @@ class qi2labDataStore:
             )
             attributes = self._load_from_json(zattrs_path)
             attributes["stage_zyx_um"] = stage_zyx_um.tolist()
+            attributes["affine_zyx_px"] = affine_zyx_px.tolist()
             self._save_to_json(attributes, zattrs_path)
         except (FileNotFoundError, json.JSONDecodeError):
             print(tile_id, round_id)
@@ -2619,7 +2621,7 @@ class qi2labDataStore:
             attributes = self._load_from_json(current_local_zattrs_path)
             attributes["gain_correction"] = (gain_correction,)
             attributes["hotpixel_correction"] = (hotpixel_correction,)
-            attributes["shading_correction"] = (shading_correction,)
+            attributes["shading_correction"] = (shading_correction)
             attributes["psf_idx"] = psf_idx
             self._save_to_json(attributes, current_local_zattrs_path)
         except (IOError, OSError, TimeoutError) as e:

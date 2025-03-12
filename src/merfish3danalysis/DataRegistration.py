@@ -29,7 +29,7 @@ from merfish3danalysis.utils.registration import (
 )
 from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
-    downsample_image_isotropic,
+    downsample_image_isotropic
 )
 from ufish.api import UFish
 import torch
@@ -237,12 +237,12 @@ class DataRegistration:
                 )
             )
             
-            stage_positions.append(
-                self._datastore.load_local_stage_position_zyx_um(
+            stage_position, _ = self._datastore.load_local_stage_position_zyx_um(
                     tile=self._tile_id,
                     round=round_id
                 )
-            )
+            
+            stage_positions.append(stage_position)
 
         self._stage_positions = np.stack(stage_positions, axis=0)
         del stage_positions

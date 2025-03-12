@@ -23,7 +23,7 @@ from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 from merfish3danalysis.utils.dataio import read_metadatafile
-from merfish3danalysis.utils.imageprocessing import replace_hot_pixels
+from merfish3danalysis.utils.imageprocessing import replace_hot_pixels, estimate_shading
 from itertools import compress
 from typing import Optional
 
@@ -428,9 +428,7 @@ def convert_data(
                 raw_image = np.flip(raw_image, axis=3)
 
             # Correct for known camera gain and offset
-            raw_image = (raw_image.astype(np.float32) - offset) * e_per_ADU
-            raw_image[raw_image < 0.0] = 0.0
-            raw_image = raw_image.astype(np.uint16)
+            raw_image = ((raw_image.astype(np.float32) - offset) * e_per_ADU).clip(0,2**16-1).astype(np.uint16)
             gain_corrected = True
 
             # Correct for known hot pixel map
