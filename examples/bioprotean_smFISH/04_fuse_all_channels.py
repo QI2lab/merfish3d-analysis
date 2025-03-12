@@ -1,3 +1,10 @@
+"""
+Fuse all channels into individual ome-ngff v0.4 for viewing.
+
+Shepherd 2025/03 - created script.
+"""
+
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -12,10 +19,8 @@ import dask.array as da
 import dask
 import numpy as np
 import zarr
-import ngff_zarr as nz
-from ngff_zarr import Methods
 
-def register_all_channels(root_path : Path):
+def fuse_all_channels(root_path : Path):
     """Register all channels across all tiles.
     
     Registration is performed using the polyDT channel.
@@ -111,16 +116,15 @@ def register_all_channels(root_path : Path):
             registration_binning={"z": 3, "y": 6, "x": 6},
             post_registration_do_quality_filter=True,
         )
-        
-        
-
+ 
     print("\nLazy loading and fusing full-resolution polyDT and readouts...")
     tile_ids = datastore.tile_ids
+
+    
     for ch_idx in tqdm(range(len(channel_ids)),desc="channel"):
         msims_full = []
-        print("Loading data for "+str(channel_ids[ch_idx])+"...")
-        for tile_idx, msim in enumerate(msims):
-        
+        for tile_idx, msim in enumerate(tqdm(msims,desc="tile")):
+    
             # parse the registered fidicual channel to get the registration metadata
             affine = msi_utils.get_transform_from_msim(
                 msim, transform_key="affine_registered"
@@ -139,11 +143,12 @@ def register_all_channels(root_path : Path):
             # lazy load tile data
             tile_id = tile_ids[tile_idx]
         
+        
             # lazy load deconvolved polyDT
             if ch_idx == 0:
                 input_path = datastore_path / Path("polyDT") / Path(tile_id) / Path("round001.zarr")
                 store = zarr.DirectoryStore(str(input_path))
-                im_data[0,:] = da.from_zarr(store, component="registered_decon_data").astype("uint16")
+                im_data[0,:] = da.from_zarr(store, component="registered_decon_data").astype(np.uint16)
             # lazy load deconvolved * (u-fish prediction>0.25) readout bits
             else:
                 input_path = datastore_path / Path("readouts") / Path(tile_id) / Path("bit"+str(ch_idx).zfill(3)+".zarr")
@@ -158,7 +163,8 @@ def register_all_channels(root_path : Path):
                 scale=scale,
                 translation=origin,
                 affine=affine,
-                transform_key="affine_registered"
+                transform_key="affine_registered",
+                c_coords = channel_ids[ch_idx]
             )
 
             # convert to multiscale spatial image object and append to list for fusion
@@ -166,7 +172,7 @@ def register_all_channels(root_path : Path):
             msims_full.append(msim_full)
             del im_data
             gc.collect()
-        
+    
         # create fused image object using previously calculated registration metadata and all channels
         print("Constructing fusion...")
         with dask.diagnostics.ProgressBar():
@@ -176,86 +182,18 @@ def register_all_channels(root_path : Path):
                 output_chunksize=512,
                 overlap_in_pixels=64,
                 )
-        
-        # Create zarr for full-resolution data
-        full_res_path = root_path / Path(r"full_resolution") / Path("ch"+str(ch_idx).zfill(3)+".zarr")
-        if not((full_res_path).exists()):
-            full_res_path.mkdir()
-        
-        output_zarr_arr = zarr.open(
-            full_res_path,
-            shape=fused.data.shape,
-            chunks=fused.data.chunksize,
-            dtype=fused.data.dtype,
-            write_empty_chunks=False,
-            dimension_separator="/",
-            fill_value=0,
-            mode="w",
-        )
-                
-        # fuse all channels and all tiles to disk
-        print("Saving full-resolution fusion...")
-        ngff_utils
-
-        with dask.config.set({'optimization.fuse.active': True}):
-            fused.data.to_zarr(
-                output_zarr_arr,
+    
+        fused_path = root_path / Path("fused")
+        fused_path.mkdir(exist_ok=True)
+        ome_output_path = fused_path / Path("ch"+str(ch_idx).zfill(2)+".ome.zarr")
+        print(f'Fusing views and saving output to {str(ome_output_path)}...')
+        with dask.diagnostics.ProgressBar():
+            fused = ngff_utils.write_sim_to_ome_zarr(
+                fused, 
+                str(ome_output_path),
                 overwrite=True,
-                dimension_separator="/",
-                return_stored=False,
-                compute=True,
-                scheduler="threads"
-            )
-        del output_zarr_arr, fused
-    
-    # THIS DOES NOT WORK YET!
-    # HERE BE DRAGONS
-    
-    # # fuse all channels and all tiles to disk into one big zarr
-    # print("\nConverting full dataset fusion to multiscale ome.zarr...")
-    
-    # print("\nLoading full-scale resolutions...")
-    # im_data = []
-    # for ch_idx in tqdm(range(len(channel_ids)),desc="channel"):
-    #     full_res_path = root_path / Path(r"full_resolution") / Path("ch"+str(ch_idx).zfill(3)+".zarr")
-    #     im_data.append(da.from_zarr(full_res_path))
-        
-    # im_data = da.stack(im_data,axis=2)
-    
-    # image = nz.to_ngff_image(
-    #     da.squeeze(im_data),
-    #     dims=['c','z','y', 'x'],
-    #     scale={'z' : .32,'y' : .098,'x': .098},
-    #     translation={'z' : 1.0,'y' : 1.0,'x': 1.0}
-    # )
-    
-    # print("\nCreating multiscale mapping...")
-    # with dask.diagnostics.ProgressBar():
-    #     multiscales = nz.to_multiscales(
-    #         image,
-    #         scale_factors=[2,4],
-    #         method=Methods.ITK_BIN_SHRINK,
-    #         cache=True
-    #     )
-    
-    # print("\nWriting to disk...")
-    # ome_output_path = root_path / Path("full_exp.ome.zarr")
-    
-    # # set compressor options
-    # kwargs = {
-    #     "compressor": {
-    #         "name": "blosc",
-    #         "configuration": {
-    #             "cname": "zstd",
-    #             "clevel": 5,
-    #             "shuffle": "bitshuffle"
-    #         }
-    #     }
-    # }
-    
-    # with dask.diagnostics.ProgressBar():
-    #     nz.to_ngff_zarr(str(ome_output_path), multiscales,version=0.4,**kwargs)
-    
+        )
+          
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
-    register_all_channels(root_path)
+    fuse_all_channels(root_path)
