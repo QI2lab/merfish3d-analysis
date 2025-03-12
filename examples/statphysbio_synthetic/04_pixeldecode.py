@@ -77,5 +77,5 @@ def decode_pixels(
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/opm3/20241218_statphysbio/sim_acquisition")
+    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
     decode_pixels(root_path=root_path)

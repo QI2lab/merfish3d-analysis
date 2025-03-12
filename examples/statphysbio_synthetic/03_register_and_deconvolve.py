@@ -26,7 +26,10 @@ def local_register_data(root_path: Path):
     
     # initialize registration class
     registration_factory = DataRegistration(
-        datastore=datastore, perform_optical_flow=False, overwrite_registered=False
+        datastore=datastore, 
+        perform_optical_flow=False, 
+        overwrite_registered=False,
+        save_all_polyDT_registered=False
     )
 
     # run local registration across rounds
@@ -60,9 +63,11 @@ def global_register_data(
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     
+    stage_zyx_um, _ = datastore.load_local_stage_position_zyx_um(tile=0,round=0)
+    
     datastore.save_global_coord_xforms_um(
         affine_zyx_um=np.identity(4),
-        origin_zyx_um=datastore.load_local_stage_position_zyx_um(tile=0,round=0),
+        origin_zyx_um=stage_zyx_um,
         spacing_zyx_um=np.asarray(
             (datastore.voxel_size_zyx_um[0],
             datastore.voxel_size_zyx_um[1],
@@ -130,6 +135,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/opm3/20241218_statphysbio/sim_acquisition")
+    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
     local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=False)
