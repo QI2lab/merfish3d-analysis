@@ -85,11 +85,6 @@ def global_register_data(
             tile_id, round_id
         )
         
-        # per marvin's suggestion on issue with affine matrix containing rotation
-        # https://github.com/multiview-stitcher/multiview-stitcher/issues/51
-        # affine_zyx_px[1,1] = 0
-        # affine_zyx_px[2,2] = 0
-
         tile_grid_positions = {
             "z": np.round(tile_position_zyx_um[0], 2),
             "y": np.round(tile_position_zyx_um[1], 2),
@@ -174,6 +169,18 @@ def global_register_data(
 
         del fused_msim
 
+        # if the next step fails, you can try the following code instead
+        # it will take longer, but should limit memory usage. You still need
+        # enough memory to hold the result in RAM.
+        """
+        datastore.save_global_fidicual_image(
+            fused_image=fused_sim.data.compute(scheduler="single-threaded"),
+            affine_zyx_um=affine,
+            origin_zyx_um=origin,
+            spacing_zyx_um=spacing,
+        )
+        
+        """
         datastore.save_global_fidicual_image(
             fused_image=fused_sim.data.compute(scheduler="threads", num_workers=12),
             affine_zyx_um=affine,
