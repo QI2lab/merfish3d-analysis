@@ -10,8 +10,8 @@ from pathlib import Path
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 5,
-    ufish_threshold: float = 0.5,
+    minimum_pixels_per_RNA: int = 2,
+    ufish_threshold: float = 0.25,
     fdr_target: float = .05
 ):
     """Perform pixel decoding.
@@ -44,11 +44,10 @@ def decode_pixels(
     # optimize normalization weights through iterative decoding and update
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=1,
+        n_iterations=10,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold
     )
-    datastore.iterative_background_vector
     
     """
     if you need to access normalizations, they are class properties that can
