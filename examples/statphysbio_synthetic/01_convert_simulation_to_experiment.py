@@ -131,5 +131,5 @@ def convert_simulation(
     shutil.copy(sim_bitorder_path, sim_acq_bitorder_path)
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/opm3/20241218_statphysbio")
+    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1")
     convert_simulation(root_path=root_path)

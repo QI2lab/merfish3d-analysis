@@ -482,9 +482,9 @@ def convert_data(
                 shading_correction=False,
                 round=round_idx,
             )
-
+            affine_zyx_px = np.eye(4)
             datastore.save_local_stage_position_zyx_um(
-                stage_pos_zyx_um, tile=tile_idx, round=round_idx
+                stage_pos_zyx_um, affine_zyx_px, tile=tile_idx, round=round_idx
             )
 
             datastore.save_local_wavelengths_um(
@@ -530,7 +530,7 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/opm3/20241218_statphysbio/sim_acquisition")
+    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
     baysor_binary_path = None
     baysor_options_path = None
     julia_threads = 20
