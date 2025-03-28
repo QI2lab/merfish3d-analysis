@@ -10,6 +10,10 @@ warnings.simplefilter("ignore", category=FutureWarning)
 import napari
 from pathlib import Path
 from cmap import Colormap
+from multiview_stitcher import vis_utils
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
 
 
 def view_fused(root_path: Path):

@@ -19,6 +19,10 @@ import dask.array as da
 import dask
 import numpy as np
 import zarr
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
+
 
 def fuse_all_channels(root_path : Path):
     """Register all channels across all tiles.

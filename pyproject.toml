@@ -42,6 +42,9 @@ allow-direct-references = true
 only-include = ["src"]
 sources = ["src"]
 
+[tool.ruff]
+ignore = ["E402"]
+
 # extras
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]

@@ -16,6 +16,9 @@ Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.simplefilter("ignore", category=FutureWarning)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
@@ -29,6 +32,9 @@ from itertools import compress
 from typing import Optional
 import gc
 import builtins
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
 
 def convert_data(
     root_path: Path,
@@ -462,9 +468,10 @@ def convert_data(
     gc.collect()
     
     # Calculate and apply flatfield corrections
+    datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     n_flatfield_images = 100
-    sample_indices = np.asarray(np.random.choice(num_tiles, size=n_flatfield_images, replace=False))
+    sample_indices = np.asarray(np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False))
     data_camera_corrected = []
 
     # calculate fiducial correction
@@ -472,15 +479,15 @@ def convert_data(
         data_camera_corrected.append(
             datastore.load_local_corrected_image(
                 tile=int(rand_tile_idx),
-                round=round_idx,
+                round=0,
             )
         )    
     fidicual_illumination = estimate_shading(data_camera_corrected)
     del data_camera_corrected
     gc.collect()
     
-    for round_idx in tqdm(range(num_rounds), desc="rounds"):     
-        for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
+    for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):     
+        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
             data_camera_corrected = datastore.load_local_corrected_image(
                 tile=tile_idx,
                 round=round_idx,
@@ -510,7 +517,7 @@ def convert_data(
         readout_illumimation = estimate_shading(data_camera_corrected)
         del data_camera_corrected
         gc.collect()
-        for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
+        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
             data_camera_corrected = datastore.load_local_corrected_image(
                 tile=tile_idx,
                 bit=bit_id,

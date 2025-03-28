@@ -11,11 +11,18 @@ Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.simplefilter("ignore", category=FutureWarning)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
 from cellpose import models, io
 from roifile import roiread, roiwrite, ImagejRoi
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
+
 
 def warp_point(
     pixel_space_point: np.ndarray,

@@ -7,6 +7,9 @@ Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.simplefilter("ignore", category=FutureWarning)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.DataRegistration import DataRegistration
 from pathlib import Path
@@ -19,6 +22,9 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher import msi_utils, registration, fusion
 import dask.diagnostics
 import dask.array as da
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
 
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
