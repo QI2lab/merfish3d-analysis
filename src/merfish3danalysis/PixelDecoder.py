@@ -1903,6 +1903,7 @@ class PixelDecoder:
         tile_idx: int = 0,
         display_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
+        magnitude_threshold: Optional[float] = 0.9,
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.5,
@@ -1918,7 +1919,9 @@ class PixelDecoder:
         display_results : bool, default False
             Display results in napari. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
-            Lowpass sigma. 
+            Lowpass sigma.
+        magnitude_threshold: Optional[float, default 0.9
+            L2-norm threshold
         minimum_pixels : Optional[float], default 3.0
             Minimum number of pixels for a barcode. 
         use_normalization : Optional[bool], default True
@@ -1936,7 +1939,7 @@ class PixelDecoder:
             self._lp_filter(sigma=lowpass_sigma)
         self._decode_pixels(
             distance_threshold=self._distance_threshold,
-            magnitude_threshold=self._magnitude_threshold,
+            magnitude_threshold=magnitude_threshold,
         )
         if display_results:
             self._display_results()
@@ -1952,6 +1955,7 @@ class PixelDecoder:
         minimum_pixels: float = 3.0,
         ufish_threshold: float = 0.5,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
+        magnitude_threshold: Optional[float] = 0.9
     ):
         """Optimize normalization by decoding.
 
@@ -1968,7 +1972,9 @@ class PixelDecoder:
         ufish_threshold : float, default 0.5
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
-            Lowpass sigma. 
+            Lowpass sigma.
+        magnitude_threshold: Optional[float, default 0.9
+            L2-norm threshold
         """
 
         self._optimize_normalization_weights = True
@@ -2003,6 +2009,7 @@ class PixelDecoder:
                     tile_idx=tile_idx,
                     display_results=False,
                     lowpass_sigma=lowpass_sigma,
+                    magnitude_threshold=magnitude_threshold,
                     minimum_pixels=minimum_pixels,
                     ufish_threshold=ufish_threshold,
                     use_normalization=use_normalization,
@@ -2023,6 +2030,7 @@ class PixelDecoder:
         assign_to_cells: bool = True,
         prep_for_baysor: bool = True,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
+        magnitude_threshold: Optional[float] = 0.9,
         minimum_pixels: Optional[float] = 2.0,
         ufish_threshold: Optional[float] = 0.5,
         fdr_target: Optional[float] = 0.05,
@@ -2039,6 +2047,8 @@ class PixelDecoder:
             Prepare barcodes for Baysor. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma. 
+        magnitude_threshold: Optional[float, default 0.9
+            L2-norm threshold
         minimum_pixels : Optional[float], default 2.0
             Minimum number of pixels for a barcode. 
         ufish_threshold : Optional[float], default 0.5
@@ -2067,7 +2077,7 @@ class PixelDecoder:
                 self._lp_filter(sigma=lowpass_sigma)
             self._decode_pixels(
                 distance_threshold=self._distance_threshold,
-                magnitude_threshold=self._magnitude_threshold,
+                magnitude_threshold=magnitude_threshold,
             )
             self._extract_barcodes(minimum_pixels=minimum_pixels)
             self._save_barcodes()
