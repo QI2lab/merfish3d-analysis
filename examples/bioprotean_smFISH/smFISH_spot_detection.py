@@ -25,11 +25,10 @@ class qi2labDataStore:
         return pd.read_parquet(current_ufish_localizations_path)
 
 datastore_path = root_path / Path(r"qi2labdatastore")
+# initialize the qi2labDataStore class
 datastore = qi2labDataStore(datastore_path)
-# The __init__ method is automatically called when you create an instance of a class, as in the above line.
-# You do not need to call it explicitly
 
-# you need to call a method of the class or it will not be executed
+# Read the ufish localizations from the Parquet file
 ufish_localizations_df = datastore.read_ufish_localizations("tile0000", "bit001")
 # print(ufish_localizations_df)
 
