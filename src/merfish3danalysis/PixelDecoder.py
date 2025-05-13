@@ -956,8 +956,8 @@ class PixelDecoder:
         for barcode_index in iterable_barcode:
             on_bits_indices = np.where(self._codebook_matrix[barcode_index])[0]
 
-            if len(on_bits_indices) == 1:
-                break
+            # if len(on_bits_indices) == 1:
+            #     break
 
             if self._is_3D:
                 if self._verbose > 1:
@@ -999,10 +999,10 @@ class PixelDecoder:
 
                 df_barcode = pd.DataFrame(props)
 
-                df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                df_barcode["on_bit_2"] = on_bits_indices[1] + 1
-                df_barcode["on_bit_3"] = on_bits_indices[2] + 1
-                df_barcode["on_bit_4"] = on_bits_indices[3] + 1
+                df_barcode["on_bit_1"] = on_bits_indices[0] + 1 if len(on_bits_indices) > 0 else 0
+                df_barcode["on_bit_2"] = on_bits_indices[1] + 1 if len(on_bits_indices) > 1 else 0
+                df_barcode["on_bit_3"] = on_bits_indices[2] + 1 if len(on_bits_indices) > 2 else 0
+                df_barcode["on_bit_4"] = on_bits_indices[3] + 1 if len(on_bits_indices) > 3 else 0
                 df_barcode["barcode_id"] = df_barcode.apply(
                     lambda x: (barcode_index + 1), axis=1
                 )
@@ -1116,10 +1116,10 @@ class PixelDecoder:
 
                     df_barcode = pd.DataFrame(props)
 
-                    df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                    df_barcode["on_bit_2"] = on_bits_indices[1] + 1
-                    df_barcode["on_bit_3"] = on_bits_indices[2] + 1
-                    df_barcode["on_bit_4"] = on_bits_indices[3] + 1
+                    df_barcode["on_bit_1"] = on_bits_indices[0] + 1 if len(on_bits_indices) > 0 else 0
+                    df_barcode["on_bit_2"] = on_bits_indices[1] + 1 if len(on_bits_indices) > 1 else 0
+                    df_barcode["on_bit_3"] = on_bits_indices[2] + 1 if len(on_bits_indices) > 2 else 0
+                    df_barcode["on_bit_4"] = on_bits_indices[3] + 1 if len(on_bits_indices) > 3 else 0
                     df_barcode["barcode_id"] = df_barcode.apply(
                         lambda x: (barcode_index + 1), axis=1
                     )
