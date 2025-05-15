@@ -29,9 +29,5 @@ decoder.decode_one_tile(
     ufish_threshold=0.5  # Ufish threshold
 )
 
-# # access decoded image
-# decoded_image = decoder._decoded_image
-# print(decoded_image)
-
 # # Save barcodes
 # decoder._save_barcodes()
