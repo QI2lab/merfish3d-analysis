@@ -15,7 +15,8 @@ decoder = PixelDecoder(
     datastore=datastore, 
     use_mask=False, 
     merfish_bits=merfish_bits, 
-    verbose=1
+    verbose=1,
+    smFISH = True
 )
 
 # decode one tile

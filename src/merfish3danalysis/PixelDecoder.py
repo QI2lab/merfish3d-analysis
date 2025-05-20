@@ -71,6 +71,7 @@ class PixelDecoder:
         use_mask: Optional[bool] = False,
         z_range: Optional[Sequence[int]] = None,
         include_blanks: Optional[bool] = True,
+        smFISH: bool = False
     ):
         self._datastore = datastore
         self._verbose = verbose
@@ -78,6 +79,10 @@ class PixelDecoder:
         self._include_blanks = include_blanks
 
         self._n_merfish_bits = merfish_bits
+
+        # Is this data smFISH or MERFISH? 
+        # Default is False, meaning data is MERFISH
+        self._smFISH = smFISH
 
         if self._datastore.microscope_type == "2D":
             self._is_3D = False
@@ -1841,12 +1846,20 @@ class PixelDecoder:
         app = QApplication.instance()
 
         app.lastWindowClosed.connect(on_close_callback)
-
-        viewer.add_image(
-            self._scaled_pixel_images,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="pixels",
-        )
+        
+        if self._smFISH:
+            for bit in range(self._datastore.num_bits):
+                viewer.add_image(
+                    self._scaled_pixel_images[bit],
+                    scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                    name="pixels_" + str(bit),
+                )
+        else:
+            viewer.add_image(
+                self._scaled_pixel_images,
+                scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                name="pixels",
+            )
 
         viewer.add_image(
             self._decoded_image,
