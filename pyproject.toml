@@ -59,11 +59,11 @@ dependencies = [
     "cuvs-cu12",
     "onnx",
     "onnxruntime",
-    "pytorch",
+    "torch",
     "torchvision",
     "napari[pyqt6]",
     "napari-ome-zarr",
-    "cellpose[gui,distributed]"
+    "cellpose[gui,distributed]",
     "cupy-cuda12x",
     "jax[cuda12_local]==0.4.38",
     "onnxruntime-gpu",
@@ -91,7 +91,7 @@ ignore = ["E402"]
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]
 opm = [
-    "opm_processing @ git+https://github.com/QI2lab/opm-processing-v2.git@main",
+    "opm-processing-v2 @ git+https://github.com/QI2lab/opm-processing-v2.git@main",
 ]
 dev = [
     "pytest",
