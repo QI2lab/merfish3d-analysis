@@ -61,7 +61,9 @@ dependencies = [
     "onnxruntime",
     "pytorch",
     "torchvision",
-    "cellpose"
+    "napari[pyqt6]",
+    "napari-ome-zarr",
+    "cellpose[gui,distributed]"
     "cupy-cuda12x",
     "jax[cuda12_local]==0.4.38",
     "onnxruntime-gpu",
@@ -69,7 +71,7 @@ dependencies = [
     "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",
     "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
-    #"ome-zarr @ git+https://github.com/ome/ome-zarr-py.git@refs/pull/404/head"
+    "ome-zarr @ git+https://github.com/ome/ome-zarr-py.git@refs/pull/404/head"
 ]
 
 [tool.hatch.version]
