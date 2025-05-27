@@ -83,14 +83,14 @@ def convert_data(
     # load codebook
     # --------------
     if codebook_path is None:
-        codebook = pd.read_csv(root_path / Path("codebook.csv"))
+        codebook = pd.read_csv(root_path.parents[0] / Path("codebook.csv"))
     else:
         codebook = pd.read_csv(codebook_path)
 
     # load experimental order
     # -----------------------
     if bit_order_path is None:
-        df_experiment_order = pd.read_csv(root_path / Path("bit_order.csv"))
+        df_experiment_order = pd.read_csv(root_path.parents[0] / Path("bit_order.csv"))
         experiment_order = df_experiment_order.values
     else:
         df_experiment_order = pd.read_csv(bit_order_path)
@@ -119,7 +119,8 @@ def convert_data(
         excess_scan_positions = 0
     elif "stage" in opm_mode:
         scan_axis_step_um = float(find_key(zattrs,"scan_axis_step_um")) 
-        excess_scan_positions = int(find_key(zattrs,"excess_scan_positions"))
+        excess_scan_positions = int(find_key(zattrs,"excess_scan_positions"))+2
+        flyback_positions = 40
     pixel_size_um = float(find_key(zattrs,"pixel_size_um"))
     opm_tilt_deg = float(find_key(zattrs,"angle_deg"))
     camera_offset = float(find_key(zattrs,"offset"))
@@ -154,7 +155,7 @@ def convert_data(
     
     # # estimate shape of one deskewed volume
     deskewed_shape, _, _ = deskew_shape_estimator(
-        [opm_datastore.shape[-3]-excess_scan_positions,opm_datastore.shape[-2],opm_datastore.shape[-1]], # type: ignore
+        [opm_datastore.shape[-3]-excess_scan_positions-flyback_positions,opm_datastore.shape[-2],opm_datastore.shape[-1]], # type: ignore
         theta=opm_tilt_deg,
         distance=scan_axis_step_um, # type: ignore
         pixel_size=pixel_size_um
@@ -197,35 +198,36 @@ def convert_data(
                 )
     else:
         flatfields = np.ones((opm_datastore.shape[2],opm_datastore.shape[-2],opm_datastore.shape[-1]),dtype=np.float32)
-    
-    pad = (deskewed.shape[1]) % deskewed.shape[2]
+
+    pad = (-deskewed.shape[1]) % deskewed.shape[2]
     if not(pad == 0):
         pad_width = [(0, 0)] * deskewed.ndim
         pad_width[1] = (0, pad)
         deskewed_padded = np.pad(deskewed, pad_width, mode='constant', constant_values=0)
 
     crop_size = (deskewed.shape[0],deskewed.shape[2], deskewed.shape[2])
-    overlap = (0,.1*deskewed.shape[2], 0)
+    overlap = (0,int(.1*deskewed.shape[2]), 0)
     slices = Slicer(deskewed_padded, crop_size=crop_size, overlap=overlap)
     n_tiles_in_deskew = sum(1 for _ in slices)
     num_tiles = n_tiles_in_deskew * pos_shape
-    del deskewed_padded
+    del deskewed, deskewed_padded
     gc.collect()
 
-    channel_psfs = []
-    for psf_idx in range(opm_datastore.shape[2]):
-        psf = generate_skewed_psf(
-            em_wvl=float(int(str(channels[psf_idx]).rstrip("nm")) / 1000),
-            pixel_size_um=pixel_size_um,
-            scan_axis_step_um=scan_axis_step_um,
-            pz=0.0,
-            plot=False
-        )
-        channel_psfs.append(psf)
+    if deconvolve:
+        channel_psfs = []
+        for psf_idx in range(opm_datastore.shape[2]):
+            psf = generate_skewed_psf(
+                em_wvl=float(int(str(channels[psf_idx]).rstrip("nm")) / 1000),
+                pixel_size_um=pixel_size_um,
+                scan_axis_step_um=scan_axis_step_um,
+                pz=0.0,
+                plot=False
+            )
+            channel_psfs.append(psf)
 
     # initialize datastore
     if output_path is None:
-        datastore_path = root_path / Path(r"qi2labdatastore")
+        datastore_path = root_path.parents[0] / Path(r"qi2labdatastore")
         datastore = qi2labDataStore(datastore_path)
     else:
         datastore = qi2labDataStore(output_path)
@@ -240,7 +242,7 @@ def convert_data(
     datastore.num_rounds = num_rounds
     datastore.codebook = codebook
     datastore.experiment_order = experiment_order
-    datastore.num_tiles = num_tiles
+    datastore.num_tiles = 10000
     datastore.microscope_type = "3D"
     datastore.camera_model = "OrcaFusionBT"
     try:
@@ -253,7 +255,7 @@ def convert_data(
     datastore.binning = 1
     datastore.noise_map = np.zeros((opm_datastore.shape[-2], opm_datastore.shape[-1]), dtype=np.uint16)  # not used yet
     datastore._shading_maps = flatfields
-    datastore.channel_psfs = None
+    datastore.channel_psfs = np.zeros((3,51,51,51),dtype=np.float32)
     datastore.voxel_size_zyx_um = [
         z_downsample_level * pixel_size_um,
         pixel_size_um,
@@ -264,7 +266,7 @@ def convert_data(
     datastore_state = datastore.datastore_state
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
-    tile_idx = 0
+    tile_idx = -1
 
     ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
     em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
@@ -272,13 +274,13 @@ def convert_data(
     # Loop over data and create datastore.
     for round_idx in tqdm(range(num_rounds), desc="rounds"):
         for pos_idx in tqdm(range(pos_shape), desc="position", leave=False):
-            current_pos_tile_idx = tile_idx
+            current_pos_tile_idx = tile_idx + 1
             for chan_idx in tqdm(range(opm_datastore.shape[2]), desc="channels", leave=False):
 
                 # initialize datastore tile
                 # this creates the directory structure and links fiducial rounds <-> readout bits
-                if round_idx == 0:
-                    datastore.initialize_tile(pos_idx)
+                #if round_idx == 0:
+                #    datastore.initialize_tile(pos_idx)
 
                 # load raw image
                 camera_corrected_data = (((np.squeeze(opm_datastore[round_idx,pos_idx,chan_idx,:].read().result()).astype(np.float32)-camera_offset)*camera_conversion)/flatfields[chan_idx,:].astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
@@ -300,7 +302,7 @@ def convert_data(
                     elif camera_corrected_data.shape[1]==512:
                         chunk_size = 196
                     deconvolved_data = chunked_rlgc(
-                        camera_corrected_data[excess_scan_positions:,:,:],
+                        camera_corrected_data[excess_scan_positions:-flyback_positions,:,:],
                         np.asarray(channel_psfs[chan_idx]),
                         scan_chunk_size=chunk_size,
                         scan_overlap_size=32
@@ -312,16 +314,22 @@ def convert_data(
                         distance = scan_axis_step_um,
                         pixel_size = pixel_size_um
                     )
-                    deskewed_padded = np.pad(deskewed, pad_width, mode='constant', constant_values=0)
                 else:
-                    deskewed_padded = np.pad(camera_corrected_data, pad_width, mode='constant', constant_values=0)
-                
-                crop_size = (deskewed.shape[0],deskewed.shape[2], deskewed.shape[2])
-                overlap = (0,.1*deskewed.shape[2], 0)
+                    deskewed = orthogonal_deskew(
+                        camera_corrected_data[excess_scan_positions:-flyback_positions,:,:],
+                        theta = opm_tilt_deg,
+                        distance = scan_axis_step_um,
+                        pixel_size = pixel_size_um
+                    )
+                deskewed_padded = np.squeeze(np.pad(deskewed, pad_width, mode='constant', constant_values=0))
+                crop_size = (deskewed_padded.shape[0],deskewed_padded.shape[2], deskewed_padded.shape[2])
+                overlap = (0,int(.1*deskewed_padded.shape[2]), 0)
                 slices = Slicer(deskewed_padded, crop_size=crop_size, overlap=overlap)
                 local_tile_counter = current_pos_tile_idx
                 current_tile_position_y = stage_positions[pos_idx,1]
-                for crop, _, _ in slices:
+                #print(f"local tile counter start: {local_tile_counter}")
+                for crop, _, _ in tqdm(slices,desc="split",leave=False):
+                    #print(f"current local tile counter: {local_tile_counter}")
                     stage_pos_zyx_um = np.asarray(
                         [
                             stage_positions[pos_idx,0], 
@@ -331,6 +339,8 @@ def convert_data(
                         dtype=np.float32
                     )
                     if channels[chan_idx] == "488nm":
+                        if round_idx == 0:
+                            datastore.initialize_tile(local_tile_counter)
                         datastore.save_local_corrected_image(
                             np.squeeze(crop).astype(np.uint16),
                             tile=local_tile_counter,
@@ -342,11 +352,11 @@ def convert_data(
                         )
                         datastore.save_local_wavelengths_um(
                             (ex_wavelengths_um[chan_idx], em_wavelengths_um[chan_idx]),
-                            tile=tile_idx,
+                            tile=local_tile_counter,
                             round=round_idx,
                         )
                         datastore.save_local_stage_position_zyx_um(
-                            stage_pos_zyx_um, tile=local_tile_counter, round=round_idx
+                            stage_pos_zyx_um, tile=local_tile_counter, round=round_idx, affine_zyx_px=np.ones(4)
                         )
                     else:
                         if channels[chan_idx] == "561nm":
@@ -355,7 +365,7 @@ def convert_data(
                             this_chan_idx = 2
                         datastore.save_local_corrected_image(
                             np.squeeze(crop).astype(np.uint16),
-                            tile=tile_idx,
+                            tile=local_tile_counter,
                             psf_idx=this_chan_idx,
                             gain_correction=gain_corrected,
                             hotpixel_correction=hot_pixel_corrected,
@@ -364,12 +374,14 @@ def convert_data(
                         )
                         datastore.save_local_wavelengths_um(
                             (ex_wavelengths_um[this_chan_idx], em_wavelengths_um[this_chan_idx]),
-                            tile=tile_idx,
+                            tile=local_tile_counter,
                             bit=int(experiment_order[round_idx, this_chan_idx]) - 1,
                         )
                     local_tile_counter += 1
                     current_tile_position_y = current_tile_position_y + crop.shape[1]*pixel_size_um
-           
+                tile_idx = local_tile_counter
+
+    datastore.num_tiles = tile_idx
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
@@ -444,7 +456,7 @@ def call_estimate_illuminations(datastore, camera_offset, camera_conversion):
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server1/")
+    root_path = Path(r"/mnt/server1/20250514_OB_MERFISH/full_run_restarted.zarr")
     baysor_binary_path = Path(
         r"/home/dps/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
