@@ -109,13 +109,15 @@ class PixelDecoder:
         self._optimize_normalization_weights = False
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
-        self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
+        
         if self._smFISH:
             # establish lower threshold for magnitude for smFISH data
             self._magnitude_threshold = 0.75
             self._upper_magnitude_threshold = 1.75
+            self._distance_threshold = 1.0
         else:
             self._magnitude_threshold = 0.9  # default for HW4D4 code
+            self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
 
     def _load_codebook(self):
         """Load and parse codebook into gene_id and codeword matrix."""
