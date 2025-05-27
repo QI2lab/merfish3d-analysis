@@ -111,8 +111,9 @@ class PixelDecoder:
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
         if self._smFISH:
-            # establish lower threshold for magnitude
+            # establish lower threshold for magnitude for smFISH data
             self._magnitude_threshold = 0.75
+            self._upper_magnitude_threshold = 1.75
         else:
             self._magnitude_threshold = 0.9  # default for HW4D4 code
 
@@ -781,7 +782,8 @@ class PixelDecoder:
 
     def _decode_pixels(
         self, distance_threshold: float = 0.5172, 
-        magnitude_threshold: float = 1.0
+        magnitude_threshold: float,
+        upper_magnitude_threshold: float = None,  # Only used for smFISH data
     ):
         """Decode pixels using the decoding matrix.
 
@@ -864,7 +866,6 @@ class PixelDecoder:
             
             # For smFISH data, we are adding an upper magnitude threshold and setting pixels above this threshold to -1.
             if self._smFISH:
-                upper_magnitude_threshold = 1.75
                 decoded_trace[pixel_magnitude_trace >= upper_magnitude_threshold] = -1
                 decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
             else:
@@ -1927,7 +1928,8 @@ class PixelDecoder:
         tile_idx: int = 0,
         display_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9,
+        magnitude_threshold: Optional[float] = None,
+        upper_magnitude_threshold: Optional[float] = None,
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.5,
@@ -1956,6 +1958,10 @@ class PixelDecoder:
 
         if use_normalization:
             self._load_iterative_normalization_vectors()
+        if magnitude_threshold is None:
+            magnitude_threshold = self._magnitude_threshold
+        if upper_magnitude_threshold is None:
+            upper_magnitude_threshold = getattr(self, "_upper_magnitude_threshold", None)
 
         self._tile_idx = tile_idx
         self._load_bit_data(ufish_threshold=ufish_threshold)
@@ -1963,7 +1969,8 @@ class PixelDecoder:
             self._lp_filter(sigma=lowpass_sigma)
         self._decode_pixels(
             distance_threshold=self._distance_threshold,
-            magnitude_threshold=magnitude_threshold,
+            magnitude_threshold=magnitude_threshold, 
+            upper_magnitude_threshold=upper_magnitude_threshold,
         )
         if display_results:
             self._display_results()
