@@ -110,7 +110,11 @@ class PixelDecoder:
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = 0.9  # default for HW4D4 code
+        if self._smFISH:
+            # establish lower threshold for magnitude
+            self._magnitude_threshold = 0.75
+        else:
+            self._magnitude_threshold = 0.9  # default for HW4D4 code
 
     def _load_codebook(self):
         """Load and parse codebook into gene_id and codeword matrix."""
@@ -857,7 +861,14 @@ class PixelDecoder:
             decoded_trace = cp.full(distance_trace.shape[0], -1, dtype=cp.int16)
             mask_trace = distance_trace < distance_threshold
             decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
-            decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+            
+            # For smFISH data, we are adding an upper magnitude threshold and setting pixels above this threshold to -1.
+            if self._smFISH:
+                upper_magnitude_threshold = 1.75
+                decoded_trace[pixel_magnitude_trace >= upper_magnitude_threshold] = -1
+                decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+            else:
+                decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
 
             self._decoded_image[z_idx, :] = cp.asnumpy(
                 cp.reshape(cp.round(decoded_trace, 3), z_plane_shape[1:])
