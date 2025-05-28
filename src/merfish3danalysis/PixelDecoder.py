@@ -783,8 +783,8 @@ class PixelDecoder:
         return min_distances, min_indices
 
     def _decode_pixels(
-        self, distance_threshold: float = 0.5172, 
-        magnitude_threshold: float,
+        self, distance_threshold: float = None, 
+        magnitude_threshold: float = None,
         upper_magnitude_threshold: float = None,  # Only used for smFISH data
     ):
         """Decode pixels using the decoding matrix.
@@ -797,6 +797,8 @@ class PixelDecoder:
         magnitude_threshold : float, default 1.0.
             Magnitude threshold for decoding. 
         """
+        if distance_threshold is None:
+            distance_threshold = self._distance_threshold
 
         if self._filter_type == "lp":
             original_shape = self._image_data_lp.shape
