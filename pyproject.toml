@@ -58,3 +58,9 @@ Tracker = "https://github.com/qi2lab/merfish3d-analysis/issues"
 
 [project.scripts]
 setup-merfish3d = "merfish3danalysis.setup_merfish3d:main"
+qi2lab-convert = "merfish3danalysis.converters.qi2lab_microscope:main"
+qi2lab-process = "merfish3danalysis.cli.qi2lab_microscope:main"
+bifish-convert = "merfish3danalysis.converters.bifish_simulation:main"
+bifish-process = "merfish3danalysis.cli.bifish_simulation:main"
+zhuang-convert = "merfish3danalysis.converters.zhuang_experiments:main"
+zhuang-process = "merfish3danalysis.cli.zhuang_experiments:main"
