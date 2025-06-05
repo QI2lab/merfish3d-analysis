@@ -100,7 +100,8 @@ def convert_data(
 
     camera = "synthetic"
     e_per_ADU = metadata["gain"]
-    offset = metadata["offset"]
+    # offset = metadata["offset"]
+    offset = 3200
     binning = 1
     channels_active = [
         metadata["blue_active"],
@@ -255,20 +256,21 @@ def convert_data(
             raw_image = imread(image_path)
             if tile_idx == 0 and round_idx == 0:
                 correct_shape = raw_image.shape
-            if raw_image is None or raw_image.shape != correct_shape:
-                if raw_image.shape[0] < correct_shape[0]:
-                    print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
-                    print("Found shape: " + str(raw_image.shape))
-                    print("Correct shape: " + str(correct_shape))
-                    print("Replacing data with zeros.\n")
-                    raw_image = np.zeros(correct_shape, dtype=np.uint16)
-                else:                    
-                    # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
-                    # print("Found shape: " + str(raw_image.shape))
-                    size_to_trim = raw_image.shape[1] - correct_shape[1]
-                    raw_image = raw_image[:,size_to_trim:,:].copy()
-                    # print("Correct shape: " + str(correct_shape))
-                    # print("Corrected to shape: " + str(raw_image.shape) + "\n")
+            else:
+                if raw_image is None or raw_image.shape != correct_shape:
+                    if raw_image.shape[0] < correct_shape[0]:
+                        print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
+                        print("Found shape: " + str(raw_image.shape))
+                        print("Correct shape: " + str(correct_shape))
+                        print("Replacing data with zeros.\n")
+                        raw_image = np.zeros(correct_shape, dtype=np.uint16)
+                    else:                    
+                        # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
+                        # print("Found shape: " + str(raw_image.shape))
+                        size_to_trim = raw_image.shape[1] - correct_shape[1]
+                        raw_image = raw_image[:,size_to_trim:,:].copy()
+                        # print("Correct shape: " + str(correct_shape))
+                        # print("Corrected to shape: " + str(raw_image.shape) + "\n")
 
             # Correct if channels were acquired in reverse order (red->purple)
             if channel_order == "reversed":
@@ -356,7 +358,7 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
     baysor_binary_path = Path(
         r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
