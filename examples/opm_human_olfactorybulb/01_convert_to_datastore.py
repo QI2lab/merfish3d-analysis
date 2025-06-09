@@ -266,22 +266,17 @@ def convert_data(
     datastore_state = datastore.datastore_state
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
-    tile_idx = -1
+    
 
     ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
     em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
 
     # Loop over data and create datastore.
     for round_idx in tqdm(range(num_rounds), desc="rounds"):
+        tile_idx = -1
         for pos_idx in tqdm(range(pos_shape), desc="position", leave=False):
             current_pos_tile_idx = tile_idx + 1
-            for chan_idx in tqdm(range(opm_datastore.shape[2]), desc="channels", leave=False):
-
-                # initialize datastore tile
-                # this creates the directory structure and links fiducial rounds <-> readout bits
-                #if round_idx == 0:
-                #    datastore.initialize_tile(pos_idx)
-
+            for chan_idx in tqdm(range(opm_datastore.shape[2]), desc="channels", leave=False):                
                 # load raw image
                 camera_corrected_data = (((np.squeeze(opm_datastore[round_idx,pos_idx,chan_idx,:].read().result()).astype(np.float32)-camera_offset)*camera_conversion)/flatfields[chan_idx,:].astype(np.float32)).clip(0,2**16-1).astype(np.uint16)
                 gain_corrected = True
@@ -327,9 +322,7 @@ def convert_data(
                 slices = Slicer(deskewed_padded, crop_size=crop_size, overlap=overlap)
                 local_tile_counter = current_pos_tile_idx
                 current_tile_position_y = stage_positions[pos_idx,1]
-                #print(f"local tile counter start: {local_tile_counter}")
                 for crop, _, _ in tqdm(slices,desc="split",leave=False):
-                    #print(f"current local tile counter: {local_tile_counter}")
                     stage_pos_zyx_um = np.asarray(
                         [
                             stage_positions[pos_idx,0], 
