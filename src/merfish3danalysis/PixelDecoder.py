@@ -348,8 +348,12 @@ class PixelDecoder:
             self._iterative_normalization_vector = cp.asarray(normalization_vector)
             self._iterative_background_vector = cp.asarray(background_vector)
             self._iterative_normalization_loaded = True
+            print('Iterative normalization vectors loaded in line 351')
         else:
             self._iterative_normalization_vectors()
+            print('Iterative normalization vectors loaded in line 354')
+        print(f'The background vector is {background_vector}')
+        print(f'The normalization vector is {normalization_vector}')
 
     def _iterative_normalization_vectors(self):
         """Calculate iterative normalization and background vectors."""
@@ -473,6 +477,7 @@ class PixelDecoder:
         self._datastore.iterative_background_vector = barcode_based_background_vector
 
         self._iterative_normalization_loaded = True
+        print('Iterative normalization vectors loaded in line 480')
 
         del df_barcodes_loaded_no_blanks
         gc.collect()
@@ -838,6 +843,7 @@ class PixelDecoder:
                 )
 
             if self._iterative_normalization_loaded:
+                print('Iterative normalization vectors loaded in line 846')
                 scaled_pixel_traces = self._scale_pixel_traces(
                     scaled_pixel_traces,
                     self._iterative_background_vector,
@@ -845,6 +851,7 @@ class PixelDecoder:
                     self._n_merfish_bits,
                 )
             elif self._global_normalization_loaded:
+                print('Iterative normalization vectors not loaded, so doing global normalization')
                 scaled_pixel_traces = self._scale_pixel_traces(
                     scaled_pixel_traces,
                     self._global_background_vector,
