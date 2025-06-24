@@ -81,7 +81,7 @@ def run_cellpose(root_path,
     }
 
     # run cellpose on polyDT max projection
-    masks, _, _, _ = model.eval(
+    masks, _, _ = model.eval(
         polyDT_max_projection,
         diameter=cellpose_parameters['diameter'],
         channel_axis=None,
@@ -136,7 +136,7 @@ def run_cellpose(root_path,
     pixel_spacing_rois = roiwrite(global_roi_path,global_spacing_rois)
         
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
+    root_path = Path(r"/data/MERFISH/20250513_Bartelle_MERFISH_control")
     cellpose_parameters = {
         'normalization' : [0.5,95.0],
         'blur_kernel_size' : 2.0,
