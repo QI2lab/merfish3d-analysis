@@ -42,7 +42,7 @@ def convert_parquet_to_csv_and_run_baysor(root_path: Path) -> None:
     baysor_input_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(baysor_input_csv, index=False)
 
-    baysor_output_path = datastore.segmentation_root_path / "baysor"
+    baysor_output_path = datastore._segmentation_root_path / "baysor"
     baysor_output_path.mkdir(exist_ok=True)
 
     julia_prefix = f"JULIA_NUM_THREADS={datastore.julia_threads} "
