@@ -1883,12 +1883,13 @@ class PixelDecoder:
                 scale=[self._axial_step, self._pixel_size, self._pixel_size],
                 name="pixels",
             )
-
-        viewer.add_image(
-            self._decoded_image,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="decoded",
-        )
+        
+        for bit in range(self._datastore.num_bits):
+            viewer.add_image(
+                self._decoded_image,
+                scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                name="decoded_" + str(bit),
+            )
 
         viewer.add_image(
             self._magnitude_image,
