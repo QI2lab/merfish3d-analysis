@@ -348,12 +348,10 @@ class PixelDecoder:
             self._iterative_normalization_vector = cp.asarray(normalization_vector)
             self._iterative_background_vector = cp.asarray(background_vector)
             self._iterative_normalization_loaded = True
-            print('Iterative normalization vectors loaded in line 351')
+            # print('Iterative normalization vectors loaded in line 351')
         else:
             self._iterative_normalization_vectors()
-            print('Iterative normalization vectors loaded in line 354')
-        print(f'The background vector is {background_vector}')
-        print(f'The normalization vector is {normalization_vector}')
+            # print('Iterative normalization vectors loaded in line 354')
 
     def _iterative_normalization_vectors(self):
         """Calculate iterative normalization and background vectors."""
@@ -477,7 +475,7 @@ class PixelDecoder:
         self._datastore.iterative_background_vector = barcode_based_background_vector
 
         self._iterative_normalization_loaded = True
-        print('Iterative normalization vectors loaded in line 480')
+        # print('Iterative normalization vectors loaded in line 480')
 
         del df_barcodes_loaded_no_blanks
         gc.collect()
@@ -843,7 +841,7 @@ class PixelDecoder:
                 )
 
             if self._iterative_normalization_loaded:
-                print('Iterative normalization vectors loaded in line 846')
+                # print('Iterative normalization vectors loaded in line 846')
                 scaled_pixel_traces = self._scale_pixel_traces(
                     scaled_pixel_traces,
                     self._iterative_background_vector,
@@ -1885,9 +1883,18 @@ class PixelDecoder:
             )
         
         for bit in range(self._datastore.num_bits):
+            img = self._decoded_image[bit]
+            print("Adding image with shape:", img.shape)
+            if img.ndim == 3:
+                scale = [self._axial_step, self._pixel_size, self._pixel_size]
+            elif img.ndim == 2:
+                scale = [self._pixel_size, self._pixel_size]
+            else:
+                raise ValueError(f"Unexpected image dimension: {img.ndim}")
+            print("Using scale:", scale)
             viewer.add_image(
-                self._decoded_image,
-                scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                img,
+                scale=scale,
                 name="decoded_" + str(bit),
             )
 
