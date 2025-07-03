@@ -1884,14 +1884,12 @@ class PixelDecoder:
         
         for bit in range(self._datastore.num_bits):
             img = self._decoded_image[bit]
-            print("Adding image with shape:", img.shape)
             if img.ndim == 3:
                 scale = [self._axial_step, self._pixel_size, self._pixel_size]
             elif img.ndim == 2:
                 scale = [self._pixel_size, self._pixel_size]
             else:
                 raise ValueError(f"Unexpected image dimension: {img.ndim}")
-            print("Using scale:", scale)
             viewer.add_image(
                 img,
                 scale=scale,
