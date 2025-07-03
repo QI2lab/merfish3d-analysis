@@ -1983,8 +1983,8 @@ class PixelDecoder:
             upper_magnitude_threshold = getattr(self, "_upper_magnitude_threshold", None)
 
         print(f"The distance threshold is {self._distance_threshold}")
-        print(f"The lower magnitude threshold is {self._magnitude_threshold}")
-        print(f"The upper magnitude threshold is {self._upper_magnitude_threshold}")
+        print(f"The lower magnitude threshold is {magnitude_threshold}")
+        print(f"The upper magnitude threshold is {upper_magnitude_threshold}")
 
         self._tile_idx = tile_idx
         self._load_bit_data(ufish_threshold=ufish_threshold)
