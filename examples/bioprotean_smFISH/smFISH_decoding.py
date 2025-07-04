@@ -28,7 +28,7 @@ decoder.decode_one_tile(
     display_results=True,  # Set to True to visualize results in Napari
     lowpass_sigma=(3, 1, 1),  # Lowpass filter sigma
     magnitude_threshold=0.2,  # L2-norm threshold
-    upper_magnitude_threshold=1.05,  # Upper L2-norm threshold
+    upper_magnitude_threshold=0.75,  # Upper L2-norm threshold
     minimum_pixels=3.0,  # Minimum number of pixels for a barcode
     use_normalization=True,  # Use normalization
     ufish_threshold=0.5  # Ufish threshold

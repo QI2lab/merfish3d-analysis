@@ -114,7 +114,7 @@ class PixelDecoder:
             # establish lower threshold for magnitude for smFISH data
             self._magnitude_threshold = 0.75
             self._upper_magnitude_threshold = 1.75
-            self._distance_threshold = 1.0
+            self._distance_threshold = 0.9
         else:
             self._magnitude_threshold = 0.9  # default for HW4D4 code
             self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
