@@ -1902,22 +1902,25 @@ class PixelDecoder:
         self,
         tile_idx: int = 0,
         display_results: bool = False,
+        return_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
         magnitude_threshold: Optional[float] = 0.9,
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.5,
-    ):
+    ) -> Optional[tuple[np.ndarray, ...]]:
         """Decode one tile.
 
-        Helper function to decode one tile. Can also display results in napari.
+        Helper function to decode one tile. Can also display results in napari or return results as np.ndarray.
 
         Parameters
         ----------
         tile_idx : int, default 0
             Tile index.
         display_results : bool, default False
-            Display results in napari. 
+            Display results in napari.
+        return_results : bool, default False
+            Return results as np.ndarray
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Optional[float, default 0.9
@@ -1927,7 +1930,17 @@ class PixelDecoder:
         use_normalization : Optional[bool], default True
             Use normalization. 
         ufish_threshold : Optional[float], default 0.5
-            Ufish threshold. 
+            Ufish threshold.
+
+        Returns
+        -------
+        Optional[tuple[np.ndarray,...]]
+            If return_results is True, returns a tuple of np.ndarray containing the following:
+            1. Image data (filtered or unfiltered).
+            2. Scaled pixel images.
+            3. Magnitude image.
+            4. Distance image.
+            5. Decoded image.
         """
 
         if use_normalization:
@@ -1943,6 +1956,23 @@ class PixelDecoder:
         )
         if display_results:
             self._display_results()
+        if return_results:
+            if self._filter_type == "lp":
+                return (
+                    self._image_data_lp, 
+                    self._scaled_pixel_images, 
+                    self._magnitude_image, 
+                    self._distance_image, 
+                    self._decoded_image
+                )
+            else:
+                return (
+                    self._image_data, 
+                    self._scaled_pixel_images, 
+                    self._magnitude_image, 
+                    self._distance_image, 
+                    self._decoded_image
+                )
         if not (self._optimize_normalization_weights):
             self._cleanup()
         else:
