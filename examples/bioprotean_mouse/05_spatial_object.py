@@ -81,6 +81,3 @@ if __name__ == "__main__":
         root_path=Path(r"/data/MERFISH/20241108_Bartelle_MouseMERFISH_LC/"),
         confidence_cutoff=0.7
         )
-
-# /data/MERFISH/20241108_Bartelle_MouseMERFISH_LC/
-# /mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC
