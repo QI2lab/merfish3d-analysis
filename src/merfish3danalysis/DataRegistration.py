@@ -6,6 +6,9 @@ cross-correlation and optical flow techniques.
 
 History:
 ---------
+- **2025/06**:
+    - Implement multi-GPU U-FISH processing
+    - Implement multi-GPU rlgc deconvolution
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
     - Switched to qi2labdatastore for data access.
@@ -34,25 +37,33 @@ from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
     downsample_image_isotropic
 )
-from ufish.api import UFish
-import torch
-import cupy as cp
 import builtins
 from tqdm import tqdm
-import os
 
-def _apply_bits_on_gpu(dr, bit_list, gpu_id):
+def _apply_bits_on_gpu(
+    dr, 
+    bit_list: list, 
+    gpu_id: int = 0
+):
     """
     Run the “deconvolve→rigid+optical‐flow→UFish” loop for a subset of bits on a single GPU.
     
-    dr       : a DataRegistration instance (pickled into this process)
-    bit_list : list of bit_id’s to process on this GPU
-    gpu_id   : which physical GPU to bind in this process
+    Parameters
+    ----------
+    dr       : 
+        DataRegistration instance (pickled into this process)
+    bit_list : list 
+        bit_ids to process on this GPU
+    gpu_id : int
+        physical GPU to bind in this process
     """
-    # 1) Force this process to see only GPU=gpu_id
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-    torch.cuda.set_device(0)      # In this subprocess, “CUDA device 0” == the real GPU gpu_id
-    cp.cuda.Device(0).use()
+
+    import torch
+    import cupy as cp
+    from ufish.api import UFish
+
+    torch.cuda.set_device(gpu_id)
+    cp.cuda.Device(gpu_id).use()
 
     for bit_id in bit_list:
         # --- the exact same body you had before for processing one bit ---
@@ -140,13 +151,13 @@ def _apply_bits_on_gpu(dr, bit_list, gpu_id):
             data_reg = data_reg.astype(np.uint16)
 
             # 4) run UFish
-            builtins.print = lambda *a, **k: None
-            ufish = UFish(device="cuda")
+            #builtins.print = lambda *a, **k: None
+            ufish = UFish(device=f"cuda:{gpu_id}")
             ufish.load_weights_from_internet()
             ufish_loc, ufish_data = ufish.predict(
                 data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
-            builtins.print = dr._original_print
+            #builtins.print = dr._original_print
 
             ufish_loc = ufish_loc.rename(
                 columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
@@ -240,7 +251,13 @@ class DataRegistration:
         self.save_all_polyDT_registered = save_all_polyDT_registered
         self._decon_background = decon_background
         self._original_print = builtins.print
-        
+    
+    def __getstate__(self):
+        # copy everything except the bits we know aren’t pickleable
+        state = self.__dict__.copy()
+        state.pop("_data_raw", None)
+        state.pop("_stage_positions", None)
+        return state
 
     # -----------------------------------
     # property access for class variables
@@ -662,7 +679,7 @@ class DataRegistration:
         Works even if N=1.
         """
         # 1) How many GPUs do we have?
-        num_gpus = torch.cuda.device_count()
+        num_gpus = 2
         if num_gpus == 0:
             raise RuntimeError("No GPUs detected. Cannot run _apply_registration_to_bits().")
 
