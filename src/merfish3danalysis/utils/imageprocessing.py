@@ -16,7 +16,7 @@ import gc
 from numpy.typing import ArrayLike
 from numba import njit, prange
 from typing import Sequence, Tuple
-from pycudadecon import decon
+# from pycudadecon import decon
 from ryomen import Slicer
 import builtins
 from basicpy import BaSiC
@@ -370,21 +370,21 @@ def chunked_cudadecon(
 
     for crop, source, destination in slices:
         builtins.print= no_op
-        image_decon_padded[destination] = decon(
-            images=crop,
-            psf=psf,
-            dzpsf=float(psf_voxel_zyx_um[0]),
-            dxpsf=float(psf_voxel_zyx_um[1]),
-            dzdata=float(image_voxel_zyx_um[0]),
-            dxdata=float(image_voxel_zyx_um[1]),
-            wavelength=int(wavelength_um * 1000),
-            na=float(na),
-            nimm=float(ri),
-            n_iters=int(n_iters),
-            cleanup_otf=True,
-            napodize=15,
-            background=float(background),
-        )[source]
+        # image_decon_padded[destination] = decon(
+        #     images=crop,
+        #     psf=psf,
+        #     dzpsf=float(psf_voxel_zyx_um[0]),
+        #     dxpsf=float(psf_voxel_zyx_um[1]),
+        #     dzdata=float(image_voxel_zyx_um[0]),
+        #     dxdata=float(image_voxel_zyx_um[1]),
+        #     wavelength=int(wavelength_um * 1000),
+        #     na=float(na),
+        #     nimm=float(ri),
+        #     n_iters=int(n_iters),
+        #     cleanup_otf=True,
+        #     napodize=15,
+        #     background=float(background),
+        # )[source]
         builtins.print = original_print
 
     image_decon = remove_padding_z(image_decon_padded, pad_z_before, pad_z_after)

@@ -2482,7 +2482,7 @@ class qi2labDataStore:
             )
 
         if not Path(current_local_zarr_path).exists():
-            print("Corrected image not found.")
+            # print("Corrected image not found.")
             return None
 
         try:
@@ -3061,7 +3061,7 @@ class qi2labDataStore:
             )
 
         if not Path(current_local_zarr_path).exists():
-            print("Registered deconvolved image not found.")
+            # print("Registered deconvolved image not found.")
             return None
 
         try:
@@ -3260,7 +3260,7 @@ class qi2labDataStore:
         )
 
         if not Path(current_local_zarr_path).exists():
-            print("U-FISH prediction image not found.")
+            # print("U-FISH prediction image not found.")
             return None
 
         try:
@@ -3408,7 +3408,7 @@ class qi2labDataStore:
         )
 
         if not current_ufish_localizations_path.exists():
-            print("U-FISH localizations not found.")
+            # print("U-FISH localizations not found.")
             return None
         else:
             ufish_localizations = self._load_from_parquet(
@@ -3616,7 +3616,7 @@ class qi2labDataStore:
         )
 
         if not Path(current_local_zarr_path).exists():
-            print("Globally registered, fused image not found.")
+            # print("Globally registered, fused image not found.")
             return None
 
         zattrs_path = str(current_local_zarr_path / Path(".zattrs"))
@@ -3732,7 +3732,7 @@ class qi2labDataStore:
         )
 
         if not current_tile_features_path.exists():
-            print("Decoded spots not found.")
+            # print("Decoded spots not found.")
             return None
         else:
             tile_features = self._load_from_parquet(current_tile_features_path)
@@ -3794,7 +3794,7 @@ class qi2labDataStore:
         )
 
         if not current_global_filtered_decoded_path.exists():
-            print("Global, filtered, decoded spots not found.")
+            # print("Global, filtered, decoded spots not found.")
             return None
         else:
             all_tiles_filtered = self._load_from_parquet(
@@ -3843,7 +3843,7 @@ class qi2labDataStore:
         )
 
         if not current_cellpose_outlines_path.exists():
-            print("Cellpose cell mask outlines not found.")
+            # print("Cellpose cell mask outlines not found.")
             return None
         else:
             cellpose_outlines = self._load_from_microjson(
@@ -3876,7 +3876,7 @@ class qi2labDataStore:
         )
 
         if not current_local_zarr_path.exists():
-            print("Cellpose prediction on global fused image not found.")
+            # print("Cellpose prediction on global fused image not found.")
             return None
 
         try:
@@ -4082,7 +4082,7 @@ class qi2labDataStore:
         )
 
         if not current_baysor_spots_path.exists():
-            print("Baysor filtered genes not found.")
+            # print("Baysor filtered genes not found.")
             return None
         else:
             baysor_filtered_genes = self._load_from_csv(current_baysor_spots_path)
@@ -4108,7 +4108,7 @@ class qi2labDataStore:
         )
 
         if not current_baysor_outlines_path.exists():
-            print("Baysor outlines not found.")
+            # print("Baysor outlines not found.")
             return None
         else:
             baysor_rois = roiread(current_baysor_outlines_path)

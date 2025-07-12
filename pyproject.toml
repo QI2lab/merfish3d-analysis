@@ -20,17 +20,9 @@ classifiers = [
     "License :: OSI Approved :: BSD License"
 ]
 dynamic = ["version"]
-dependencies = ["numpy", "tifffile", "zarr<3.0", "numba",
-                "numcodecs", "psfmodels", "cmap", "SimpleITK", 
-                "tqdm", "ndstorage", "roifile",
-                "pyarrow", "tbb", "shapely", "scikit-image<0.24",
-                "imbalanced-learn", "scikit-learn", "rtree",
-                "ryomen", "tensorstore", "jax[cuda12_local]==0.4.38",
-                "napari[pyqt6]", "napari-ome-zarr", "onnxruntime-gpu",
-                "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
-                "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",
-                "deeds @ git+https://github.com/AlexCoul/deeds-registration@flow_field",
-                "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main"]
+dependencies = [
+    "typer"
+]
 
 [tool.hatch.version]
 path = "src/merfish3danalysis/__init__.py"
@@ -48,6 +40,7 @@ ignore = ["E402"]
 # extras
 # https://peps.python.org/pep-0621/#dependencies-optional-dependencies
 [project.optional-dependencies]
+
 dev = [
     "pytest",
     "pytest-mock"
@@ -65,3 +58,9 @@ docs = [
 [project.urls]
 Source = "https://github.com/qi2lab/merfish3d-analysis"
 Tracker = "https://github.com/qi2lab/merfish3d-analysis/issues"
+
+# Entry points
+# https://peps.python.org/pep-0621/#entry-points
+# same as console_scripts entry point
+[project.scripts]
+setup-merfish3d = "merfish3danalysis.setup_merfish3d:main"

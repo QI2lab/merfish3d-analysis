@@ -6,6 +6,9 @@ cross-correlation and optical flow techniques.
 
 History:
 ---------
+- **2025/06**:
+    - Implement multi-GPU U-FISH processing
+    - Implement multi-GPU rlgc deconvolution
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
     - Switched to qi2labdatastore for data access.
@@ -16,6 +19,9 @@ History:
 - **2024/01**: Adjusted for qi2lab MERFISH file format v0.1.
 - **2023/09**: Initial commit.
 """
+
+import multiprocessing as mp
+mp.set_start_method('forkserver', force=True)
 
 import numpy as np
 from typing import Union, Optional
@@ -31,11 +37,176 @@ from merfish3danalysis.utils.imageprocessing import (
     chunked_cudadecon,
     downsample_image_isotropic
 )
-from ufish.api import UFish
-import torch
-import cupy as cp
 import builtins
 from tqdm import tqdm
+
+def _apply_bits_on_gpu(
+    dr, 
+    bit_list: list, 
+    gpu_id: int = 0
+):
+    """
+    Run the “deconvolve→rigid+optical‐flow→UFish” loop for a subset of bits on a single GPU.
+    
+    Parameters
+    ----------
+    dr       : 
+        DataRegistration instance (pickled into this process)
+    bit_list : list 
+        bit_ids to process on this GPU
+    gpu_id : int
+        physical GPU to bind in this process
+    """
+
+    import torch
+    import cupy as cp
+    from ufish.api import UFish
+
+    torch.cuda.set_device(gpu_id)
+    cp.cuda.Device(gpu_id).use()
+
+    for bit_id in bit_list:
+        # --- the exact same body you had before for processing one bit ---
+        r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
+        ex_wl, em_wl = dr._datastore.load_local_wavelengths_um(tile=dr._tile_id, bit=bit_id)
+        psf_idx = 1 if ex_wl < 600 else 2
+
+        test = dr._datastore.load_local_registered_image(tile=dr._tile_id, bit=bit_id)
+        reg_on_disk = (test is not None)
+
+        if (not reg_on_disk) or dr._overwrite_registered:
+            # 1) load corrected image (blocking)
+            corrected_image = dr._datastore.load_local_corrected_image(
+                tile=dr._tile_id, bit=bit_id, return_future=False
+            )
+
+            # 2) deconvolve or copy
+            if dr._decon:
+                decon_image = chunked_cudadecon(
+                    image=corrected_image,
+                    psf=dr._psfs[psf_idx, :],
+                    image_voxel_zyx_um=dr._datastore.voxel_size_zyx_um,
+                    psf_voxel_zyx_um=dr._datastore.voxel_size_zyx_um,
+                    wavelength_um=em_wl,
+                    na=dr._datastore.na,
+                    ri=dr._datastore.ri,
+                    n_iters=dr._decon_iters,
+                    background=dr._decon_background,
+                )
+            else:
+                decon_image = corrected_image.copy()
+
+            # 3) apply rigid + (optional) optical‐flow if r_idx > 0
+            if r_idx > 0:
+                rigid_xyz_px = dr._datastore.load_local_rigid_xform_xyz_px(
+                    tile=dr._tile_id, round=dr._round_ids[r_idx]
+                )
+                shift_xyz = [float(v) for v in rigid_xyz_px]
+                xyz_tx = sitk.TranslationTransform(3, shift_xyz)
+
+                if dr._perform_optical_flow:
+                    of_xform_px, _ = dr._datastore.load_coord_of_xform_px(
+                        tile=dr._tile_id, round=dr._round_ids[r_idx], return_future=False
+                    )
+                    of_xform_sitk = sitk.GetImageFromArray(
+                        of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
+                        isVector=True,
+                    )
+                    interp = sitk.sitkLinear
+                    identity = sitk.Transform(3, sitk.sitkIdentity)
+                    optical_flow_sitk = sitk.Resample(
+                        of_xform_sitk,
+                        sitk.GetImageFromArray(decon_image),
+                        identity,
+                        interp,
+                        0,
+                        of_xform_sitk.GetPixelID(),
+                    )
+                    disp_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+                    del optical_flow_sitk, of_xform_px
+                    gc.collect()
+
+                # apply rigid
+                decon_image_rigid = apply_transform(decon_image, decon_image, xyz_tx)
+                del decon_image
+
+                if dr._perform_optical_flow:
+                    decon_bit_sitk = sitk.Resample(
+                        sitk.GetImageFromArray(decon_image_rigid), disp_field
+                    )
+                    del disp_field
+                    data_reg = sitk.GetArrayFromImage(decon_bit_sitk).astype(np.float32)
+                    del decon_bit_sitk
+                else:
+                    data_reg = decon_image_rigid.copy()
+                    del decon_image_rigid
+                gc.collect()
+            else:
+                data_reg = decon_image.copy()
+                del decon_image
+                gc.collect()
+
+            # clamp negatives & cast to uint16
+            data_reg[data_reg < 0.0] = 0.0
+            data_reg = data_reg.astype(np.uint16)
+
+            # 4) run UFish
+            #builtins.print = lambda *a, **k: None
+            ufish = UFish(device=f"cuda:{gpu_id}")
+            ufish.load_weights_from_internet()
+            ufish_loc, ufish_data = ufish.predict(
+                data_reg, axes="zyx", blend_3d=False, batch_size=1
+            )
+            #builtins.print = dr._original_print
+
+            ufish_loc = ufish_loc.rename(
+                columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
+            )
+            del ufish
+            gc.collect()
+
+            torch.cuda.empty_cache()
+            cp.get_default_memory_pool().free_all_blocks()
+            gc.collect()
+
+            # 5) ROI sums
+            roi_z, roi_y, roi_x = 7, 5, 5
+
+            def sum_pixels_in_roi(row, image, roi_dims):
+                z, y, x = row["z"], row["y"], row["x"]
+                rz, ry, rx = roi_dims
+                zmin = max(0, z - rz // 2)
+                ymin = max(0, y - ry // 2)
+                xmin = max(0, x - rx // 2)
+                zmax = min(image.shape[0], zmin + rz)
+                ymax = min(image.shape[1], ymin + ry)
+                xmax = min(image.shape[2], xmin + rx)
+                roi = image[int(zmin):int(zmax), int(ymin):int(ymax), int(xmin):int(xmax)]
+                return np.sum(roi)
+
+            ufish_loc["sum_prob_pixels"] = ufish_loc.apply(
+                sum_pixels_in_roi, axis=1, image=ufish_data, roi_dims=(roi_z, roi_y, roi_x)
+            )
+            ufish_loc["sum_decon_pixels"] = ufish_loc.apply(
+                sum_pixels_in_roi, axis=1, image=data_reg, roi_dims=(roi_z, roi_y, roi_x)
+            )
+
+            ufish_loc["tile_idx"] = dr._tile_ids.index(dr._tile_id)
+            ufish_loc["bit_idx"] = dr._bit_ids.index(bit_id) + 1
+            ufish_loc["tile_z_px"] = ufish_loc["z"]
+            ufish_loc["tile_y_px"] = ufish_loc["y"]
+            ufish_loc["tile_x_px"] = ufish_loc["x"]
+
+            # 6) save outputs
+            dr._datastore.save_local_registered_image(
+                data_reg, tile=dr._tile_id, deconvolution=True, bit=bit_id
+            )
+            dr._datastore.save_local_ufish_image(ufish_data, tile=dr._tile_id, bit=bit_id)
+            dr._datastore.save_local_ufish_spots(ufish_loc, tile=dr._tile_id, bit=bit_id)
+
+            del data_reg, ufish_data, ufish_loc
+            gc.collect()
+
 
 class DataRegistration:
     """Register 2D or 3D MERFISH data across rounds.
@@ -62,8 +233,8 @@ class DataRegistration:
         overwrite_registered: bool = False,
         perform_optical_flow: bool = False,
         save_all_polyDT_registered: bool = True,
-        decon_iters: Optional[int] = 10,
-        decon_background: Optional[float] = 50.0,
+        decon: Optional[bool] = True,
+        decon_background: Optional[float] = 0.0,
     ):
     
         self._datastore = datastore
@@ -71,15 +242,22 @@ class DataRegistration:
         self._round_ids = self._datastore.round_ids
         self._bit_ids = self._datastore.bit_ids
         self._psfs = self._datastore.channel_psfs
+        self._decon = decon
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_polyDT_registered = save_all_polyDT_registered
-        self._decon_iters = decon_iters
         self._decon_background = decon_background
         self._original_print = builtins.print
+    
+    def __getstate__(self):
+        # copy everything except the bits we know aren’t pickleable
+        state = self.__dict__.copy()
+        state.pop("_data_raw", None)
+        state.pop("_stage_positions", None)
+        return state
 
     # -----------------------------------
     # property access for class variables
@@ -263,19 +441,21 @@ class DataRegistration:
             
         if not (has_reg_decon_data) or self._overwrite_registered:
 
-            ref_image_decon = chunked_cudadecon(
-                image=np.asarray(self._data_raw[0].result(),dtype=np.uint16),
-                psf=self._psfs[0, :],
-                image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                wavelength_um=self._datastore.load_local_wavelengths_um(
-                    tile=self._tile_id,
-                    round=self._round_ids[0])[1],
-                na=self._datastore.na,
-                ri=self._datastore.ri,
-                n_iters=self._decon_iters,
-                background=self._decon_background,
-            )
+            if self._decon:
+                ref_image_decon = chunked_cudadecon(
+                    image=np.asarray(self._data_raw[0].result(),dtype=np.uint16),
+                    psf=self._psfs[0, :],
+                    image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+                    psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+                    wavelength_um=self._datastore.load_local_wavelengths_um(
+                        tile=self._tile_id,
+                        round=self._round_ids[0])[1],
+                    na=self._datastore.na,
+                    ri=self._datastore.ri,
+                    background=self._decon_background,
+                )
+            else:
+                ref_image_decon = np.asarray(self._data_raw[0].result(),dtype=np.uint16)
 
             self._datastore.save_local_registered_image(
                 ref_image_decon,
@@ -307,23 +487,27 @@ class DataRegistration:
                         return_future=False
                     )
                 
-
-                mov_image_decon = chunked_cudadecon(
-                    image=np.asarray(
+                if self._decon:
+                    mov_image_decon = chunked_cudadecon(
+                        image=np.asarray(
+                            self._data_raw[r_idx].result(),dtype=np.uint16
+                        ),
+                        psf=self._psfs[0, :],
+                        image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+                        psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+                        wavelength_um=float(self._datastore.load_local_wavelengths_um(
+                            tile=self._tile_id,
+                            round=self._round_ids[0])[1]
+                        ),
+                        na=self._datastore.na,
+                        ri=self._datastore.ri,
+                        n_iters=self._decon_iters,
+                        background=self._decon_background,
+                    )
+                else:
+                    mov_image_decon = np.asarray(
                         self._data_raw[r_idx].result(),dtype=np.uint16
-                    ),
-                    psf=self._psfs[0, :],
-                    image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                    psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                    wavelength_um=float(self._datastore.load_local_wavelengths_um(
-                        tile=self._tile_id,
-                        round=self._round_ids[0])[1]
-                    ),
-                    na=self._datastore.na,
-                    ri=self._datastore.ri,
-                    n_iters=self._decon_iters,
-                    background=self._decon_background,
-                )
+                    )
 
                 downsample_factor = 2
                 if downsample_factor > 1:
@@ -489,210 +673,244 @@ class DataRegistration:
                 gc.collect()
 
     def _apply_registration_to_bits(self):
-        """Generate ufish + deconvolved, registered readout data and save to datastore."""
+        """
+        Split self._bit_ids across all available GPUs (N = torch.cuda.device_count()).
+        Then spawn up to N child processes, each binding to GPU i and processing its subset.
+        Works even if N=1.
+        """
+        # 1) How many GPUs do we have?
+        num_gpus = 2
+        if num_gpus == 0:
+            raise RuntimeError("No GPUs detected. Cannot run _apply_registration_to_bits().")
+
+        # 2) Grab all bit IDs and split into `num_gpus` chunks
+        all_bits = list(self._bit_ids)
+        chunk_size = (len(all_bits) + num_gpus - 1) // num_gpus  # ceiling division
+
+        # 3) Launch one process per GPU (only as many as needed)
+        processes = []
+        for gpu_id in range(num_gpus):
+            start = gpu_id * chunk_size
+            end = min(start + chunk_size, len(all_bits))
+            if start >= end:
+                break  # no more bits to assign
+
+            subset = all_bits[start:end]
+            p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, gpu_id))
+            p.start()
+            processes.append(p)
+
+        # 4) Wait for all GPU‐workers to finish
+        for p in processes:
+            p.join()
+
+    # def _apply_registration_to_bits(self):
+    #     """Generate ufish + deconvolved, registered readout data and save to datastore."""
         
-        for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bits')):
+    #     for bit_idx, bit_id in enumerate(tqdm(self._bit_ids,desc='bits')):
 
-            r_idx = self._datastore.load_local_round_linker(
-                tile=self._tile_id,
-                bit=bit_id
-            )
-            r_idx = r_idx - 1
-            ex_wavelength_um, em_wavelength_um = self._datastore.load_local_wavelengths_um(
-                tile=self._tile_id,
-                bit=bit_id
-            )
+    #         r_idx = self._datastore.load_local_round_linker(
+    #             tile=self._tile_id,
+    #             bit=bit_id
+    #         )
+    #         r_idx = r_idx - 1
+    #         ex_wavelength_um, em_wavelength_um = self._datastore.load_local_wavelengths_um(
+    #             tile=self._tile_id,
+    #             bit=bit_id
+    #         )
             
-            # TO DO: hacky fix. Need to come up with a better way.
-            if ex_wavelength_um < 600:
-                psf_idx = 1
-            else:
-                psf_idx = 2
+    #         # TO DO: hacky fix. Need to come up with a better way.
+    #         if ex_wavelength_um < 600:
+    #             psf_idx = 1
+    #         else:
+    #             psf_idx = 2
 
-            test = self._datastore.load_local_registered_image(
-                tile=self._tile_id,
-                bit=bit_id
-            )
+    #         test = self._datastore.load_local_registered_image(
+    #             tile=self._tile_id,
+    #             bit=bit_id
+    #         )
             
-            if test is None:
-                reg_decon_data_on_disk = False
-            else:
-                reg_decon_data_on_disk = True
+    #         if test is None:
+    #             reg_decon_data_on_disk = False
+    #         else:
+    #             reg_decon_data_on_disk = True
 
 
-            if (not (reg_decon_data_on_disk) or self._overwrite_registered):
+    #         if (not (reg_decon_data_on_disk) or self._overwrite_registered):
                 
-                corrected_image = self._datastore.load_local_corrected_image(
-                    tile=self._tile_id,
-                    bit=bit_id,
-                    return_future=False,
-                )
+    #             corrected_image = self._datastore.load_local_corrected_image(
+    #                 tile=self._tile_id,
+    #                 bit=bit_id,
+    #                 return_future=False,
+    #             )
 
-                decon_image = chunked_cudadecon(
-                    image=corrected_image,
-                    psf=self._psfs[psf_idx, :],
-                    image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                    psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
-                    wavelength_um=em_wavelength_um,
-                    na=self._datastore.na,
-                    ri=self._datastore.ri,
-                    n_iters=self._decon_iters,
-                    background=self._decon_background,
-                )
+    #             if self._decon:
+    #                 decon_image = chunked_cudadecon(
+    #                     image=corrected_image,
+    #                     psf=self._psfs[psf_idx, :],
+    #                     image_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+    #                     psf_voxel_zyx_um=self._datastore.voxel_size_zyx_um,
+    #                     wavelength_um=em_wavelength_um,
+    #                     na=self._datastore.na,
+    #                     ri=self._datastore.ri,
+    #                     n_iters=self._decon_iters,
+    #                     background=self._decon_background,
+    #                 )
+    #             else:
+    #                 decon_image = corrected_image.copy()
 
+    #             if r_idx > 0:
+    #                 rigid_xform_xyz_um = self._datastore.load_local_rigid_xform_xyz_px(
+    #                     tile=self._tile_id,
+    #                     round=self._round_ids[r_idx],
+    #                 )
+    #                 shift_xyz = [float(i) for i in rigid_xform_xyz_um]
+    #                 xyz_transform = sitk.TranslationTransform(3, shift_xyz)
 
-                if r_idx > 0:
-                    rigid_xform_xyz_um = self._datastore.load_local_rigid_xform_xyz_px(
-                        tile=self._tile_id,
-                        round=self._round_ids[r_idx],
-                    )
-                    shift_xyz = [float(i) for i in rigid_xform_xyz_um]
-                    xyz_transform = sitk.TranslationTransform(3, shift_xyz)
-
-                    if self._perform_optical_flow:
+    #                 if self._perform_optical_flow:
                         
-                        of_xform_px, _ = self._datastore.load_coord_of_xform_px(
-                            tile=self._tile_id,
-                            round=self._round_ids[r_idx],
-                            return_future=False
-                        )
+    #                     of_xform_px, _ = self._datastore.load_coord_of_xform_px(
+    #                         tile=self._tile_id,
+    #                         round=self._round_ids[r_idx],
+    #                         return_future=False
+    #                     )
 
-                        of_xform_sitk = sitk.GetImageFromArray(
-                            of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
-                            isVector=True,
-                        )
+    #                     of_xform_sitk = sitk.GetImageFromArray(
+    #                         of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
+    #                         isVector=True,
+    #                     )
 
-                        interpolator = sitk.sitkLinear
-                        identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+    #                     interpolator = sitk.sitkLinear
+    #                     identity_transform = sitk.Transform(3, sitk.sitkIdentity)
                         
-                        optical_flow_sitk = sitk.Resample(
-                            of_xform_sitk,
-                            sitk.GetImageFromArray(decon_image),
-                            identity_transform,
-                            interpolator,
-                            0,
-                            of_xform_sitk.GetPixelID(),
-                        )
-                        displacement_field = sitk.DisplacementFieldTransform(
-                            optical_flow_sitk
-                        )
-                        del optical_flow_sitk, of_xform_px
-                        gc.collect()
+    #                     optical_flow_sitk = sitk.Resample(
+    #                         of_xform_sitk,
+    #                         sitk.GetImageFromArray(decon_image),
+    #                         identity_transform,
+    #                         interpolator,
+    #                         0,
+    #                         of_xform_sitk.GetPixelID(),
+    #                     )
+    #                     displacement_field = sitk.DisplacementFieldTransform(
+    #                         optical_flow_sitk
+    #                     )
+    #                     del optical_flow_sitk, of_xform_px
+    #                     gc.collect()
 
-                    decon_image_rigid = apply_transform(
-                        decon_image, 
-                        decon_image, 
-                        xyz_transform
-                    )
-                    del decon_image
+    #                 decon_image_rigid = apply_transform(
+    #                     decon_image, 
+    #                     decon_image, 
+    #                     xyz_transform
+    #                 )
+    #                 del decon_image
 
-                    if self._perform_optical_flow:
-                        decon_bit_image_sitk = sitk.Resample(
-                            sitk.GetImageFromArray(decon_image_rigid), 
-                            displacement_field
-                        )
-                        del displacement_field
+    #                 if self._perform_optical_flow:
+    #                     decon_bit_image_sitk = sitk.Resample(
+    #                         sitk.GetImageFromArray(decon_image_rigid), 
+    #                         displacement_field
+    #                     )
+    #                     del displacement_field
 
-                        data_decon_registered = sitk.GetArrayFromImage(
-                            decon_bit_image_sitk
-                        ).astype(np.float32)
-                        del decon_bit_image_sitk
-                    else:
-                        data_decon_registered = decon_image_rigid.copy()
-                        del decon_image_rigid
-                    gc.collect()
+    #                     data_decon_registered = sitk.GetArrayFromImage(
+    #                         decon_bit_image_sitk
+    #                     ).astype(np.float32)
+    #                     del decon_bit_image_sitk
+    #                 else:
+    #                     data_decon_registered = decon_image_rigid.copy()
+    #                     del decon_image_rigid
+    #                 gc.collect()
 
-                else:
-                    data_decon_registered = decon_image.copy()
-                    del decon_image
-                    gc.collect()
+    #             else:
+    #                 data_decon_registered = decon_image.copy()
+    #                 del decon_image
+    #                 gc.collect()
                     
-                data_decon_registered[data_decon_registered<0.]=0.0
+    #             data_decon_registered[data_decon_registered<0.]=0.0
 
-                builtins.print = _no_op
-                ufish = UFish(device="cuda")
-                ufish.load_weights_from_internet()
+    #             builtins.print = _no_op
+    #             ufish = UFish(device="cuda")
+    #             ufish.load_weights_from_internet()
 
-                ufish_localization, ufish_data = ufish.predict(
-                    data_decon_registered, axes="zyx", blend_3d=False, batch_size=1
-                )
-                builtins.print = self._original_print
+    #             ufish_localization, ufish_data = ufish.predict(
+    #                 data_decon_registered, axes="zyx", blend_3d=False, batch_size=1
+    #             )
+    #             builtins.print = self._original_print
 
-                ufish_localization = ufish_localization.rename(columns={"axis-0": "z"})
-                ufish_localization = ufish_localization.rename(columns={"axis-1": "y"})
-                ufish_localization = ufish_localization.rename(columns={"axis-2": "x"})
+    #             ufish_localization = ufish_localization.rename(columns={"axis-0": "z"})
+    #             ufish_localization = ufish_localization.rename(columns={"axis-1": "y"})
+    #             ufish_localization = ufish_localization.rename(columns={"axis-2": "x"})
 
-                del ufish
-                gc.collect()
+    #             del ufish
+    #             gc.collect()
 
-                torch.cuda.empty_cache()
-                cp.get_default_memory_pool().free_all_blocks()
-                gc.collect()
+    #             torch.cuda.empty_cache()
+    #             cp.get_default_memory_pool().free_all_blocks()
+    #             gc.collect()
 
-                roi_z, roi_y, roi_x = 7, 5, 5
+    #             roi_z, roi_y, roi_x = 7, 5, 5
 
-                def sum_pixels_in_roi(row, image, roi_dims):
-                    z, y, x = row["z"], row["y"], row["x"]
-                    roi_z, roi_y, roi_x = roi_dims
-                    z_min, y_min, x_min = (
-                        max(0, z - roi_z // 2),
-                        max(0, y - roi_y // 2),
-                        max(0, x - roi_x // 2),
-                    )
-                    z_max, y_max, x_max = (
-                        min(image.shape[0], z_min + roi_z),
-                        min(image.shape[1], y_min + roi_y),
-                        min(image.shape[2], x_min + roi_x),
-                    )
-                    roi = image[
-                        int(z_min) : int(z_max),
-                        int(y_min) : int(y_max),
-                        int(x_min) : int(x_max),
-                    ]
-                    return np.sum(roi)
+    #             def sum_pixels_in_roi(row, image, roi_dims):
+    #                 z, y, x = row["z"], row["y"], row["x"]
+    #                 roi_z, roi_y, roi_x = roi_dims
+    #                 z_min, y_min, x_min = (
+    #                     max(0, z - roi_z // 2),
+    #                     max(0, y - roi_y // 2),
+    #                     max(0, x - roi_x // 2),
+    #                 )
+    #                 z_max, y_max, x_max = (
+    #                     min(image.shape[0], z_min + roi_z),
+    #                     min(image.shape[1], y_min + roi_y),
+    #                     min(image.shape[2], x_min + roi_x),
+    #                 )
+    #                 roi = image[
+    #                     int(z_min) : int(z_max),
+    #                     int(y_min) : int(y_max),
+    #                     int(x_min) : int(x_max),
+    #                 ]
+    #                 return np.sum(roi)
 
-                ufish_localization["sum_prob_pixels"] = ufish_localization.apply(
-                    sum_pixels_in_roi,
-                    axis=1,
-                    image=ufish_data,
-                    roi_dims=(roi_z, roi_y, roi_x),
-                )
-                ufish_localization["sum_decon_pixels"] = ufish_localization.apply(
-                    sum_pixels_in_roi,
-                    axis=1,
-                    image=data_decon_registered,
-                    roi_dims=(roi_z, roi_y, roi_x),
-                )
+    #             ufish_localization["sum_prob_pixels"] = ufish_localization.apply(
+    #                 sum_pixels_in_roi,
+    #                 axis=1,
+    #                 image=ufish_data,
+    #                 roi_dims=(roi_z, roi_y, roi_x),
+    #             )
+    #             ufish_localization["sum_decon_pixels"] = ufish_localization.apply(
+    #                 sum_pixels_in_roi,
+    #                 axis=1,
+    #                 image=data_decon_registered,
+    #                 roi_dims=(roi_z, roi_y, roi_x),
+    #             )
 
-                ufish_localization["tile_idx"] = self._tile_ids.index(self._tile_id)
-                ufish_localization["bit_idx"] = bit_idx + 1
-                ufish_localization["tile_z_px"] = ufish_localization["z"]
-                ufish_localization["tile_y_px"] = ufish_localization["y"]
-                ufish_localization["tile_x_px"] = ufish_localization["x"]
+    #             ufish_localization["tile_idx"] = self._tile_ids.index(self._tile_id)
+    #             ufish_localization["bit_idx"] = bit_idx + 1
+    #             ufish_localization["tile_z_px"] = ufish_localization["z"]
+    #             ufish_localization["tile_y_px"] = ufish_localization["y"]
+    #             ufish_localization["tile_x_px"] = ufish_localization["x"]
 
-                self._datastore.save_local_registered_image(
-                    data_decon_registered.astype(np.uint16),
-                    tile=self._tile_id,
-                    deconvolution=True,
-                    bit=bit_id
-                )
-                self._datastore.save_local_ufish_image(
-                    ufish_data,
-                    tile=self._tile_id,
-                    bit=bit_id
-                )
-                self._datastore.save_local_ufish_spots(
-                    ufish_localization,
-                    tile=self._tile_id,
-                    bit=bit_id
-                )
+    #             self._datastore.save_local_registered_image(
+    #                 data_decon_registered.astype(np.uint16),
+    #                 tile=self._tile_id,
+    #                 deconvolution=True,
+    #                 bit=bit_id
+    #             )
+    #             self._datastore.save_local_ufish_image(
+    #                 ufish_data,
+    #                 tile=self._tile_id,
+    #                 bit=bit_id
+    #             )
+    #             self._datastore.save_local_ufish_spots(
+    #                 ufish_localization,
+    #                 tile=self._tile_id,
+    #                 bit=bit_id
+    #             )
                 
-                del (
-                    data_decon_registered,
-                    ufish_data,
-                    ufish_localization,
-                )
-                gc.collect()
+    #             del (
+    #                 data_decon_registered,
+    #                 ufish_data,
+    #                 ufish_localization,
+    #             )
+    #             gc.collect()
                 
                 
 def _no_op(*args, **kwargs):
