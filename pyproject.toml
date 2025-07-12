@@ -20,7 +20,7 @@ classifiers = [
     "License :: OSI Approved :: BSD License"
 ]
 dynamic = ["version"]
-dependencies = ["numpy", "tifffile", "zarr<3.0", "numba",
+dependencies = ["numpy", "tifffile", "zarr<3.0", "numba", "anndata",
                 "numcodecs", "psfmodels", "cmap", "SimpleITK", 
                 "tqdm", "ndstorage", "roifile",
                 "pyarrow", "tbb", "shapely", "scikit-image<0.24",
