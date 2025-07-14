@@ -15,8 +15,6 @@ import numpy as np
 import gc
 from numpy.typing import ArrayLike
 from numba import njit, prange
-from typing import Sequence, Tuple
-from ryomen import Slicer
 import builtins
 from basicpy import BaSiC
 

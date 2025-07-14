@@ -29,7 +29,6 @@ from typing import Union, Optional
 import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.DataRegistration import DataRegistration
 from merfish3danalysis.utils.registration import (
     compute_optical_flow,
     apply_transform,
@@ -46,7 +45,7 @@ from tqdm import tqdm
 
 
 def _apply_polyDT_on_gpu(
-    dr: DataRegistration,
+    dr,
     round_list: list,
     gpu_id: int = 0
 ):
@@ -266,7 +265,7 @@ def _apply_polyDT_on_gpu(
 
 
 def _apply_bits_on_gpu(
-    dr: DataRegistration,
+    dr,
     bit_list: list, 
     gpu_id: int = 0
 ):
