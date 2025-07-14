@@ -71,6 +71,7 @@ class PixelDecoder:
         use_mask: Optional[bool] = False,
         z_range: Optional[Sequence[int]] = None,
         include_blanks: Optional[bool] = True,
+        smFISH: bool = False
     ):
         self._datastore = datastore
         self._verbose = verbose
@@ -78,6 +79,10 @@ class PixelDecoder:
         self._include_blanks = include_blanks
 
         self._n_merfish_bits = merfish_bits
+
+        # Is this data smFISH or MERFISH? 
+        # Default is False, meaning data is MERFISH
+        self._smFISH = smFISH
 
         if self._datastore.microscope_type == "2D":
             self._is_3D = False
@@ -104,8 +109,15 @@ class PixelDecoder:
         self._optimize_normalization_weights = False
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
-        self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = 0.9  # default for HW4D4 code
+        
+        if self._smFISH:
+            # establish lower threshold for magnitude for smFISH data
+            self._magnitude_threshold = 0.75
+            self._upper_magnitude_threshold = 1.75
+            self._distance_threshold = 1.0
+        else:
+            self._magnitude_threshold = 0.9  # default for HW4D4 code
+            self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
 
     def _load_codebook(self):
         """Load and parse codebook into gene_id and codeword matrix."""
@@ -771,8 +783,9 @@ class PixelDecoder:
         return min_distances, min_indices
 
     def _decode_pixels(
-        self, distance_threshold: float = 0.5172, 
-        magnitude_threshold: float = 1.0
+        self, distance_threshold: float = None, 
+        magnitude_threshold: float = None,
+        upper_magnitude_threshold: float = None,  # Only used for smFISH data
     ):
         """Decode pixels using the decoding matrix.
 
@@ -784,6 +797,8 @@ class PixelDecoder:
         magnitude_threshold : float, default 1.0.
             Magnitude threshold for decoding. 
         """
+        if distance_threshold is None:
+            distance_threshold = self._distance_threshold
 
         if self._filter_type == "lp":
             original_shape = self._image_data_lp.shape
@@ -852,7 +867,13 @@ class PixelDecoder:
             decoded_trace = cp.full(distance_trace.shape[0], -1, dtype=cp.int16)
             mask_trace = distance_trace < distance_threshold
             decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
-            decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+            
+            # For smFISH data, we are adding an upper magnitude threshold and setting pixels above this threshold to -1.
+            if self._smFISH:
+                decoded_trace[pixel_magnitude_trace >= upper_magnitude_threshold] = -1
+                decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+            else:
+                decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
 
             self._decoded_image[z_idx, :] = cp.asnumpy(
                 cp.reshape(cp.round(decoded_trace, 3), z_plane_shape[1:])
@@ -1841,12 +1862,20 @@ class PixelDecoder:
         app = QApplication.instance()
 
         app.lastWindowClosed.connect(on_close_callback)
-
-        viewer.add_image(
-            self._scaled_pixel_images,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="pixels",
-        )
+        
+        if self._smFISH:
+            for bit in range(self._datastore.num_bits):
+                viewer.add_image(
+                    self._scaled_pixel_images[bit],
+                    scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                    name="pixels_" + str(bit),
+                )
+        else:
+            viewer.add_image(
+                self._scaled_pixel_images,
+                scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                name="pixels",
+            )
 
         viewer.add_image(
             self._decoded_image,
@@ -1904,7 +1933,8 @@ class PixelDecoder:
         display_results: bool = False,
         return_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9,
+        magnitude_threshold: Optional[float] = None,
+        upper_magnitude_threshold: Optional[float] = None,
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.5,
@@ -1945,6 +1975,10 @@ class PixelDecoder:
 
         if use_normalization:
             self._load_iterative_normalization_vectors()
+        if magnitude_threshold is None:
+            magnitude_threshold = self._magnitude_threshold
+        if upper_magnitude_threshold is None:
+            upper_magnitude_threshold = getattr(self, "_upper_magnitude_threshold", None)
 
         self._tile_idx = tile_idx
         self._load_bit_data(ufish_threshold=ufish_threshold)
@@ -1952,7 +1986,8 @@ class PixelDecoder:
             self._lp_filter(sigma=lowpass_sigma)
         self._decode_pixels(
             distance_threshold=self._distance_threshold,
-            magnitude_threshold=magnitude_threshold,
+            magnitude_threshold=magnitude_threshold, 
+            upper_magnitude_threshold=upper_magnitude_threshold,
         )
         if display_results:
             self._display_results()
