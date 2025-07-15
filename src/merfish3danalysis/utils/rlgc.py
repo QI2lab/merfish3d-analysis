@@ -13,8 +13,8 @@ from cupy import ElementwiseKernel
 from ryomen import Slicer
 from tqdm import tqdm
 import timeit
+import gc
 
-rng = cp.random.default_rng(42)
 DEBUG = False
 
 gc_update_kernel = ElementwiseKernel(
@@ -37,35 +37,35 @@ gc_update_kernel = ElementwiseKernel(
 _fft_cache: dict[tuple[int,int,int], tuple[cp.ndarray, cp.ndarray]] = {}
 _H_T_cache: dict[tuple[int,int,int], cp.ndarray] = {}
 
-def next_multiple_of_64(x: int) -> int:
+def next_multiple_of_32(x: int) -> int:
     """Determine the next multiple of 64 greater than or equal to x.
     
     Parameters
     ----------
     x: int
-        The input integer to round up to the next multiple of 64.
+        The input integer to round up to the next multiple of 32.
         
     Returns
     -------
-    next_64_x: int
-        The next multiple of 64 that is greater than or equal to x.
+    next__x: int
+        The next multiple of 32 that is greater than or equal to x.
     """
-    next_64_x = int(np.ceil((x + 31) / 31)) * 32
-    return next_64_x
+    next_32_x = int(np.ceil((x + 15) / 15)) * 16
+    return next_32_x
 
-def pad_z(image: cp.ndarray, bkd: int) -> tuple[cp.ndarray, int, int]:
-    """Pad z-axis of 3D array by the next multiple of 64 (zyx order).
+def pad_z(image: np.ndarray, bkd: int) -> tuple[np.ndarray, int, int]:
+    """Pad z-axis of 3D array by the next multiple of 32 (zyx order).
 
     Parameters
     ----------
-    image: cp.ndarray
+    image: np.ndarray
         3D image to pad.
     bkd: int
         Background value to subtract before padding.
 
     Returns
     -------
-    padded_image: cp.ndarray
+    padded_image: np.ndarray
         Padded 3D image.
     pad_z_before: int
         Amount of padding at the start of the y-axis.
@@ -73,19 +73,19 @@ def pad_z(image: cp.ndarray, bkd: int) -> tuple[cp.ndarray, int, int]:
         Amount of padding at the end of the y-axis.
     """
     z, y, x = image.shape
-    new_z = next_multiple_of_64(z)
+    new_z = next_multiple_of_32(z)
     pad_z = new_z - z
     pad_z_before = pad_z // 2
     pad_z_after = pad_z - pad_z_before
     pad_width = ((pad_z_before, pad_z_after),(0, 0), (0, 0))
-    padded_image = cp.pad(
-        (image.astype(cp.float32) - float(bkd)).clip(0, 2**16 - 1).astype(cp.uint16),
+    padded_image = np.pad(
+        (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1).astype(np.uint16),
         pad_width, mode="reflect"
     )
     return padded_image, pad_z_before, pad_z_after
 
 def remove_padding_z(
-    padded_image: cp.ndarray,
+    padded_image: np.ndarray,
     pad_z_before: int,
     pad_z_after: int
 ) -> cp.ndarray:
@@ -93,7 +93,7 @@ def remove_padding_z(
 
     Parameters
     ----------
-    padded_image: cp.ndarray
+    padded_image: np.ndarray
         Padded 3D image.
     pad_z_before: int
         Amount of padding at the start of the z-axis.
@@ -102,11 +102,75 @@ def remove_padding_z(
 
     Returns
     -------
-    image: cp.ndarray
+    image: np.ndarray
         Unpadded 3D image.
     """
     image = padded_image[pad_z_before:-pad_z_after, :, :]
     return image
+
+def pad_psf_new(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
+    """Pad and center a PSF to match the target image shape.
+
+    This will crop or zero‑pad psf_temp so that its center voxel
+    ends up at the center of an array of shape `image_shape`.  After
+    embedding, the result is fft‑shifted (center->corner), normalized,
+    and clipped for numeric stability.
+
+    Parameters
+    ----------
+    psf_temp : cp.ndarray
+        Original PSF volume.
+    image_shape : tuple of int (3,)
+        Desired output shape (z, y, x).
+
+    Returns
+    -------
+    cp.ndarray
+        Padded, centered, fft‑shifted, and unit‑sum PSF of shape `image_shape`.
+    """
+    # prepare output
+    psf = cp.zeros(image_shape, dtype=psf_temp.dtype)
+
+    in_shape = psf_temp.shape
+    # centers
+    out_ctr = [dim // 2 for dim in image_shape]
+    in_ctr  = [dim // 2 for dim in in_shape]
+
+    # build slices for each axis
+    slices_in  = []
+    slices_out = []
+    for ax in range(3):
+        N = image_shape[ax]
+        M = in_shape[ax]
+        # how much to shift input so its center lands at output center
+        shift = out_ctr[ax] - in_ctr[ax]
+
+        # input slice bounds
+        i0 = max(0, -shift)
+        i1 = min(M, N - shift if shift >= 0 else N)
+
+        # output slice bounds
+        o0 = max(0, shift)
+        o1 = o0 + (i1 - i0)
+
+        slices_in.append(slice(i0, i1))
+        slices_out.append(slice(o0, o1))
+
+    # copy the overlapping region
+    psf[slices_out[0], slices_out[1], slices_out[2]] = \
+        psf_temp[slices_in[0], slices_in[1], slices_in[2]]
+
+    # move center→corner for FFT convolution
+    psf = cp.fft.ifftshift(psf)
+
+    # normalize to unit sum
+    total = psf.sum()
+    if total != 0:
+        psf = psf / total
+
+    # clip for stability
+    return cp.clip(psf, a_min=1e-12, a_max=2**16-1).astype(cp.float32)
+
 
 def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
     """Pad and center a PSF to match the target image shape.
@@ -242,15 +306,14 @@ def rlgc_biggs(
         Deconvolved 3D image, clipped to [0, 2^16-1] and cast to uint16.
     """
     cp.cuda.Device(gpu_id).use()
+    rng = cp.random.default_rng(42)
     if image.ndim == 3:
-        image_gpu, pad_z_before, pad_z_after = pad_z(
-            cp.asarray(image, dtype=cp.float32), bkd
-        )
+        image_gpu =cp.asarray(image, dtype=cp.float32)
     else:
         image_gpu = cp.asarray(image, dtype=cp.float32)
         image_gpu = image_gpu[cp.newaxis, ...]
     if isinstance(psf, np.ndarray) and otf is None and otfT is None:
-        psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
+        psf_gpu = pad_psf_new(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
         otf = cp.fft.rfftn(psf_gpu)
         otfT = cp.conjugate(otf)
         del psf_gpu
@@ -350,20 +413,23 @@ def rlgc_biggs(
                 f"KLDs: {kld1:.4f} (split1), {kld2:.4f} (split2)."
             )
     recon = cp.clip(recon, 0, 2**16 - 1).astype(cp.uint16)
-    if image.ndim == 3:
-        recon = remove_padding_z(recon, pad_z_before, pad_z_after)
-    else:
+    if not(image.ndim == 3):
         recon = cp.squeeze(recon)
-    del recon_next, g1, g2, H_T_ones
+
+    recon_cpu = cp.asnumpy(recon).astype(np.uint16)
+    del recon_next, g1, g2, H_T_ones, recon, temp_g2, previous_recon, split1, split2
+    del numerator, denominator, alpha, temp
+    del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
+    gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
-    return cp.asnumpy(recon)
+    return recon_cpu
 
 def chunked_rlgc(
     image: np.ndarray, 
     psf: np.ndarray,
     gpu_id: int = 0,
-    crop_size: int = 1024,
-    overlap_size: int = 64,
+    crop_z: int = 36,
+    overlap_z: int = 12,
     bkd: int = 0,
     eager_mode: bool = False
 ) -> np.ndarray:
@@ -377,9 +443,9 @@ def chunked_rlgc(
         point spread function (PSF) to use for deconvolution.
     gpu_id: int, default = 0
         which GPU to use
-    crop_size: int, default = 1024
+    crop_size: int, default = 512
         size of the chunk to process at a time.
-    overlap_size: int, default = 64
+    overlap_size: int, default = 32
         size of the overlap between chunks.
     bkd: int, default = 0
         background value to subtract from the image.
@@ -394,12 +460,24 @@ def chunked_rlgc(
     
     cp.cuda.Device(gpu_id).use()
     cp.fft._cache.PlanCache(memsize=0)
-    output = np.zeros_like(image)
-    crop_size = (image.shape[-3], crop_size, crop_size)
-    overlap = (0, overlap_size, overlap_size)
-    slices = Slicer(image, crop_size=crop_size, overlap=overlap)
-    for crop, source, destination in tqdm(slices,desc="decon chunk:",leave=False):
+    if image.ndim == 3:
+        image_padded, pad_z_before, pad_z_after = pad_z(
+            image, bkd
+        )
+    image_padded = np.pad(image_padded,pad_width=((0,0),(128,128),(128,128)),mode="symmetric")
+
+    output = np.zeros_like(image_padded)
+    crop_size = (crop_z, image_padded.shape[-2], image_padded.shape[-1])
+    overlap = (overlap_z, 0, 0)
+    slices = Slicer(image_padded, crop_size=crop_size, overlap=overlap, pad = True)
+    #for crop, source, destination in tqdm(slices,desc="decon chunk:",leave=False):
+    for crop, source, destination in slices:
         crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode=eager_mode)
-        cp.get_default_memory_pool().free_all_blocks()
         output[destination] = crop_array[source]
+    if image.ndim == 3:
+        output = remove_padding_z(output,pad_z_before,pad_z_after)
+    output = output[:, 128:-128, 128:-128]
+    _fft_cache.clear()
+    _H_T_cache.clear()
+    cp.get_default_memory_pool().free_all_blocks()
     return output

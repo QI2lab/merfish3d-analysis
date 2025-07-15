@@ -501,7 +501,7 @@ def convert_data(
                 round=round_idx,
             )
     
-    for bit_id in tqdm(datastore.bit_ids, desc="bit"):
+    for bit_id in tqdm(datastore.bit_ids, desc="bit", leave=True):
         data_camera_corrected = []
 
         # calculate fiducial correction

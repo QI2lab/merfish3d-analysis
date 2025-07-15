@@ -35,14 +35,40 @@ from merfish3danalysis.utils.registration import (
     compute_rigid_transform,
 )
 from merfish3danalysis.utils.imageprocessing import downsample_image_isotropic
-from merfish3danalysis.utils.rlgc import chunked_rlgc
 
-from ufish.api import UFish
-import torch
-import cupy as cp
 import builtins
 from tqdm import tqdm
 
+def _apply_first_polyDT_on_gpu(
+    dr,
+    gpu_id: int =0
+):
+    import cupy as cp
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
+    cp.cuda.Device(0).use()
+
+    raw0 = dr._datastore.load_local_corrected_image(
+        tile=dr._tile_id,
+        round=0,
+        return_future=False
+    )
+
+    ref_image_decon = chunked_rlgc(
+        image=raw0,
+        psf=dr._psfs[0, :],
+        gpu_id=0
+    )
+
+    dr._datastore.save_local_registered_image(
+        ref_image_decon,
+        tile=dr._tile_id,
+        deconvolution=True,
+        round=dr._round_ids[0]
+    )
+
+    del raw0, ref_image_decon
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
 
 def _apply_polyDT_on_gpu(
     dr,
@@ -64,7 +90,7 @@ def _apply_polyDT_on_gpu(
 
     import torch
     import cupy as cp
-    from ufish.api import UFish
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     torch.cuda.set_device(gpu_id)
     cp.cuda.Device(gpu_id).use()
@@ -73,7 +99,8 @@ def _apply_polyDT_on_gpu(
 
         test =  dr._datastore.load_local_registered_image(
             tile=dr._tile_id,
-            round=round_id
+            round=round_id,
+            return_future=False
         )
         if test is None:
             has_reg_decon_data = False
@@ -81,103 +108,128 @@ def _apply_polyDT_on_gpu(
             has_reg_decon_data = True
 
         if not (has_reg_decon_data) or dr._overwrite_registered:
-            try:
-                temp = ref_image_decon[0:1,0:1,0:1].astype(np.float32)
-                del temp
-                gc.collect()
-            except FileNotFoundError :
-                ref_image_decon = dr._datastore.load_local_registered_image(
-                    tile=dr._tile_id,
-                    round=dr._round_ids[0],
-                    return_future=False
-                )
+            ref_image_decon_norm = dr._datastore.load_local_registered_image(
+                tile=dr._tile_id,
+                round=dr._round_ids[0],
+                return_future=False
+            ).astype(np.float32)
+
+            min_val = ref_image_decon_norm.min()
+            max_val = ref_image_decon_norm.max()
+
+            # avoid divide‐by‐zero if image is constant
+            if max_val > min_val:
+                ref_image_decon_norm -= min_val
+                ref_image_decon_norm /= (max_val - min_val)
+            else:
+                ref_image_decon_norm.fill(0)
             
+            raw = dr._datastore.load_local_corrected_image(
+                tile=dr._tile_id,
+                round=round_id,
+                return_future=False
+            )     
 
             mov_image_decon = chunked_rlgc(
-                image=np.asarray(
-                    dr._data_raw[r_idx].result(),dtype=np.uint16
-                ),
-                psf=dr._psfs[0, :]
+                image=raw,
+                psf=dr._psfs[0, :],
+                gpu_id=gpu_id
             )
 
-            downsample_factor = 2
+            mov_image_decon_norm = mov_image_decon.copy().astype(np.float32)
+
+            mov_min_val = mov_image_decon_norm.min()
+            mov_max_val = mov_image_decon_norm.max()
+
+            # avoid divide‐by‐zero if image is constant
+            if mov_max_val > mov_min_val:
+                mov_image_decon_norm -= mov_min_val
+                mov_image_decon_norm /= (mov_max_val - mov_min_val)
+            else:
+                mov_image_decon_norm.fill(0)
+
+            # downsample_factor = 2
+            # if downsample_factor > 1:
+            #     ref_image_decon_norm_ds = downsample_image_isotropic(
+            #         ref_image_decon_norm, downsample_factor
+            #     )
+            #     mov_image_decon_norm_ds = downsample_image_isotropic(
+            #         mov_image_decon_norm, downsample_factor
+            #     )
+            # else:
+            #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
+            #     mov_image_decon_norm_ds = mov_image_decon_norm.copy()
+
+            # _, initial_xy_shift = compute_rigid_transform(
+            #     ref_image_decon_norm_ds,
+            #     mov_image_decon_norm_ds,
+            #     use_mask=False,
+            #     downsample_factor=downsample_factor,
+            #     projection="z",
+            # )
+
+            # intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
+
+            # mov_image_decon_norm = apply_transform(
+            #     ref_image_decon_norm, mov_image_decon_norm, intial_xy_transform
+            # )
+
+            # downsample_factor = 2
+            # if downsample_factor > 1:
+            #     ref_image_decon_norm_ds = downsample_image_isotropic(
+            #         ref_image_decon_norm, downsample_factor
+            #     )
+            #     mov_image_decon_norm_ds = downsample_image_isotropic(
+            #         mov_image_decon_norm, downsample_factor
+            #     )
+            # else:
+            #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
+            #     mov_image_decon_norm_ds = mov_image_decon_norm.copy()
+
+            # _, intial_z_shift = compute_rigid_transform(
+            #     ref_image_decon_norm_ds,
+            #     mov_image_decon_norm_ds,
+            #     use_mask=False,
+            #     downsample_factor=downsample_factor,
+            #     projection="search",
+            # )
+
+            # intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
+
+            # mov_image_decon_norm = apply_transform(
+            #     ref_image_decon_norm, mov_image_decon_norm, intial_z_transform
+            # )
+
+            downsample_factor = 3
             if downsample_factor > 1:
-                ref_image_decon_ds = downsample_image_isotropic(
-                    ref_image_decon, downsample_factor
+                ref_image_decon_norm_ds = downsample_image_isotropic(
+                    ref_image_decon_norm, downsample_factor
                 )
-                mov_image_decon_ds = downsample_image_isotropic(
-                    mov_image_decon, downsample_factor
+                mov_image_decon_norm_ds = downsample_image_isotropic(
+                    mov_image_decon_norm, downsample_factor
                 )
             else:
-                ref_image_decon_ds = ref_image_decon.copy()
-                mov_image_decon_ds = mov_image_decon.copy()
-
-            _, initial_xy_shift = compute_rigid_transform(
-                ref_image_decon_ds,
-                mov_image_decon_ds,
-                use_mask=True,
-                downsample_factor=downsample_factor,
-                projection="z",
-            )
-
-            intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
-
-            mov_image_decon = apply_transform(
-                ref_image_decon, mov_image_decon, intial_xy_transform
-            )
-
-            downsample_factor = 2
-            if downsample_factor > 1:
-                ref_image_decon_ds = downsample_image_isotropic(
-                    ref_image_decon, downsample_factor
-                )
-                mov_image_decon_ds = downsample_image_isotropic(
-                    mov_image_decon, downsample_factor
-                )
-            else:
-                ref_image_decon_ds = ref_image_decon.copy()
-                mov_image_decon_ds = mov_image_decon.copy()
-
-            _, intial_z_shift = compute_rigid_transform(
-                ref_image_decon_ds,
-                mov_image_decon_ds,
-                use_mask=False,
-                downsample_factor=downsample_factor,
-                projection="search",
-            )
-
-            intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
-
-            mov_image_decon = apply_transform(
-                ref_image_decon, mov_image_decon, intial_z_transform
-            )
-
-            downsample_factor = 4
-            if downsample_factor > 1:
-                ref_image_decon_ds = downsample_image_isotropic(
-                    ref_image_decon, downsample_factor
-                )
-                mov_image_decon_ds = downsample_image_isotropic(
-                    mov_image_decon, downsample_factor
-                )
-            else:
-                ref_image_decon_ds = ref_image_decon.copy()
-                mov_image_decon_ds = mov_image_decon.copy()
+                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
+                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
 
             _, xyz_shift_4x = compute_rigid_transform(
-                ref_image_decon_ds,
-                mov_image_decon_ds,
-                use_mask=True,
+                ref_image_decon_norm_ds,
+                mov_image_decon_norm_ds,
+                use_mask=False,
                 downsample_factor=downsample_factor,
                 projection=None,
             )
             
-            final_xyz_shift = (
-                np.asarray(initial_xy_shift)
-                + np.asarray(intial_z_shift)
-                + np.asarray(xyz_shift_4x)
-            )
-            # final_xyz_shift = np.asarray(xyz_shift_4x)
+            # final_xyz_shift = (
+            #     np.asarray(initial_xy_shift)
+            #     + np.asarray(intial_z_shift)
+            #     + np.asarray(xyz_shift_4x)
+            # )
+            
+            final_xyz_shift = -1.*np.asarray(xyz_shift_4x)
+            
+            #print(round_id,final_xyz_shift)
+            
             dr._datastore.save_local_rigid_xform_xyz_px(
                 rigid_xform_xyz_px=final_xyz_shift,
                 tile=dr._tile_id,
@@ -185,23 +237,29 @@ def _apply_polyDT_on_gpu(
             )
 
             xyz_transform_4x = sitk.TranslationTransform(3, xyz_shift_4x)
-            mov_image_decon = apply_transform(
-                ref_image_decon, mov_image_decon, xyz_transform_4x
+            mov_image_decon_norm = apply_transform(
+                ref_image_decon_norm, mov_image_decon_norm, xyz_transform_4x
             )
+
+            # import napari
+            # viewer = napari.Viewer()
+            # viewer.add_image(ref_image_decon_norm)
+            # viewer.add_image(mov_image_decon_norm)
+            # napari.run()
             
             if dr._perform_optical_flow:
                 downsample_factor = 3
                 if downsample_factor > 1:
-                    ref_image_decon_ds = downsample_image_isotropic(
-                        ref_image_decon, downsample_factor
+                    ref_image_decon_norm_ds = downsample_image_isotropic(
+                        ref_image_decon_norm, downsample_factor
                     )
-                    mov_image_decon_ds = downsample_image_isotropic(
-                        mov_image_decon, downsample_factor
+                    mov_image_decon_norm_ds = downsample_image_isotropic(
+                        mov_image_decon_norm, downsample_factor
                     )
 
                 of_xform_px = compute_optical_flow(
-                    ref_image_decon_ds, 
-                    mov_image_decon_ds
+                    ref_image_decon_norm_ds, 
+                    mov_image_decon_norm_ds
                 )
 
                 dr._datastore.save_coord_of_xform_px(
@@ -218,6 +276,9 @@ def _apply_polyDT_on_gpu(
                     of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
                     isVector=True,
                 )
+
+                mov_image_decon = mov_image_decon_norm * (mov_max_val-mov_min_val) + mov_min_val
+
                 interpolator = sitk.sitkLinear
                 identity_transform = sitk.Transform(3, sitk.sitkIdentity)
                 optical_flow_sitk = sitk.Resample(
@@ -243,14 +304,14 @@ def _apply_polyDT_on_gpu(
                 data_registered = sitk.GetArrayFromImage(
                     mov_image_sitk
                 ).astype(np.float32)
-                data_registered[data_registered < 0.0] = 0
-                data_registered = data_registered.astype(np.uint16)
+
+                data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
                 
                 del mov_image_sitk, displacement_field
                 gc.collect()
             else:
-                mov_image_decon[mov_image_decon < 0.0] = 0
-                data_registered = mov_image_decon.astype(np.uint16)
+
+                data_registered = mov_image_decon.clip(0,2**16-1).astype(np.uint16)
                 
             if dr.save_all_polyDT_registered:
                 dr._datastore.save_local_registered_image(
@@ -591,7 +652,7 @@ class DataRegistration:
         """Helper function to register all tiles."""
         for tile_id in tqdm(self._datastore.tile_ids,desc="tiles"):
             self.tile_id=tile_id
-            self._load_raw_data()
+            #self._load_raw_data()
             self._generate_registrations()
             self._apply_registration_to_bits()
             
@@ -648,18 +709,9 @@ class DataRegistration:
             
         if not (has_reg_decon_data) or self._overwrite_registered:
 
-            ref_image_decon = chunked_rlgc(
-                image=np.asarray(self._data_raw[0].result(),dtype=np.uint16),
-                psf=self._psfs[0, :],
-                gpu_id=0
-            )
-
-            self._datastore.save_local_registered_image(
-                ref_image_decon,
-                tile=self._tile_id,
-                deconvolution=True,
-                round=self._round_ids[0]
-            )
+            p_first = mp.Process(target=_apply_first_polyDT_on_gpu, args=(self,0))
+            p_first.start()
+            p_first.join()
 
         # 1) How many GPUs do we have?
         num_gpus = 2
@@ -686,7 +738,6 @@ class DataRegistration:
         # 4) Wait for all GPU‐workers to finish
         for p in processes:
             p.join()
-        
 
     def _apply_registration_to_bits(self):
         """Generate ufish + deconvolved, registered readout data and save to datastore."""
