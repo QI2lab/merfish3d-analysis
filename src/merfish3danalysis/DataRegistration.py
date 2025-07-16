@@ -346,6 +346,7 @@ def _apply_bits_on_gpu(
     import torch
     import cupy as cp
     from ufish.api import UFish
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     torch.cuda.set_device(gpu_id)
     cp.cuda.Device(gpu_id).use()
@@ -509,8 +510,6 @@ class DataRegistration:
         overwrite_registered: bool = False,
         perform_optical_flow: bool = False,
         save_all_polyDT_registered: bool = True,
-        decon_iters: Optional[int] = 10,
-        decon_background: Optional[float] = 50.0,
     ):
     
         self._datastore = datastore
@@ -524,8 +523,7 @@ class DataRegistration:
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_polyDT_registered = save_all_polyDT_registered
-        self._decon_iters = decon_iters
-        self._decon_background = decon_background
+        self._decon = True
         self._original_print = builtins.print
 
     # -----------------------------------

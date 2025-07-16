@@ -37,23 +37,40 @@ gc_update_kernel = ElementwiseKernel(
 _fft_cache: dict[tuple[int,int,int], tuple[cp.ndarray, cp.ndarray]] = {}
 _H_T_cache: dict[tuple[int,int,int], cp.ndarray] = {}
 
-def next_multiple_of_32(x: int) -> int:
-    """Determine the next multiple of 64 greater than or equal to x.
-    
+def next_gpu_fft_size(x: int) -> int:
+    """
+    Pick the smallest FFT‑friendly size ≥ x whose only prime factors are 2 or 3.
+    GPUs (cuFFT) are super‑fast on radix‑2 and radix‑3, so this trades a few extra
+    pixels (vs. a pure power‑of‑two) for peak throughput.
+
     Parameters
     ----------
-    x: int
-        The input integer to round up to the next multiple of 32.
-        
+    x : int
+        Minimum desired length.
+
     Returns
     -------
-    next__x: int
-        The next multiple of 32 that is greater than or equal to x.
+    int
+        The next length ≥ x that is 2–3–smooth.
     """
-    next_32_x = int(np.ceil((x + 15) / 15)) * 16
-    return next_32_x
+    if x <= 1:
+        return 1
 
-def pad_z(image: np.ndarray, bkd: int) -> tuple[np.ndarray, int, int]:
+    # scan upward until we hit a 2–3–smooth number
+    n = x
+    while True:
+        m = n
+        # pull out all factors of 2
+        while (m % 2) == 0:
+            m //= 2
+        # pull out all factors of 3
+        while (m % 3) == 0:
+            m //= 3
+        if m == 1:
+            return n
+        n += 1
+
+def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
     """Pad z-axis of 3D array by the next multiple of 32 (zyx order).
 
     Parameters
@@ -73,7 +90,7 @@ def pad_z(image: np.ndarray, bkd: int) -> tuple[np.ndarray, int, int]:
         Amount of padding at the end of the y-axis.
     """
     z, y, x = image.shape
-    new_z = next_multiple_of_32(z)
+    new_z = next_gpu_fft_size(z)
     pad_z = new_z - z
     pad_z_before = pad_z // 2
     pad_z_after = pad_z - pad_z_before
@@ -224,7 +241,8 @@ def fft_conv(image: cp.ndarray, OTF: cp.ndarray, shape) -> cp.ndarray:
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= OTF
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
-    return cp.clip(ifft_buf,a_min=1e-12, a_max=2**16-1)
+    cp.clip(ifft_buf, 1e-12, 2**16-1, out=ifft_buf)
+    return ifft_buf
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     """Compute Kullback–Leibler divergence between two distributions.
@@ -308,7 +326,7 @@ def rlgc_biggs(
     cp.cuda.Device(gpu_id).use()
     rng = cp.random.default_rng(42)
     if image.ndim == 3:
-        image_gpu =cp.asarray(image, dtype=cp.float32)
+        image_gpu = cp.asarray(image, dtype=cp.float32)
     else:
         image_gpu = cp.asarray(image, dtype=cp.float32)
         image_gpu = image_gpu[cp.newaxis, ...]
@@ -412,11 +430,13 @@ def rlgc_biggs(
                 f"Iteration {num_iters:03d} completed in {calc_time:.3f}s. "
                 f"KLDs: {kld1:.4f} (split1), {kld2:.4f} (split2)."
             )
-    recon = cp.clip(recon, 0, 2**16 - 1).astype(cp.uint16)
-    if not(image.ndim == 3):
+    recon = cp.clip(recon, 0, 2**16 - 1).astype(cp.float32)
+    if image.ndim == 3:
+        pass
+    else:
         recon = cp.squeeze(recon)
 
-    recon_cpu = cp.asnumpy(recon).astype(np.uint16)
+    recon_cpu = cp.asnumpy(recon).astype(np.float32)
     del recon_next, g1, g2, H_T_ones, recon, temp_g2, previous_recon, split1, split2
     del numerator, denominator, alpha, temp
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
@@ -429,7 +449,7 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_z: int = 36,
-    overlap_z: int = 12,
+    overlap_z: int = 15,
     bkd: int = 0,
     eager_mode: bool = False
 ) -> np.ndarray:
@@ -443,9 +463,9 @@ def chunked_rlgc(
         point spread function (PSF) to use for deconvolution.
     gpu_id: int, default = 0
         which GPU to use
-    crop_size: int, default = 512
+    crop_size: int, default = 33
         size of the chunk to process at a time.
-    overlap_size: int, default = 32
+    overlap_size: int, default = 4
         size of the overlap between chunks.
     bkd: int, default = 0
         background value to subtract from the image.
@@ -464,20 +484,40 @@ def chunked_rlgc(
         image_padded, pad_z_before, pad_z_after = pad_z(
             image, bkd
         )
-    image_padded = np.pad(image_padded,pad_width=((0,0),(128,128),(128,128)),mode="symmetric")
+    new_yx = next_gpu_fft_size(image_padded.shape[-1]+1)
+    pad_yx = new_yx - image_padded.shape[-1]
+    pad_yx_before = pad_yx // 2
+    pad_yx_after = pad_yx - pad_yx_before
+    image_padded = np.pad(image_padded,pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),mode="reflect")
 
-    output = np.zeros_like(image_padded)
+    output_sum   = np.zeros_like(image_padded, dtype=np.float32)
+    output_count = np.zeros_like(image_padded, dtype=np.float32)
     crop_size = (crop_z, image_padded.shape[-2], image_padded.shape[-1])
     overlap = (overlap_z, 0, 0)
     slices = Slicer(image_padded, crop_size=crop_size, overlap=overlap, pad = True)
-    #for crop, source, destination in tqdm(slices,desc="decon chunk:",leave=False):
+    
     for crop, source, destination in slices:
-        crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode=eager_mode)
-        output[destination] = crop_array[source]
+        crop_array = rlgc_biggs(crop, psf, bkd, gpu_id,
+                                eager_mode=eager_mode)
+
+        # 1) pull out just the valid part of the crop
+        sub = crop_array[source]         # shape == whatever source slices select
+
+        # 2) add it into the destination region in one go
+        output_sum[destination]   += sub
+        output_count[destination] += 1   # broadcasting the +1 over the same shape
+
+    # now build final average, only where count > 0
+    nonzero = output_count > 0
+    output  = np.zeros_like(output_sum, dtype=output_sum.dtype)
+    output[nonzero] = output_sum[nonzero] / output_count[nonzero]
+    output = output.clip(0,2**16-1).astype(np.uint16)
+
     if image.ndim == 3:
         output = remove_padding_z(output,pad_z_before,pad_z_after)
-    output = output[:, 128:-128, 128:-128]
+    output = output[:, pad_yx_before:-pad_yx_after, pad_yx_before:-pad_yx_after]
     _fft_cache.clear()
     _H_T_cache.clear()
     cp.get_default_memory_pool().free_all_blocks()
+
     return output
