@@ -1,5 +1,5 @@
 """
-Convert raw qi2lab WF MERFISH data to qi2labdatastore.
+Convert raw qi2lab WF smFISH data to qi2labdatastore.
 
 This is an example on how to convert a qi2lab experiment to the datastore
 object that the qi2lab "merfish3d-analysis" package uses. Most of the
@@ -9,12 +9,16 @@ extract the correct parameters.
 
 Required user parameters for system dependent variables are at end of script.
 
+Shepherd 2024/02 - add flatfield shading correction
 Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.simplefilter("ignore", category=FutureWarning)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
@@ -23,9 +27,14 @@ from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 from merfish3danalysis.utils.dataio import read_metadatafile
-from merfish3danalysis.utils.imageprocessing import replace_hot_pixels
+from merfish3danalysis.utils.imageprocessing import replace_hot_pixels, estimate_shading, no_op
 from itertools import compress
 from typing import Optional
+import gc
+import builtins
+import multiprocessing as mp
+
+mp.set_start_method('spawn', force=True)
 
 def convert_data(
     root_path: Path,
@@ -50,22 +59,22 @@ def convert_data(
         path to baysor options toml
     julia_threads: int
         number of threads to use for Julia
-    channel_names: list[str]
+    channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Optional[Path]
-        path to hot pixel map. Default is None
-    output_path: Optional[Path]
-        path to output directory. Default is None and will be created
+    hot_pixel_image_path: Optional[Path], default None
+        path to hot pixel map. Default of `None` will set it to all zeros.
+    output_path: Optional[Path], default None
+        path to output directory. Default of `None` and will be created
         within the root_path
-    codebook_path: Optional[Path]
-        path to codebook. Default is None and it assumed the file is in
+    codebook_path: Optional[Path], default None
+        path to codebook. Default of `None` assumes the file is in
         the root_path.
-    bit_order_path: Optional[Path]
+    bit_order_path: Optional[Path], default None
         path to bit order file. This file defines what bits are present in each
-        imaging round, in channel order. Default is None and it assumed
+        imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
     """
-
+    
     # load codebook
     # --------------
     if codebook_path is None:
@@ -91,16 +100,16 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
 
-    # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
     from ndstorage import Dataset
 
     # load first tile to get experimental metadata
     dataset_path = root_path / Path(
         root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
     )
+    original_print = builtins.print
+    builtins.print = no_op
     dataset = Dataset(str(dataset_path))
+    builtins.print = original_print
     channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
     ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
     try:
@@ -169,7 +178,7 @@ def convert_data(
         )
         voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
 
-        del ndtiff_metadata, next_ndtiff_metadata, dataset
+        del next_ndtiff_metadata
 
     # this entry was not contained in pre-v8 metadata csv, it was instead stored
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
@@ -206,52 +215,21 @@ def convert_data(
             noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
         else:
             noise_map = imread(hot_pixel_image_path)
-        try:
-            stage_flipped_x = metadata["stage_flipped_x"]
-        except Exception:
-            stage_flipped_x = False
-        try:
-            stage_flipped_y = metadata["stage_flipped_y"]
-        except Exception:
-            stage_flipped_y = False
-        try:
-            image_rotated = metadata["image_rotated"]
-        except Exception:
-            image_rotated = False
-        try:
-            image_flipped_y = metadata["image_flipped_y"]
-        except Exception:
-            image_flipped_y = False
-        try:
-            image_flipped_x = metadata["image_flipped_x"]
-        except Exception:
-            image_flipped_x = False
     elif camera == "orcav3":
         if hot_pixel_image_path is None:
             noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
         else:
             noise_map = imread(hot_pixel_image_path)
-
-        try:
-            stage_flipped_x = metadata["stage_flipped_x"]
-        except Exception:
-            stage_flipped_x = True
-        try:
-            stage_flipped_y = metadata["stage_flipped_y"]
-        except Exception:
-            stage_flipped_y = True
-        try:
-            image_rotated = metadata["image_rotated"]
-        except Exception:
-            image_rotated = True
-        try:
-            image_flipped_y = metadata["image_flipped_y"]
-        except Exception:
-            image_flipped_y = True
-        try:
-            image_flipped_x = metadata["image_flipped_x"]
-        except Exception:
-            image_flipped_x = False
+            
+    stage_affine_str = ndtiff_metadata["PixelSizeAffine"]
+    stage_affine_values = np.asarray(list(map(float, stage_affine_str.split(';'))),dtype=np.float32)
+    stage_affine_values = np.round(stage_affine_values / float(ndtiff_metadata["PixelSizeUm"]),2)
+    affine_zyx_px = np.array([
+        [1,0,0,0],
+        [0,stage_affine_values[4],stage_affine_values[3],0],
+        [0,stage_affine_values[1],stage_affine_values[0],0],
+        [0,0,0,1]
+    ],dtype=np.float32) 
 
     # generate PSFs
     # --------------
@@ -273,7 +251,7 @@ def convert_data(
         channel_psfs.append(psf)
     channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
 
-    # # initialize datastore
+    # initialize datastore
     if output_path is None:
         datastore_path = root_path / Path(r"qi2labdatastore")
         datastore = qi2labDataStore(datastore_path)
@@ -317,35 +295,25 @@ def convert_data(
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
 
-    # Deal with camera vs stage orientation for stage positions.
-    # This is required because we want all of the data in global world
-    # coordinates, but the camera and software may not match the stage's
-    # orientation or motion direction.
-    round_idx = 0
-    if stage_flipped_x or stage_flipped_y:
-        for tile_idx in range(num_tiles):
-            stage_position_path = root_path / Path(
-                root_name
-                + "_r"
-                + str(round_idx + 1).zfill(4)
-                + "_tile"
-                + str(tile_idx).zfill(4)
-                + "_stage_positions.csv"
-            )
-            stage_positions = read_metadatafile(stage_position_path)
-            stage_x = np.round(float(stage_positions["stage_x"]), 2)
-            stage_y = np.round(float(stage_positions["stage_y"]), 2)
-            if tile_idx == 0:
-                max_y = stage_y
-                max_x = stage_x
-            else:
-                if max_y < stage_y:
-                    max_y = stage_y
-                if max_x < stage_x:
-                    max_x = stage_x
-
     # Loop over data and create datastore.
     for round_idx in tqdm(range(num_rounds), desc="rounds"):
+        # Get all stage positions for this round
+        position_list = []
+        for tile_idx in range(num_tiles):
+            dataset_path = root_path / Path(
+                root_name + "_r" + str(round_idx+1).zfill(4) + "_tile" + str(tile_idx).zfill(4) + "_1"
+            )
+            builtins.print = no_op
+            dataset = Dataset(str(dataset_path))
+            builtins.print = original_print
+            x_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["XPosition_um_Intended"]),2)
+            y_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["YPosition_um_Intended"]),2)
+            z_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["ZPosition_um_Intended"]),2)
+            temp = [z_pos_um,y_pos_um,x_pos_um]
+            position_list.append(np.asarray(temp))
+            del dataset
+        position_list = np.asarray(position_list)
+        
         for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
             # initialize datastore tile
             # this creates the directory structure and links fiducial rounds <-> readout bits
@@ -384,27 +352,23 @@ def convert_data(
                 if tile_idx == 0 and round_idx == 0:
                     correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
-                print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
-                print("Found shape: " + str(raw_image.shape))
-                print("Correct shape: " + str(correct_shape))
-                print("Replacing data with zeros.\n")
-                raw_image = np.zeros(correct_shape, dtype=np.uint16)
+                if raw_image.shape[0] < correct_shape[0]:
+                    print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
+                    print("Found shape: " + str(raw_image.shape))
+                    print("Correct shape: " + str(correct_shape))
+                    print("Replacing data with zeros.\n")
+                    raw_image = np.zeros(correct_shape, dtype=np.uint16)
+                else:                    
+                    # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
+                    # print("Found shape: " + str(raw_image.shape))
+                    size_to_trim = raw_image.shape[1] - correct_shape[1]
+                    raw_image = raw_image[:,size_to_trim:,:].copy()
+                    # print("Correct shape: " + str(correct_shape))
+                    # print("Corrected to shape: " + str(raw_image.shape) + "\n")
 
             # Correct if channels were acquired in reverse order (red->purple)
             if channel_order == "reversed":
                 raw_image = np.flip(raw_image, axis=0)
-
-            # Correct if camera is rotated wrt to stage
-            if image_rotated:
-                raw_image = np.rot90(raw_image, k=-1, axes=(3, 2))
-
-            # Correct if camera is flipped in y wrt to stage
-            if image_flipped_y:
-                raw_image = np.flip(raw_image, axis=2)
-
-            # Correct if camera is flipped in x wrt to stage
-            if image_flipped_x:
-                raw_image = np.flip(raw_image, axis=3)
 
             # Correct for known camera gain and offset
             raw_image = (raw_image.astype(np.float32) - offset) * e_per_ADU
@@ -423,32 +387,19 @@ def convert_data(
                 hot_pixel_corrected = False
 
             # load stage position
-            stage_position_path = root_path / Path(
-                root_name
-                + "_r"
-                + str(round_idx + 1).zfill(4)
-                + "_tile"
-                + str(tile_idx).zfill(4)
-                + "_stage_positions.csv"
-            )
-            df_stage_positions = read_metadatafile(stage_position_path)
-            stage_x = np.round(float(df_stage_positions["stage_x"]), 2)
-            stage_y = np.round(float(df_stage_positions["stage_y"]), 2)
-            stage_z = np.round(float(df_stage_positions["stage_z"]), 2)
-
-            # correct for stage direction reversed wrt to global coordinates
-            if stage_flipped_x or stage_flipped_y:
-                if stage_flipped_y:
-                    corrected_y = max_y - stage_y
-                else:
-                    corrected_y = stage_y
-                if stage_flipped_x:
-                    corrected_x = max_x - stage_x
-                else:
-                    corrected_x = stage_x
+            if int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1:
+                corrected_y = np.max(position_list[:,2]) - position_list[tile_idx,2]
+                corrected_x = np.max(position_list[:,1]) - position_list[tile_idx,1]
+            elif int(ndtiff_metadata["XYStage-TransposeMirrorY"]) == 1:
+                corrected_y = np.max(position_list[:,2]) - position_list[tile_idx,2]
+                corrected_x = np.max(position_list[:,1]) - position_list[tile_idx,1]
             else:
-                corrected_y = stage_y
-                corrected_x = stage_x
+                corrected_y = position_list[tile_idx,1]
+                corrected_x = position_list[tile_idx,2]
+            
+            corrected_x = np.round(corrected_x,2)
+            corrected_y = np.round(corrected_y,2)
+            stage_z = np.round(position_list[tile_idx,0],2)
             
             stage_pos_zyx_um = np.asarray(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
@@ -466,7 +417,10 @@ def convert_data(
             )
 
             datastore.save_local_stage_position_zyx_um(
-                stage_pos_zyx_um, tile=tile_idx, round=round_idx
+                stage_pos_zyx_um, 
+                affine_zyx_px,
+                tile=tile_idx, 
+                round=round_idx
             )
 
             datastore.save_local_wavelengths_um(
@@ -506,22 +460,109 @@ def convert_data(
                 tile=tile_idx,
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
+    
+    datastore_state = datastore.datastore_state
+    datastore_state.update({"Corrected": True})
+    datastore.datastore_state = datastore_state
+    del datastore
+    gc.collect()
+    
+    # Calculate and apply flatfield corrections
+    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore = qi2labDataStore(datastore_path)
+    n_flatfield_images = 100
+    sample_indices = np.asarray(np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False))
+    data_camera_corrected = []
+
+    # calculate fiducial correction
+    for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
+        data_camera_corrected.append(
+            datastore.load_local_corrected_image(
+                tile=int(rand_tile_idx),
+                round=0,
+            )
+        )    
+    fidicual_illumination = estimate_shading(data_camera_corrected)
+    del data_camera_corrected
+    gc.collect()
+    
+    for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):     
+        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+            data_camera_corrected = datastore.load_local_corrected_image(
+                tile=tile_idx,
+                round=round_idx,
+                return_future=False)
+            print(tile_idx, round_idx)
+            data_camera_corrected = (data_camera_corrected.astype(np.float32) / fidicual_illumination).clip(0,2**16-1).astype(np.uint16)
+            datastore.save_local_corrected_image(
+                data_camera_corrected,
+                tile=tile_idx,
+                psf_idx=0,
+                gain_correction=True,
+                hotpixel_correction=False,
+                shading_correction=True,
+                round=round_idx,
+            )
+    
+    for bit_id in tqdm(datastore.bit_ids, desc="bit"):
+        data_camera_corrected = []
+
+        # calculate fiducial correction
+        for rand_tile_idx in tqdm(sample_indices,desc='flatfield data',leave=False):
+            data_camera_corrected.append(
+                datastore.load_local_corrected_image(
+                    tile=int(rand_tile_idx),
+                    bit=bit_id,
+                )
+            )
+        readout_illumimation = estimate_shading(data_camera_corrected)
+        del data_camera_corrected
+        gc.collect()
+        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+            data_camera_corrected = datastore.load_local_corrected_image(
+                tile=tile_idx,
+                bit=bit_id,
+                return_future=False)
+            data_camera_corrected = (data_camera_corrected.astype(np.float32) / readout_illumimation).clip(0,2**16-1).astype(np.uint16)
+
+            ex_wavelength_um, em_wavelength_um = datastore.load_local_wavelengths_um(
+                tile=tile_idx,
+                bit=bit_id
+            )
+            
+            # TO DO: hacky fix. Need to come up with a better way.
+            if ex_wavelength_um < 600:
+                psf_idx = 1
+            else:
+                psf_idx = 2
+
+            datastore.save_local_corrected_image(
+                data_camera_corrected.astype(np.uint16),
+                tile=tile_idx,
+                psf_idx=psf_idx,
+                gain_correction=True,
+                hotpixel_correction=False,
+                shading_correction=True,
+                bit=bit_id
+            )
+
 
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
+    root_path = Path(r"/data/MERFISH/20250625_bartelle_merfish_LC7d_p100")
     baysor_binary_path = Path(
-        r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
+        r"/home/momo/Repos/Baysor/bin/baysor/bin/./baysor"
     )
     baysor_options_path = Path(
-        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/bioprotean_mouse/bioprotean_mouse.toml"
+        r"/home/momo/Repos/merfish-env/merfish3d-analysis/examples/bioprotean_mouse/bioprotean_mouse.toml"
     )
     julia_threads = 20
 
-    hot_pixel_image_path = Path(r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/hot_pixel_flir.tif")
+    # hot_pixel_image_path = Path(r"/data/smFISH/hot_pixel_image.tif")
+    hot_pixel_image_path = None
 
     convert_data(
         root_path=root_path,
