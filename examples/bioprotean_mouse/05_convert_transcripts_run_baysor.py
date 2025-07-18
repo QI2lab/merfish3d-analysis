@@ -82,6 +82,5 @@ def convert_parquet_to_csv_and_run_baysor(root_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    root = Path(r"/path/to/root")
+    root = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
     convert_parquet_to_csv_and_run_baysor(root)
-
