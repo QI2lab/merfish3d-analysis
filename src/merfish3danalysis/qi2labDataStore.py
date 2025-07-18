@@ -3061,7 +3061,7 @@ class qi2labDataStore:
             )
 
         if not Path(current_local_zarr_path).exists():
-            print("Registered deconvolved image not found.")
+            #print("Registered deconvolved image not found.")
             return None
 
         try:
