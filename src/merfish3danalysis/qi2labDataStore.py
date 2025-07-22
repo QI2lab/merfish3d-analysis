@@ -1468,7 +1468,7 @@ class qi2labDataStore:
 
                     for key in keys_to_check:
                         if key not in attributes.keys():
-                            raise KeyError("Rigid registration missing")
+                            raise KeyError(f"{round_id,tile_id} Rigid registration missing")
 
                     current_local_zarr_path = str(
                         self._polyDT_root_path

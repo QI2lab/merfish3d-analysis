@@ -22,17 +22,15 @@ BASE_PIP_DEPS = [
     "tensorstore",
     "cmap",
     "napari[all]",
-    "zarr>=3.0.8",
+    #"zarr>=3.0.8",
     "psfmodels",
-    "tifffile>=2025.6.1",
+    #"tifffile>=2025.6.1",
     "nvidia-cuda-runtime-cu12==12.8.*",
     "onnx",
     "onnxruntime-gpu",
-    "torch",
-    "torchvision",
-    "napari[pyqt6]",
+    "napari",
     "napari-ome-zarr",
-    "cellpose[gui,distributed]",
+    "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",
     "deeds @ git+https://github.com/QI2lab/deeds-registration",
@@ -59,13 +57,14 @@ LINUX_CONDA_CUDA_PKGS = [
     "'cuda-version=12.8'",
     "'cuda-toolkit=12.8'",
     "cuda-cudart",
-    "'cucim=25.06'",
-    "'cuvs=25.06'"
+    "cucim",
+    "cuvs",
     "cupy",
     "scikit-image",
     "cudnn",
     "cutensor",
-    "nccl"
+    "nccl",
+    "'scipy >=1.11.4, <=1.15.3'"
 ]
 
 WINDOWS_CONDA_CUDA_PKGS = [
@@ -206,6 +205,7 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
             pass
         
     else:
+        run(f"pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
         pip_deps = BASE_PIP_DEPS.copy()
         deps_str = " ".join(shlex.quote(d) for d in pip_deps)
         run(f"pip install {deps_str}")

@@ -6,10 +6,14 @@ MERFISH datasets efficiently.
 
 History:
 ---------
+- **2025/07**: Refactor for multiple GPU support.
 - **2024/12**: Refactor repo structure.
 - **2024/03**: Reworked GPU logic to reduce out-of-memory crashes.
 - **2024/01**: Updated for qi2lab MERFISH file format v1.0.
 """
+
+import multiprocessing as mp
+mp.set_start_method('spawn', force=True)
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 import numpy as np
@@ -19,7 +23,8 @@ import cupy as cp
 from cupyx.scipy.ndimage import gaussian_filter
 from cucim.skimage.measure import label
 from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.spatial.distance import cdist
+#from cupyx.scipy.spatial.distance import cdist
+from cuvs.distance import pairwise_distance
 from skimage.measure import regionprops_table
 from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
@@ -39,6 +44,67 @@ warnings.filterwarnings(
     message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
 )
 
+# GPU helper functions
+
+def _decode_tiles_worker(
+    decoder,
+    tile_indices: Sequence[int],
+    gpu_id: int,
+    lowpass_sigma,
+    magnitude_threshold,
+    minimum_pixels,
+    ufish_threshold,
+):
+    """Worker that runs decode_one_tile on a subset of tiles under one GPU."""
+    import cupy as cp
+    cp.cuda.Device(gpu_id).use()
+    cp.cuda.Stream.null.synchronize()
+    for tile_idx in tile_indices:
+        decoder.decode_one_tile(
+            tile_idx=tile_idx,
+            display_results=False,
+            return_results=False,
+            lowpass_sigma=lowpass_sigma,
+            magnitude_threshold=magnitude_threshold,
+            minimum_pixels=minimum_pixels,
+            ufish_threshold=ufish_threshold,
+            use_normalization=True,
+            gpu_id=gpu_id,
+        )
+
+
+def _optimize_norm_worker(
+    decoder,
+    tile_indices: Sequence[int],
+    gpu_id: int,
+    iteration: int,
+    lowpass_sigma,
+    magnitude_threshold,
+    minimum_pixels,
+    ufish_threshold,
+):
+    """Worker that runs one iteration of normalization‐by‐decoding on a GPU."""
+    import cupy as cp
+    cp.cuda.Device(gpu_id).use()
+    cp.cuda.Stream.null.synchronize()
+    decoder._load_global_normalization_vectors()
+
+    # if iteration==0, skip use_normalization
+    use_norm = iteration > 0
+    for tile_idx in tile_indices:
+        decoder.decode_one_tile(
+            tile_idx=tile_idx,
+            display_results=False,
+            return_results=False,
+            lowpass_sigma=lowpass_sigma,
+            magnitude_threshold=magnitude_threshold,
+            minimum_pixels=minimum_pixels,
+            ufish_threshold=ufish_threshold,
+            use_normalization=use_norm,
+            gpu_id=gpu_id,
+        )
+        decoder._save_barcodes()
+
 
 class PixelDecoder:
     """
@@ -52,6 +118,8 @@ class PixelDecoder:
         qi2labDataStore object
     merfish_bits: int, default 16
         number of merfish bits. Assumes that in codebook, MERFISH rounds are [0,merfish_bits].
+    num_gpus: int, default 1
+        number of GPUs to use for decoding. If > 1, will split decoding across GPUs.
     verbose: int, default 1
         control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
     use_mask: Optiona[bool], default False
@@ -67,12 +135,14 @@ class PixelDecoder:
         self,
         datastore: qi2labDataStore,
         merfish_bits: int = 16,
+        num_gpus: int = 1,
         verbose: int = 1,
         use_mask: Optional[bool] = False,
         z_range: Optional[Sequence[int]] = None,
         include_blanks: Optional[bool] = True,
     ):
         self._datastore = datastore
+        self._num_gpus = num_gpus
         self._verbose = verbose
         self._barcodes_filtered = False
         self._include_blanks = include_blanks
@@ -325,19 +395,20 @@ class PixelDecoder:
         self._global_normalization_vector = normalization_vector
         self._global_normalization_loaded = True
 
-    def _load_iterative_normalization_vectors(self):
+    def _load_iterative_normalization_vectors(self,gpu_id: int = 0):
         """Load or calculate iterative normalization and background vectors."""
-        normalization_vector = self._datastore.iterative_normalization_vector
-        background_vector = self._datastore.iterative_background_vector
+        with cp.cuda.Device(gpu_id):
+            normalization_vector = self._datastore.iterative_normalization_vector
+            background_vector = self._datastore.iterative_background_vector
 
-        if normalization_vector is not None and background_vector is not None:
-            background_vector = np.nan_to_num(background_vector, 0.0)
-            normalization_vector = np.nan_to_num(normalization_vector, 1.0)
-            self._iterative_normalization_vector = cp.asarray(normalization_vector)
-            self._iterative_background_vector = cp.asarray(background_vector)
-            self._iterative_normalization_loaded = True
-        else:
-            self._iterative_normalization_vectors()
+            if normalization_vector is not None and background_vector is not None:
+                background_vector = np.nan_to_num(background_vector, 0.0)
+                normalization_vector = np.nan_to_num(normalization_vector, 1.0)
+                self._iterative_normalization_vector = cp.asarray(normalization_vector)
+                self._iterative_background_vector = cp.asarray(background_vector)
+                self._iterative_normalization_loaded = True
+            else:
+                self._iterative_normalization_vectors()
 
     def _iterative_normalization_vectors(self):
         """Calculate iterative normalization and background vectors."""
@@ -755,10 +826,14 @@ class PixelDecoder:
         if isinstance(codebook_matrix, np.ndarray):
             codebook_matrix = cp.asarray(codebook_matrix, dtype=cp.float32)
 
-        distances = cdist(
+        distances = cp.ascontiguousarray(
+            cp.zeros((pixel_traces.shape[1], codebook_matrix.shape[0]), dtype=cp.float32)
+        )
+        pairwise_distance(
             cp.ascontiguousarray(pixel_traces.T),
             cp.ascontiguousarray(codebook_matrix),
             metric="euclidean",
+            out=distances
         )
 
         min_indices = cp.argmin(distances, axis=1)
@@ -1901,6 +1976,7 @@ class PixelDecoder:
     def decode_one_tile(
         self,
         tile_idx: int = 0,
+        gpu_id: int = 0, 
         display_results: bool = False,
         return_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
@@ -1917,6 +1993,8 @@ class PixelDecoder:
         ----------
         tile_idx : int, default 0
             Tile index.
+        gpu_id : int, default 0
+            GPU ID to use for decoding.
         display_results : bool, default False
             Display results in napari.
         return_results : bool, default False
@@ -1943,49 +2021,52 @@ class PixelDecoder:
             5. Decoded image.
         """
 
-        if use_normalization:
-            self._load_iterative_normalization_vectors()
+        with cp.cuda.Device(gpu_id):
 
-        self._tile_idx = tile_idx
-        self._load_bit_data(ufish_threshold=ufish_threshold)
-        if not (np.any(lowpass_sigma == 0)):
-            self._lp_filter(sigma=lowpass_sigma)
-        self._decode_pixels(
-            distance_threshold=self._distance_threshold,
-            magnitude_threshold=magnitude_threshold,
-        )
-        if display_results:
-            self._display_results()
-        if return_results:
-            if self._filter_type == "lp":
-                return (
-                    self._image_data_lp, 
-                    self._scaled_pixel_images, 
-                    self._magnitude_image, 
-                    self._distance_image, 
-                    self._decoded_image
-                )
+            if use_normalization:
+                self._load_iterative_normalization_vectors()
+
+            self._tile_idx = tile_idx
+            self._load_bit_data(ufish_threshold=ufish_threshold)
+            if not (np.any(lowpass_sigma == 0)):
+                self._lp_filter(sigma=lowpass_sigma)
+            self._decode_pixels(
+                distance_threshold=self._distance_threshold,
+                magnitude_threshold=magnitude_threshold,
+            )
+            if display_results:
+                self._display_results()
+            if return_results:
+                if self._filter_type == "lp":
+                    return (
+                        self._image_data_lp, 
+                        self._scaled_pixel_images, 
+                        self._magnitude_image, 
+                        self._distance_image, 
+                        self._decoded_image
+                    )
+                else:
+                    return (
+                        self._image_data, 
+                        self._scaled_pixel_images, 
+                        self._magnitude_image, 
+                        self._distance_image, 
+                        self._decoded_image
+                    )
+            if not (self._optimize_normalization_weights):
+                self._cleanup()
             else:
-                return (
-                    self._image_data, 
-                    self._scaled_pixel_images, 
-                    self._magnitude_image, 
-                    self._distance_image, 
-                    self._decoded_image
-                )
-        if not (self._optimize_normalization_weights):
-            self._cleanup()
-        else:
-            self._extract_barcodes(minimum_pixels=minimum_pixels)
+                self._extract_barcodes(minimum_pixels=minimum_pixels)
+
 
     def optimize_normalization_by_decoding(
         self,
         n_random_tiles: int = 10,
         n_iterations: int = 10,
         minimum_pixels: float = 3.0,
-        ufish_threshold: float = 0.5,
+        ufish_threshold: float = 0.1,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9
+        magnitude_threshold: Optional[float] = 0.9,
     ):
         """Optimize normalization by decoding.
 
@@ -1999,61 +2080,145 @@ class PixelDecoder:
             Number of iterations. 
         minimum_pixels : float, default 3.0
             Minimum number of pixels for a barcode. 
-        ufish_threshold : float, default 0.5
+        ufish_threshold : float, default 0.1
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Optional[float, default 0.9
             L2-norm threshold
         """
+        if self._num_gpus < 1:
+            raise RuntimeError("No GPUs allocated.")
+        all_tiles = list(range(len(self._datastore.tile_ids)))
 
+        # preload global normalization once
+        self._iterative_background_vector = None
+        self._iterative_normalization_vector = None
         self._optimize_normalization_weights = True
         self._temp_dir = Path(tempfile.mkdtemp())
 
-        if len(self._datastore.tile_ids) > n_random_tiles and not(n_random_tiles==1):
-            random_tiles = sample(range(len(self._datastore.tile_ids)), n_random_tiles)
+        # split the same set of random tiles each iteration
+        if len(all_tiles) > n_random_tiles:
+            random_tiles = sample(all_tiles, n_random_tiles)
         else:
-            random_tiles = range(len(self._datastore.tile_ids))
+            random_tiles = all_tiles
+        chunk_size = (len(random_tiles) + self._num_gpus - 1) // self._num_gpus
 
-        if self._verbose >= 1:
-            iterable_iteration = tqdm(range(n_iterations), desc="iteration", leave=True)
-        else:
-            iterable_iteration = range(n_iterations)
+        for iteration in range(n_iterations):
 
-        self._load_global_normalization_vectors()
-        self._iterative_background_vector = None
-        self._iterative_normalization_vector = None
-        for iteration in iterable_iteration:
-            if self._verbose >= 1:
-                iterable_tiles = tqdm(random_tiles, desc="tile", leave=True)
-            else:
-                iterable_tiles = random_tiles
-            if iteration > 0:
-                self._load_iterative_normalization_vectors()
-            for tile_idx in iterable_tiles:
-                if iteration == 0:
-                    use_normalization = False
-                else:
-                    use_normalization = True
-                self.decode_one_tile(
-                    tile_idx=tile_idx,
-                    display_results=False,
-                    lowpass_sigma=lowpass_sigma,
-                    magnitude_threshold=magnitude_threshold,
-                    minimum_pixels=minimum_pixels,
-                    ufish_threshold=ufish_threshold,
-                    use_normalization=use_normalization,
+            # launch one process per GPU
+            processes = []
+            for gpu in range(self._num_gpus):
+                start = gpu * chunk_size
+                end = min(start + chunk_size, len(random_tiles))
+                subset = random_tiles[start:end]
+                if not subset:
+                    continue
+                p = mp.Process(
+                    target=_optimize_norm_worker,
+                    args=(
+                        self,
+                        subset,
+                        gpu,
+                        iteration,
+                        lowpass_sigma,
+                        magnitude_threshold,
+                        minimum_pixels,
+                        ufish_threshold,
+                    ),
                 )
-                self._save_barcodes()
+                p.start()
+                processes.append(p)
+
+            for p in processes:
+                p.join()
+
+            # gather results and update codebook
             self._load_all_barcodes()
-            if self._verbose >= 1:
-                print("---")
-                print("Total # of barcodes: " + str(len(self._df_barcodes_loaded)))
-                print("---")
             self._iterative_normalization_vectors()
+
+        # cleanup temp files, etc.
         self._cleanup()
         self._optimize_normalization_weights = False
         shutil.rmtree(self._temp_dir)
+
+
+    # def optimize_normalization_by_decoding(
+    #     self,
+    #     n_random_tiles: int = 10,
+    #     n_iterations: int = 10,
+    #     minimum_pixels: float = 3.0,
+    #     ufish_threshold: float = 0.1,
+    #     lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
+    #     magnitude_threshold: Optional[float] = 0.9
+    # ):
+    #     """Optimize normalization by decoding.
+
+    #     Helper function to iteratively optimize normalization by decoding.
+        
+    #     Parameters
+    #     ----------
+    #     n_random_tiles : int, default 10
+    #         Number of random tiles. 
+    #     n_iterations : int, default 10
+    #         Number of iterations. 
+    #     minimum_pixels : float, default 3.0
+    #         Minimum number of pixels for a barcode. 
+    #     ufish_threshold : float, default 0.1
+    #         Ufish threshold. 
+    #     lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
+    #         Lowpass sigma.
+    #     magnitude_threshold: Optional[float, default 0.9
+    #         L2-norm threshold
+    #     """
+
+    #     self._optimize_normalization_weights = True
+    #     self._temp_dir = Path(tempfile.mkdtemp())
+
+    #     if len(self._datastore.tile_ids) > n_random_tiles and not(n_random_tiles==1):
+    #         random_tiles = sample(range(len(self._datastore.tile_ids)), n_random_tiles)
+    #     else:
+    #         random_tiles = range(len(self._datastore.tile_ids))
+
+    #     if self._verbose >= 1:
+    #         iterable_iteration = tqdm(range(n_iterations), desc="iteration", leave=True)
+    #     else:
+    #         iterable_iteration = range(n_iterations)
+
+    #     self._load_global_normalization_vectors()
+    #     self._iterative_background_vector = None
+    #     self._iterative_normalization_vector = None
+    #     for iteration in iterable_iteration:
+    #         if self._verbose >= 1:
+    #             iterable_tiles = tqdm(random_tiles, desc="tile", leave=True)
+    #         else:
+    #             iterable_tiles = random_tiles
+    #         if iteration > 0:
+    #             self._load_iterative_normalization_vectors()
+    #         for tile_idx in iterable_tiles:
+    #             if iteration == 0:
+    #                 use_normalization = False
+    #             else:
+    #                 use_normalization = True
+    #             self.decode_one_tile(
+    #                 tile_idx=tile_idx,
+    #                 display_results=False,
+    #                 lowpass_sigma=lowpass_sigma,
+    #                 magnitude_threshold=magnitude_threshold,
+    #                 minimum_pixels=minimum_pixels,
+    #                 ufish_threshold=ufish_threshold,
+    #                 use_normalization=use_normalization,
+    #             )
+    #             self._save_barcodes()
+    #         self._load_all_barcodes()
+    #         if self._verbose >= 1:
+    #             print("---")
+    #             print("Total # of barcodes: " + str(len(self._df_barcodes_loaded)))
+    #             print("---")
+    #         self._iterative_normalization_vectors()
+    #     self._cleanup()
+    #     self._optimize_normalization_weights = False
+    #     shutil.rmtree(self._temp_dir)
 
     def decode_all_tiles(
         self,
@@ -2062,63 +2227,64 @@ class PixelDecoder:
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
         magnitude_threshold: Optional[float] = 0.9,
         minimum_pixels: Optional[float] = 2.0,
-        ufish_threshold: Optional[float] = 0.5,
+        ufish_threshold: Optional[float] = 0.1,
         fdr_target: Optional[float] = 0.05,
     ):
-        """Decode all tiles.
+        """Optimize normalization by decoding.
 
-        Helper function to decode all tiles. Assumes iterative normalization has been performed.
+        Helper function to iteratively optimize normalization by decoding.
 
         Parameters
         ----------
-        assign_to_cells : bool, default True
-            Assign barcodes to cells. 
-        prep_for_baysor : bool, default True
-            Prepare barcodes for Baysor. 
+        n_random_tiles : int, default 10
+            Number of random tiles. 
+        n_iterations : int, default 10
+            Number of iterations. 
+        minimum_pixels : float, default 3.0
+            Minimum number of pixels for a barcode. 
+        ufish_threshold : float, default 0.1
+            Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
-            Lowpass sigma. 
+            Lowpass sigma.
         magnitude_threshold: Optional[float, default 0.9
             L2-norm threshold
-        minimum_pixels : Optional[float], default 2.0
-            Minimum number of pixels for a barcode. 
-        ufish_threshold : Optional[float], default 0.5
-            Ufish threshold. 
-        fdr_target : Optional[float], default 0.05
-            False discovery rate target. 
         """
+        
+        if self._num_gpus < 1:
+            raise RuntimeError("No GPUs allocated.")
+        all_tiles = list(range(len(self._datastore.tile_ids)))
+        chunk_size = (len(all_tiles) + self._num_gpus - 1) // self._num_gpus
 
-        if self._verbose >= 1:
-            iterable_tile_id = enumerate(
-                tqdm(self._datastore.tile_ids, desc="tile", leave=False)
+        processes = []
+        for gpu in range(self._num_gpus):
+            start = gpu * chunk_size
+            end = min(start + chunk_size, len(all_tiles))
+            subset = all_tiles[start:end]
+            if not subset:
+                continue
+            p = mp.Process(
+                target=_decode_tiles_worker,
+                args=(
+                    self,
+                    subset,
+                    gpu,
+                    lowpass_sigma,
+                    magnitude_threshold,
+                    minimum_pixels,
+                    ufish_threshold,
+                ),
             )
-        else:
-            iterable_tile_id = enumerate(self._datastore.tile_ids)
+            p.start()
+            processes.append(p)
 
-        self._optimize_normalization_weights = False
-        self._load_iterative_normalization_vectors()
+        for p in processes:
+            p.join()
 
-        if not (self._iterative_normalization_loaded):
-            raise ValueError("Perform iterative normalization before decoding.")
-
-        for tile_idx, _ in iterable_tile_id:
-            self._tile_idx = tile_idx
-            self._load_bit_data(ufish_threshold=ufish_threshold)
-            if not (np.any(lowpass_sigma == 0)):
-                self._lp_filter(sigma=lowpass_sigma)
-            self._decode_pixels(
-                distance_threshold=self._distance_threshold,
-                magnitude_threshold=magnitude_threshold,
-            )
-            self._extract_barcodes(minimum_pixels=minimum_pixels)
-            self._save_barcodes()
-            self._cleanup()
-
+        # now all local parquet files—or however you're saving per‐tile—are on disk;
+        # you can continue with the shared‐disk merge, filtering, cell‐assignment, etc.
         self._load_tile_decoding = True
         self._load_all_barcodes()
-        self._load_tile_decoding = False
-        self._verbose = 2
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
-        self._verbose = 1
         self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
@@ -2126,6 +2292,78 @@ class PixelDecoder:
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
         self._cleanup()
+
+    # def decode_all_tiles(
+    #     self,
+    #     assign_to_cells: bool = True,
+    #     prep_for_baysor: bool = True,
+    #     lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
+    #     magnitude_threshold: Optional[float] = 0.9,
+    #     minimum_pixels: Optional[float] = 2.0,
+    #     ufish_threshold: Optional[float] = 0.1,
+    #     fdr_target: Optional[float] = 0.05,
+    # ):
+    #     """Decode all tiles.
+
+    #     Helper function to decode all tiles. Assumes iterative normalization has been performed.
+
+    #     Parameters
+    #     ----------
+    #     assign_to_cells : bool, default True
+    #         Assign barcodes to cells. 
+    #     prep_for_baysor : bool, default True
+    #         Prepare barcodes for Baysor. 
+    #     lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
+    #         Lowpass sigma. 
+    #     magnitude_threshold: Optional[float, default 0.9
+    #         L2-norm threshold
+    #     minimum_pixels : Optional[float], default 2.0
+    #         Minimum number of pixels for a barcode. 
+    #     ufish_threshold : Optional[float], default 0.5
+    #         Ufish threshold. 
+    #     fdr_target : Optional[float], default 0.05
+    #         False discovery rate target. 
+    #     """
+
+    #     if self._verbose >= 1:
+    #         iterable_tile_id = enumerate(
+    #             tqdm(self._datastore.tile_ids, desc="tile", leave=False)
+    #         )
+    #     else:
+    #         iterable_tile_id = enumerate(self._datastore.tile_ids)
+
+    #     self._optimize_normalization_weights = False
+    #     self._load_iterative_normalization_vectors()
+
+    #     if not (self._iterative_normalization_loaded):
+    #         raise ValueError("Perform iterative normalization before decoding.")
+
+    #     for tile_idx, _ in iterable_tile_id:
+    #         self._tile_idx = tile_idx
+    #         self._load_bit_data(ufish_threshold=ufish_threshold)
+    #         if not (np.any(lowpass_sigma == 0)):
+    #             self._lp_filter(sigma=lowpass_sigma)
+    #         self._decode_pixels(
+    #             distance_threshold=self._distance_threshold,
+    #             magnitude_threshold=magnitude_threshold,
+    #         )
+    #         self._extract_barcodes(minimum_pixels=minimum_pixels)
+    #         self._save_barcodes()
+    #         self._cleanup()
+
+    #     self._load_tile_decoding = True
+    #     self._load_all_barcodes()
+    #     self._load_tile_decoding = False
+    #     self._verbose = 2
+    #     self._filter_all_barcodes_LR(fdr_target=fdr_target)
+    #     self._verbose = 1
+    #     self._remove_duplicates_in_tile_overlap()
+    #     if assign_to_cells:
+    #         self._assign_cells()
+    #     self._save_barcodes()
+    #     if prep_for_baysor:
+    #         self._reformat_barcodes_for_baysor()
+    #     self._cleanup()
 
     def optimize_filtering(
         self,

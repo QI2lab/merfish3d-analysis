@@ -498,10 +498,8 @@ class DataRegistration:
         Perform optical flow registration
     save_all_polyDT_registered: bool, default True
         Save fidicual polyDT rounds > 1. These are not used for analysis. 
-    decon_iters : Optional[int], default 10
-        Deconvolution iterations
-    decon_background: Optional[float], default 50.0
-        Background to substract during deconvolution
+    num_gpus: int, default 1
+        Number of GPUs to use for registration.
     """
         
     def __init__(
@@ -510,6 +508,7 @@ class DataRegistration:
         overwrite_registered: bool = False,
         perform_optical_flow: bool = False,
         save_all_polyDT_registered: bool = True,
+        num_gpus: int = 1,
     ):
     
         self._datastore = datastore
@@ -517,6 +516,7 @@ class DataRegistration:
         self._round_ids = self._datastore.round_ids
         self._bit_ids = self._datastore.bit_ids
         self._psfs = self._datastore.channel_psfs
+        self._num_gpus = num_gpus
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None
@@ -650,7 +650,6 @@ class DataRegistration:
         """Helper function to register all tiles."""
         for tile_id in tqdm(self._datastore.tile_ids,desc="tiles"):
             self.tile_id=tile_id
-            #self._load_raw_data()
             self._generate_registrations()
             self._apply_registration_to_bits()
             
@@ -664,7 +663,6 @@ class DataRegistration:
         """
 
         self.tile_id = tile_id
-        self._load_raw_data()
         self._generate_registrations()
         self._apply_registration_to_bits()
 
@@ -712,17 +710,16 @@ class DataRegistration:
             p_first.join()
 
         # 1) How many GPUs do we have?
-        num_gpus = 2
-        if num_gpus == 0:
+        if self._num_gpus == 0:
             raise RuntimeError("No GPUs detected. Cannot run _generate_registrations().")
 
         # 2) Grab all rounds IDs after round 0 and split into `num_gpus` chunks
         all_rounds = list(self._round_ids[1:])
-        chunk_size = (len(all_rounds) + num_gpus - 1) // num_gpus  # ceiling division
+        chunk_size = (len(all_rounds) + self._num_gpus - 1) // self._num_gpus  # ceiling division
 
         # 3) Launch one process per GPU (only as many as needed)
         processes = []
-        for gpu_id in range(num_gpus):
+        for gpu_id in range(self._num_gpus):
             start = gpu_id * chunk_size
             end = min(start + chunk_size, len(all_rounds))
             if start >= end:
@@ -740,17 +737,16 @@ class DataRegistration:
     def _apply_registration_to_bits(self):
         """Generate ufish + deconvolved, registered readout data and save to datastore."""
         # 1) How many GPUs do we have?
-        num_gpus = 2
-        if num_gpus == 0:
+        if self._num_gpus == 0:
             raise RuntimeError("No GPUs detected. Cannot run _apply_registration_to_bits().")
 
         # 2) Grab all bit IDs and split into `num_gpus` chunks
         all_bits = list(self._bit_ids)
-        chunk_size = (len(all_bits) + num_gpus - 1) // num_gpus  # ceiling division
+        chunk_size = (len(all_bits) + self._num_gpus - 1) // self._num_gpus  # ceiling division
 
         # 3) Launch one process per GPU (only as many as needed)
         processes = []
-        for gpu_id in range(num_gpus):
+        for gpu_id in range(self._num_gpus):
             start = gpu_id * chunk_size
             end = min(start + chunk_size, len(all_bits))
             if start >= end:

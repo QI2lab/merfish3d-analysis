@@ -14,7 +14,6 @@ from ryomen import Slicer
 from tqdm import tqdm
 import timeit
 import gc
-
 DEBUG = False
 
 gc_update_kernel = ElementwiseKernel(
@@ -124,70 +123,6 @@ def remove_padding_z(
     """
     image = padded_image[pad_z_before:-pad_z_after, :, :]
     return image
-
-def pad_psf_new(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
-    """Pad and center a PSF to match the target image shape.
-
-    This will crop or zero‑pad psf_temp so that its center voxel
-    ends up at the center of an array of shape `image_shape`.  After
-    embedding, the result is fft‑shifted (center->corner), normalized,
-    and clipped for numeric stability.
-
-    Parameters
-    ----------
-    psf_temp : cp.ndarray
-        Original PSF volume.
-    image_shape : tuple of int (3,)
-        Desired output shape (z, y, x).
-
-    Returns
-    -------
-    cp.ndarray
-        Padded, centered, fft‑shifted, and unit‑sum PSF of shape `image_shape`.
-    """
-    # prepare output
-    psf = cp.zeros(image_shape, dtype=psf_temp.dtype)
-
-    in_shape = psf_temp.shape
-    # centers
-    out_ctr = [dim // 2 for dim in image_shape]
-    in_ctr  = [dim // 2 for dim in in_shape]
-
-    # build slices for each axis
-    slices_in  = []
-    slices_out = []
-    for ax in range(3):
-        N = image_shape[ax]
-        M = in_shape[ax]
-        # how much to shift input so its center lands at output center
-        shift = out_ctr[ax] - in_ctr[ax]
-
-        # input slice bounds
-        i0 = max(0, -shift)
-        i1 = min(M, N - shift if shift >= 0 else N)
-
-        # output slice bounds
-        o0 = max(0, shift)
-        o1 = o0 + (i1 - i0)
-
-        slices_in.append(slice(i0, i1))
-        slices_out.append(slice(o0, o1))
-
-    # copy the overlapping region
-    psf[slices_out[0], slices_out[1], slices_out[2]] = \
-        psf_temp[slices_in[0], slices_in[1], slices_in[2]]
-
-    # move center→corner for FFT convolution
-    psf = cp.fft.ifftshift(psf)
-
-    # normalize to unit sum
-    total = psf.sum()
-    if total != 0:
-        psf = psf / total
-
-    # clip for stability
-    return cp.clip(psf, a_min=1e-12, a_max=2**16-1).astype(cp.float32)
-
 
 def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
     """Pad and center a PSF to match the target image shape.
@@ -325,13 +260,24 @@ def rlgc_biggs(
     """
     cp.cuda.Device(gpu_id).use()
     rng = cp.random.default_rng(42)
+    
+    new_yx = next_gpu_fft_size(image.shape[-1]+1)
+    pad_yx = new_yx - image.shape[-1]
+    pad_yx_before = pad_yx // 2
+    pad_yx_after = pad_yx - pad_yx_before
+    image_padded = np.pad(image,pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),mode="reflect")
+
     if image.ndim == 3:
-        image_gpu = cp.asarray(image, dtype=cp.float32)
+        image_gpu, pad_z_before, pad_z_after = pad_z(cp.asarray(image_padded, dtype=cp.float32))
     else:
-        image_gpu = cp.asarray(image, dtype=cp.float32)
+        image_gpu = cp.asarray(image_padded, dtype=cp.float32)
         image_gpu = image_gpu[cp.newaxis, ...]
+
+    otf = None
+    otfT = None
+
     if isinstance(psf, np.ndarray) and otf is None and otfT is None:
-        psf_gpu = pad_psf_new(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
+        psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
         otf = cp.fft.rfftn(psf_gpu)
         otfT = cp.conjugate(otf)
         del psf_gpu
@@ -432,13 +378,16 @@ def rlgc_biggs(
             )
     recon = cp.clip(recon, 0, 2**16 - 1).astype(cp.float32)
     if image.ndim == 3:
-        pass
+        recon = remove_padding_z(recon,pad_z_before,pad_z_after)
     else:
         recon = cp.squeeze(recon)
 
+    recon = recon[:,pad_yx_before:-pad_yx_after,pad_yx_before:-pad_yx_after]
+
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
     del recon_next, g1, g2, H_T_ones, recon, temp_g2, previous_recon, split1, split2
-    del numerator, denominator, alpha, temp
+    if num_iters >= 2:
+        del numerator, denominator, alpha, temp
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
@@ -448,10 +397,10 @@ def chunked_rlgc(
     image: np.ndarray, 
     psf: np.ndarray,
     gpu_id: int = 0,
-    crop_z: int = 36,
-    overlap_z: int = 15,
+    crop_yx: int = 1024,
+    overlap_yx: int = 32,
     bkd: int = 0,
-    eager_mode: bool = False
+    eager_mode: bool = True
 ) -> np.ndarray:
     """Chunked RLGC deconvolution.
     
@@ -463,9 +412,9 @@ def chunked_rlgc(
         point spread function (PSF) to use for deconvolution.
     gpu_id: int, default = 0
         which GPU to use
-    crop_size: int, default = 33
+    crop_yx: int, default = 1024
         size of the chunk to process at a time.
-    overlap_size: int, default = 4
+    overlap_yx: int, default = 128
         size of the overlap between chunks.
     bkd: int, default = 0
         background value to subtract from the image.
@@ -480,25 +429,15 @@ def chunked_rlgc(
     
     cp.cuda.Device(gpu_id).use()
     cp.fft._cache.PlanCache(memsize=0)
-    if image.ndim == 3:
-        image_padded, pad_z_before, pad_z_after = pad_z(
-            image, bkd
-        )
-    new_yx = next_gpu_fft_size(image_padded.shape[-1]+1)
-    pad_yx = new_yx - image_padded.shape[-1]
-    pad_yx_before = pad_yx // 2
-    pad_yx_after = pad_yx - pad_yx_before
-    image_padded = np.pad(image_padded,pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),mode="reflect")
 
-    output_sum   = np.zeros_like(image_padded, dtype=np.float32)
-    output_count = np.zeros_like(image_padded, dtype=np.float32)
-    crop_size = (crop_z, image_padded.shape[-2], image_padded.shape[-1])
-    overlap = (overlap_z, 0, 0)
-    slices = Slicer(image_padded, crop_size=crop_size, overlap=overlap, pad = True)
+    output_sum   = np.zeros_like(image, dtype=np.float32)
+    output_count = np.zeros_like(image, dtype=np.float32)
+    crop_size = (image.shape[0], crop_yx, crop_yx)
+    overlap = (0, overlap_yx, overlap_yx)
+    slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad = True)
     
     for crop, source, destination in slices:
-        crop_array = rlgc_biggs(crop, psf, bkd, gpu_id,
-                                eager_mode=eager_mode)
+        crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
 
         # 1) pull out just the valid part of the crop
         sub = crop_array[source]         # shape == whatever source slices select
@@ -513,11 +452,13 @@ def chunked_rlgc(
     output[nonzero] = output_sum[nonzero] / output_count[nonzero]
     output = output.clip(0,2**16-1).astype(np.uint16)
 
-    if image.ndim == 3:
-        output = remove_padding_z(output,pad_z_before,pad_z_after)
-    output = output[:, pad_yx_before:-pad_yx_after, pad_yx_before:-pad_yx_after]
     _fft_cache.clear()
     _H_T_cache.clear()
     cp.get_default_memory_pool().free_all_blocks()
+
+    # import napari
+    # viewer = napari.Viewer()
+    # viewer.add_image(output)
+    # napari.run()
 
     return output

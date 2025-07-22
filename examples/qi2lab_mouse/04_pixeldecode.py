@@ -1,6 +1,7 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
+Shepherd 2025/07 - refactor for multiple GPU suport.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
@@ -13,7 +14,7 @@ from pathlib import Path
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
-    ufish_threshold: float = 0.5,
+    ufish_threshold: float = 0.1,
     fdr_target: float = 0.2,
     run_baysor: bool = True,
 ):
@@ -28,7 +29,7 @@ def decode_pixels(
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
     ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.5
+        threshold to accept ufish prediction. Default = 0.1
     fdr_target : float
         false discovery rate (FDR) target. Default = .2
         NOTE: This is higher than usual, but we are finding that .05 is too 
@@ -49,7 +50,9 @@ def decode_pixels(
         datastore=datastore, 
         use_mask=False, 
         merfish_bits=merfish_bits, 
-        verbose=1
+        num_gpus=2,
+        verbose=1,
+        
     )
 
     # optimize normalization weights through iterative decoding and update
@@ -75,5 +78,5 @@ def decode_pixels(
         datastore.save_mtx()
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
+    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
     decode_pixels(root_path=root_path,run_baysor=False)
