@@ -15,9 +15,28 @@ Activate the environment and install the GPU dependencies. This install method a
 conda activate merfish3d
 ```
 
-Next, clone the repository using `git clone https://github.com/QI2lab/merfish3d-analysis` and install using `pip install .`. For interactive editing use `pip install -e .`. 
+Next, clone the repository using
 
-Finally, install the `merfish3d-analysis` dependencies using the command `setup-merfish3d`. This will automatically setup the correct CUDA libraries and other packages in the conda environmnent.
+```
+git clone https://github.com/QI2lab/merfish3d-analysis
+``` 
+
+and install using 
+```
+pip install .
+```
+
+For interactive editing use 
+```
+pip install -e .
+``` 
+
+Finally, install the `merfish3d-analysis` dependencies using the command 
+```
+setup-merfish3d
+```` 
+
+This will automatically setup the correct CUDA libraries and other packages in the conda environmnent.
 
 ### (Optional) Baysor installation
 If you plan on re-segmenting cells using decoded RNA, please follow the [Baysor installation instructions](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation).
