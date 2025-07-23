@@ -244,8 +244,11 @@ def compute_rigid_transform(image1: ArrayLike,
         shift_xyz = shift_reversed
 
     # Create an affine transform with the shift from the cross-correlation
-    transform = sitk.TranslationTransform(3, shift_xyz)
-    
+    try:
+      transform = sitk.TranslationTransform(3, shift_xyz)
+    except:
+      transform = None
+      
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
 
