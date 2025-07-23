@@ -1474,7 +1474,7 @@ class qi2labDataStore:
                         self._polyDT_root_path
                         / Path(tile_id)
                         / Path(round_id + ".zarr")
-                        / Path("of_xform_px")
+                        / Path("opticalflow_xform_px")
                     )
 
                     try:
@@ -2826,7 +2826,7 @@ class qi2labDataStore:
             self._polyDT_root_path
             / Path(tile_id)
             / Path(round_id + ".zarr")
-            / Path("of_xform_px")
+            / Path("opticalflow_xform_px")
         )
         zattrs_path = str(
             self._polyDT_root_path
