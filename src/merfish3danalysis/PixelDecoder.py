@@ -2211,6 +2211,7 @@ class PixelDecoder:
         self._global_background_vector = None
         self._optimize_normalization_weights = True
         temp_dir = Path(tempfile.mkdtemp())
+        self._temp_dir = temp_dir
 
         # split the same set of random tiles each iteration
         if len(all_tiles) > n_random_tiles:
@@ -2253,13 +2254,14 @@ class PixelDecoder:
             with cp.cuda.Device(0):
             # gather results and update codebook
                 self._load_all_barcodes()
-                self._load_global_normalization_vectors()
-                self._iterative_normalization_vectors()
+                self._load_global_normalization_vectors(gpu_id=0)
+                self._iterative_normalization_vectors(gpu_id=0)
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
+                cp.cuda.Stream.null.synchronize()
                 cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
                 
-
         # cleanup temp files, etc.
         self._cleanup()
         shutil.rmtree(self._temp_dir)
