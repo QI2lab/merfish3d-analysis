@@ -1,13 +1,14 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
+Shepherd 2025/07 - refactor for multiple GPU suport.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 
 def decode_pixels(
@@ -49,7 +50,9 @@ def decode_pixels(
         datastore=datastore, 
         use_mask=False, 
         merfish_bits=merfish_bits, 
-        verbose=1
+        num_gpus=2,
+        verbose=1,
+        
     )
 
     # optimize normalization weights through iterative decoding and update
@@ -75,9 +78,5 @@ def decode_pixels(
         datastore.save_mtx()
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    decode_pixels(root_path=root_path,
-                ufish_threshold=0.1,
-                fdr_target=.2,
-                magnitude_threshold=1.5,
-                run_baysor=False)
+    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
+    decode_pixels(root_path=root_path,run_baysor=False)

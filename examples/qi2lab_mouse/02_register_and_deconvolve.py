@@ -1,30 +1,20 @@
 """
-Perform registration on Human OB qi2labdatastore. By default creates a max 
+Perform registration on qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
-Shepherd 2025/02 - update to use camera to stage affine mapping
+Shepherd 2025/07 - rework for multiple GPU support.
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.simplefilter("ignore", category=FutureWarning)
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.DataRegistration import DataRegistration
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
 import gc
 from tqdm import tqdm
 from tifffile import TiffWriter
 from typing import Optional
-from multiview_stitcher import spatial_image_utils as si_utils
-from multiview_stitcher import msi_utils, registration, fusion
-import dask.diagnostics
-import dask.array as da
-import multiprocessing as mp
-
-mp.set_start_method('spawn', force=True)
 
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
@@ -44,7 +34,8 @@ def local_register_data(root_path: Path):
         datastore=datastore, 
         perform_optical_flow=True, 
         overwrite_registered=True,
-        save_all_polyDT_registered=True
+        save_all_polyDT_registered=True,
+        num_gpus=2
     )
 
     # run local registration across rounds
@@ -54,9 +45,6 @@ def local_register_data(root_path: Path):
     datastore_state = datastore.datastore_state
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
-    
-    del datastore, registration_factory
-    gc.collect()
 
 
 def global_register_data(
@@ -70,13 +58,26 @@ def global_register_data(
     root_path: Path
         path to experiment
     
-    create_max_proj_tiff: Optional[bool], default True
-        create max projection tiff in the segmentation/cellpose directory.
+    create_max_proj_tiff: Optional[bool]
+        create max projection tiff in the segmentation/cellpose directory. 
+        Default = True
     """
+
+    from multiview_stitcher import spatial_image_utils as si_utils
+    from multiview_stitcher import msi_utils, registration, fusion
+    import dask.diagnostics
+    import dask.array as da
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
+
+    # load tile positions
+    for tile_idx, tile_id in enumerate(datastore.tile_ids):
+        round_id = datastore.round_ids[0]
+        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
+            tile_id, round_id
+        )
 
     # convert local tiles from first round to multiscale spatial images
     msims = []
@@ -123,7 +124,7 @@ def global_register_data(
                 reg_channel_index=0,
                 transform_key="stage_metadata",
                 new_transform_key="affine_registered",
-                pre_registration_pruning_method="keep_axis_aligned",
+                #pre_registration_pruning_method="keep_axis_aligned",
                 registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
             )
@@ -243,6 +244,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
+    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
     local_register_data(root_path)
-    global_register_data(root_path,create_max_proj_tiff=True)
+    global_register_data(root_path)

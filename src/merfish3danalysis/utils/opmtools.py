@@ -12,8 +12,6 @@ History:
 
 from merfish3danalysis.utils.imageprocessing import (
     downsample_axis,
-    pad_z,
-    remove_padding_z,
 )
 from ryomen import Slicer
 from tqdm import tqdm

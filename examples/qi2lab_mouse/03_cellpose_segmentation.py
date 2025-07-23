@@ -1,11 +1,13 @@
 """
 Run cellpose, save ROIs, reload ROIs, warp ROIs to global system, save again.
-Denoise the max projection image before running cellpose (optional).
 
 Eventually, this will be re-integrated back into the library - but it is 
 helpful to see it split out for now.
 
-This version uses Cellpose 4 API.
+IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
+then fill in the dictionary at the bottom of the script.
+
+Shepherd 2025/07 - refactor for CellposeSAM
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
@@ -15,7 +17,6 @@ from pathlib import Path
 import numpy as np
 from cellpose import models, io
 from roifile import roiread, roiwrite, ImagejRoi
-from skimage.morphology import ball, white_tophat, disk
 
 def warp_point(
     pixel_space_point: np.ndarray,
@@ -48,44 +49,16 @@ def warp_point(
     
     return registered_space_point
 
-def rolling_ball_background_subtraction(img, radius):
-    """
-    img: np.ndarray of shape (Y,X), (Z,Y,X), or (Y,X,C)
-    returns: background-subtracted image same shape as input
-    """
-    if img.ndim == 2:
-        # simple 2D case
-        selem = disk(radius)
-        return white_tophat(img, footprint=selem)
-
-    elif img.ndim == 3:
-        # could be (Z,Y,X) or (Y,X,C)
-        # decide based on which axis is small:
-        z_dim, y_dim, x_dim = img.shape
-        # if Z is the first axis and reasonable >1 → treat as volume
-        if z_dim > 1 and z_dim < min(y_dim, x_dim):
-            selem = ball(radius)
-            return white_tophat(img, footprint=selem)
-        else:
-            # assume multi-channel 2D: loop channels
-            out = []
-            selem = disk(radius)
-            for c in range(img.shape[2]):
-                out.append(white_tophat(img[..., c], footprint=selem))
-            return np.stack(out, axis=2)
-
-    else:
-        raise ValueError(f"Unsupported image dimensions: {img.ndim}")
-
 def run_cellpose(root_path,
-                 rolling_ball_radius = None
-                 ):
+                 cellpose_parameters: dict):
     """Run cellpose and save ROIs
 
     Parameters
     ----------
     root_path: Path
         path to experiment
+    cellpose_parameters: dict
+        dictionary of cellpose parameters
     """
     
     # initialize datastore
@@ -94,40 +67,33 @@ def run_cellpose(root_path,
     
     # load downsampled, fused polyDT image and coordinates 
     polyDT_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
-
+    
     # create max projection
     polyDT_max_projection = np.max(np.squeeze(polyDT_fused),axis=0)
-
-    if rolling_ball_radius:
-        ### Denoising polyDT max projection
-        print("Denoising ...")
-        polyDT_max_projection = rolling_ball_background_subtraction(polyDT_max_projection, rolling_ball_radius)
-    
     del polyDT_fused
     
-    print("Segmenting ...")
-    # DPS note: This is now missing the cellprob and flow_threshold parameters. 
-    #           You should reimplement, these often need to changed for correct segmentation. 
     # initialize cellpose model and options
-    model = models.CellposeModel(gpu=True, pretrained_model="cpsam")
+    model = models.CellposeModel(gpu=True)
     normalize = {
-        "normalize": True
+        "normalize": True,
+        "percentile": cellpose_parameters['normalization'],
     }
 
     # run cellpose on polyDT max projection
     masks, _, _ = model.eval(
         polyDT_max_projection,
-        channel_axis=None,
+        diameter=cellpose_parameters['diameter'],
+        flow_threshold=cellpose_parameters['flow_threshold'],
+        cellprob_threshold=-cellpose_parameters['cellprob_threshold'],
+        niter=200,
         normalize=normalize)
     
-    print("Saving masks ...")
     # save masks
     datastore.save_global_cellpose_segmentation_image(
         masks,
         downsampling=[1,3.5,3.5]
     )
     
-    print("Saving ROIs ...")
     # save pixel spaced ROIs
     imagej_roi_path_dir = datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
     if not(imagej_roi_path_dir.exists()):
@@ -166,8 +132,13 @@ def run_cellpose(root_path,
     # write global coordinate ROIs
     global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
     pixel_spacing_rois = roiwrite(global_roi_path,global_spacing_rois)
-
+        
 if __name__ == "__main__":
-    root_path = Path(r"/data/MERFISH/20250625_bartelle_merfish_LC7d_p100")
-    rolling_ball_radius = None
-    run_cellpose(root_path, rolling_ball_radius)
+    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
+    cellpose_parameters = {
+        'normalization' : [1.,99.0],
+        'flow_threshold' : 0.4,
+        'cellprob_threshold' : 1.0,
+        'diameter': 50.0
+    }
+    run_cellpose(root_path, cellpose_parameters)
