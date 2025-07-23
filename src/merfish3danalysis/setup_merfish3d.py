@@ -64,7 +64,8 @@ LINUX_CONDA_CUDA_PKGS = [
     "cudnn",
     "cutensor",
     "nccl",
-    "'scipy >=1.11.4, <=1.15.3'"
+    "'scipy >=1.11.4, <=1.15.3'",
+    "pyopengl"
 ]
 
 WINDOWS_CONDA_CUDA_PKGS = [

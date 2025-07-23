@@ -7,6 +7,7 @@ qi2lab 3D MERFISH data.
 
 History:
 ---------
+- **2025/07**: Changed to anisotropic downsampling for registration.
 - **2024/12**: Refactored repo structure.
 - **2024/07**: Prepared to remove all Dask usage and integrate functions
                into the DataRegistration class as static methods.
@@ -108,8 +109,8 @@ def apply_transform(image1: ArrayLike,
 
 def compute_rigid_transform(image1: ArrayLike, 
                             image2: ArrayLike,
+                            downsample_factors: Tuple[int,int,int] = (1,3,3),
                             use_mask: Optional[bool] = False,
-                            downsample_factor: Optional[float] = 4.0,
                             projection: Optional[str] = None) -> Tuple[sitk.TranslationTransform,Sequence[float]]:
     """
     Calculate initial translation transform using scikit-image
@@ -121,10 +122,11 @@ def compute_rigid_transform(image1: ArrayLike,
         reference image
     image2: ArrayLike
         moving image
+    downsample_factor: Tuple[int,int,int], default = (2,6,6)
+        amount of zyx downsampling applied before calling registration
     use_mask: Optional[bool], default False
         use mask for middle 1/3 of image
-    downsample_factor: Optional[float], default 4.0
-        amount of downsampling applied before calling registration
+
     projection: Optional[str], default None
         projection method to use
 
@@ -219,7 +221,12 @@ def compute_rigid_transform(image1: ArrayLike,
                                                         disambiguate=True)
     
         # Convert the shift to a list of doubles
-        shift = [float(i*-1*downsample_factor) for i in shift]
+        for i in range(len(shift)):
+            if downsample_factors[i] > 1:
+                shift[i] = -1*float(shift[i] * downsample_factors[i])
+            else:
+                shift[i] = -1*float(shift[i])
+        #shift = [float(i*-1*downsample_factors[i]) for i in shift]
         shift_reversed = shift[::-1]
 
     if projection is not None:
@@ -232,7 +239,7 @@ def compute_rigid_transform(image1: ArrayLike,
                          0.,
                          shift_reversed[1]]
         elif projection == 'search':
-            shift_xyz = [0.,0.,-downsample_factor*found_shift]
+            shift_xyz = [0.,0.,-downsample_factors[0]*found_shift]
     else:
         shift_xyz = shift_reversed
 

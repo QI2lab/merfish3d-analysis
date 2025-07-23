@@ -430,35 +430,34 @@ def chunked_rlgc(
     cp.cuda.Device(gpu_id).use()
     cp.fft._cache.PlanCache(memsize=0)
 
-    output_sum   = np.zeros_like(image, dtype=np.float32)
-    output_count = np.zeros_like(image, dtype=np.float32)
-    crop_size = (image.shape[0], crop_yx, crop_yx)
-    overlap = (0, overlap_yx, overlap_yx)
-    slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad = True)
-    
-    for crop, source, destination in slices:
-        crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
+    if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
+        output = rlgc_biggs(image, psf, bkd, gpu_id, eager_mode)
+        output = output.clip(0,2**16-1).astype(np.uint16)
+    else:
+        output_sum   = np.zeros_like(image, dtype=np.float32)
+        output_count = np.zeros_like(image, dtype=np.float32)
+        crop_size = (image.shape[0], crop_yx, crop_yx)
+        overlap = (0, overlap_yx, overlap_yx)
+        slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad = True)
+        
+        for crop, source, destination in slices:
+            crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
 
-        # 1) pull out just the valid part of the crop
-        sub = crop_array[source]         # shape == whatever source slices select
+            # 1) pull out just the valid part of the crop
+            sub = crop_array[source]         # shape == whatever source slices select
 
-        # 2) add it into the destination region in one go
-        output_sum[destination]   += sub
-        output_count[destination] += 1   # broadcasting the +1 over the same shape
+            # 2) add it into the destination region in one go
+            output_sum[destination]   += sub
+            output_count[destination] += 1   # broadcasting the +1 over the same shape
 
-    # now build final average, only where count > 0
-    nonzero = output_count > 0
-    output  = np.zeros_like(output_sum, dtype=output_sum.dtype)
-    output[nonzero] = output_sum[nonzero] / output_count[nonzero]
-    output = output.clip(0,2**16-1).astype(np.uint16)
+        # now build final average, only where count > 0
+        nonzero = output_count > 0
+        output  = np.zeros_like(output_sum, dtype=output_sum.dtype)
+        output[nonzero] = output_sum[nonzero] / output_count[nonzero]
+        output = output.clip(0,2**16-1).astype(np.uint16)
 
     _fft_cache.clear()
     _H_T_cache.clear()
     cp.get_default_memory_pool().free_all_blocks()
-
-    # import napari
-    # viewer = napari.Viewer()
-    # viewer.add_image(output)
-    # napari.run()
 
     return output

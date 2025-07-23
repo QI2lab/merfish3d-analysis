@@ -6,7 +6,9 @@ MERFISH datasets efficiently.
 
 History:
 ---------
-- **2025/07**: Refactor for multiple GPU support.
+- **2025/07**: 
+    - Refactor for multiple GPU support.
+    - Switch to cuvs for distance calculations.
 - **2024/12**: Refactor repo structure.
 - **2024/03**: Reworked GPU logic to reduce out-of-memory crashes.
 - **2024/01**: Updated for qi2lab MERFISH file format v1.0.
@@ -28,7 +30,7 @@ from skimage.measure import regionprops_table
 from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
 from random import sample
-from tqdm import tqdm
+from tqdm import tqdm, trange
 from shapely.geometry import Point, Polygon
 from roifile import roiread
 import rtree
@@ -117,7 +119,7 @@ def _optimize_norm_worker(
         use_mask=False, 
         merfish_bits=merfish_bits, 
         num_gpus=1,
-        verbose=1,
+        verbose=0,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
@@ -304,6 +306,7 @@ class PixelDecoder:
         low_percentile_cut: float = 10.0,
         high_percentile_cut: float = 90.0,
         hot_pixel_threshold: int = 50000,
+        gpu_id: int = 0
     ):
         """Calculate global normalization and background vectors.
         
@@ -2220,7 +2223,7 @@ class PixelDecoder:
             random_tiles = all_tiles
         chunk_size = (len(random_tiles) + self._num_gpus - 1) // self._num_gpus
 
-        for iteration in range(n_iterations):
+        for iteration in trange(n_iterations,desc="Iterative normalization"):
 
             # launch one process per GPU
             processes = []

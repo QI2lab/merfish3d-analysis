@@ -2,12 +2,13 @@
 Perform registration on qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
+Shepherd 2025/07 - rework for multiple GPU support.
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.DataRegistration import DataRegistration
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
 import gc
@@ -32,8 +33,8 @@ def local_register_data(root_path: Path):
     registration_factory = DataRegistration(
         datastore=datastore, 
         perform_optical_flow=True, 
-        overwrite_registered=False,
-        save_all_polyDT_registered=False,
+        overwrite_registered=True,
+        save_all_polyDT_registered=True,
         num_gpus=2
     )
 

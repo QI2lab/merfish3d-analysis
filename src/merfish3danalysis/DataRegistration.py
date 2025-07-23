@@ -7,9 +7,10 @@ cross-correlation and optical flow techniques.
 History:
 ---------
 - **2025/07**:
-    - Implement RLGC deconvolution
-    - Implement new deeds-registration package
-    - Implement multi-GPU processing
+    - Implement anistropic downsampling for registration.
+    - Implement RLGC deconvolution.
+    - Implement new deeds-registration package.
+    - Implement multi-GPU processing.
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
     - Switched to qi2labdatastore for data access.
@@ -22,7 +23,7 @@ History:
 """
 
 import multiprocessing as mp
-mp.set_start_method('forkserver', force=True)
+mp.set_start_method('spawn', force=True)
 
 import numpy as np
 from typing import Union, Optional
@@ -34,7 +35,7 @@ from merfish3danalysis.utils.registration import (
     apply_transform,
     compute_rigid_transform,
 )
-from merfish3danalysis.utils.imageprocessing import downsample_image_isotropic
+from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
 
 import builtins
 from tqdm import tqdm
@@ -56,7 +57,8 @@ def _apply_first_polyDT_on_gpu(
     ref_image_decon = chunked_rlgc(
         image=raw0,
         psf=dr._psfs[0, :],
-        gpu_id=0
+        gpu_id=0,
+        crop_yx = dr._crop_yx_decon
     )
 
     dr._datastore.save_local_registered_image(
@@ -133,7 +135,8 @@ def _apply_polyDT_on_gpu(
             mov_image_decon = chunked_rlgc(
                 image=raw,
                 psf=dr._psfs[0, :],
-                gpu_id=gpu_id
+                gpu_id=gpu_id,
+                crop_yx = dr._crop_yx_decon
             )
 
             mov_image_decon_norm = mov_image_decon.copy().astype(np.float32)
@@ -148,13 +151,13 @@ def _apply_polyDT_on_gpu(
             else:
                 mov_image_decon_norm.fill(0)
 
-            # downsample_factor = 2
-            # if downsample_factor > 1:
+            # downsample_factors = (1,3,3)
+            # if max(downsample_factor) > 1:
             #     ref_image_decon_norm_ds = downsample_image_isotropic(
-            #         ref_image_decon_norm, downsample_factor
+            #         ref_image_decon_norm, downsample_factors
             #     )
             #     mov_image_decon_norm_ds = downsample_image_isotropic(
-            #         mov_image_decon_norm, downsample_factor
+            #         mov_image_decon_norm, downsample_factors
             #     )
             # else:
             #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
@@ -163,8 +166,8 @@ def _apply_polyDT_on_gpu(
             # _, initial_xy_shift = compute_rigid_transform(
             #     ref_image_decon_norm_ds,
             #     mov_image_decon_norm_ds,
+            #     downsample_factors=downsample_factors,
             #     use_mask=False,
-            #     downsample_factor=downsample_factor,
             #     projection="z",
             # )
 
@@ -174,13 +177,13 @@ def _apply_polyDT_on_gpu(
             #     ref_image_decon_norm, mov_image_decon_norm, intial_xy_transform
             # )
 
-            # downsample_factor = 2
-            # if downsample_factor > 1:
-            #     ref_image_decon_norm_ds = downsample_image_isotropic(
-            #         ref_image_decon_norm, downsample_factor
+            # downsample_factors = (1,3,3)
+            # if max(downsample_factors) > 1:
+            #     ref_image_decon_norm_ds = downsample_image_anisotropic(
+            #         ref_image_decon_norm, downsample_factors
             #     )
-            #     mov_image_decon_norm_ds = downsample_image_isotropic(
-            #         mov_image_decon_norm, downsample_factor
+            #     mov_image_decon_norm_ds = downsample_image_anisotropic(
+            #         mov_image_decon_norm, downsample_factors
             #     )
             # else:
             #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
@@ -189,8 +192,8 @@ def _apply_polyDT_on_gpu(
             # _, intial_z_shift = compute_rigid_transform(
             #     ref_image_decon_norm_ds,
             #     mov_image_decon_norm_ds,
+            #     downsample_factors=downsample_factors,
             #     use_mask=False,
-            #     downsample_factor=downsample_factor,
             #     projection="search",
             # )
 
@@ -200,23 +203,23 @@ def _apply_polyDT_on_gpu(
             #     ref_image_decon_norm, mov_image_decon_norm, intial_z_transform
             # )
 
-            downsample_factor = 3
-            if downsample_factor > 1:
-                ref_image_decon_norm_ds = downsample_image_isotropic(
-                    ref_image_decon_norm, downsample_factor
+            downsample_factors = (1,3,3)
+            if max(downsample_factors) > 1:
+                ref_image_decon_norm_ds = downsample_image_anisotropic(
+                    ref_image_decon_norm, downsample_factors
                 )
-                mov_image_decon_norm_ds = downsample_image_isotropic(
-                    mov_image_decon_norm, downsample_factor
+                mov_image_decon_norm_ds = downsample_image_anisotropic(
+                    mov_image_decon_norm, downsample_factors
                 )
             else:
                 ref_image_decon_norm_ds = ref_image_decon_norm.copy()
                 mov_image_decon_norm_ds = mov_image_decon_norm.copy()
 
-            _, xyz_shift_4x = compute_rigid_transform(
+            _, xyz_shift_ds = compute_rigid_transform(
                 ref_image_decon_norm_ds,
                 mov_image_decon_norm_ds,
                 use_mask=False,
-                downsample_factor=downsample_factor,
+                downsample_factors=downsample_factors,
                 projection=None,
             )
             
@@ -226,35 +229,33 @@ def _apply_polyDT_on_gpu(
             #     + np.asarray(xyz_shift_4x)
             # )
             
-            final_xyz_shift = -1.*np.asarray(xyz_shift_4x)
-            
-            #print(round_id,final_xyz_shift)
-            
+            final_xyz_shift = np.asarray(xyz_shift_ds) 
+                        
             dr._datastore.save_local_rigid_xform_xyz_px(
                 rigid_xform_xyz_px=final_xyz_shift,
                 tile=dr._tile_id,
                 round=round_id
             )
 
-            xyz_transform_4x = sitk.TranslationTransform(3, xyz_shift_4x)
+            xyz_transform_ds = sitk.TranslationTransform(3, final_xyz_shift)
             mov_image_decon_norm = apply_transform(
-                ref_image_decon_norm, mov_image_decon_norm, xyz_transform_4x
+                ref_image_decon_norm, mov_image_decon_norm, xyz_transform_ds
             )
 
-            # import napari
-            # viewer = napari.Viewer()
-            # viewer.add_image(ref_image_decon_norm)
-            # viewer.add_image(mov_image_decon_norm)
-            # napari.run()
+            import napari
+            viewer = napari.Viewer()
+            viewer.add_image(ref_image_decon_norm)
+            viewer.add_image(mov_image_decon_norm)
+            napari.run()
             
             if dr._perform_optical_flow:
-                downsample_factor = 3
+                downsample_factor = (1,3,3)
                 if downsample_factor > 1:
-                    ref_image_decon_norm_ds = downsample_image_isotropic(
-                        ref_image_decon_norm, downsample_factor
+                    ref_image_decon_norm_ds = downsample_image_anisotropic(
+                        ref_image_decon_norm, downsample_factors
                     )
-                    mov_image_decon_norm_ds = downsample_image_isotropic(
-                        mov_image_decon_norm, downsample_factor
+                    mov_image_decon_norm_ds = downsample_image_anisotropic(
+                        mov_image_decon_norm, downsample_factors
                     )
 
                 of_xform_px = compute_optical_flow(
@@ -266,9 +267,10 @@ def _apply_polyDT_on_gpu(
                     of_xform_px=of_xform_px,
                     tile=dr._tile_id,
                     downsampling=[
-                        float(downsample_factor),
-                        float(downsample_factor),
-                        float(downsample_factor)],
+                        float(downsample_factors[0]),
+                        float(downsample_factors[1]),
+                        float(downsample_factors[2])
+                    ],
                     round=round_id
                 )
 
@@ -371,7 +373,8 @@ def _apply_bits_on_gpu(
                 decon_image = chunked_rlgc(
                     image=corrected_image,
                     psf=dr._psfs[psf_idx, :],
-                    gpu_id = gpu_id
+                    gpu_id = gpu_id,
+                    crop_yx = dr._crop_yx_decon
                 )
             else:
                 decon_image = corrected_image.copy()
@@ -500,15 +503,18 @@ class DataRegistration:
         Save fidicual polyDT rounds > 1. These are not used for analysis. 
     num_gpus: int, default 1
         Number of GPUs to use for registration.
+    crop_yx_decon: int, default 1024
+        Crop size for deconvolution applied to both y and x dimensions.
     """
         
     def __init__(
         self,
         datastore: qi2labDataStore,
         overwrite_registered: bool = False,
-        perform_optical_flow: bool = False,
+        perform_optical_flow: bool = True,
         save_all_polyDT_registered: bool = True,
         num_gpus: int = 1,
+        crop_yx_decon: int = 1024
     ):
     
         self._datastore = datastore
@@ -517,6 +523,7 @@ class DataRegistration:
         self._bit_ids = self._datastore.bit_ids
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
+        self._crop_yx_decon = crop_yx_decon
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None

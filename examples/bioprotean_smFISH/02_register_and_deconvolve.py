@@ -44,7 +44,7 @@ def local_register_data(root_path: Path):
         datastore=datastore, 
         perform_optical_flow=True, 
         overwrite_registered=True,
-        save_all_polyDT_registered=False
+        save_all_polyDT_registered=True
     )
 
     # run local registration across rounds

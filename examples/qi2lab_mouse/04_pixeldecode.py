@@ -7,8 +7,8 @@ Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 
 def decode_pixels(
