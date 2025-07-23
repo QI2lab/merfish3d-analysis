@@ -119,7 +119,7 @@ def _apply_polyDT_on_gpu(
             min_val = ref_image_decon_norm.min()
             max_val = ref_image_decon_norm.max()
 
-            # avoid divide‐by‐zero if image is constant
+            # normalize reference to [0,1] and avoid divide‐by‐zero if image is constant
             if max_val > min_val:
                 ref_image_decon_norm -= min_val
                 ref_image_decon_norm /= (max_val - min_val)
@@ -144,66 +144,40 @@ def _apply_polyDT_on_gpu(
             mov_min_val = mov_image_decon_norm.min()
             mov_max_val = mov_image_decon_norm.max()
 
-            # avoid divide‐by‐zero if image is constant
+            # normalize moving to [0,1] and avoid divide‐by‐zero if image is constant
             if mov_max_val > mov_min_val:
                 mov_image_decon_norm -= mov_min_val
                 mov_image_decon_norm /= (mov_max_val - mov_min_val)
             else:
                 mov_image_decon_norm.fill(0)
 
-            # downsample_factors = (1,3,3)
-            # if max(downsample_factor) > 1:
-            #     ref_image_decon_norm_ds = downsample_image_isotropic(
-            #         ref_image_decon_norm, downsample_factors
-            #     )
-            #     mov_image_decon_norm_ds = downsample_image_isotropic(
-            #         mov_image_decon_norm, downsample_factors
-            #     )
-            # else:
-            #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
-            #     mov_image_decon_norm_ds = mov_image_decon_norm.copy()
+            downsample_factors = (2,6,6)
+            if max(downsample_factor) > 1:
+                ref_image_decon_norm_ds = downsample_image_anisotropic(
+                    ref_image_decon_norm, downsample_factors
+                )
+                mov_image_decon_norm_ds = downsample_image_anisotropic(
+                    mov_image_decon_norm, downsample_factors
+                )
+            else:
+                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
+                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
 
-            # _, initial_xy_shift = compute_rigid_transform(
-            #     ref_image_decon_norm_ds,
-            #     mov_image_decon_norm_ds,
-            #     downsample_factors=downsample_factors,
-            #     use_mask=False,
-            #     projection="z",
-            # )
+            _, initial_xy_shift = compute_rigid_transform(
+                ref_image_decon_norm_ds,
+                mov_image_decon_norm_ds,
+                downsample_factors=downsample_factors,
+                use_mask=False,
+                projection="z",
+            )
 
-            # intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
+            intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
 
-            # mov_image_decon_norm = apply_transform(
-            #     ref_image_decon_norm, mov_image_decon_norm, intial_xy_transform
-            # )
+            mov_image_decon_norm = apply_transform(
+                ref_image_decon_norm, mov_image_decon_norm, intial_xy_transform
+            )
 
-            # downsample_factors = (1,3,3)
-            # if max(downsample_factors) > 1:
-            #     ref_image_decon_norm_ds = downsample_image_anisotropic(
-            #         ref_image_decon_norm, downsample_factors
-            #     )
-            #     mov_image_decon_norm_ds = downsample_image_anisotropic(
-            #         mov_image_decon_norm, downsample_factors
-            #     )
-            # else:
-            #     ref_image_decon_norm_ds = ref_image_decon_norm.copy()
-            #     mov_image_decon_norm_ds = mov_image_decon_norm.copy()
-
-            # _, intial_z_shift = compute_rigid_transform(
-            #     ref_image_decon_norm_ds,
-            #     mov_image_decon_norm_ds,
-            #     downsample_factors=downsample_factors,
-            #     use_mask=False,
-            #     projection="search",
-            # )
-
-            # intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
-
-            # mov_image_decon_norm = apply_transform(
-            #     ref_image_decon_norm, mov_image_decon_norm, intial_z_transform
-            # )
-
-            downsample_factors = (1,3,3)
+            downsample_factors = (2,6,6)
             if max(downsample_factors) > 1:
                 ref_image_decon_norm_ds = downsample_image_anisotropic(
                     ref_image_decon_norm, downsample_factors
@@ -215,7 +189,33 @@ def _apply_polyDT_on_gpu(
                 ref_image_decon_norm_ds = ref_image_decon_norm.copy()
                 mov_image_decon_norm_ds = mov_image_decon_norm.copy()
 
-            _, xyz_shift_ds = compute_rigid_transform(
+            _, intial_z_shift = compute_rigid_transform(
+                ref_image_decon_norm_ds,
+                mov_image_decon_norm_ds,
+                downsample_factors=downsample_factors,
+                use_mask=False,
+                projection="search",
+            )
+
+            intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
+
+            mov_image_decon_norm = apply_transform(
+                ref_image_decon_norm, mov_image_decon_norm, intial_z_transform
+            )
+
+            downsample_factors = (2,6,6)
+            if max(downsample_factors) > 1:
+                ref_image_decon_norm_ds = downsample_image_anisotropic(
+                    ref_image_decon_norm, downsample_factors
+                )
+                mov_image_decon_norm_ds = downsample_image_anisotropic(
+                    mov_image_decon_norm, downsample_factors
+                )
+            else:
+                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
+                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
+
+            _, initial_xyz_shift = compute_rigid_transform(
                 ref_image_decon_norm_ds,
                 mov_image_decon_norm_ds,
                 use_mask=False,
@@ -223,13 +223,11 @@ def _apply_polyDT_on_gpu(
                 projection=None,
             )
             
-            # final_xyz_shift = (
-            #     np.asarray(initial_xy_shift)
-            #     + np.asarray(intial_z_shift)
-            #     + np.asarray(xyz_shift_4x)
-            # )
-            
-            final_xyz_shift = np.asarray(xyz_shift_ds) 
+            final_xyz_shift = (
+                np.asarray(initial_xy_shift)
+                + np.asarray(intial_z_shift)
+                + np.asarray(initial_xyz_shift)
+            )
                         
             dr._datastore.save_local_rigid_xform_xyz_px(
                 rigid_xform_xyz_px=final_xyz_shift,
@@ -237,19 +235,13 @@ def _apply_polyDT_on_gpu(
                 round=round_id
             )
 
-            xyz_transform_ds = sitk.TranslationTransform(3, final_xyz_shift)
+            final_xyz_transform = sitk.TranslationTransform(3, final_xyz_shift)
             mov_image_decon_norm = apply_transform(
-                ref_image_decon_norm, mov_image_decon_norm, xyz_transform_ds
+                ref_image_decon_norm, mov_image_decon_norm, final_xyz_transform
             )
 
-            import napari
-            viewer = napari.Viewer()
-            viewer.add_image(ref_image_decon_norm)
-            viewer.add_image(mov_image_decon_norm)
-            napari.run()
-            
             if dr._perform_optical_flow:
-                downsample_factor = (1,3,3)
+                downsample_factor = (2,6,6)
                 if downsample_factor > 1:
                     ref_image_decon_norm_ds = downsample_image_anisotropic(
                         ref_image_decon_norm, downsample_factors
@@ -279,6 +271,7 @@ def _apply_polyDT_on_gpu(
                     isVector=True,
                 )
 
+                # undo normalization from [0,1] back to full range
                 mov_image_decon = mov_image_decon_norm * (mov_max_val-mov_min_val) + mov_min_val
 
                 interpolator = sitk.sitkLinear
