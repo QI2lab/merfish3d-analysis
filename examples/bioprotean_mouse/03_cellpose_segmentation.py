@@ -106,6 +106,8 @@ def run_cellpose(root_path,
     del polyDT_fused
     
     print("Segmenting ...")
+    # DPS note: This is now missing the cellprob and flow_threshold parameters. 
+    #           You should reimplement, these often need to changed for correct segmentation. 
     # initialize cellpose model and options
     model = models.CellposeModel(gpu=True, pretrained_model="cpsam")
     normalize = {
