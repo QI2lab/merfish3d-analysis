@@ -13,7 +13,7 @@ from pathlib import Path
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
-    ufish_threshold: float = 0.5,
+    ufish_threshold: float = 0.1,
     fdr_target: float = 0.2,
     run_baysor: bool = True,
 ):
@@ -28,7 +28,7 @@ def decode_pixels(
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
     ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.5
+        threshold to accept ufish prediction. Default = 0.1
     fdr_target : float
         false discovery rate (FDR) target. Default = .2
         NOTE: This is higher than usual, but we are finding that .05 is too 
@@ -78,6 +78,6 @@ if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
     decode_pixels(root_path=root_path,
                 ufish_threshold=0.1,
-                fdr_target=5,
+                fdr_target=.2,
                 magnitude_threshold=1.5,
                 run_baysor=False)
