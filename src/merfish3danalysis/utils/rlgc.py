@@ -431,11 +431,9 @@ def chunked_rlgc(
     cp.fft._cache.PlanCache(memsize=0)
 
     if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
-        print("Deconvolving entire image in one chunk.")
         output = rlgc_biggs(image, psf, bkd, gpu_id, eager_mode)
         output = output.clip(0,2**16-1).astype(np.uint16)
     else:
-        print("Deconvolving entire image in multiple chunks.")
         output_sum   = np.zeros_like(image, dtype=np.float32)
         output_count = np.zeros_like(image, dtype=np.float32)
         crop_size = (image.shape[0], crop_yx, crop_yx)
