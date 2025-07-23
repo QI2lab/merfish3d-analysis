@@ -152,7 +152,7 @@ def _apply_polyDT_on_gpu(
                 mov_image_decon_norm.fill(0)
 
             downsample_factors = (2,6,6)
-            if max(downsample_factor) > 1:
+            if max(downsample_factors) > 1:
                 ref_image_decon_norm_ds = downsample_image_anisotropic(
                     ref_image_decon_norm, downsample_factors
                 )
@@ -241,8 +241,8 @@ def _apply_polyDT_on_gpu(
             )
 
             if dr._perform_optical_flow:
-                downsample_factor = (2,6,6)
-                if downsample_factor > 1:
+                downsample_factors = (2,6,6)
+                if max(downsample_factors) > 1:
                     ref_image_decon_norm_ds = downsample_image_anisotropic(
                         ref_image_decon_norm, downsample_factors
                     )
