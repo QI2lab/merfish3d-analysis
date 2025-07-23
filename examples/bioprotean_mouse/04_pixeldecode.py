@@ -76,4 +76,8 @@ def decode_pixels(
 
 if __name__ == "__main__":
     root_path = Path(r"/mnt/data/bartelle/20241108_Bartelle_MouseMERFISH_LC")
-    decode_pixels(root_path=root_path,run_baysor=False)
+    decode_pixels(root_path=root_path,
+                ufish_threshold=0.1,
+                fdr_target=5,
+                magnitude_threshold=1.5,
+                run_baysor=False)
