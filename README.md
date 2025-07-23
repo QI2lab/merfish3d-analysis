@@ -7,18 +7,19 @@ GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This p
 ## Installation
 
 Create a python 3.12 environment using your favorite package manager, e.g.
-```conda create -n merfish3d python=3.12```
+```
+conda create -n merfish3d python=3.12
+```
 
 Activate the environment and install the GPU dependencies. This install method assumes an Nvidia GPU capable of running CUDA 12.8.
-
 ```
 conda activate merfish3d
 ```
 
-Next, clone the repository using
-
+Next, clone the repository in your location of choice and enter the directory using
 ```
 git clone https://github.com/QI2lab/merfish3d-analysis
+cd merfish3d-analysis
 ``` 
 
 and install using 
