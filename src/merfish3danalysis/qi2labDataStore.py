@@ -2931,7 +2931,7 @@ class qi2labDataStore:
             self._polyDT_root_path
             / Path(tile_id)
             / Path(local_id + ".zarr")
-            / Path("of_xform_px")
+            / Path("opticalflow_xform_px")
         )
         current_local_zattrs_path = str(
             self._polyDT_root_path
