@@ -1,7 +1,8 @@
 """
-Perform registration on Human OB qi2labdatastore. By default creates a max 
+Perform registration on qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
+Shepherd 2025/07 - update to use refactored DataRegistration class for multiple GPUs
 Shepherd 2025/02 - update to use camera to stage affine mapping
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
@@ -10,8 +11,9 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
 from merfish3danalysis.DataRegistration import DataRegistration
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
 import gc
@@ -22,9 +24,6 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from multiview_stitcher import msi_utils, registration, fusion
 import dask.diagnostics
 import dask.array as da
-import multiprocessing as mp
-
-mp.set_start_method('spawn', force=True)
 
 def local_register_data(root_path: Path, start_index: int = 0):
     """Register each tile across rounds in local coordinates.
@@ -44,25 +43,29 @@ def local_register_data(root_path: Path, start_index: int = 0):
         datastore=datastore, 
         perform_optical_flow=True, 
         overwrite_registered=True,
-        save_all_polyDT_registered=False
+        save_all_polyDT_registered=True,
+        num_gpus=1,
+        crop_yx_decon=2048
     )
 
-    # pick up from `start_index`
-    if start_index != None:
-        print(f"Picking up registration from {start_index}...")
-        tile_ids = datastore.tile_ids
-        for idx, tid in enumerate(tile_ids[start_index:], start_index):
-            try:
-                print(f"[{idx}/{len(tile_ids)}] Registering {tid}")
-                registration_factory.register_one_tile(tid)
-            except Exception as e:
-                print(f"  ▶ tile {tid!r} (index {idx}) failed: {e}")
-                break
+    # # pick up from `start_index`
+    # if start_index != None:
+    #     print(f"Picking up registration from {start_index}...")
+    #     tile_ids = datastore.tile_ids
+    #     for idx, tid in enumerate(tile_ids[start_index:], start_index):
+    #         try:
+    #             print(f"[{idx}/{len(tile_ids)}] Registering {tid}")
+    #             registration_factory.register_one_tile(tid)
+    #         except Exception as e:
+    #             print(f"  ▶ tile {tid!r} (index {idx}) failed: {e}")
+    #             break
     
-    else:
-        print("Registering all tiles...")
-        # run local registration across rounds
-        registration_factory.register_all_tiles()
+    # else:
+
+    # DPS: The above will need to be reworked with the new DataRegistration class for multiple GPUs
+    print("Registering all tiles...")
+    # run local registration across rounds
+    registration_factory.register_all_tiles()
 
     # update datastore state
     datastore_state = datastore.datastore_state
@@ -137,8 +140,7 @@ def global_register_data(
                 reg_channel_index=0,
                 transform_key="stage_metadata",
                 new_transform_key="affine_registered",
-                pre_registration_pruning_method="keep_axis_aligned",
-                registration_binning={"z": 3, "y": 6, "x": 6},
+                registration_binning={"z": 2, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
             )
 
