@@ -166,7 +166,7 @@ def _apply_polyDT_on_gpu(
             
             xyz_shift = np.asarray(lowres_xyz_shift)
 
-            print(f"tile id: {dr._tile_id}; round id: {round_id}; initial xyz: {xyz_shift}")
+            print(f"tile id: {dr._tile_id}; round id: {round_id}; rigid xyz offset: {xyz_shift}")
 
             initial_xyz_transform = sitk.TranslationTransform(3, np.asarray(xyz_shift))
             warped_mov_image_decon_float = apply_transform(
@@ -192,6 +192,7 @@ def _apply_polyDT_on_gpu(
                     mov_image_decon_float,
                     gpu_id = gpu_id
                 )
+                print(f"tile id: {dr._tile_id}; round id: {round_id}; warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}")
 
                 dr._datastore.save_coord_of_xform_px(
                     of_xform_px=warp_field,
@@ -295,6 +296,10 @@ def _apply_bits_on_gpu(
 
     import torch
     import cupy as cp
+    import os
+    os.environ["ORT_LOG_SEVERITY_LEVEL"] = "3"
+    import onnxruntime as ort
+    ort.set_default_logger_severity(3)
     from ufish.api import UFish
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
@@ -333,7 +338,7 @@ def _apply_bits_on_gpu(
                     tile=dr._tile_id, round=dr._round_ids[r_idx]
                 )
                 shift_xyz = [float(v) for v in rigid_xyz_px]
-                xyz_tx = sitk.TranslationTransform(3, shift_xyz)
+                xyz_tx = sitk.TranslationTransform(3, np.asarray(shift_xyz))
 
                 # if dr._perform_optical_flow:
         
@@ -369,6 +374,7 @@ def _apply_bits_on_gpu(
                          return_future=False
                     )
 
+                    # TO DO: save block_size and block-stride to disk / then reload 
                     block_size = cp.asarray([4., 12., 12.], dtype=cp.float32)
                     block_stride = cp.asarray([3., 9., 9.], dtype=cp.float32)
                     decon_image_warped_cp = warp_volume(
@@ -452,6 +458,7 @@ def _apply_bits_on_gpu(
             )
             dr._datastore.save_local_ufish_image(ufish_data, tile=dr._tile_id, bit=bit_id)
             dr._datastore.save_local_ufish_spots(ufish_loc, tile=dr._tile_id, bit=bit_id)
+            print(f"tile id: {dr._tile_id}; bit id: {bit_id}; Processed.")
 
             del data_reg, ufish_data, ufish_loc
             gc.collect()

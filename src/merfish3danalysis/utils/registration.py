@@ -123,7 +123,6 @@ def compute_warpfield(
     warp_field = cp.asnumpy(warp_map.warp_field).astype(np.float32)
     block_size = cp.asnumpy(warp_map.block_size).astype(np.float32)
     block_stride = cp.asnumpy(warp_map.block_stride).astype(np.float32)
-    print(f"warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}")
         
     return (warped_image, warp_field, block_size, block_stride)
 
