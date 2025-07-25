@@ -164,11 +164,12 @@ def _apply_polyDT_on_gpu(
                 projection=None
             )
             
-            xyz_shift = np.asarray(lowres_xyz_shift)
+            xyz_shift = np.asarray(lowres_xyz_shift,dtype=np.float32)
+            xyz_shift_float = [round(float(v),1) for v in lowres_xyz_shift]
 
-            print(f"tile id: {dr._tile_id}; round id: {round_id}; rigid xyz offset: {xyz_shift}")
-
-            initial_xyz_transform = sitk.TranslationTransform(3, np.asarray(xyz_shift))
+            print(f"tile id: {dr._tile_id}; round id: {round_id}; rigid xyz offset: {xyz_shift_float}")
+            
+            initial_xyz_transform = sitk.TranslationTransform(3, xyz_shift_float)
             warped_mov_image_decon_float = apply_transform(
                 ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
             )
