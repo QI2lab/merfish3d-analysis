@@ -32,7 +32,7 @@ def local_register_data(root_path: Path):
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore, 
-        perform_optical_flow=True, 
+        perform_optical_flow=False, 
         overwrite_registered=True,
         save_all_polyDT_registered=True,
         num_gpus=2

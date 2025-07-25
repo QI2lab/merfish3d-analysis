@@ -33,8 +33,10 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.registration import (
     compute_optical_flow,
     apply_transform,
-    compute_rigid_transform,
+    compute_rigid_transform
+    compute_warpfield
 )
+
 from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
 
 import builtins
@@ -110,21 +112,11 @@ def _apply_polyDT_on_gpu(
             has_reg_decon_data = True
 
         if not (has_reg_decon_data) or dr._overwrite_registered:
-            ref_image_decon_norm = dr._datastore.load_local_registered_image(
+            ref_image_decon_float = dr._datastore.load_local_registered_image(
                 tile=dr._tile_id,
                 round=dr._round_ids[0],
                 return_future=False
             ).astype(np.float32)
-
-            min_val = ref_image_decon_norm.min()
-            max_val = ref_image_decon_norm.max()
-
-            # normalize reference to [0,1] and avoid divide‐by‐zero if image is constant
-            if max_val > min_val:
-                ref_image_decon_norm -= min_val
-                ref_image_decon_norm /= (max_val - min_val)
-            else:
-                ref_image_decon_norm.fill(0)
             
             raw = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id,
@@ -139,174 +131,160 @@ def _apply_polyDT_on_gpu(
                 crop_yx = dr._crop_yx_decon
             )
 
-            mov_image_decon_norm = mov_image_decon.copy().astype(np.float32)
+            mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
 
-            mov_min_val = mov_image_decon_norm.min()
-            mov_max_val = mov_image_decon_norm.max()
-
-            # normalize moving to [0,1] and avoid divide‐by‐zero if image is constant
-            if mov_max_val > mov_min_val:
-                mov_image_decon_norm -= mov_min_val
-                mov_image_decon_norm /= (mov_max_val - mov_min_val)
-            else:
-                mov_image_decon_norm.fill(0)
-
-            downsample_factors = (2,6,6)
+            downsample_factors = [5,16,16]
             if max(downsample_factors) > 1:
-                ref_image_decon_norm_ds = downsample_image_anisotropic(
-                    ref_image_decon_norm, downsample_factors
+                ref_image_decon_float_ds = downsample_image_anisotropic(
+                    ref_image_decon_float, downsample_factors
                 )
-                mov_image_decon_norm_ds = downsample_image_anisotropic(
-                    mov_image_decon_norm, downsample_factors
-                )
-            else:
-                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
-                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
-
-            _, initial_xy_shift = compute_rigid_transform(
-                ref_image_decon_norm_ds,
-                mov_image_decon_norm_ds,
-                downsample_factors=downsample_factors,
-                use_mask=False,
-                projection="z",
-            )
-
-            intial_xy_transform = sitk.TranslationTransform(3, initial_xy_shift)
-
-            mov_image_decon_norm = apply_transform(
-                ref_image_decon_norm, mov_image_decon_norm, intial_xy_transform
-            )
-
-            downsample_factors = (2,6,6)
-            if max(downsample_factors) > 1:
-                ref_image_decon_norm_ds = downsample_image_anisotropic(
-                    ref_image_decon_norm, downsample_factors
-                )
-                mov_image_decon_norm_ds = downsample_image_anisotropic(
-                    mov_image_decon_norm, downsample_factors
+                mov_image_decon_float_ds = downsample_image_anisotropic(
+                    mov_image_decon_float, downsample_factors
                 )
             else:
-                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
-                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
+                ref_image_decon_float_ds = ref_image_decon_float.copy()
+                mov_image_decon_float_ds = mov_image_decon_float.copy()
 
-            _, intial_z_shift = compute_rigid_transform(
-                ref_image_decon_norm_ds,
-                mov_image_decon_norm_ds,
+
+            _, lowres_xyz_shift = compute_rigid_transform(
+                ref_image_decon_float_ds,
+                mov_image_decon_float_ds,
                 downsample_factors=downsample_factors,
-                use_mask=False,
-                projection="search",
-            )
-
-            intial_z_transform = sitk.TranslationTransform(3, intial_z_shift)
-
-            mov_image_decon_norm = apply_transform(
-                ref_image_decon_norm, mov_image_decon_norm, intial_z_transform
-            )
-
-            downsample_factors = (2,6,6)
-            if max(downsample_factors) > 1:
-                ref_image_decon_norm_ds = downsample_image_anisotropic(
-                    ref_image_decon_norm, downsample_factors
-                )
-                mov_image_decon_norm_ds = downsample_image_anisotropic(
-                    mov_image_decon_norm, downsample_factors
-                )
-            else:
-                ref_image_decon_norm_ds = ref_image_decon_norm.copy()
-                mov_image_decon_norm_ds = mov_image_decon_norm.copy()
-
-            _, initial_xyz_shift = compute_rigid_transform(
-                ref_image_decon_norm_ds,
-                mov_image_decon_norm_ds,
-                use_mask=False,
-                downsample_factors=downsample_factors,
-                projection=None,
+                mask = None,
+                projection=None
             )
             
-            final_xyz_shift = (
-                np.asarray(initial_xy_shift)
-                + np.asarray(intial_z_shift)
-                + np.asarray(initial_xyz_shift)
+            initial_xyz_shift = np.asarray(lowres_xyz_shift)
+
+            print(f"tile id: {dr._tile_id}; round id: {round_id}; initial xyz: {initial_xyz_shift}")
+
+            initial_xyz_transform = sitk.TranslationTransform(3, np.asarray(initial_xyz_shift))
+            warped_mov_image_decon_float = apply_transform(
+                ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
             )
-                        
+            del mov_image_decon_float
+            gc.collect()
+
+            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
+
+            downsample_factors = [1,3,3]
+            if max(downsample_factors) > 1:
+                ref_image_decon_float_ds = downsample_image_anisotropic(
+                    ref_image_decon_float, downsample_factors
+                )
+                mov_image_decon_float_ds = downsample_image_anisotropic(
+                    mov_image_decon_float, downsample_factors
+                )
+            else:
+                ref_image_decon_float_ds = ref_image_decon_float.copy()
+                mov_image_decon_float_ds = mov_image_decon_float.copy()
+
+            mask = np.zeros_like(mov_image_decon_float_ds)
+            z_means = []
+            for z_idx in range(mov_image_decon_float_ds.shape[0]):
+                z_means.append(np.mean(mov_image_decon_float_ds[z_idx, :, :]))
+                if np.mean(mov_image_decon_float_ds[z_idx, :, :]) < 1:
+                    mask[z_idx, :, :] = 0
+                else:
+                    mask[z_idx, :, :] = 1
+            print(f"z plane mean: {z_means}")
+
+            _, highres_xyz_shift = compute_rigid_transform(
+                ref_image_decon_float_ds,
+                mov_image_decon_float_ds,
+                downsample_factors = downsample_factors,
+                mask = cp.asarray(mask,dtype=cp.float32),
+                projection=None
+            )
+            
+            xyz_shift = np.asarray(initial_xyz_shift) + np.asarray(highres_xyz_shift)
+
+            print(f"tile id: {dr._tile_id}; round id: {round_id}; final xyz: {xyz_shift}")
+
+            xyz_transform = sitk.TranslationTransform(3, np.asarray(highres_xyz_shift))
+            warped_mov_image_decon_float = apply_transform(
+                ref_image_decon_float, mov_image_decon_float, xyz_transform
+            )
+            del mov_image_decon_float
+            gc.collect()
+
+            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
+
             dr._datastore.save_local_rigid_xform_xyz_px(
-                rigid_xform_xyz_px=final_xyz_shift,
+                rigid_xform_xyz_px=xyz_shift,
                 tile=dr._tile_id,
                 round=round_id
             )
 
-            final_xyz_transform = sitk.TranslationTransform(3, final_xyz_shift)
-            mov_image_decon_norm = apply_transform(
-                ref_image_decon_norm, mov_image_decon_norm, final_xyz_transform
-            )
-
             if dr._perform_optical_flow:
-                downsample_factors = (2,6,6)
-                if max(downsample_factors) > 1:
-                    ref_image_decon_norm_ds = downsample_image_anisotropic(
-                        ref_image_decon_norm, downsample_factors
-                    )
-                    mov_image_decon_norm_ds = downsample_image_anisotropic(
-                        mov_image_decon_norm, downsample_factors
-                    )
-
-                of_xform_px = compute_optical_flow(
-                    ref_image_decon_norm_ds, 
-                    mov_image_decon_norm_ds
+                
+                data_registered, warp_field, block_size, block_strie = compute_warpfield(
+                    ref_image_decon_float,
+                    mov_image_decon_float,
+                    gpu_id = gpu_id
                 )
+                # downsample_factors = (3,3,3)
+                # if max(downsample_factors) > 1:
+                #     ref_image_decon_float_ds = downsample_image_anisotropic(
+                #         ref_image_decon_float, downsample_factors
+                #     )
+                #     mov_image_decon_float_ds = downsample_image_anisotropic(
+                #         mov_image_decon_float, downsample_factors
+                #     )
 
-                dr._datastore.save_coord_of_xform_px(
-                    of_xform_px=of_xform_px,
-                    tile=dr._tile_id,
-                    downsampling=[
-                        float(downsample_factors[0]),
-                        float(downsample_factors[1]),
-                        float(downsample_factors[2])
-                    ],
-                    round=round_id
-                )
+                # of_xform_px = compute_optical_flow(
+                #     ref_image_decon_float_ds, 
+                #     mov_image_decon_float_ds
+                # )
 
-                of_xform_sitk = sitk.GetImageFromArray(
-                    of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
-                    isVector=True,
-                )
+                # dr._datastore.save_coord_of_xform_px(
+                #     of_xform_px=of_xform_px,
+                #     tile=dr._tile_id,
+                #     downsampling=[
+                #         float(downsample_factors[0]),
+                #         float(downsample_factors[1]),
+                #         float(downsample_factors[2])
+                #     ],
+                #     round=round_id
+                # )
 
-                # undo normalization from [0,1] back to full range
-                mov_image_decon = mov_image_decon_norm * (mov_max_val-mov_min_val) + mov_min_val
+                # of_xform_sitk = sitk.GetImageFromArray(
+                #     of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
+                #     isVector=True,
+                # )
+                # interpolator = sitk.sitkLinear
+                # identity_transform = sitk.Transform(3, sitk.sitkIdentity)
+                # optical_flow_sitk = sitk.Resample(
+                #     of_xform_sitk,
+                #     sitk.GetImageFromArray(mov_image_decon_float),
+                #     identity_transform,
+                #     interpolator,
+                #     0,
+                #     of_xform_sitk.GetPixelID(),
+                # )
+                # displacement_field = sitk.DisplacementFieldTransform(
+                #     optical_flow_sitk
+                # )
+                # del optical_flow_sitk, of_xform_px
+                # gc.collect()
 
-                interpolator = sitk.sitkLinear
-                identity_transform = sitk.Transform(3, sitk.sitkIdentity)
-                optical_flow_sitk = sitk.Resample(
-                    of_xform_sitk,
-                    sitk.GetImageFromArray(mov_image_decon),
-                    identity_transform,
-                    interpolator,
-                    0,
-                    of_xform_sitk.GetPixelID(),
-                )
-                displacement_field = sitk.DisplacementFieldTransform(
-                    optical_flow_sitk
-                )
-                del optical_flow_sitk, of_xform_px
-                gc.collect()
+                # # apply optical flow
+                # mov_image_sitk = sitk.Resample(
+                #     sitk.GetImageFromArray(mov_image_decon_float), 
+                #     displacement_field
+                # )
 
-                # apply optical flow
-                mov_image_sitk = sitk.Resample(
-                    sitk.GetImageFromArray(mov_image_decon), 
-                    displacement_field
-                )
-
-                data_registered = sitk.GetArrayFromImage(
-                    mov_image_sitk
-                ).astype(np.float32)
+                # data_registered = sitk.GetArrayFromImage(
+                #     mov_image_sitk
+                # ).astype(np.float32)
 
                 data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
                 
                 del mov_image_sitk, displacement_field
                 gc.collect()
             else:
-
-                data_registered = mov_image_decon.clip(0,2**16-1).astype(np.uint16)
+                print("Building image.")
+                data_registered = mov_image_decon_float.clip(0,2**16-1).astype(np.uint16)
                 
             if dr.save_all_polyDT_registered:
                 dr._datastore.save_local_registered_image(
