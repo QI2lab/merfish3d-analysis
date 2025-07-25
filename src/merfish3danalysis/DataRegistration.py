@@ -24,6 +24,17 @@ History:
 
 import multiprocessing as mp
 mp.set_start_method('spawn', force=True)
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    message=r".*cupyx\.jit\.rawkernel is experimental.*"
+)
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=r".*block stride.*last level.*"
+)
 
 import numpy as np
 from typing import Union, Optional
@@ -31,13 +42,12 @@ import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.registration import (
-    compute_optical_flow,
     apply_transform,
     compute_rigid_transform
-    compute_warpfield
 )
-
+from merfish3danalysis.utils.registration import compute_warpfield
 from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
+from warpfield.warp import warp_volume
 
 import builtins
 from tqdm import tqdm
@@ -133,7 +143,7 @@ def _apply_polyDT_on_gpu(
 
             mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
 
-            downsample_factors = [5,16,16]
+            downsample_factors = [3,9,9]
             if max(downsample_factors) > 1:
                 ref_image_decon_float_ds = downsample_image_anisotropic(
                     ref_image_decon_float, downsample_factors
@@ -154,11 +164,11 @@ def _apply_polyDT_on_gpu(
                 projection=None
             )
             
-            initial_xyz_shift = np.asarray(lowres_xyz_shift)
+            xyz_shift = np.asarray(lowres_xyz_shift)
 
-            print(f"tile id: {dr._tile_id}; round id: {round_id}; initial xyz: {initial_xyz_shift}")
+            print(f"tile id: {dr._tile_id}; round id: {round_id}; initial xyz: {xyz_shift}")
 
-            initial_xyz_transform = sitk.TranslationTransform(3, np.asarray(initial_xyz_shift))
+            initial_xyz_transform = sitk.TranslationTransform(3, np.asarray(xyz_shift))
             warped_mov_image_decon_float = apply_transform(
                 ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
             )
@@ -166,49 +176,8 @@ def _apply_polyDT_on_gpu(
             gc.collect()
 
             mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
-
-            downsample_factors = [1,3,3]
-            if max(downsample_factors) > 1:
-                ref_image_decon_float_ds = downsample_image_anisotropic(
-                    ref_image_decon_float, downsample_factors
-                )
-                mov_image_decon_float_ds = downsample_image_anisotropic(
-                    mov_image_decon_float, downsample_factors
-                )
-            else:
-                ref_image_decon_float_ds = ref_image_decon_float.copy()
-                mov_image_decon_float_ds = mov_image_decon_float.copy()
-
-            mask = np.zeros_like(mov_image_decon_float_ds)
-            z_means = []
-            for z_idx in range(mov_image_decon_float_ds.shape[0]):
-                z_means.append(np.mean(mov_image_decon_float_ds[z_idx, :, :]))
-                if np.mean(mov_image_decon_float_ds[z_idx, :, :]) < 1:
-                    mask[z_idx, :, :] = 0
-                else:
-                    mask[z_idx, :, :] = 1
-            print(f"z plane mean: {z_means}")
-
-            _, highres_xyz_shift = compute_rigid_transform(
-                ref_image_decon_float_ds,
-                mov_image_decon_float_ds,
-                downsample_factors = downsample_factors,
-                mask = cp.asarray(mask,dtype=cp.float32),
-                projection=None
-            )
-            
-            xyz_shift = np.asarray(initial_xyz_shift) + np.asarray(highres_xyz_shift)
-
-            print(f"tile id: {dr._tile_id}; round id: {round_id}; final xyz: {xyz_shift}")
-
-            xyz_transform = sitk.TranslationTransform(3, np.asarray(highres_xyz_shift))
-            warped_mov_image_decon_float = apply_transform(
-                ref_image_decon_float, mov_image_decon_float, xyz_transform
-            )
-            del mov_image_decon_float
+            del warped_mov_image_decon_float
             gc.collect()
-
-            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
 
             dr._datastore.save_local_rigid_xform_xyz_px(
                 rigid_xform_xyz_px=xyz_shift,
@@ -218,11 +187,19 @@ def _apply_polyDT_on_gpu(
 
             if dr._perform_optical_flow:
                 
-                data_registered, warp_field, block_size, block_strie = compute_warpfield(
+                data_registered, warp_field, block_size, block_stride = compute_warpfield(
                     ref_image_decon_float,
                     mov_image_decon_float,
                     gpu_id = gpu_id
                 )
+
+                dr._datastore.save_coord_of_xform_px(
+                    of_xform_px=warp_field,
+                    tile=dr._tile_id,
+                    downsampling=[1,1,1],
+                    round=round_id
+                )
+
                 # downsample_factors = (3,3,3)
                 # if max(downsample_factors) > 1:
                 #     ref_image_decon_float_ds = downsample_image_anisotropic(
@@ -280,7 +257,7 @@ def _apply_polyDT_on_gpu(
 
                 data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
                 
-                del mov_image_sitk, displacement_field
+                del warp_field
                 gc.collect()
             else:
                 print("Building image.")
@@ -358,39 +335,60 @@ def _apply_bits_on_gpu(
                 shift_xyz = [float(v) for v in rigid_xyz_px]
                 xyz_tx = sitk.TranslationTransform(3, shift_xyz)
 
-                if dr._perform_optical_flow:
-                    of_xform_px, _ = dr._datastore.load_coord_of_xform_px(
-                        tile=dr._tile_id, round=dr._round_ids[r_idx], return_future=False
-                    )
-                    of_xform_sitk = sitk.GetImageFromArray(
-                        of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
-                        isVector=True,
-                    )
-                    interp = sitk.sitkLinear
-                    identity = sitk.Transform(3, sitk.sitkIdentity)
-                    optical_flow_sitk = sitk.Resample(
-                        of_xform_sitk,
-                        sitk.GetImageFromArray(decon_image),
-                        identity,
-                        interp,
-                        0,
-                        of_xform_sitk.GetPixelID(),
-                    )
-                    disp_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                    del optical_flow_sitk, of_xform_px
-                    gc.collect()
+                # if dr._perform_optical_flow:
+        
+                    # of_xform_px, _ = dr._datastore.load_coord_of_xform_px(
+                    #     tile=dr._tile_id, round=dr._round_ids[r_idx], return_future=False
+                    # )
+                    # of_xform_sitk = sitk.GetImageFromArray(
+                    #     of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
+                    #     isVector=True,
+                    # )
+                    # interp = sitk.sitkLinear
+                    # identity = sitk.Transform(3, sitk.sitkIdentity)
+                    # optical_flow_sitk = sitk.Resample(
+                    #     of_xform_sitk,
+                    #     sitk.GetImageFromArray(decon_image),
+                    #     identity,
+                    #     interp,
+                    #     0,
+                    #     of_xform_sitk.GetPixelID(),
+                    # )
+                    # disp_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
+                    # del optical_flow_sitk, of_xform_px
+                    # gc.collect()
 
                 # apply rigid
                 decon_image_rigid = apply_transform(decon_image, decon_image, xyz_tx)
                 del decon_image
 
                 if dr._perform_optical_flow:
-                    decon_bit_sitk = sitk.Resample(
-                        sitk.GetImageFromArray(decon_image_rigid), disp_field
+                    warp_field, _ = dr._datastore.load_coord_of_xform_px(
+                         tile=dr._tile_id, 
+                         round=dr._round_ids[r_idx], 
+                         return_future=False
                     )
-                    del disp_field
-                    data_reg = sitk.GetArrayFromImage(decon_bit_sitk).astype(np.float32)
-                    del decon_bit_sitk
+
+                    block_size = cp.asarray([4., 12., 12.], dtype=cp.float32)
+                    block_stride = cp.asarray([3., 9., 9.], dtype=cp.float32)
+                    decon_image_warped_cp = warp_volume(
+                        decon_image_rigid, 
+                        warp_field, 
+                        block_stride, 
+                        cp.array(-block_size / block_stride / 2), 
+                        out=None,
+                        gpu_id=gpu_id
+                    )
+                    data_reg = cp.asnumpy(decon_image_warped_cp).astype(np.float32)
+                    del decon_image_warped_cp
+                    gc.collect()
+
+                    # decon_bit_sitk = sitk.Resample(
+                    #     sitk.GetImageFromArray(decon_image_rigid), disp_field
+                    # )
+                    # del disp_field
+                    # data_reg = sitk.GetArrayFromImage(decon_bit_sitk).astype(np.float32)
+                    # del decon_bit_sitk
                 else:
                     data_reg = decon_image_rigid.copy()
                     del decon_image_rigid
@@ -401,8 +399,7 @@ def _apply_bits_on_gpu(
                 gc.collect()
 
             # clip to uint16
-            data_reg[data_reg < 0.0] = 0.0
-            data_reg = data_reg.astype(np.uint16)
+            data_reg = data_reg.clip(0,2**16-1).astype(np.uint16)
 
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")

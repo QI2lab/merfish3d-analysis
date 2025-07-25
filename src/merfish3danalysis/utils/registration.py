@@ -101,27 +101,29 @@ def compute_warpfield(
     recipe.levels[-1].repeats = 0
 
     recipe.add_level(block_size=[16, 48, 48])
-    recipe.levels[-1].block_stride = 0.5
-    recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
+    recipe.levels[-1].block_stride = 0.75
+    recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
     recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 5
+    recipe.levels[-1].repeats = 3
     
     recipe.add_level(block_size=[4, 12, 12])
     recipe.levels[-1].block_stride = 0.75
     recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
     recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 5
+    recipe.levels[-1].repeats = 3
 
     warped_image, warp_map, _ = warpfield.register_volumes(
         ref = img_ref, 
         vol = img_trg, 
         recipe = recipe,
+        verbose = False,
         gpu_id = gpu_id,
     )
     warped_image = cp.asnumpy(warped_image).astype(np.float32)
-    warp_field = cp.asnumpy(warp_map.warp_field).dtype(np.float32)
-    block_size = cp.asnumpy(warp_map.block_size).dtype(np.float32)
-    block_stride = cp.asnumpy(warp_map.block_stride).dtype(np.float32)
+    warp_field = cp.asnumpy(warp_map.warp_field).astype(np.float32)
+    block_size = cp.asnumpy(warp_map.block_size).astype(np.float32)
+    block_stride = cp.asnumpy(warp_map.block_stride).astype(np.float32)
+    print(f"warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}")
         
     return (warped_image, warp_field, block_size, block_stride)
 
