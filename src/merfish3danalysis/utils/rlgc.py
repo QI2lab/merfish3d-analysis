@@ -390,7 +390,9 @@ def rlgc_biggs(
         del numerator, denominator, alpha, temp
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
     gc.collect()
+    cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
     return recon_cpu
 
 def chunked_rlgc(
@@ -398,7 +400,7 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 1024,
-    overlap_yx: int = 32,
+    overlap_yx: int = 128,
     bkd: int = 0,
     eager_mode: bool = True
 ) -> np.ndarray:
@@ -458,6 +460,8 @@ def chunked_rlgc(
 
     _fft_cache.clear()
     _H_T_cache.clear()
+    cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
 
     return output

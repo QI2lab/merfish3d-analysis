@@ -126,3 +126,4 @@ src/wf_merfish/postprocess/__pycache__/postprocess.cpython-310.pyc
 run_postprocessing.py
 test_pixeldecode.py
 test_round_alignment.py
+output.mp4

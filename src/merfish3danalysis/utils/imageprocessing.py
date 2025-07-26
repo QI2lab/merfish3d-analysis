@@ -122,14 +122,14 @@ def estimate_shading(
     
     return shading_correction
 
-def downsample_image_anisotropic(image: ArrayLike, level: tuple[int,int,int] = (1,3,3)) -> ArrayLike:
+def downsample_image_anisotropic(image: ArrayLike, level: tuple[int,int,int] = (2,6,6)) -> ArrayLike:
     """Numba accelerated anisotropic downsampling
 
     Parameters
     ----------
     image: ArrayLike
         3D image to be downsampled
-    level: tuple[int,int,int], default=(1,3,3)
+    level: tuple[int,int,int], default=(2,6,6)
         anisotropic downsampling level
 
     Returns
