@@ -2862,11 +2862,14 @@ class qi2labDataStore:
                 return_future,
             )
             attributes = self._load_from_json(zattrs_path)
-            downsampling = np.asarray(
-                attributes["opticalflow_downsampling"], dtype=np.float32
+            block_size = np.asarray(
+                attributes["block_size"], dtype=np.float32
+            )
+            block_stride = np.asarray(
+                attributes["block_stride"], dtype=np.float32
             )
 
-            return of_xform_px, downsampling
+            return (of_xform_px, block_size, block_stride)
         except (IOError, OSError, ZarrError) as e:
             print(e)
             print("Error loading optical flow transform.")
@@ -2876,7 +2879,8 @@ class qi2labDataStore:
         self,
         of_xform_px: ArrayLike,
         tile: Union[int, str],
-        downsampling: Sequence[float],
+        block_size: Sequence[float],
+        block_stride: Sequence[float],
         round: Union[int, str],
         return_future: Optional[bool] = False,
     ):
@@ -2888,8 +2892,10 @@ class qi2labDataStore:
             Local fidicual optical flow matrix for one round and tile.
         tile : Union[int, str]
             Tile index or tile id.
-        downsampling : Sequence[float]
-            Downsampling factor.
+        block_size : Sequence[float]
+            Block size for pixel warp
+        block_stride: Sequence[float]
+            Block stride for pixel warp
         round : Union[int, str] 
             Round index or round id.
         return_future : Optional[bool]
@@ -2963,7 +2969,8 @@ class qi2labDataStore:
                 return_future,
             )
             attributes = self._load_from_json(current_local_zattrs_path)
-            attributes["opticalflow_downsampling"] = downsampling
+            attributes["block_size"] = block_size.tolist()
+            attributes["block_stride"] = block_stride.tolist()
             self._save_to_json(attributes, current_local_zattrs_path)
         except (IOError, OSError, TimeoutError):
             print("Error saving optical flow transform.")

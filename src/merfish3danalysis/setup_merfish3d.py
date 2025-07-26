@@ -33,7 +33,7 @@ BASE_PIP_DEPS = [
     "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",
-    "deeds @ git+https://github.com/QI2lab/deeds-registration",
+    "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
     "ome-zarr",
     "numcodecs",
@@ -65,7 +65,8 @@ LINUX_CONDA_CUDA_PKGS = [
     "cutensor",
     "nccl",
     "'scipy >=1.11.4, <=1.15.3'",
-    "pyopengl"
+    "pyopengl",
+    "pyimagej"
 ]
 
 WINDOWS_CONDA_CUDA_PKGS = [

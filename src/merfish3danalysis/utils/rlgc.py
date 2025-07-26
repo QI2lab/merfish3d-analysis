@@ -14,6 +14,10 @@ from ryomen import Slicer
 from tqdm import tqdm
 import timeit
 import gc
+import os
+import io
+import contextlib
+
 DEBUG = False
 
 gc_update_kernel = ElementwiseKernel(
@@ -35,6 +39,36 @@ gc_update_kernel = ElementwiseKernel(
 
 _fft_cache: dict[tuple[int,int,int], tuple[cp.ndarray, cp.ndarray]] = {}
 _H_T_cache: dict[tuple[int,int,int], cp.ndarray] = {}
+
+def make_feather_weight(shape: tuple[int,int,int], feather_fraction: float = 0.1):
+    """
+    Create a feathered weight mask with more weight in the center and tapering at edges.
+    Uses a cosine tapering window.
+
+    Parameters:
+    shape: tuple
+        the shape of the crop (z, y, x)
+    feather_fraction: float, default 0.1
+        how much of the edge to feather (0 to 0.5)
+
+    Returns:
+    - weight: np.ndarray of same shape as input, with values in [0,1]
+    """
+
+    def cosine_window(length, feather_fraction):
+        feather = int(length * feather_fraction)
+        window = np.ones(length, dtype=np.float32)
+        if feather > 0:
+            ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, 2 * feather)))
+            window[:feather] = ramp[:feather]
+            window[-feather:] = ramp[-feather:]
+        return window
+
+    z_win = cosine_window(shape[0], feather_fraction)
+    y_win = cosine_window(shape[1], feather_fraction)
+    x_win = cosine_window(shape[2], feather_fraction)
+    weight = np.outer(z_win, np.outer(y_win, x_win)).reshape(shape)
+    return weight
 
 def next_gpu_fft_size(x: int) -> int:
     """
@@ -265,7 +299,12 @@ def rlgc_biggs(
     pad_yx = new_yx - image.shape[-1]
     pad_yx_before = pad_yx // 2
     pad_yx_after = pad_yx - pad_yx_before
-    image_padded = np.pad(image,pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),mode="reflect")
+    image_padded = np.pad(
+        image,
+        pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),
+        mode="constant",
+        constant_values = np.median(image)
+    )
 
     if image.ndim == 3:
         image_gpu, pad_z_before, pad_z_after = pad_z(cp.asarray(image_padded, dtype=cp.float32))
@@ -390,7 +429,9 @@ def rlgc_biggs(
         del numerator, denominator, alpha, temp
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
     gc.collect()
+    cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
     return recon_cpu
 
 def chunked_rlgc(
@@ -398,9 +439,10 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 1024,
-    overlap_yx: int = 32,
-    bkd: int = 0,
-    eager_mode: bool = True
+    overlap_yx: int = 128,
+    bkd: bool = False,
+    eager_mode: bool = False,
+    ij = None
 ) -> np.ndarray:
     """Chunked RLGC deconvolution.
     
@@ -416,8 +458,8 @@ def chunked_rlgc(
         size of the chunk to process at a time.
     overlap_yx: int, default = 128
         size of the overlap between chunks.
-    bkd: int, default = 0
-        background value to subtract from the image.
+    sub_bkd: bool, default = False
+        subtract background using imagej
     eager_mode: bool, default = False
         Use stricter iteration cutoff, potentially leading to over-fitting.
         
@@ -427,37 +469,64 @@ def chunked_rlgc(
         deconvolved image.
     """
     
+
     cp.cuda.Device(gpu_id).use()
     cp.fft._cache.PlanCache(memsize=0)
 
-    if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
-        output = rlgc_biggs(image, psf, bkd, gpu_id, eager_mode)
-        output = output.clip(0,2**16-1).astype(np.uint16)
+    # if requested, subtract background before deconvolution. This can help with registration across rounds.
+    if bkd:
+        imp_array = ij.py.to_imageplus(image)
+        imp_array.setStack(imp_array.getStack().duplicate())
+        imp_array.show()
+        ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
+        imp_array.show()
+        ij.py.sync_image(imp_array)
+        bkd_output = ij.py.from_java(imp_array.duplicate())
+        imp_array.close()
+        bkd_image = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
+        del imp_array, bkd_output
+        gc.collect()
     else:
-        output_sum   = np.zeros_like(image, dtype=np.float32)
-        output_count = np.zeros_like(image, dtype=np.float32)
-        crop_size = (image.shape[0], crop_yx, crop_yx)
+        bkd_image = image.copy()
+
+    # Check if deconvolution is tiled. If not, do full deconvolution in one go
+    if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
+        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, eager_mode)
+        output = output.clip(0,2**16-1).astype(np.uint16)
+
+    # Tiled deconvolution with feathered weighting across tiles
+    else:
+        output_sum   = np.zeros_like(bkd_image, dtype=np.float32)
+        output_weight = np.zeros_like(bkd_image, dtype=np.float32)
+        crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
-        slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad = True)
+        slices = Slicer(bkd_image, crop_size=crop_size, overlap=overlap, pad = True)
+        feather_weight = make_feather_weight(crop_size, feather_fraction=0.3)
         
         for crop, source, destination in slices:
             crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
+ 
+            # feathered weighted averaging
+            weighted_crop = crop_array * feather_weight
+            weighted_sub = weighted_crop[source]
+            weight_sub = feather_weight[source]
 
-            # 1) pull out just the valid part of the crop
-            sub = crop_array[source]         # shape == whatever source slices select
+            output_sum[destination]   += weighted_sub
+            output_weight[destination] += weight_sub
 
-            # 2) add it into the destination region in one go
-            output_sum[destination]   += sub
-            output_count[destination] += 1   # broadcasting the +1 over the same shape
-
-        # now build final average, only where count > 0
-        nonzero = output_count > 0
+        nonzero = output_weight > 0
         output  = np.zeros_like(output_sum, dtype=output_sum.dtype)
-        output[nonzero] = output_sum[nonzero] / output_count[nonzero]
+        output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
         output = output.clip(0,2**16-1).astype(np.uint16)
 
     _fft_cache.clear()
     _H_T_cache.clear()
+    cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
 
     return output
+
+    
+
+    
