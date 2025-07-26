@@ -66,7 +66,7 @@ def compute_warpfield(
     """
 
     recipe = warpfield.Recipe() # initialized with a translation level, followed by an affine registration level
-    recipe.pre_filter.clip_thresh = 1 # clip DC background, if present
+    recipe.pre_filter.clip_thresh = 100 # clip DC background, if present
     recipe.pre_filter.soft_edge = [4, 32, 32]
 
     # affine level properties

@@ -58,6 +58,9 @@ def _apply_first_polyDT_on_gpu(
 ):
     import cupy as cp
     from merfish3danalysis.utils.rlgc import chunked_rlgc
+    import imagej
+    import io
+    import contextlib
     cp.cuda.Device(0).use()
 
     raw0 = dr._datastore.load_local_corrected_image(
@@ -66,12 +69,19 @@ def _apply_first_polyDT_on_gpu(
         return_future=False
     )
 
-    ref_image_decon = chunked_rlgc(
-        image=raw0,
-        psf=dr._psfs[0, :],
-        gpu_id=0,
-        crop_yx = dr._crop_yx_decon
-    )
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stderr(stderr_buffer):
+        ij = imagej.init()
+        ref_image_decon = chunked_rlgc(
+            image=raw0,
+            psf=dr._psfs[0, :],
+            gpu_id=0,
+            crop_yx = dr._crop_yx_decon,
+            bkd = True,
+            ij = ij
+        )
+        del ij
+        gc.collect()
 
     dr._datastore.save_local_registered_image(
         ref_image_decon,
@@ -79,6 +89,7 @@ def _apply_first_polyDT_on_gpu(
         deconvolution=True,
         round=dr._round_ids[0]
     )
+    print(f"tile id: {dr._tile_id}; round id: round000; rigid xyz offset: [0,0,0]")
 
     del raw0, ref_image_decon
     gc.collect()
@@ -104,123 +115,134 @@ def _apply_polyDT_on_gpu(
 
     import torch
     import cupy as cp
+    import imagej
+    import io
+    import contextlib
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     torch.cuda.set_device(gpu_id)
     cp.cuda.Device(gpu_id).use()
 
-    for r_idx, round_id in enumerate(round_list):
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stderr(stderr_buffer):
 
-        test =  dr._datastore.load_local_registered_image(
-            tile=dr._tile_id,
-            round=round_id,
-            return_future=False
-        )
-        if test is None:
-            has_reg_decon_data = False
-        else:
-            has_reg_decon_data = True
+        ij = imagej.init()
+        for r_idx, round_id in enumerate(round_list):
 
-        if not (has_reg_decon_data) or dr._overwrite_registered:
-            ref_image_decon_float = dr._datastore.load_local_registered_image(
-                tile=dr._tile_id,
-                round=dr._round_ids[0],
-                return_future=False
-            ).astype(np.float32)
-            
-            raw = dr._datastore.load_local_corrected_image(
+            test =  dr._datastore.load_local_registered_image(
                 tile=dr._tile_id,
                 round=round_id,
                 return_future=False
-            )     
-
-            mov_image_decon = chunked_rlgc(
-                image=raw,
-                psf=dr._psfs[0, :],
-                gpu_id=gpu_id,
-                crop_yx = dr._crop_yx_decon
             )
-
-            mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
-
-            downsample_factors = [3,9,9]
-            if max(downsample_factors) > 1:
-                ref_image_decon_float_ds = downsample_image_anisotropic(
-                    ref_image_decon_float, downsample_factors
-                )
-                mov_image_decon_float_ds = downsample_image_anisotropic(
-                    mov_image_decon_float, downsample_factors
-                )
+            if test is None:
+                has_reg_decon_data = False
             else:
-                ref_image_decon_float_ds = ref_image_decon_float.copy()
-                mov_image_decon_float_ds = mov_image_decon_float.copy()
+                has_reg_decon_data = True
 
-
-            _, lowres_xyz_shift = compute_rigid_transform(
-                ref_image_decon_float_ds,
-                mov_image_decon_float_ds,
-                downsample_factors=downsample_factors,
-                mask = None,
-                projection=None
-            )
-            
-            xyz_shift = np.asarray(lowres_xyz_shift,dtype=np.float32)
-            xyz_shift_float = [round(float(v),1) for v in lowres_xyz_shift]
-
-            print(f"tile id: {dr._tile_id}; round id: {round_id}; rigid xyz offset: {xyz_shift_float}")
-            
-            initial_xyz_transform = sitk.TranslationTransform(3, xyz_shift_float)
-            warped_mov_image_decon_float = apply_transform(
-                ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
-            )
-            del mov_image_decon_float
-            gc.collect()
-
-            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
-            del warped_mov_image_decon_float
-            gc.collect()
-
-            dr._datastore.save_local_rigid_xform_xyz_px(
-                rigid_xform_xyz_px=xyz_shift,
-                tile=dr._tile_id,
-                round=round_id
-            )
-
-            if dr._perform_optical_flow:
-                
-                data_registered, warp_field, block_size, block_stride = compute_warpfield(
-                    ref_image_decon_float,
-                    mov_image_decon_float,
-                    gpu_id = gpu_id
-                )
-                print(f"tile id: {dr._tile_id}; round id: {round_id}; warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}")
-
-                dr._datastore.save_coord_of_xform_px(
-                    of_xform_px=warp_field,
+            if not (has_reg_decon_data) or dr._overwrite_registered:
+                ref_image_decon_float = dr._datastore.load_local_registered_image(
                     tile=dr._tile_id,
-                    block_size=block_size,
-                    block_stride=block_stride,
-                    round=round_id
+                    round=dr._round_ids[0],
+                    return_future=False
+                ).astype(np.float32)
+                
+                raw = dr._datastore.load_local_corrected_image(
+                    tile=dr._tile_id,
+                    round=round_id,
+                    return_future=False
+                )     
+
+                mov_image_decon = chunked_rlgc(
+                    image=raw,
+                    psf=dr._psfs[0, :],
+                    gpu_id=gpu_id,
+                    crop_yx = dr._crop_yx_decon,
+                    bkd = True,
+                    ij = ij
                 )
 
-                data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
+                mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
+
+                downsample_factors = [3,9,9]
+                if max(downsample_factors) > 1:
+                    ref_image_decon_float_ds = downsample_image_anisotropic(
+                        ref_image_decon_float, downsample_factors
+                    )
+                    mov_image_decon_float_ds = downsample_image_anisotropic(
+                        mov_image_decon_float, downsample_factors
+                    )
+                else:
+                    ref_image_decon_float_ds = ref_image_decon_float.copy()
+                    mov_image_decon_float_ds = mov_image_decon_float.copy()
+
+
+                _, lowres_xyz_shift = compute_rigid_transform(
+                    ref_image_decon_float_ds,
+                    mov_image_decon_float_ds,
+                    downsample_factors=downsample_factors,
+                    mask = None,
+                    projection=None
+                )
                 
-                del warp_field
+                xyz_shift = np.asarray(lowres_xyz_shift,dtype=np.float32)
+                xyz_shift_float = [round(float(v),1) for v in lowres_xyz_shift]
+
+                print(f"tile id: {dr._tile_id}; round id: {round_id}; rigid xyz offset: {xyz_shift_float}")
+                
+                initial_xyz_transform = sitk.TranslationTransform(3, xyz_shift_float)
+                warped_mov_image_decon_float = apply_transform(
+                    ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
+                )
+                del mov_image_decon_float
                 gc.collect()
-            else:
-                print("Building image.")
-                data_registered = mov_image_decon_float.clip(0,2**16-1).astype(np.uint16)
-                
-            if dr.save_all_polyDT_registered:
-                dr._datastore.save_local_registered_image(
-                    registered_image=data_registered.astype(np.uint16),
+
+                mov_image_decon_float = warped_mov_image_decon_float.copy().astype(np.float32)
+                del warped_mov_image_decon_float
+                gc.collect()
+
+                dr._datastore.save_local_rigid_xform_xyz_px(
+                    rigid_xform_xyz_px=xyz_shift,
                     tile=dr._tile_id,
-                    deconvolution=True,
                     round=round_id
                 )
 
-            del data_registered
-            gc.collect()
+                if dr._perform_optical_flow:
+                    
+                    data_registered, warp_field, block_size, block_stride = compute_warpfield(
+                        ref_image_decon_float,
+                        mov_image_decon_float,
+                        gpu_id = gpu_id
+                    )
+                    print(f"tile id: {dr._tile_id}; round id: {round_id}; warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}")
+
+                    dr._datastore.save_coord_of_xform_px(
+                        of_xform_px=warp_field,
+                        tile=dr._tile_id,
+                        block_size=block_size,
+                        block_stride=block_stride,
+                        round=round_id
+                    )
+
+                    data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
+                    
+                    del warp_field
+                    gc.collect()
+                else:
+                    print("Building image.")
+                    data_registered = mov_image_decon_float.clip(0,2**16-1).astype(np.uint16)
+                    
+                if dr.save_all_polyDT_registered:
+                    dr._datastore.save_local_registered_image(
+                        registered_image=data_registered.astype(np.uint16),
+                        tile=dr._tile_id,
+                        deconvolution=True,
+                        round=round_id
+                    )
+
+                del data_registered
+                gc.collect()
+        del ij
+        gc.collect()
 
 def _apply_bits_on_gpu(
     dr,
