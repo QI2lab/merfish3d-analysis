@@ -7,7 +7,9 @@ qi2lab 3D MERFISH data.
 
 History:
 ---------
-- **2025/07**: Changed to anisotropic downsampling for registration.
+- **2025/07**: 
+    - Changed to anisotropic downsampling for registration.
+    - Changed to GPU-accelerated pixel warping strategy 
 - **2024/12**: Refactored repo structure.
 - **2024/07**: Prepared to remove all Dask usage and integrate functions
                into the DataRegistration class as static methods.
@@ -19,7 +21,6 @@ import numpy as np
 from numpy.typing import ArrayLike
 from typing import Union, Sequence, Tuple, Optional
 import SimpleITK as sitk
-#import deeds
 import gc
 import warpfield
 
@@ -39,35 +40,6 @@ except ImportError:
     from skimage.registration import phase_cross_correlation # type: ignore
     from skimage.metrics import structural_similarity # type: ignore
     CUCIM_AVAILABLE = False
-
-
-# def compute_optical_flow(img_ref: ArrayLike, 
-#                          img_trg: ArrayLike) -> ArrayLike:
-#     """
-#     Compute the optical flow to warp a target image to a reference image.
-
-#     Parameters
-#     ----------
-#     img_ref: ArrayLike
-#         reference image
-#     img_trg: ArrayLike
-#         moving image
-
-#     Returns
-#     -------
-#     field: ArrayLike
-#         optical flow matrix
-#     """
-
-#     field = deeds.registration_fields(
-#                 fixed=img_ref, 
-#                 moving=img_trg, 
-#                 alpha=1.6, 
-#                 levels=5, 
-#                 verbose=False,
-#                 )
-#     field = np.array(field)
-#     return field
 
 def compute_warpfield(
     img_ref: ArrayLike, 
@@ -104,13 +76,13 @@ def compute_warpfield(
     recipe.levels[-1].block_stride = 0.75
     recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
     recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 3
+    recipe.levels[-1].repeats = 2
     
     recipe.add_level(block_size=[4, 12, 12])
     recipe.levels[-1].block_stride = 0.75
     recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
     recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 3
+    recipe.levels[-1].repeats = 2
 
     warped_image, warp_map, _ = warpfield.register_volumes(
         ref = img_ref, 
@@ -305,89 +277,3 @@ def compute_rigid_transform(
 
 
         return transform, shift_xyz
-
-def warp_coordinates(
-    coordinates: ArrayLike, 
-    tile_translation_transform: sitk.Transform,
-    voxel_size_zyx_um: ArrayLike,
-    displacement_field_transform: Optional[sitk.Transform] = None
-) -> ArrayLike:
-    """
-    First apply a translation transform to the coordinates, then warp them using a given displacement field.
-
-    Parameters
-    ----------
-    coordinates: ArrayLike
-        List of tuples representing the coordinates.
-        MUST be in xyz order!
-    voxel_size_zyx_um: ArrayLike
-        physical pixel spacing
-    displacement_field_transform: Optional[sitk DisplacementField transform], default None
-        simpleITK displacement field transform
-        
-    Returns
-    -------
-    transformed_coordinates: ArrayLike
-        List of tuples representing warped coordinates
-        Returned in xyz order!
-    """
-    voxel_size_xyz_um = voxel_size_zyx_um[::-1]   
-    coords_list = [[coord / voxel_size_xyz_um[i] for i, coord in enumerate(point)] for point in coordinates]
-    
-    
-    transformed_coordinates = []
-    for coord in coords_list:
-        coord_floats = tuple(map(float, coord))
-        
-        # Apply the translation transform
-        translated_physical_coord = tile_translation_transform.TransformPoint(coord_floats)
-        
-        # Apply the displacement field transform
-        if displacement_field_transform is not None:
-            warped_coord = displacement_field_transform.TransformPoint(translated_physical_coord)
-        
-            transformed_coordinates.append(warped_coord)
-        else:
-            transformed_coordinates.append(translated_physical_coord)
-            
-    transformed_physical_coords = [[coord * voxel_size_xyz_um[i] for i, coord in enumerate(point)] for point in transformed_coordinates]
-
-    return np.array(transformed_physical_coords)
-
-# def make_flow_vectors(field: Union[ArrayLike,list[ArrayLike]],
-#                       mask: ArrayLike = None) -> ArrayLike:
-#     """
-#     Arrange the results of a optical flow method to display vectors in a 3D volume.
-    
-#     Parameters
-#     ----------
-#     field: ArrayLike or list[ArrayLike]
-#         Result from scikit-image or cucim ILK or TLV1 methods, or from DEEDS.
-#     mask: ArrayLike, default None
-#         Boolean mask to select areas where the flow field needs to be computed.
-    
-#     Returns
-#     -------
-#     flow_field: ArrayLike
-#         A (im_size x 2 x ndim) array indicating origin and final position of voxels.
-#     """
-
-#     nz, ny, nx = field[0].shape
-
-#     z_coords, y_coords, x_coords = np.meshgrid(
-#         np.arange(nz), 
-#         np.arange(ny), 
-#         np.arange(nx),
-#         indexing='ij',
-#         )
-
-#     if mask is not None:
-#         origin = np.vstack([z_coords[mask], y_coords[mask], x_coords[mask]]).T
-#         shift = np.vstack([field[0][mask], field[1][mask], field[2][mask]]).T 
-#     else:
-#         origin = np.vstack([z_coords.ravel(), y_coords.ravel(), x_coords.ravel()]).T
-#         shift = np.vstack([field[0].ravel(), field[1].ravel(), field[2].ravel()]).T 
-
-#     flow_field = np.moveaxis(np.dstack([origin, shift]), 1, 2) 
-    
-#     return flow_field

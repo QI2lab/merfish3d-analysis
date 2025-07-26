@@ -9,7 +9,7 @@ History:
 - **2025/07**:
     - Implement anistropic downsampling for registration.
     - Implement RLGC deconvolution.
-    - Implement new deeds-registration package.
+    - Implement new GPU based pixel-warping strategy using warpfield
     - Implement multi-GPU processing.
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
@@ -198,64 +198,10 @@ def _apply_polyDT_on_gpu(
                 dr._datastore.save_coord_of_xform_px(
                     of_xform_px=warp_field,
                     tile=dr._tile_id,
-                    downsampling=[1,1,1],
+                    block_size=block_size,
+                    block_stride=block_stride,
                     round=round_id
                 )
-
-                # downsample_factors = (3,3,3)
-                # if max(downsample_factors) > 1:
-                #     ref_image_decon_float_ds = downsample_image_anisotropic(
-                #         ref_image_decon_float, downsample_factors
-                #     )
-                #     mov_image_decon_float_ds = downsample_image_anisotropic(
-                #         mov_image_decon_float, downsample_factors
-                #     )
-
-                # of_xform_px = compute_optical_flow(
-                #     ref_image_decon_float_ds, 
-                #     mov_image_decon_float_ds
-                # )
-
-                # dr._datastore.save_coord_of_xform_px(
-                #     of_xform_px=of_xform_px,
-                #     tile=dr._tile_id,
-                #     downsampling=[
-                #         float(downsample_factors[0]),
-                #         float(downsample_factors[1]),
-                #         float(downsample_factors[2])
-                #     ],
-                #     round=round_id
-                # )
-
-                # of_xform_sitk = sitk.GetImageFromArray(
-                #     of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
-                #     isVector=True,
-                # )
-                # interpolator = sitk.sitkLinear
-                # identity_transform = sitk.Transform(3, sitk.sitkIdentity)
-                # optical_flow_sitk = sitk.Resample(
-                #     of_xform_sitk,
-                #     sitk.GetImageFromArray(mov_image_decon_float),
-                #     identity_transform,
-                #     interpolator,
-                #     0,
-                #     of_xform_sitk.GetPixelID(),
-                # )
-                # displacement_field = sitk.DisplacementFieldTransform(
-                #     optical_flow_sitk
-                # )
-                # del optical_flow_sitk, of_xform_px
-                # gc.collect()
-
-                # # apply optical flow
-                # mov_image_sitk = sitk.Resample(
-                #     sitk.GetImageFromArray(mov_image_decon_float), 
-                #     displacement_field
-                # )
-
-                # data_registered = sitk.GetArrayFromImage(
-                #     mov_image_sitk
-                # ).astype(np.float32)
 
                 data_registered = data_registered.clip(0,2**16-1).astype(np.uint16)
                 
@@ -275,7 +221,6 @@ def _apply_polyDT_on_gpu(
 
             del data_registered
             gc.collect()
-
 
 def _apply_bits_on_gpu(
     dr,
@@ -341,43 +286,19 @@ def _apply_bits_on_gpu(
                 shift_xyz = [float(v) for v in rigid_xyz_px]
                 xyz_tx = sitk.TranslationTransform(3, np.asarray(shift_xyz))
 
-                # if dr._perform_optical_flow:
-        
-                    # of_xform_px, _ = dr._datastore.load_coord_of_xform_px(
-                    #     tile=dr._tile_id, round=dr._round_ids[r_idx], return_future=False
-                    # )
-                    # of_xform_sitk = sitk.GetImageFromArray(
-                    #     of_xform_px.transpose(1, 2, 3, 0).astype(np.float64),
-                    #     isVector=True,
-                    # )
-                    # interp = sitk.sitkLinear
-                    # identity = sitk.Transform(3, sitk.sitkIdentity)
-                    # optical_flow_sitk = sitk.Resample(
-                    #     of_xform_sitk,
-                    #     sitk.GetImageFromArray(decon_image),
-                    #     identity,
-                    #     interp,
-                    #     0,
-                    #     of_xform_sitk.GetPixelID(),
-                    # )
-                    # disp_field = sitk.DisplacementFieldTransform(optical_flow_sitk)
-                    # del optical_flow_sitk, of_xform_px
-                    # gc.collect()
-
                 # apply rigid
                 decon_image_rigid = apply_transform(decon_image, decon_image, xyz_tx)
                 del decon_image
 
                 if dr._perform_optical_flow:
-                    warp_field, _ = dr._datastore.load_coord_of_xform_px(
+                    warp_field, block_size, block_stride = dr._datastore.load_coord_of_xform_px(
                          tile=dr._tile_id, 
                          round=dr._round_ids[r_idx], 
                          return_future=False
                     )
 
-                    # TO DO: save block_size and block-stride to disk / then reload 
-                    block_size = cp.asarray([4., 12., 12.], dtype=cp.float32)
-                    block_stride = cp.asarray([3., 9., 9.], dtype=cp.float32)
+                    block_size = cp.asarray(block_size, dtype=cp.float32)
+                    block_stride = cp.asarray(block_stride, dtype=cp.float32)
                     decon_image_warped_cp = warp_volume(
                         decon_image_rigid, 
                         warp_field, 
@@ -390,12 +311,6 @@ def _apply_bits_on_gpu(
                     del decon_image_warped_cp
                     gc.collect()
 
-                    # decon_bit_sitk = sitk.Resample(
-                    #     sitk.GetImageFromArray(decon_image_rigid), disp_field
-                    # )
-                    # del disp_field
-                    # data_reg = sitk.GetArrayFromImage(decon_bit_sitk).astype(np.float32)
-                    # del decon_bit_sitk
                 else:
                     data_reg = decon_image_rigid.copy()
                     del decon_image_rigid
