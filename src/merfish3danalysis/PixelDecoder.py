@@ -111,10 +111,10 @@ class PixelDecoder:
         self._iterative_normalization_loaded = False
         
         if self._smFISH:
-            # establish lower threshold for magnitude for smFISH data
+            # establish lower magnitude threshold for smFISH data
             self._magnitude_threshold = 0.75
             self._upper_magnitude_threshold = 1.75
-            self._distance_threshold = 0.9
+            self._distance_threshold = 1.0
         else:
             self._magnitude_threshold = 0.9  # default for HW4D4 code
             self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
@@ -348,10 +348,8 @@ class PixelDecoder:
             self._iterative_normalization_vector = cp.asarray(normalization_vector)
             self._iterative_background_vector = cp.asarray(background_vector)
             self._iterative_normalization_loaded = True
-            # print('Iterative normalization vectors loaded in line 351')
         else:
             self._iterative_normalization_vectors()
-            # print('Iterative normalization vectors loaded in line 354')
 
     def _iterative_normalization_vectors(self):
         """Calculate iterative normalization and background vectors."""
@@ -475,7 +473,6 @@ class PixelDecoder:
         self._datastore.iterative_background_vector = barcode_based_background_vector
 
         self._iterative_normalization_loaded = True
-        # print('Iterative normalization vectors loaded in line 480')
 
         del df_barcodes_loaded_no_blanks
         gc.collect()
