@@ -841,7 +841,6 @@ class PixelDecoder:
                 )
 
             if self._iterative_normalization_loaded:
-                # print('Iterative normalization vectors loaded in line 846')
                 scaled_pixel_traces = self._scale_pixel_traces(
                     scaled_pixel_traces,
                     self._iterative_background_vector,
@@ -849,7 +848,6 @@ class PixelDecoder:
                     self._n_merfish_bits,
                 )
             elif self._global_normalization_loaded:
-                print('Iterative normalization vectors not loaded, so doing global normalization')
                 scaled_pixel_traces = self._scale_pixel_traces(
                     scaled_pixel_traces,
                     self._global_background_vector,
@@ -1873,7 +1871,7 @@ class PixelDecoder:
                 viewer.add_image(
                     self._scaled_pixel_images[bit],
                     scale=[self._axial_step, self._pixel_size, self._pixel_size],
-                    name="pixels_" + str(bit),
+                    name="pixels_" + str(int(bit)+1),
                 )
         else:
             viewer.add_image(
@@ -1881,19 +1879,18 @@ class PixelDecoder:
                 scale=[self._axial_step, self._pixel_size, self._pixel_size],
                 name="pixels",
             )
-        
+
         for bit in range(self._datastore.num_bits):
-            img = self._decoded_image[bit]
-            if img.ndim == 3:
-                scale = [self._axial_step, self._pixel_size, self._pixel_size]
-            elif img.ndim == 2:
-                scale = [self._pixel_size, self._pixel_size]
-            else:
-                raise ValueError(f"Unexpected image dimension: {img.ndim}")
+            # Create a mask for pixels decoded as this bit
+            mask = self._decoded_image == bit
+            # Create an image with intensities where mask is True, zeros elsewhere
+            decoded_intensity_image = np.zeros_like(self._magnitude_image)
+            decoded_intensity_image[mask] = self._magnitude_image[mask]
+
             viewer.add_image(
-                img,
-                scale=scale,
-                name="decoded_" + str(bit),
+                decoded_intensity_image,
+                scale=[self._axial_step, self._pixel_size, self._pixel_size],
+                name="decoded_" + str(int(bit)+1),
             )
 
         viewer.add_image(
