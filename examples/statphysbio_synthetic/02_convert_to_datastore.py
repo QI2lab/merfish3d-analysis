@@ -112,7 +112,7 @@ def convert_data(
     else:
         channel_order = "forward"
 
-    voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
+    voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"], metadata["yx_pixel_um"]]
     na = metadata["na"]
     ri = metadata["ri"]
     
@@ -232,6 +232,7 @@ def convert_data(
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
+            print(f"loaded image shape: {raw_image.shape}")
             if tile_idx == 0 and round_idx == 0:
                 correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
@@ -258,16 +259,7 @@ def convert_data(
             raw_image[raw_image < 0.0] = 0.0
             raw_image = raw_image.astype(np.uint16)
             gain_corrected = True
-
-            # Correct for known hot pixel map
-            if camera == "flir":
-                raw_image = replace_hot_pixels(noise_map, raw_image)
-                raw_image = replace_hot_pixels(
-                    np.max(raw_image, axis=0), raw_image, threshold=100
-                )
-                hot_pixel_corrected = True
-            else:
-                hot_pixel_corrected = False
+            hot_pixel_corrected = False
 
             # load stage position
             corrected_y = position_list[tile_idx,1]
@@ -347,7 +339,7 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
     baysor_binary_path = Path(
         r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )
