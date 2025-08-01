@@ -40,34 +40,35 @@ gc_update_kernel = ElementwiseKernel(
 _fft_cache: dict[tuple[int,int,int], tuple[cp.ndarray, cp.ndarray]] = {}
 _H_T_cache: dict[tuple[int,int,int], cp.ndarray] = {}
 
-def make_feather_weight(shape: tuple[int,int,int], feather_fraction: float = 0.1):
+def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64):
     """
-    Create a feathered weight mask with more weight in the center and tapering at edges.
-    Uses a cosine tapering window.
+    Create a feathered weight mask using a cosine taper on Y/X axes only.
+    Z is uniform. Feather taper width is explicitly specified in pixels.
 
-    Parameters:
-    shape: tuple
-        the shape of the crop (z, y, x)
-    feather_fraction: float, default 0.1
-        how much of the edge to feather (0 to 0.5)
+    Parameters
+    ----------
+    shape : tuple[int, int, int]
+        Shape of the crop (z, y, x)
+    feather_px : int
+        Number of pixels to taper at each edge of Y and X
 
-    Returns:
-    - weight: np.ndarray of same shape as input, with values in [0,1]
+    Returns
+    -------
+    weight : np.ndarray
+        Feather mask of shape (z, y, x), values in [0, 1]
     """
-
-    def cosine_window(length, feather_fraction):
-        feather = int(length * feather_fraction)
+    def cosine_taper(length, feather):
         window = np.ones(length, dtype=np.float32)
         if feather > 0:
             ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, 2 * feather)))
-            window[:feather] = ramp[:feather]
-            window[-feather:] = ramp[-feather:]
+            window[:feather] = ramp[:feather]          # ramp up
+            window[-feather:] = ramp[feather:]         # ramp down
         return window
 
-    z_win = cosine_window(shape[0], feather_fraction)
-    y_win = cosine_window(shape[1], feather_fraction)
-    x_win = cosine_window(shape[2], feather_fraction)
-    weight = np.outer(z_win, np.outer(y_win, x_win)).reshape(shape)
+    y_win = cosine_taper(shape[1], feather_px)
+    x_win = cosine_taper(shape[2], feather_px)
+    weight2d = np.outer(y_win, x_win)
+    weight = np.broadcast_to(weight2d[None, :, :], shape)
     return weight
 
 def next_gpu_fft_size(x: int) -> int:
@@ -438,8 +439,8 @@ def chunked_rlgc(
     image: np.ndarray, 
     psf: np.ndarray,
     gpu_id: int = 0,
-    crop_yx: int = 1024,
-    overlap_yx: int = 128,
+    crop_yx: int = 1500,
+    overlap_yx: int = 32,
     bkd: bool = False,
     eager_mode: bool = False,
     ij = None
@@ -498,20 +499,44 @@ def chunked_rlgc(
     else:
         output_sum   = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
-        crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
-        overlap = (0, overlap_yx, overlap_yx)
+        crop_size = (bkd_image.shape[0], 1400, 1400)
+        overlap = (0, 64, 64)
         slices = Slicer(bkd_image, crop_size=crop_size, overlap=overlap, pad = True)
-        feather_weight = make_feather_weight(crop_size, feather_fraction=0.3)
         
-        for crop, source, destination in slices:
+        for i, (crop, source, destination) in enumerate(slices):
             crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
- 
-            # feathered weighted averaging
+             # --- Parse slices ---
+            # Get source slices
+            z_slice, y_slice, x_slice = source[1:]
+
+            # Convert negative stops to absolute positions
+            def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
+                start = s.start if s.start is not None else 0
+                stop = s.stop if s.stop is not None else dim
+                if stop < 0:
+                    stop = dim + stop
+                return start, stop
+
+            y_start, y_stop = resolve_slice(y_slice, crop.shape[1])
+            x_start, x_stop = resolve_slice(x_slice, crop.shape[2])
+
+            # Determine edge tiles correctly
+            is_y_edge = y_start == 0 or y_stop == crop.shape[1]
+            is_x_edge = x_start == 0 or x_stop == crop.shape[2]
+
+            
+            if is_y_edge or is_x_edge:
+                feather_weight = np.ones_like(crop_array, dtype=np.float32)
+            else:
+                feather_px = y_start
+                feather_weight = make_feather_weight(crop.shape, feather_px=feather_px)
+
+            # --- Apply weight to valid region only ---
             weighted_crop = crop_array * feather_weight
             weighted_sub = weighted_crop[source]
             weight_sub = feather_weight[source]
 
-            output_sum[destination]   += weighted_sub
+            output_sum[destination] += weighted_sub
             output_weight[destination] += weight_sub
 
         nonzero = output_weight > 0
