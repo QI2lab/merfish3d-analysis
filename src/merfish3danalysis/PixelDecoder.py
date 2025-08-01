@@ -726,7 +726,7 @@ class PixelDecoder:
                     range(self._image_data_lp.shape[0]), desc="lowpass", leave=False
                 )
             else:
-                iterable_lp = self._image_data_lp
+                iterable_lp = range(self._image_data_lp.shape[0])
 
             for i in iterable_lp:
                 if self._is_3D:
@@ -2213,6 +2213,7 @@ class PixelDecoder:
         self._iterative_normalization_vector = None
         self._global_background_vector = None
         self._optimize_normalization_weights = True
+        self._load_global_normalization_vectors(gpu_id=0)
         temp_dir = Path(tempfile.mkdtemp())
         self._temp_dir = temp_dir
 
@@ -2258,7 +2259,9 @@ class PixelDecoder:
             # gather results and update codebook
                 self._load_all_barcodes()
                 self._load_global_normalization_vectors(gpu_id=0)
+                self._verbose = 2
                 self._iterative_normalization_vectors(gpu_id=0)
+                self._verbose = 1
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
                 cp.cuda.Stream.null.synchronize()
