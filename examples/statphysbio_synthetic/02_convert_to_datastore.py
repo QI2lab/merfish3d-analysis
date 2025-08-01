@@ -96,156 +96,42 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
 
-    from ndstorage import Dataset
-
-    # load first tile to get experimental metadata
-    dataset_path = root_path / Path(
-        root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_1"
-    )
-    original_print = builtins.print
-    builtins.print = no_op
-    dataset = Dataset(str(dataset_path))
-    builtins.print = original_print
-    channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
-    ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
-    try:
-        camera_id = ndtiff_metadata["Camera-CameraName"]
-        camera_id_alt = None
-    except KeyError:
-        camera_id = None
-        camera_id_alt = ndtiff_metadata["Core-Camera"]
-    if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
-        camera = "orcav3"
-        e_per_ADU = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
-        offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
-    elif camera_id == "Blackfly S BFS-U3-200S6M" or camera_id_alt == "Blackfly S BFS-U3-200S6M":
-        camera = "flir"
-        e_per_ADU = 0.03  # this comes from separate calibration
-        offset = 0.0  # this comes from separate calibration
-    else:
-        camera = "synthetic"
-        e_per_ADU = metadata["gain"]
-        offset = metadata["offset"]
-
-    try:
-        binning = metadata["binning"]
-    except Exception:
-        if camera == "orcav3":
-            binning_str = ndtiff_metadata["Camera-Binning"]
-            if binning_str == "1x1":
-                binning = 1
-            elif binning_str == "2x2":
-                binning = 2
-        elif camera == "flir":
-            binning_str = ndtiff_metadata["Binning"]
-            if binning_str == "1":
-                binning = 1
-            elif binning_str == "2":
-                binning = 2
-        elif camera == "synthetic":
-            binning = 1
+    camera = "synthetic"
+    e_per_ADU = metadata["gain"]
+    offset = metadata["offset"]
+    binning = 1
     channels_active = [
         metadata["blue_active"],
         metadata["yellow_active"],
         metadata["red_active"],
     ]
-    # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
-    try:
-        channel_order_bool = metadata["channels_reversed"]
-        if channel_order_bool:
-            channel_order = "reversed"
-        else:
-            channel_order = "forward"
-    except KeyError:
-        if (dataset.get_image_coordinates_list()[0]["channel"]) == "F-Blue":
-            channel_order = "forward"
-        else:
-            channel_order = "reversed"
+ 
+    channel_order_bool = metadata["channels_reversed"]
+    if channel_order_bool:
+        channel_order = "reversed"
+    else:
+        channel_order = "forward"
 
-    # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
-    try:
-        voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
-    except Exception:
-        yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
-        next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
-        z_pixel_um = np.round(
-            np.abs(
-                float(next_ndtiff_metadata["ZPosition_um_Intended"])
-                - float(ndtiff_metadata["ZPosition_um_Intended"])
-            ),
-            3,
-        )
-        voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
-
-        del next_ndtiff_metadata
-
-    # this entry was not contained in pre-v8 metadata csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
-    try:
-        na = metadata["na"]
-    except Exception:
-        na = 1.35
-
-    # this entry was not contained in pre-v8 microscope csv, it was instead stored
-    # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
-    # access pattern easier.
-    try:
-        ri = metadata["ri"]
-    except Exception:
-        ri = 1.51
-
+    voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
+    na = metadata["na"]
+    ri = metadata["ri"]
+    
     ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
     em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
     channel_idxs = list(range(num_ch))
     channels_in_data = list(compress(channel_idxs, channels_active))
 
-    # load camera specific stage vs camera vs computer orientation
-    # parameters.
-    #
-    # these entries were not contained in pre-v8 microscope csv. There were
-    # instead stored in the imaging data itself.
-    #
-    # We added it to > v8 qi2lab-scope metadata csv to make the access pattern easier.
-    # The defaults are the "known" defaults for this camera configuration.
-
-    if camera == "flir":
-        if hot_pixel_image_path is None:
-            noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
-        else:
-            noise_map = imread(hot_pixel_image_path)
-    elif camera == "orcav3":
-        if hot_pixel_image_path is None:
-            noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
-        else:
-            noise_map = imread(hot_pixel_image_path)
-    elif camera == "synthetic":
-        if hot_pixel_image_path is None:
-            noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
-        else:
-            noise_map = imread(hot_pixel_image_path)
-    
-    if not(camera) == "synthetic":
-        stage_affine_str = ndtiff_metadata["PixelSizeAffine"]
-        stage_affine_values = np.asarray(list(map(float, stage_affine_str.split(';'))),dtype=np.float32)
-        stage_affine_values = np.round(stage_affine_values / float(ndtiff_metadata["PixelSizeUm"]),2)
-        affine_zyx_px = np.array([
-            [1,0,0,0],
-            [0,stage_affine_values[4],stage_affine_values[3],0],
-            [0,stage_affine_values[1],stage_affine_values[0],0],
-            [0,0,0,1]
-        ],dtype=np.float32)
+    if hot_pixel_image_path is None:
+        noise_map = None
     else:
-        affine_zyx_px = np.array([
-            [1,0,0,0],
-            [0,1,0,0],
-            [0,0,1,0],
-            [0,0,0,1]
-        ],dtype=np.float32)
+        noise_map = imread(hot_pixel_image_path)
+    
+    affine_zyx_px = np.array([
+        [1,0,0,0],
+        [0,1,0,0],
+        [0,0,1,0],
+        [0,0,0,1]
+    ],dtype=np.float32)
 
     # generate PSFs
     # --------------
@@ -288,10 +174,11 @@ def convert_data(
     try:
         datastore.microscope_type = metadata["experiment_type"]
     except Exception:
-        if z_pixel_um < 0.5:
+        if voxel_size_zyx_um[0] < 0.5:
             datastore.microscope_type = "3D"
         else:
             datastore.microscope_type = "2D"
+    
     datastore.camera_model = camera
     try:
         datastore.tile_overlap = metadata["tile_overlap"]
@@ -301,8 +188,6 @@ def convert_data(
     datastore.na = na
     datastore.ri = ri
     datastore.binning = binning
-    datastore.noise_map = noise_map
-    datastore._shading_maps = np.ones((3, 2048, 2048), dtype=np.float32)  # not used yet
     datastore.voxel_size_zyx_um = voxel_size_zyx_um
 
     # Update datastore state to note that calibrations are done
@@ -315,18 +200,20 @@ def convert_data(
         # Get all stage positions for this round
         position_list = []
         for tile_idx in range(num_tiles):
-            dataset_path = root_path / Path(
-                root_name + "_r" + str(round_idx+1).zfill(4) + "_tile" + str(tile_idx).zfill(4) + "_1"
+            stage_position_path = root_path / Path(
+                root_name
+                + "_r"
+                + str(round_idx + 1).zfill(4)
+                + "_tile"
+                + str(tile_idx).zfill(4)
+                + "_stage_positions.csv"
             )
-            builtins.print = no_op
-            dataset = Dataset(str(dataset_path))
-            builtins.print = original_print
-            x_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["XPosition_um_Intended"]),2)
-            y_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["YPosition_um_Intended"]),2)
-            z_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["ZPosition_um_Intended"]),2)
-            temp = [z_pos_um,y_pos_um,x_pos_um]
+            stage_positions = read_metadatafile(stage_position_path)
+            stage_x = np.round(float(stage_positions["stage_x"]), 2)
+            stage_y = np.round(float(stage_positions["stage_y"]), 2)
+            stage_z = np.round(float(stage_positions["stage_y"]), 2)
+            temp = [stage_z,stage_y,stage_x]
             position_list.append(np.asarray(temp))
-            del dataset
         position_list = np.asarray(position_list)
         
         for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
@@ -338,37 +225,15 @@ def convert_data(
             # load raw image
             image_path = (
                 root_path
-                / Path(
-                    root_name
-                    + "_r"
-                    + str(round_idx + 1).zfill(4)
-                    + "_tile"
-                    + str(tile_idx).zfill(4)
-                    + "_1"
-                )
-                / Path(
-                    root_name
-                    + "_r"
-                    + str(round_idx + 1).zfill(4)
-                    + "_tile"
-                    + str(tile_idx).zfill(4)
-                    + "_NDTiffStack.tif"
-                )
+                / Path(root_name+ "_r"+ str(round_idx + 1).zfill(4)+ "_tile"+ str(tile_idx).zfill(4)+ "_1")
+                / Path("data_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+".tif")
             )
 
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
-            if camera == "orcav3":
-                raw_image = np.swapaxes(raw_image, 0, 1)
-                if tile_idx == 0 and round_idx == 0:
-                    correct_shape = raw_image.shape
-            elif camera == "flir":
-                if tile_idx == 0 and round_idx == 0:
-                    correct_shape = raw_image.shape
-            elif camera == "synthetic":
-                if tile_idx == 0 and round_idx == 0:
-                    correct_shape = raw_image.shape
+            if tile_idx == 0 and round_idx == 0:
+                correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:
                 if raw_image.shape[0] < correct_shape[0]:
                     print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
@@ -405,19 +270,8 @@ def convert_data(
                 hot_pixel_corrected = False
 
             # load stage position
-            if not(camera) == "synthetic":
-                if int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1:
-                    corrected_y = np.max(position_list[:,2]) - position_list[tile_idx,2]
-                    corrected_x = np.max(position_list[:,1]) - position_list[tile_idx,1]
-                elif int(ndtiff_metadata["XYStage-TransposeMirrorY"]) == 1:
-                    corrected_y = np.max(position_list[:,2]) - position_list[tile_idx,2]
-                    corrected_x = np.max(position_list[:,1]) - position_list[tile_idx,1]
-                else:
-                    corrected_y = position_list[tile_idx,1]
-                    corrected_x = position_list[tile_idx,2]
-            else:
-                corrected_y = position_list[tile_idx,1]
-                corrected_x = position_list[tile_idx,2]
+            corrected_y = position_list[tile_idx,1]
+            corrected_x = position_list[tile_idx,2]
             
             corrected_x = np.round(corrected_x,2)
             corrected_y = np.round(corrected_y,2)
@@ -486,6 +340,8 @@ def convert_data(
     z_center_psf = 51//2
     corrected_psf_z_range = correct_shape[0]//2
     datastore.channel_psfs = channel_psfs[:,z_center_psf-corrected_psf_z_range:z_center_psf+corrected_psf_z_range,:,:]
+    datastore.noise_map = np.zeros((3, correct_shape[1], correct_shape[2]), dtype=np.float32)  
+    datastore._shading_maps = np.ones((3, correct_shape[1], correct_shape[2]), dtype=np.float32)
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
