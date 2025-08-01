@@ -232,7 +232,6 @@ def convert_data(
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
             raw_image = imread(image_path)
-            print(f"loaded image shape: {raw_image.shape}")
             if tile_idx == 0 and round_idx == 0:
                 correct_shape = raw_image.shape
             if raw_image is None or raw_image.shape != correct_shape:

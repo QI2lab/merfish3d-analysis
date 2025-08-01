@@ -71,7 +71,7 @@ def decode_tiles_worker(
         use_mask=False, 
         merfish_bits=merfish_bits, 
         num_gpus=1,
-        verbose=1,
+        verbose=2,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)

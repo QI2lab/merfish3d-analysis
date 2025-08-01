@@ -134,7 +134,7 @@ def calculate_F1(
     return results
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
-    gt_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/GT_spots.csv")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
+    gt_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/GT_spots.csv")
     results = calculate_F1(root_path=root_path,gt_path=gt_path,search_radius=.75)
     print(results)

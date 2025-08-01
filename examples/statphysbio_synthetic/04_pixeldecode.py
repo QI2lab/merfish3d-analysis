@@ -10,7 +10,7 @@ from pathlib import Path
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 2,
+    minimum_pixels_per_RNA: int = 9,
     ufish_threshold: float = 0.25,
     fdr_target: float = .05
 ):
@@ -40,14 +40,22 @@ def decode_pixels(
         merfish_bits=merfish_bits, 
         verbose=1
     )
-    
-    # optimize normalization weights through iterative decoding and update
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=1,
-        n_iterations=10,
-        minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold
+
+    # decoder.optimize_normalization_by_decoding(
+    #     n_random_tiles=1,
+    #     n_iterations=10,
+    #     minimum_pixels=minimum_pixels_per_RNA,
+    #     ufish_threshold=ufish_threshold
+    # )
+
+    decoder.decode_one_tile(
+        tile_idx = 0,
+        gpu_id=0,
+        display_results=True,
+        ufish_threshold=ufish_threshold,
+        magnitude_threshold=1.5
     )
+    
     
     """
     if you need to access normalizations, they are class properties that can
@@ -66,15 +74,15 @@ def decode_pixels(
     datastore.iterative_background_vector = np.zeros(16,dtype=np.float32)
     """
     
-    decoder.decode_all_tiles(
-        assign_to_cells=False,
-        prep_for_baysor=False,
-        minimum_pixels=minimum_pixels_per_RNA,
-        fdr_target=fdr_target,
-        ufish_threshold=ufish_threshold
-    )
+    # decoder.decode_all_tiles(
+    #     assign_to_cells=False,
+    #     prep_for_baysor=False,
+    #     minimum_pixels=minimum_pixels_per_RNA,
+    #     fdr_target=fdr_target,
+    #     ufish_threshold=ufish_threshold
+    # )
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
     decode_pixels(root_path=root_path)
