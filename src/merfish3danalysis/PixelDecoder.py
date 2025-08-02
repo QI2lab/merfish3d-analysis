@@ -76,6 +76,7 @@ def decode_tiles_worker(
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
     local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
+    local_decoder._optimize_normalization_weights = False
     
     for tile_idx in tile_indices:
         local_decoder.decode_one_tile(
