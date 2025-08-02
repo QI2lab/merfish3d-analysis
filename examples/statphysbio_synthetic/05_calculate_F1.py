@@ -120,13 +120,15 @@ def calculate_F1(
     qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
 
     # Extract coordinates and gene_ids from ground truth
-    gt_coords = gt_spots[['Z', 'Y', 'X']].to_numpy()
+    offset = [0,256/2*.1625,256/2*.1625]
+    gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy()
+    gt_coords_offset = gt_coords + offset
     gt_gene_ids = gene_ids[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
     
     results = calculate_F1_with_radius(
         qi2lab_coords,
         qi2lab_gene_ids,
-        gt_coords,
+        gt_coords_offset,
         gt_gene_ids,
         search_radius
     )
