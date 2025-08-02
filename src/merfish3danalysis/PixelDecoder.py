@@ -78,7 +78,7 @@ def decode_tiles_worker(
     local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
     local_decoder._optimize_normalization_weights = False
     
-    for tile_idx in tile_indices:
+    for tile_tracker, tile_idx in enumerate(tile_indices):
         local_decoder.decode_one_tile(
             tile_idx=tile_idx,
             display_results=False,
@@ -91,8 +91,9 @@ def decode_tiles_worker(
             gpu_id=gpu_id,
         )
 
-    local_decoder._save_barcodes()
-    local_decoder._cleanup()
+        local_decoder._save_barcodes()
+        local_decoder._cleanup()
+        print(f"GPU {gpu_id}: decoded and saved tile {tile_tracker} of out {len(tile_indices)} (tile index: {tile_idx}).")
 
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
