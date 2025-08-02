@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 from tifffile import TiffWriter
 from typing import Optional
+from tqdm import tqdm
+import gc
 
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
@@ -28,8 +30,8 @@ def local_register_data(root_path: Path):
     registration_factory = DataRegistration(
         datastore=datastore, 
         perform_optical_flow=False, 
-        overwrite_registered=False,
-        save_all_polyDT_registered=False
+        overwrite_registered=True,
+        save_all_polyDT_registered=True
     )
 
     # run local registration across rounds
@@ -45,9 +47,7 @@ def global_register_data(
     root_path : Path, 
     create_max_proj_tiff: Optional[bool] = True
 ):
-    """Register all tiles in first round in global coordinates. 
-    
-    Because there is only one tile in this simulation, we fake the registration.
+    """Register all tiles in first round in global coordinates.
 
     Parameters
     ----------
@@ -58,45 +58,36 @@ def global_register_data(
         create max projection tiff in the segmentation/cellpose directory. 
         Default = True
     """
-    
+
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    
-    stage_zyx_um, _ = datastore.load_local_stage_position_zyx_um(tile=0,round=0)
-    
+
+    affine_zyx_px = np.array([
+        [1,0,0,0],
+        [0,1,0,0],
+        [0,0,1,0],
+        [0,0,0,1]
+    ],dtype=np.float32)
+
+    origin = np.asarray([0.,0.,0.],dtype=np.float32)
+
+    spacing = np.asarray(datastore.voxel_size_zyx_um.copy(), dtype=np.float32)
+
     datastore.save_global_coord_xforms_um(
-        affine_zyx_um=np.identity(4),
-        origin_zyx_um=stage_zyx_um,
-        spacing_zyx_um=np.asarray(
-            (datastore.voxel_size_zyx_um[0],
-            datastore.voxel_size_zyx_um[1],
-            datastore.voxel_size_zyx_um[1])
-        ),
+        affine_zyx_um=affine_zyx_px,
+        origin_zyx_um=origin,
+        spacing_zyx_um=spacing,
         tile=0,
-    )
-    
-    im_data = datastore.load_local_registered_image(
-        tile=0, round=0, return_future=False
     )
 
     datastore.save_global_fidicual_image(
-        fused_image=im_data,
-        affine_zyx_um=np.identity(4),
-        origin_zyx_um=np.zeros(3),
-        spacing_zyx_um=np.asarray(
-            (datastore.voxel_size_zyx_um[0],
-            datastore.voxel_size_zyx_um[1],
-            datastore.voxel_size_zyx_um[1])
-        ),
+        fused_image=datastore.load_local_registered_image(tile=0,round=0,return_future=False),
+        affine_zyx_um=affine_zyx_px,
+        origin_zyx_um=origin,
+        spacing_zyx_um=spacing,
     )
-
-    # update datastore state
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"GlobalRegistered": True})
-    datastore_state.update({"Fused": True})
-    datastore.datastore_state = datastore_state
-
+    
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
         # load downsampled, fused polyDT image and coordinates 
@@ -107,6 +98,8 @@ def global_register_data(
         del polyDT_fused
         
         filename = 'polyDT_max_projection.ome.tiff'
+        cellpose_path = datastore._datastore_path / Path("segmentation") / Path("cellpose")
+        cellpose_path.mkdir(exist_ok=True)
         filename_path = datastore._datastore_path / Path("segmentation") / Path("cellpose") / Path(filename)
         with TiffWriter(filename_path, bigtiff=True) as tif:
             metadata={
@@ -133,8 +126,14 @@ def global_register_data(
                 **options,
                 metadata=metadata
             )
+
+    # update datastore state
+    datastore_state = datastore.datastore_state
+    datastore_state.update({"GlobalRegistered": True})
+    datastore_state.update({"Fused": True})
+    datastore.datastore_state = datastore_state
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
     local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=False)

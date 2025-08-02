@@ -47,7 +47,7 @@ def convert_simulation(
     # load simulated data
     simulation_data_path = root_path / Path("aligned_1.tiff")
     simulation_data = imread(simulation_data_path)
-    
+    print(f"simulation shape: {simulation_data.shape}")
     # reshape simulation to match experimental design
     reshaped_simulation_data = simulation_data.reshape(
         num_rounds,
@@ -58,8 +58,10 @@ def convert_simulation(
     )
     
     # swap yellow and red channel to match how the microscope acquires data (red, yellow, blue)
-    reshaped_simulation_data[:,[0,1],:,:,:] = reshaped_simulation_data[:,[1,0],:,:,:]
-    reshaped_simulation_data = np.swapaxes(reshaped_simulation_data,1,2)
+    print(f"reshaped simulation: {reshaped_simulation_data.shape}")
+    # reshaped_simulation_data[:,[0,1],:,:,:] = reshaped_simulation_data[:,[1,0],:,:,:]
+    # reshaped_simulation_data = np.swapaxes(reshaped_simulation_data,1,2)
+    print(f"reshaped simulation after swap: {reshaped_simulation_data.shape}")
     
     fake_stage_position_zyx_um = [
         0.0,
@@ -131,5 +133,5 @@ def convert_simulation(
     shutil.copy(sim_bitorder_path, sim_acq_bitorder_path)
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example")
     convert_simulation(root_path=root_path)
