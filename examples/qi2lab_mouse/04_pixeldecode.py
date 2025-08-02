@@ -14,8 +14,9 @@ from pathlib import Path
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
-    ufish_threshold: float = 0.1,
-    fdr_target: float = 0.2,
+    ufish_threshold: float = 0.25,
+    magnitude_threshold: float = 1.1,
+    fdr_target: float = 0.05,
     run_baysor: bool = True,
 ):
     """Perform pixel decoding.
@@ -61,15 +62,17 @@ def decode_pixels(
         n_iterations=10,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold,
+        magnitude_threshold=magnitude_threshold
     )
 
     # decode all tiles using iterative normalization weights
     decoder.decode_all_tiles(
         assign_to_cells=True,
         prep_for_baysor=True,
+        magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        fdr_target=fdr_target,
         ufish_threshold=ufish_threshold,
+        fdr_target=fdr_target,
     )
 
     # resegment data using baysor and cellpose prior assignments

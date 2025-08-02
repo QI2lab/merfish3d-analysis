@@ -119,14 +119,24 @@ def calculate_F1(
     qi2lab_coords = decoded_spots[['global_z', 'global_y', 'global_x']].to_numpy()
     qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
 
+    test_tile_data = datastore.load_local_corrected_image(tile=0,round=0,return_future=False)
+
+
     # Extract coordinates and gene_ids from ground truth
-    gt_coords = gt_spots[['Z', 'Y', 'X']].to_numpy()
+    offset = [
+        0, 
+        test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1],
+        test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]
+    ]
+
+    gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy() # note the tranpose, simulation GT is swapped X & Y
+    gt_coords_offset = gt_coords + offset
     gt_gene_ids = gene_ids[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
     
     results = calculate_F1_with_radius(
         qi2lab_coords,
         qi2lab_gene_ids,
-        gt_coords,
+        gt_coords_offset,
         gt_gene_ids,
         search_radius
     )
@@ -134,7 +144,7 @@ def calculate_F1(
     return results
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/sim_acquisition")
-    gt_path = Path(r"/mnt/data/presse/max_simdata/local_ztest_3_dz_1/GT_spots.csv")
+    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
+    gt_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/GT_spots.csv")
     results = calculate_F1(root_path=root_path,gt_path=gt_path,search_radius=.75)
     print(results)

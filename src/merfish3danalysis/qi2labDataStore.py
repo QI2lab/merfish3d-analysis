@@ -1483,8 +1483,9 @@ class qi2labDataStore:
                             self._zarrv2_spec.copy(),
                         )
                     except (IOError, OSError, ZarrError):
-                        print(tile_id, round_id)
-                        print("Optical flow registration data missing.")
+                        #print(tile_id, round_id)
+                        #print("Optical flow registration data missing.")
+                        pass
 
                 current_local_zarr_path = str(
                     self._polyDT_root_path
