@@ -119,9 +119,17 @@ def calculate_F1(
     qi2lab_coords = decoded_spots[['global_z', 'global_y', 'global_x']].to_numpy()
     qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
 
+    test_tile_data = datastore.load_local_corrected_image(tile=0,round=0,return_future=False)
+
+
     # Extract coordinates and gene_ids from ground truth
-    offset = [0,256/2*.1625,256/2*.1625]
-    gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy()
+    offset = [
+        0, 
+        test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1],
+        test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]
+    ]
+
+    gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy() # note the tranpose, simulation GT is swapped X & Y
     gt_coords_offset = gt_coords + offset
     gt_gene_ids = gene_ids[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
     
