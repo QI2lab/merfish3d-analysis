@@ -12,6 +12,7 @@ def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 9,
     ufish_threshold: float = 0.25,
+    magnitude_threshold: float = 1.5,
     fdr_target: float = .05
 ):
     """Perform pixel decoding.
@@ -21,9 +22,11 @@ def decode_pixels(
     root_path: Path
         path to experiment
     minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 3.
+        minimum pixels with same barcode ID required to call a spot. Default = 9.
     ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.5
+        threshold to accept ufish prediction. Default = 0.25
+    magnitude_threshold: float
+        minimum magnitude across all normalized bits required to accept a spot. Default = 1.5
     fdr_target : float
         false discovery rate (FDR) target. Default = .05
     """
@@ -41,20 +44,22 @@ def decode_pixels(
         verbose=1
     )
 
-    # decoder.optimize_normalization_by_decoding(
-    #     n_random_tiles=1,
-    #     n_iterations=10,
+    decoder.optimize_normalization_by_decoding(
+        n_random_tiles=1,
+        n_iterations=3,
+        magnitude_threshold=magnitude_threshold,
+        minimum_pixels=minimum_pixels_per_RNA,
+        ufish_threshold=ufish_threshold
+    )
+
+    # decoder.decode_one_tile(
+    #     tile_idx = 0,
+    #     gpu_id=0,
+    #     display_results=True,
+    #     magnitude_threshold=magnitude_threshold,
     #     minimum_pixels=minimum_pixels_per_RNA,
     #     ufish_threshold=ufish_threshold
     # )
-
-    decoder.decode_one_tile(
-        tile_idx = 0,
-        gpu_id=0,
-        display_results=True,
-        ufish_threshold=ufish_threshold,
-        magnitude_threshold=1.5
-    )
     
     
     """
@@ -74,13 +79,14 @@ def decode_pixels(
     datastore.iterative_background_vector = np.zeros(16,dtype=np.float32)
     """
     
-    # decoder.decode_all_tiles(
-    #     assign_to_cells=False,
-    #     prep_for_baysor=False,
-    #     minimum_pixels=minimum_pixels_per_RNA,
-    #     fdr_target=fdr_target,
-    #     ufish_threshold=ufish_threshold
-    # )
+    decoder.decode_all_tiles(
+        assign_to_cells=False,
+        prep_for_baysor=False,
+        magnitude_threshold=magnitude_threshold,
+        minimum_pixels=minimum_pixels_per_RNA,
+        ufish_threshold=ufish_threshold,
+        fdr_target=fdr_target
+    )
     
 
 if __name__ == "__main__":

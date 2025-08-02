@@ -71,7 +71,7 @@ def decode_tiles_worker(
         use_mask=False, 
         merfish_bits=merfish_bits, 
         num_gpus=1,
-        verbose=2,
+        verbose=1,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
@@ -89,6 +89,9 @@ def decode_tiles_worker(
             use_normalization=True,
             gpu_id=gpu_id,
         )
+
+    local_decoder._save_barcodes()
+    local_decoder._cleanup()
 
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
@@ -141,6 +144,7 @@ def _optimize_norm_worker(
             gpu_id=gpu_id,
         )
         local_decoder._save_barcodes()
+
 
     local_decoder._optimize_normalization_weights = False
 
@@ -1090,7 +1094,7 @@ class PixelDecoder:
     def _extract_barcodes(
         self, 
         minimum_pixels: int = 2, 
-        maximum_pixels: int = 100,
+        maximum_pixels: int = 400,
         gpu_id: int = 0
     ):
         """Extract barcodes from decoded image.
@@ -2036,7 +2040,7 @@ class PixelDecoder:
 
         viewer.add_image(
             self._decoded_image,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
+            scale=[self._axial_step, self._pixel_size, self._pixel_size], # yes.
             name="decoded",
         )
 
@@ -2151,7 +2155,10 @@ class PixelDecoder:
                 magnitude_threshold=magnitude_threshold,
                 gpu_id=gpu_id
             )
+            self._extract_barcodes(minimum_pixels=minimum_pixels,gpu_id=gpu_id)
+            
             if display_results:
+                print(f"Number of extracted barcodes: {len(self._df_barcodes)}")
                 self._display_results()
             if return_results:
                 if self._filter_type == "lp":
@@ -2170,10 +2177,7 @@ class PixelDecoder:
                         self._distance_image, 
                         self._decoded_image
                     )
-            if not (self._optimize_normalization_weights):
-                self._cleanup()
-            else:
-                self._extract_barcodes(minimum_pixels=minimum_pixels,gpu_id=gpu_id)
+            
 
 
     def optimize_normalization_by_decoding(
@@ -2270,6 +2274,7 @@ class PixelDecoder:
                 
         # cleanup temp files, etc.
         self._cleanup()
+        self._optimize_normalization_weights = False
         shutil.rmtree(self._temp_dir)
 
     def decode_all_tiles(
@@ -2333,15 +2338,16 @@ class PixelDecoder:
         for p in processes:
             p.join()
 
-        # now all local parquet files—or however you're saving per‐tile—are on disk;
-        # you can continue with the shared‐disk merge, filtering, cell‐assignment, etc.
+        # load all barcodes and filter
         self._load_tile_decoding = True
         self._load_all_barcodes()
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
-        self._remove_duplicates_in_tile_overlap()
+        if len(all_tiles):
+            self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
         self._save_barcodes()
+        print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
         self._cleanup()
