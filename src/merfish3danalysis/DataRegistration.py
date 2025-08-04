@@ -163,17 +163,30 @@ def _apply_polyDT_on_gpu(
 
                 mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
 
-                downsample_factors = [3,9,9]
-                if max(downsample_factors) > 1:
-                    ref_image_decon_float_ds = downsample_image_anisotropic(
-                        ref_image_decon_float, downsample_factors
-                    )
-                    mov_image_decon_float_ds = downsample_image_anisotropic(
-                        mov_image_decon_float, downsample_factors
-                    )
+                if dr._datastore.microscope_type == "3D":
+                    downsample_factors = [3,9,9]
+                    if max(downsample_factors) > 1:
+                        ref_image_decon_float_ds = downsample_image_anisotropic(
+                            ref_image_decon_float, downsample_factors
+                        )
+                        mov_image_decon_float_ds = downsample_image_anisotropic(
+                            mov_image_decon_float, downsample_factors
+                        )
+                    else:
+                        ref_image_decon_float_ds = ref_image_decon_float.copy()
+                        mov_image_decon_float_ds = mov_image_decon_float.copy()
                 else:
-                    ref_image_decon_float_ds = ref_image_decon_float.copy()
-                    mov_image_decon_float_ds = mov_image_decon_float.copy()
+                    downsample_factors = [1,3,3]
+                    if max(downsample_factors) > 1:
+                        ref_image_decon_float_ds = downsample_image_anisotropic(
+                            ref_image_decon_float, downsample_factors
+                        )
+                        mov_image_decon_float_ds = downsample_image_anisotropic(
+                            mov_image_decon_float, downsample_factors
+                        )
+                    else:
+                        ref_image_decon_float_ds = ref_image_decon_float.copy()
+                        mov_image_decon_float_ds = mov_image_decon_float.copy()
 
 
                 _, lowres_xyz_shift = compute_rigid_transform(
