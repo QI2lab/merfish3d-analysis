@@ -329,7 +329,7 @@ def convert_data(
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
   
-    z_center_psf = 51//2
+    z_center_psf = num_z//2
     corrected_psf_z_range = correct_shape[0]//2
     datastore.channel_psfs = channel_psfs[:,z_center_psf-corrected_psf_z_range:z_center_psf+corrected_psf_z_range,:,:]
     datastore.noise_map = np.zeros((3, correct_shape[1], correct_shape[2]), dtype=np.float32)  
