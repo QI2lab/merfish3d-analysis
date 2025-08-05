@@ -105,6 +105,7 @@ def convert_simulation(
                         'num_t': int(1),
                         'num_r': int(num_rounds),
                         'num_xyz': int(1),
+                        'num_z' : int(num_z),
                         'num_ch': int(num_ch),
                         'na' : float(1.35),
                         'ri' : float(1.51),

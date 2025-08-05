@@ -95,6 +95,7 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
+    num_z  = metadata["num_z"]
 
     camera = "synthetic"
     e_per_ADU = metadata["gain"]
@@ -138,7 +139,7 @@ def convert_data(
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
-            z=51,
+            z=num_z,
             nx=51,
             dxy=voxel_size_zyx_um[1],
             dz=voxel_size_zyx_um[0],
