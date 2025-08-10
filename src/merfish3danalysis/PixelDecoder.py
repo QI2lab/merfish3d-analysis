@@ -38,6 +38,7 @@ from scipy.spatial import cKDTree
 import warnings
 import tempfile
 import shutil
+from datetime import datetime
 
 # filter warning from skimage
 warnings.filterwarnings(
@@ -71,7 +72,7 @@ def decode_tiles_worker(
         use_mask=False, 
         merfish_bits=merfish_bits, 
         num_gpus=1,
-        verbose=1,
+        verbose=0,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
@@ -93,7 +94,7 @@ def decode_tiles_worker(
 
         local_decoder._save_barcodes()
         local_decoder._cleanup()
-        print(f"GPU {gpu_id}: decoded and saved tile {tile_tracker} of out {len(tile_indices)} (tile index: {tile_idx}).")
+        print(time_stamp(), f"GPU {gpu_id}: decoded and saved tile {tile_tracker+1} of out {len(tile_indices)} (tile index: {tile_idx}).")
 
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
@@ -586,13 +587,15 @@ class PixelDecoder:
             )
 
             if self._verbose > 1:
+                print(time_stamp(), "Normalizations updated.")
                 print("---")
-                print("Background")
-                print(diff_iterative_background_vector)
-                print(barcode_based_background_vector)
-                print("Foreground")
-                print(diff_iterative_normalization_vector)
-                print(barcode_based_normalization_vector)
+                print(f"Background delta: {diff_iterative_background_vector}")
+                print(f"Background estimate: {barcode_based_background_vector}")
+                print("---")
+                print(f"Foreground delta: {diff_iterative_normalization_vector}")
+                print(f"Foreground estimate: {barcode_based_normalization_vector}")
+                print("---")
+                print(f"Num. barcodes: {len(df_barcodes_loaded_no_blanks)}")
                 print("---")
 
             self._iterative_normalization_vector = barcode_based_normalization_vector
@@ -1162,30 +1165,53 @@ class PixelDecoder:
                     if self._verbose > 1:
                         print("remove small")
                     labeled_image = remove_small_objects(
-                        labeled_image, min_size=(minimum_pixels - 1)
+                        labeled_image, min_size=(minimum_pixels - 1), connectivity=3
                     )
                     if self._verbose > 1:
                         print("regionprops table")
 
+                    labeled_image = cp.asnumpy(labeled_image).astype(np.int64)
+
                     props = regionprops_table(
-                        cp.asnumpy(labeled_image).astype(np.int32),
+                        labeled_image,
                         intensity_image=intensity_image,
                         properties=[
+                            "label",
                             "area",
                             "centroid",
                             "intensity_mean",
-                            "moments_normalized",
                             "inertia_tensor_eigvals",
-                        ],
+                        ]
                     )
+                    df_barcode = pd.DataFrame(props)
 
-                    del labeled_image
+                    props_magnitude = regionprops_table(
+                        labeled_image,
+                        intensity_image=self._magnitude_image,
+                        properties=[
+                            "label",
+                            "intensity_mean",
+                        ]
+                    )
+                    df_magnitude = pd.DataFrame(props_magnitude)
+
+                    del labeled_image, props, props_magnitude
                     gc.collect()
                     cp.cuda.Stream.null.synchronize()
                     cp.get_default_memory_pool().free_all_blocks()
                     cp.get_default_pinned_memory_pool().free_all_blocks()
+                    
+                    df_magnitude = df_magnitude.rename(
+                        columns={'intensity_mean': 'magnitude_mean'}
+                    )
+                    df_barcode = df_barcode.merge(
+                        df_magnitude[["label", "magnitude_mean"]],
+                        on="label",
+                        how="left",
+                    )
 
-                    df_barcode = pd.DataFrame(props)
+                    df_barcode.drop(columns="label", inplace=True)
+                    df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
                     df_barcode["on_bit_1"] = on_bits_indices[0] + 1
                     df_barcode["on_bit_2"] = on_bits_indices[1] + 1
@@ -1249,16 +1275,14 @@ class PixelDecoder:
                         df_barcode["signal_mean"] - df_barcode["bkd_mean"]
                     )
 
-                    del props
-                    gc.collect()
-
                     if self._verbose > 1:
                         print("dataframe aggregation")
                     if barcode_index == 0:
                         self._df_barcodes = df_barcode.copy()
                     else:
-                        self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
-                        self._df_barcodes.reset_index(drop=True, inplace=True)
+                        if not df_barcode.empty:
+                            self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
+                            self._df_barcodes.reset_index(drop=True, inplace=True)
 
                     del df_barcode
                     gc.collect()
@@ -1287,13 +1311,12 @@ class PixelDecoder:
                         if self._verbose > 1:
                             print("regionprops table")
                         props = regionprops_table(
-                            cp.asnumpy(labeled_image).astype(np.int32),
-                            intensity_image=intensity_image[z_idx, :],
+                            labeled_image[z_idx,:],
+                            intensity_image=cp.asarray(intensity_image[z_idx, :]),
                             properties=[
                                 "area",
                                 "centroid",
                                 "intensity_mean",
-                                "moments_normalized",
                                 "inertia_tensor_eigvals",
                             ],
                         )
@@ -1382,8 +1405,9 @@ class PixelDecoder:
                         if barcode_index == 0:
                             self._df_barcodes = df_barcode.copy()
                         else:
-                            self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
-                            self._df_barcodes.reset_index(drop=True, inplace=True)
+                            if not df_barcode.empty:
+                                self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
+                                self._df_barcodes.reset_index(drop=True, inplace=True)
 
                         del df_barcode
                         gc.collect()
@@ -1584,18 +1608,7 @@ class PixelDecoder:
                 "signal_mean",
                 "s-b_mean",
                 "distance_mean",
-                "moments_normalized-0-0-2",
-                "moments_normalized-0-0-3",
-                "moments_normalized-0-1-1",
-                "moments_normalized-0-1-2",
-                "moments_normalized-0-1-3",
-                "moments_normalized-0-2-0",
-                "moments_normalized-0-2-1",
-                "moments_normalized-0-2-3",
-                "moments_normalized-0-3-0",
-                "moments_normalized-0-3-1",
-                "moments_normalized-0-3-2",
-                "moments_normalized-0-3-3",
+                "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
                 "inertia_tensor_eigvals-2",
@@ -1606,19 +1619,7 @@ class PixelDecoder:
                 "signal_mean",
                 "s-b_mean",
                 "distance_mean",
-                "moments_normalized-0-2",
-                "moments_normalized-0-3",
-                "moments_normalized-1-1",
-                "moments_normalized-1-2",
-                "moments_normalized-1-3",
-                "moments_normalized-2-0",
-                "moments_normalized-2-1",
-                "moments_normalized-2-2",
-                "moments_normalized-2-3",
-                "moments_normalized-3-0",
-                "moments_normalized-3-1",
-                "moments_normalized-3-2",
-                "moments_normalized-3-3",
+                "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
             ]
@@ -1765,18 +1766,7 @@ class PixelDecoder:
                 "signal_mean",
                 "s-b_mean",
                 "distance_mean",
-                "moments_normalized-0-0-2",
-                "moments_normalized-0-0-3",
-                "moments_normalized-0-1-1",
-                "moments_normalized-0-1-2",
-                "moments_normalized-0-1-3",
-                "moments_normalized-0-2-0",
-                "moments_normalized-0-2-1",
-                "moments_normalized-0-2-3",
-                "moments_normalized-0-3-0",
-                "moments_normalized-0-3-1",
-                "moments_normalized-0-3-2",
-                "moments_normalized-0-3-3",
+                "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
                 "inertia_tensor_eigvals-2",
@@ -1788,19 +1778,7 @@ class PixelDecoder:
                 "signal_mean",
                 "s-b_mean",
                 "distance_mean",
-                "moments_normalized-0-2",
-                "moments_normalized-0-3",
-                "moments_normalized-1-1",
-                "moments_normalized-1-2",
-                "moments_normalized-1-3",
-                "moments_normalized-2-0",
-                "moments_normalized-2-1",
-                "moments_normalized-2-2",
-                "moments_normalized-2-3",
-                "moments_normalized-3-0",
-                "moments_normalized-3-1",
-                "moments_normalized-3-2",
-                "moments_normalized-3-3",
+                "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
             ]
@@ -1820,7 +1798,9 @@ class PixelDecoder:
             if self._verbose > 1:
                 print("generating synthetic samples for class balance")
             smote = SMOTE(random_state=42)
-            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+            #X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+            X_train_resampled = X_train.copy()
+            y_train_resampled = y_train.copy()
 
             if self._verbose > 1:
                 print("scaling features")
@@ -2088,7 +2068,10 @@ class PixelDecoder:
             except AttributeError:
                 pass
             if self._barcodes_filtered:
-                del self._df_filtered_barcodes
+                try:
+                    del self._df_filtered_barcodes
+                except AttributeError:
+                    pass
 
             gc.collect()
             cp.cuda.Stream.null.synchronize()
@@ -2105,7 +2088,7 @@ class PixelDecoder:
         magnitude_threshold: Optional[float] = 0.9,
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
-        ufish_threshold: Optional[float] = 0.5,
+        ufish_threshold: Optional[float] = 0.25,
     ) -> Optional[tuple[np.ndarray, ...]]:
         """Decode one tile.
 
@@ -2285,8 +2268,8 @@ class PixelDecoder:
         prep_for_baysor: bool = True,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
         magnitude_threshold: Optional[float] = 0.9,
-        minimum_pixels: Optional[float] = 2.0,
-        ufish_threshold: Optional[float] = 0.1,
+        minimum_pixels: Optional[float] = 3.0,
+        ufish_threshold: Optional[float] = 0.25,
         fdr_target: Optional[float] = 0.05,
     ):
         """Optimize normalization by decoding.
@@ -2386,3 +2369,7 @@ class PixelDecoder:
         self._save_barcodes(format="parquet")
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
+
+
+def time_stamp():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
