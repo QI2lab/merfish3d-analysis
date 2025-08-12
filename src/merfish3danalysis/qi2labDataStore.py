@@ -1228,7 +1228,18 @@ class qi2labDataStore:
             Path to parquet file.
         """
 
-        df.to_parquet(parquet_path)
+        # df.to_parquet(
+        #     parquet_path,
+        #     engine="pyarrow",
+        #     version="1.0",
+        #     write_statistics=False
+        # )
+
+        df.to_parquet(
+            parquet_path,
+            engine="fastparquet", 
+            index=False
+        )
 
     def _parse_datastore(self):
         """Parse datastore to discover available components."""
@@ -4206,7 +4217,7 @@ class qi2labDataStore:
 
         self._save_to_parquet(parsed_spots_df, current_global_filtered_decoded_path)
         
-    def save_mtx(self, spots_source: str = ""):
+    def save_mtx(self, spots_source: str = "baysor"):
         """Save mtx file for downstream analysis. Assumes Baysor has been run.
         
         Parameters

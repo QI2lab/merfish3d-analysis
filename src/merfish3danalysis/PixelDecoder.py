@@ -2366,7 +2366,7 @@ class PixelDecoder:
         self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
-        self._save_barcodes(format="parquet")
+        self._save_barcodes()
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
 

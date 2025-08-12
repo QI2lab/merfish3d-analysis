@@ -49,7 +49,8 @@ BASE_PIP_DEPS = [
     "imbalanced-learn", 
     "scikit-learn", 
     "rtree",
-    "anndata"
+    "anndata",
+    "fastparquet"
 ]
 
 # CUDA conda pkgs
