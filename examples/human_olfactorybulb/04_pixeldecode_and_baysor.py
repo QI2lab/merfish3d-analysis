@@ -1,21 +1,22 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
-Baysor re-segmentation is performed without OR genes to avoid biasing results.
-
-Shepherd 2024/01 - modified script to accept parameters with sensible defaults.
+Shepherd 2025/07 - refactor for multiple GPU suport.
+Shepherd 2024/12 - refactor
+Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 
-def pixeldecode_and_baysor(
+def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 5,
-    ufish_threshold: float = 0.5,
-    fdr_target: float = .05,
+    minimum_pixels_per_RNA: int = 9,
+    ufish_threshold: float = 0.05,
+    magnitude_threshold: float = 0.9,
+    fdr_target: float = 0.05,
     run_baysor: bool = True,
 ):
     """Perform pixel decoding.
@@ -26,53 +27,59 @@ def pixeldecode_and_baysor(
         path to experiment
     merfish_bits : int
         number of bits in codebook
-    minimum_pixels_per_RNA : int, default = 9
-        minimum pixels with same barcode ID required to call a spot.
-    ufish_threshold : float, default = 0.5
-        threshold to accept ufish prediction. 
-    fdr_target : float, default = .05
-        false discovery rate (FDR) target. 
-    run_baysor : bool, default True
-        flag to run Baysor segmentation.
+    minimum_pixels_per_RNA : int
+        minimum pixels with same barcode ID required to call a spot. Default = 9.
+    ufish_threshold : float
+        threshold to accept ufish prediction. Default = 0.1
+    fdr_target : float
+        false discovery rate (FDR) target. Default = .2
+        NOTE: This is higher than usual, but we are finding that .05 is too 
+        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we 
+        have implemented. Ongoing effort to fully understand this issue using 
+        synthetic data.
+    run_baysor : bool
+        flag to run Baysor segmentation. Default = True
     """
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    merfish_bits = 16
+    merfish_bits = datastore.num_bits
 
     # initialize decodor class
     decoder = PixelDecoder(
         datastore=datastore, 
         use_mask=False, 
         merfish_bits=merfish_bits, 
-        verbose=1
+        num_gpus=2,
+        verbose=1,
+        
     )
 
     # optimize normalization weights through iterative decoding and update
     decoder.optimize_normalization_by_decoding(
-        n_random_tiles=10,
-        n_iterations=10,
+        n_random_tiles=20,
+        n_iterations=5,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold,
+        magnitude_threshold=magnitude_threshold
     )
 
     # decode all tiles using iterative normalization weights
     decoder.decode_all_tiles(
         assign_to_cells=True,
         prep_for_baysor=True,
+        magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        fdr_target=fdr_target,
         ufish_threshold=ufish_threshold,
+        fdr_target=fdr_target,
     )
 
-    # # resegment data using baysor and cellpose prior assignments
+    # resegment data using baysor and cellpose prior assignments
     if run_baysor:
         datastore.run_baysor()
-        datastore.reformat_baysor_3D_oultines()
-        datastore.reprocess_and_save_filtered_spots_with_baysor_outlines()
-        datastore.save_mtx(spots_source="resegmented")
+        datastore.save_mtx()
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
-    pixeldecode_and_baysor(root_path=root_path,run_baysor=True,fdr_target=.05)
+    root_path = Path(r"/mnt/server2/qi2lab/20250123_OB_22bit_duplicate/")
+    decode_pixels(root_path=root_path,run_baysor=False)

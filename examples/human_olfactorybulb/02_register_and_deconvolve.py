@@ -1,13 +1,14 @@
 """
-Perform registration on Human OB qi2labdatastore. By default creates a max 
+Perform registration on qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
+Shepherd 2025/07 - rework for multiple GPU support.
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.DataRegistration import DataRegistration
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
 import gc
@@ -33,11 +34,13 @@ def local_register_data(root_path: Path):
         datastore=datastore, 
         perform_optical_flow=True, 
         overwrite_registered=True,
-        save_all_polyDT_registered=False
+        save_all_polyDT_registered=True,
+        num_gpus=2
     )
 
     # run local registration across rounds
-    registration_factory.register_all_tiles()
+    #registration_factory.register_all_tiles()
+    registration_factory.register_one_tile(tile_id = 24)
 
     # update datastore state
     datastore_state = datastore.datastore_state
@@ -56,8 +59,9 @@ def global_register_data(
     root_path: Path
         path to experiment
     
-    create_max_proj_tiff: Optional[bool], default True
-        create max projection tiff in the segmentation/cellpose directory.
+    create_max_proj_tiff: Optional[bool]
+        create max projection tiff in the segmentation/cellpose directory. 
+        Default = True
     """
 
     from multiview_stitcher import spatial_image_utils as si_utils
@@ -85,17 +89,16 @@ def global_register_data(
 
         scale = {"z": voxel_zyx_um[0], "y": voxel_zyx_um[1], "x": voxel_zyx_um[2]}
 
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
+        tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
-
+        
         tile_grid_positions = {
             "z": np.round(tile_position_zyx_um[0], 2),
             "y": np.round(tile_position_zyx_um[1], 2),
             "x": np.round(tile_position_zyx_um[2], 2),
         }
 
-        im_data = []
         im_data = datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
         )
@@ -105,6 +108,7 @@ def global_register_data(
             dims=("c", "z", "y", "x"),
             scale=scale,
             translation=tile_grid_positions,
+            affine=affine_zyx_px,
             transform_key="stage_metadata",
         )
 
@@ -112,7 +116,7 @@ def global_register_data(
         msims.append(msim)
         del im_data
         gc.collect()
-
+        
     # perform registration in three steps, from most downsampling to least.
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
@@ -120,33 +124,16 @@ def global_register_data(
                 msims,
                 reg_channel_index=0,
                 transform_key="stage_metadata",
-                new_transform_key="translation_registered_4x",
-                registration_binning={"z": 4, "y": 12, "x": 12},
-                post_registration_do_quality_filter=False,
-            )
-
-            _ = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="translation_registered_4x",
-                new_transform_key="translation_registered_3x",
-                registration_binning={"z": 3, "y": 9, "x": 9},
-                post_registration_do_quality_filter=True,
-            )
-
-            _ = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="translation_registered_3x",
-                new_transform_key="translation_registered",
-                registration_binning={"z": 1, "y": 3, "x": 3},
+                new_transform_key="affine_registered",
+                #pre_registration_pruning_method="keep_axis_aligned",
+                registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
             )
 
     # extract and save transformations into datastore
     for tile_idx, msim in enumerate(msims):
         affine = msi_utils.get_transform_from_msim(
-            msim, transform_key="translation_registered"
+            msim, transform_key="affine_registered"
         ).data.squeeze()
         affine = np.round(affine, 2)
         origin = si_utils.get_origin_from_sim(
@@ -167,19 +154,19 @@ def global_register_data(
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         fused_sim = fusion.fuse(
             [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
-            transform_key="translation_registered",
+            transform_key="affine_registered",
             output_spacing={
                 "z": voxel_zyx_um[0],
                 "y": voxel_zyx_um[1] * np.round(voxel_zyx_um[0] / voxel_zyx_um[1], 1),
                 "x": voxel_zyx_um[2] * np.round(voxel_zyx_um[0] / voxel_zyx_um[2], 1),
             },
-            output_chunksize=128,
+            output_chunksize=512,
             overlap_in_pixels=64,
         )
 
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
         affine = msi_utils.get_transform_from_msim(
-            fused_msim, transform_key="translation_registered"
+            fused_msim, transform_key="affine_registered"
         ).data.squeeze()
         origin = si_utils.get_origin_from_sim(
             msi_utils.get_sim_from_msim(fused_msim), asarray=True
@@ -190,6 +177,18 @@ def global_register_data(
 
         del fused_msim
 
+        # if the next step fails, you can try the following code instead
+        # it will take longer, but should limit memory usage. You still need
+        # enough memory to hold the result in RAM.
+        """
+        datastore.save_global_fidicual_image(
+            fused_image=fused_sim.data.compute(scheduler="single-threaded"),
+            affine_zyx_um=affine,
+            origin_zyx_um=origin,
+            spacing_zyx_um=spacing,
+        )
+        
+        """
         datastore.save_global_fidicual_image(
             fused_image=fused_sim.data.compute(scheduler="threads", num_workers=12),
             affine_zyx_um=affine,
@@ -246,6 +245,6 @@ def global_register_data(
             )
     
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/qi2lab/20240317_OB_MERFISH_7")
+    root_path = Path(r"/mnt/server2/qi2lab/20250123_OB_22bit_duplicate/")
     local_register_data(root_path)
-    global_register_data(root_path,create_max_proj_tiff=True)
+    global_register_data(root_path)
