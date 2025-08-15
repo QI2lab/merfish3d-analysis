@@ -86,7 +86,7 @@ def _apply_first_polyDT_on_gpu(
             psf=dr._psfs[0, :],
             gpu_id=0,
             crop_yx = dr._crop_yx_decon,
-            bkd = True,
+            bkd = dr._bkd_subtract_polyDT,
             ij = ij
         )
         del ij
@@ -98,7 +98,7 @@ def _apply_first_polyDT_on_gpu(
         deconvolution=True,
         round=dr._round_ids[0]
     )
-    print(time_stamp(), f"GPU {gpu_id}: finished polyDT tile id: {dr._tile_id}; round id: round000.")
+    print(time_stamp(), f"GPU {gpu_id}: finished polyDT tile id: {dr._tile_id}; round id: round001.")
 
     del raw0, ref_image_decon
     gc.collect()
@@ -501,6 +501,10 @@ class DataRegistration:
     ----------
     datastore : qi2labDataStore
         Initialized qi2labDataStore object
+    decon_polyDT: bool, default False
+        Deconvolve ALL polyDT rounds. False = only deconvolve round 1 for downstream stitching.
+    bkd_subtract_polyDT: bool, default True
+        Background subtraction ALL polyDT rounds.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
     perform_optical_flow: bool, default False
@@ -517,6 +521,7 @@ class DataRegistration:
         self,
         datastore: qi2labDataStore,
         decon_polyDT: bool = False,
+        bkd_subtract_polyDT: bool = True,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
         save_all_polyDT_registered: bool = True,
@@ -532,6 +537,7 @@ class DataRegistration:
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
+        self._bkd_subtract_polyDT = bkd_subtract_polyDT
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None

@@ -11,12 +11,8 @@ import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
 from ryomen import Slicer
-from tqdm import tqdm
 import timeit
 import gc
-import os
-import io
-import contextlib
 
 DEBUG = False
 
@@ -156,8 +152,11 @@ def remove_padding_z(
     image: np.ndarray
         Unpadded 3D image.
     """
-    image = padded_image[pad_z_before:-pad_z_after, :, :]
-    return image
+    if pad_z_before == 0 and pad_z_after == 0:
+        return padded_image
+    else:
+        image = padded_image[pad_z_before:-pad_z_after, :, :]
+        return image
 
 def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
     """Pad and center a PSF to match the target image shape.
@@ -492,7 +491,7 @@ def chunked_rlgc(
 
     # Check if deconvolution is tiled. If not, do full deconvolution in one go
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
-        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, eager_mode)
+        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, eager_mode=eager_mode)
         output = output.clip(0,2**16-1).astype(np.uint16)
 
     # Tiled deconvolution with feathered weighting across tiles
