@@ -6,6 +6,7 @@ object that the qi2lab "merfish3d-analysis" package uses.
 
 Required user parameters for system dependent variables are at end of script.
 
+Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2025/08 - update for v0.7
 Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
 Shepherd 2024/12 - refactor
@@ -134,26 +135,6 @@ def convert_data(
         [0,0,0,1]
     ],dtype=np.float32)
 
-    # generate PSFs
-    # --------------
-    channel_psfs = []
-    for channel_id in channels_in_data:
-        psf = make_psf(
-            z=num_z,
-            nx=51,
-            dxy=voxel_size_zyx_um[1],
-            dz=voxel_size_zyx_um[0],
-            NA=na,
-            wvl=em_wavelengths_um[channel_id],
-            ns=1.47,
-            ni=ri,
-            ni0=ri,
-            model="vectorial",
-        ).astype(np.float32)
-        psf = psf / np.sum(psf, axis=(0, 1, 2))
-        channel_psfs.append(psf)
-    channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
-
     # initialize datastore
     if output_path is None:
         datastore_path = root_path / Path(r"qi2labdatastore")
@@ -190,6 +171,45 @@ def convert_data(
     datastore.ri = ri
     datastore.binning = binning
     datastore.voxel_size_zyx_um = voxel_size_zyx_um
+
+
+
+    # generate PSFs
+    # --------------
+    channel_psfs = []
+    for channel_id in channels_in_data:
+        if datastore.microscope_type == "3D":
+            psf = make_psf(
+                z=num_z,
+                nx=51,
+                dxy=voxel_size_zyx_um[1],
+                dz=voxel_size_zyx_um[0],
+                NA=na,
+                wvl=em_wavelengths_um[channel_id],
+                ns=1.47,
+                ni=ri,
+                ni0=ri,
+                model="vectorial",
+            ).astype(np.float32)
+            psf = psf / np.sum(psf, axis=(0, 1, 2))
+            channel_psfs.append(psf)
+        else:
+            psf = make_psf(
+                z=1,
+                nx=51,
+                dxy=voxel_size_zyx_um[1],
+                dz=voxel_size_zyx_um[0],
+                NA=na,
+                wvl=em_wavelengths_um[channel_id],
+                ns=1.47,
+                ni=ri,
+                ni0=ri,
+                model="vectorial",
+            ).astype(np.float32)
+            psf = psf / np.sum(psf, axis=(0, 1, 2))
+            channel_psfs.append(psf)
+    channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
+    datastore.channel_psfs = channel_psfs
 
     # Update datastore state to note that calibrations are done
     datastore_state = datastore.datastore_state
@@ -329,9 +349,6 @@ def convert_data(
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
   
-    z_center_psf = 51//2
-    corrected_psf_z_range = correct_shape[0]//2
-    datastore.channel_psfs = channel_psfs[:,z_center_psf-corrected_psf_z_range:z_center_psf+corrected_psf_z_range,:,:]
     datastore.noise_map = np.zeros((3, correct_shape[1], correct_shape[2]), dtype=np.float32)  
     datastore._shading_maps = np.ones((3, correct_shape[1], correct_shape[2]), dtype=np.float32)
     datastore_state = datastore.datastore_state
@@ -339,7 +356,7 @@ def convert_data(
     datastore.datastore_state = datastore_state
 
 if __name__ == "__main__":
-    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
+    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
     baysor_binary_path = Path(
         r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
     )

@@ -3,10 +3,11 @@ Convert statphysbio simulation into a fake acquisition
 
 This is an example on how to convert a statphysbio simulation into a fake 
 qi2lab acquisition. The simulation comes as a flat tiff file with all z planes
-for yellow, red, blue channels in a given round, then repeat for the next round.
+for red, yellow, blue channels in a given round, then repeat for the next round.
 
 Required user parameters for system dependent variables are at end of script.
 
+Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script based on metadata from Max in statphysbio lab.
 """
 
@@ -134,5 +135,5 @@ def convert_simulation(
     shutil.copy(sim_bitorder_path, sim_acq_bitorder_path)
     
 if __name__ == "__main__":
-    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example")
+    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/")
     convert_simulation(root_path=root_path)

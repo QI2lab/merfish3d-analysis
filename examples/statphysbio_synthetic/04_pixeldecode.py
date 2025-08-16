@@ -1,6 +1,7 @@
 """
 Decode using qi2lab GPU decoder.
 
+Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script to run on simulation.
 """
 
@@ -46,7 +47,7 @@ def decode_pixels(
 
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=3,
+        n_iterations=1,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold
@@ -90,5 +91,5 @@ def decode_pixels(
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
+    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
     decode_pixels(root_path=root_path)

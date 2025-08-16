@@ -1,6 +1,7 @@
 """
 Perform registration on simulated statphysbio data.
 
+Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script to run on simulation.
 """
 
@@ -31,7 +32,7 @@ def local_register_data(root_path: Path):
         datastore=datastore, 
         perform_optical_flow=False, 
         overwrite_registered=True,
-        save_all_polyDT_registered=True
+        save_all_polyDT_registered=False
     )
 
     # run local registration across rounds
@@ -134,6 +135,6 @@ def global_register_data(
     datastore.datastore_state = datastore_state
     
 if __name__ == "__main__":
-    root_path = Path(r"/home/max/codes/BiFISH/results/16bit_example/sim_acquisition")
+    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
     local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=False)
