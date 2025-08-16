@@ -387,7 +387,7 @@ class PixelDecoder:
                         tqdm(random_tiles, desc="background est.", leave=False)
                     )
                 else:
-                    iterable_tiles = random_tiles
+                    iterable_tiles = enumerate(random_tiles)
 
                 low_pixels = []
                 for tile_idx, tile_id in iterable_tiles:
@@ -417,7 +417,7 @@ class PixelDecoder:
                         tqdm(random_tiles, desc="normalization est.", leave=False)
                     )
                 else:
-                    iterable_tiles = random_tiles
+                    iterable_tiles = enumerate(random_tiles)
 
                 high_pixels = []
                 for tile_idx, tile_id in iterable_tiles:
@@ -1098,8 +1098,8 @@ class PixelDecoder:
 
     def _extract_barcodes(
         self, 
-        minimum_pixels: int = 2, 
-        maximum_pixels: int = 400,
+        minimum_pixels: int = 9, 
+        maximum_pixels: int = 1000,
         gpu_id: int = 0
     ):
         """Extract barcodes from decoded image.
@@ -1894,7 +1894,8 @@ class PixelDecoder:
             self._df_filtered_barcodes["cell_id"] = -1
             self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
-            print("Insufficient Blank barcodes called for filtering.")
+            if self._verbose >= 1:
+                print("Insufficient Blank barcodes called for filtering.")
 
     @staticmethod
     def _roi_to_shapely(roi):
@@ -2213,7 +2214,12 @@ class PixelDecoder:
             random_tiles = all_tiles
         chunk_size = (len(random_tiles) + self._num_gpus - 1) // self._num_gpus
 
-        for iteration in trange(n_iterations,desc="Iterative normalization"):
+        if self._verbose >= 1:
+            iterator = trange(n_iterations,desc="Iterative normalization")
+        else:
+            iterator = range(n_iterations)
+
+        for iteration in iterator:
 
             # launch one process per GPU
             processes = []
@@ -2248,9 +2254,11 @@ class PixelDecoder:
             # gather results and update codebook
                 self._load_all_barcodes()
                 self._load_global_normalization_vectors(gpu_id=0)
-                self._verbose = 2
+                if not(self._verbose == 0):
+                    self._verbose = 2
                 self._iterative_normalization_vectors(gpu_id=0)
-                self._verbose = 1
+                if not(self._verbose == 0):
+                    self._verbose = 1
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
                 cp.cuda.Stream.null.synchronize()
@@ -2332,7 +2340,8 @@ class PixelDecoder:
         if assign_to_cells:
             self._assign_cells()
         self._save_barcodes()
-        print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
+        if self._verbose >=1 :
+            print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
         self._cleanup()
@@ -2360,9 +2369,11 @@ class PixelDecoder:
         self._load_tile_decoding = True
         self._load_all_barcodes()
         self._load_tile_decoding = False
-        self._verbose = 2
+        if not(self._verbose == 0):
+            self._verbose = 2
         self._filter_all_barcodes(fdr_target=fdr_target)
-        self._verbose = 1
+        if not(self._verbose == 0):
+            self._verbose = 1
         self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
