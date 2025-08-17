@@ -295,6 +295,10 @@ def rlgc_biggs(
     cp.cuda.Device(gpu_id).use()
     rng = cp.random.default_rng(42)
     
+    if psf.ndim == 2:
+        psf = np.expand_dims(psf,axis=0)
+    if image.ndim == 2:
+        image = np.expand_dims(image,axis=0)
     new_yx = next_gpu_fft_size(image.shape[-1]+1)
     pad_yx = new_yx - image.shape[-1]
     pad_yx_before = pad_yx // 2
