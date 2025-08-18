@@ -24,6 +24,7 @@ History:
 
 import multiprocessing as mp
 mp.set_start_method('spawn', force=True)
+import os
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -37,20 +38,12 @@ warnings.filterwarnings(
 )
 
 import numpy as np
-from typing import Union, Optional
+from typing import Union
 import gc
 import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.registration import (
-    apply_transform,
-    compute_rigid_transform
-)
-from merfish3danalysis.utils.registration import compute_warpfield
-from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
-from warpfield.warp import warp_volume
 
 import builtins
-from tqdm import tqdm
 from datetime import datetime
 import time
 
@@ -59,11 +52,13 @@ def _apply_first_polyDT_on_gpu(
     gpu_id: int =0
 ):
     import cupy as cp
-    from merfish3danalysis.utils.rlgc import chunked_rlgc
     import imagej
     import io
     import contextlib
+    import os
     cp.cuda.Device(0).use()
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
+
 
     raw0 = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id,
@@ -76,6 +71,7 @@ def _apply_first_polyDT_on_gpu(
         ij_success = False
         while not(ij_success):
             try:
+                os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
                 ij = imagej.init()
                 ij_success = True
             except:
@@ -103,6 +99,7 @@ def _apply_first_polyDT_on_gpu(
     del raw0, ref_image_decon
     gc.collect()
     cp.get_default_memory_pool().free_all_blocks()
+    return True
 
 def _apply_polyDT_on_gpu(
     dr,
@@ -121,16 +118,22 @@ def _apply_polyDT_on_gpu(
     gpu_id : int
         physical GPU to bind in this process
     """
-
     import torch
+    torch.cuda.set_device(gpu_id)
     import cupy as cp
+    cp.cuda.Device(gpu_id).use()
+
+   
     import imagej
     import io
     import contextlib
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, rlgc_biggs
+    from merfish3danalysis.utils.registration import compute_warpfield
+    from merfish3danalysis.utils.registration import (
+        apply_transform,
+        compute_rigid_transform
+    )
+    from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
 
-    torch.cuda.set_device(gpu_id)
-    cp.cuda.Device(gpu_id).use()
 
     stderr_buffer = io.StringIO()
     with contextlib.redirect_stderr(stderr_buffer):
@@ -138,6 +141,7 @@ def _apply_polyDT_on_gpu(
         ij_success = False
         while not(ij_success):
             try:
+                os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
                 ij = imagej.init()
                 ij_success = True
             except:
@@ -168,19 +172,22 @@ def _apply_polyDT_on_gpu(
                         round=dr._round_ids[0],
                         return_future=False
                     )
-                    imp_array = ij.py.to_imageplus(ref_image)
-                    imp_array.setStack(imp_array.getStack().duplicate())
-                    imp_array.show()
-                    ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
-                    imp_array.show()
-                    ij.py.sync_image(imp_array)
-                    bkd_output = ij.py.from_java(imp_array.duplicate())
-                    imp_array.close()
-                    ref_image_bkd = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
-                    ref_image_decon_float = ref_image_bkd.copy().astype(np.float32)
-                    del imp_array, ref_image, bkd_output, ref_image_bkd
+                    if dr._bkd_subtract_polyDT:
+                        imp_array = ij.py.to_imageplus(ref_image)
+                        imp_array.setStack(imp_array.getStack().duplicate())
+                        imp_array.show()
+                        ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
+                        imp_array.show()
+                        ij.py.sync_image(imp_array)
+                        bkd_output = ij.py.from_java(imp_array.duplicate())
+                        imp_array.close()
+                        ref_image_bkd = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
+                        ref_image_decon_float = ref_image_bkd.copy().astype(np.float32)
+                        del imp_array, ref_image, bkd_output, ref_image_bkd
+                    else:
+                        ref_image_decon_float = ref_image.copy().astype(np.float32)
+                        del ref_image
 
-                
                 raw = dr._datastore.load_local_corrected_image(
                     tile=dr._tile_id,
                     round=round_id,
@@ -188,6 +195,7 @@ def _apply_polyDT_on_gpu(
                 )
 
                 if dr._decon_polyDT:
+                    from merfish3danalysis.utils.rlgc import chunked_rlgc, rlgc_biggs
                     if dr._datastore.microscope_type == "2D":
                         imp_array = ij.py.to_imageplus(raw)
                         imp_array.setStack(imp_array.getStack().duplicate())
@@ -218,16 +226,20 @@ def _apply_polyDT_on_gpu(
                             ij = ij
                         )
                 else:
-                    imp_array = ij.py.to_imageplus(raw)
-                    imp_array.setStack(imp_array.getStack().duplicate())
-                    imp_array.show()
-                    ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
-                    imp_array.show()
-                    ij.py.sync_image(imp_array)
-                    bkd_output = ij.py.from_java(imp_array.duplicate())
-                    imp_array.close()
-                    mov_image_decon = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
-                    del imp_array, raw, bkd_output
+                    if dr._bkd_subtract_polyDT:
+                        imp_array = ij.py.to_imageplus(raw)
+                        imp_array.setStack(imp_array.getStack().duplicate())
+                        imp_array.show()
+                        ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
+                        imp_array.show()
+                        ij.py.sync_image(imp_array)
+                        bkd_output = ij.py.from_java(imp_array.duplicate())
+                        imp_array.close()
+                        mov_image_decon = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
+                        del imp_array, raw, bkd_output
+                    else:
+                        mov_image_decon = raw.copy().astype(np.uint16)
+                        del raw
 
                 mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
                 del mov_image_decon
@@ -263,9 +275,10 @@ def _apply_polyDT_on_gpu(
                     mov_image_decon_float_ds,
                     downsample_factors=downsample_factors,
                     mask = None,
-                    projection=None
+                    projection=None,
+                    gpu_id = gpu_id
                 )
-                
+
                 xyz_shift = np.asarray(lowres_xyz_shift,dtype=np.float32)
                 xyz_shift_float = [round(float(v),1) for v in lowres_xyz_shift]
 
@@ -295,7 +308,6 @@ def _apply_polyDT_on_gpu(
                         mov_image_decon_float,
                         gpu_id = gpu_id
                     )
-                    #print(time_stamp(), f"GPU {gpu_id}: processed tile id: {dr._tile_id}; round id: {round_id}; warp_field shape: {warp_field.shape}, block_size: {block_size}, block_stride: {block_stride}.")
 
                     dr._datastore.save_coord_of_xform_px(
                         of_xform_px=warp_field,
@@ -323,8 +335,26 @@ def _apply_polyDT_on_gpu(
 
                 del data_registered
                 gc.collect()
+
+                try:
+                    cp.cuda.Stream.null.synchronize()
+                    cp.get_default_memory_pool().free_all_blocks()
+                    cp.get_default_pinned_memory_pool().free_all_blocks()
+                    try:
+                        import cupyx
+                        cupyx.scipy.fft.clear_plan_cache()
+                    except Exception:
+                        pass
+                    try:
+                        cp.fft.config.get_plan_cache().clear()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         del ij
         gc.collect()
+
+    return True
 
 def _apply_bits_on_gpu(
     dr,
@@ -346,15 +376,19 @@ def _apply_bits_on_gpu(
 
     import torch
     import cupy as cp
+
+    torch.cuda.set_device(gpu_id)
+    cp.cuda.Device(gpu_id).use()
+    
+    from warpfield.warp import warp_volume
     import os
     os.environ["ORT_LOG_SEVERITY_LEVEL"] = "3"
     import onnxruntime as ort
     ort.set_default_logger_severity(3)
     from ufish.api import UFish
     from merfish3danalysis.utils.rlgc import chunked_rlgc, rlgc_biggs
+    from merfish3danalysis.utils.registration import apply_transform
 
-    torch.cuda.set_device(gpu_id)
-    cp.cuda.Device(gpu_id).use()
 
     for bit_id in bit_list:
 
@@ -493,6 +527,8 @@ def _apply_bits_on_gpu(
 
             del data_reg, ufish_data, ufish_loc
             gc.collect()
+
+    return True
 
 class DataRegistration:
     """Register 2D or 3D MERFISH data across rounds.
@@ -738,6 +774,10 @@ class DataRegistration:
         all_rounds = list(self._round_ids[1:])
         chunk_size = (len(all_rounds) + self._num_gpus - 1) // self._num_gpus  # ceiling division
 
+
+
+
+
         # 3) Launch one process per GPU (only as many as needed)
         processes = []
         for gpu_id in range(self._num_gpus):
@@ -747,9 +787,19 @@ class DataRegistration:
                 break  # no more rounds to assign
 
             subset = all_rounds[start:end]
-            p = mp.Process(target=_apply_polyDT_on_gpu, args=(self, subset, gpu_id))
-            p.start()
-            processes.append(p)
+     
+            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            try:
+                # Inside child, logical device 0 maps to this physical GPU.
+                p = mp.Process(target=_apply_polyDT_on_gpu, args=(self, subset, 0))
+                p.start()
+                processes.append(p)
+            finally:
+                if old_vis is None:
+                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+                else:
+                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
 
         # 4) Wait for all GPU‐workers to finish
         for p in processes:
@@ -774,9 +824,19 @@ class DataRegistration:
                 break  # no more bits to assign
 
             subset = all_bits[start:end]
-            p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, gpu_id))
-            p.start()
-            processes.append(p)
+
+            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            try:
+                p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, 0))
+                p.start()
+                processes.append(p)
+            finally:
+                if old_vis is None:
+                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+                else:
+                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+
 
         # 4) Wait for all GPU‐workers to finish
         for p in processes:

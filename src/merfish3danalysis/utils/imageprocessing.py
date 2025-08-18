@@ -18,18 +18,6 @@ from numba import njit, prange
 import builtins
 from basicpy import BaSiC
 
-# GPU
-CUPY_AVIALABLE = True
-try:
-    import cupy as cp  # type: ignore
-except ImportError:
-    xp = np
-    CUPY_AVIALABLE = False
-    from scipy import ndimage  # type: ignore
-else:
-    xp = cp
-    from cupyx.scipy import ndimage  # type: ignore
-
 
 def replace_hot_pixels(
     noise_map: ArrayLike, 
@@ -51,30 +39,32 @@ def replace_hot_pixels(
         hotpixel corrected data
     """
 
-    data = xp.asarray(data, dtype=xp.float32)
-    noise_map = xp.asarray(noise_map, dtype=xp.float32)
+    # GPU
+    import cupy as cp  # type: ignore
+    from cupyx.scipy import ndimage  # type: ignore
+
+    data = cp.asarray(data, dtype=cp.float32)
+    noise_map = cp.asarray(noise_map, dtype=cp.float32)
 
     # threshold darkfield_image to generate bad pixel matrix
-    hot_pixels = xp.squeeze(xp.asarray(noise_map))
+    hot_pixels = cp.squeeze(cp.asarray(noise_map))
     hot_pixels[hot_pixels <= threshold] = 0
     hot_pixels[hot_pixels > threshold] = 1
-    hot_pixels = hot_pixels.astype(xp.float32)
-    inverted_hot_pixels = xp.ones_like(hot_pixels) - hot_pixels.copy()
+    hot_pixels = hot_pixels.astype(cp.float32)
+    inverted_hot_pixels = cp.ones_like(hot_pixels) - hot_pixels.copy()
 
-    data = xp.asarray(data, dtype=xp.float32)
+    data = cp.asarray(data, dtype=cp.float32)
     for z_idx in range(data.shape[0]):
         median = ndimage.median_filter(data[z_idx, :, :], size=3)
         data[z_idx, :] = inverted_hot_pixels * data[z_idx, :] + hot_pixels * median
 
     data[data < 0] = 0
 
-    if CUPY_AVIALABLE:
-        data = xp.asnumpy(data).astype(np.uint16)
-        gc.collect()
-        cp.clear_memo()
-        cp._default_memory_pool.free_all_blocks()
-    else:
-        data = data.astype(np.uint16)
+    data = cp.asnumpy(data).astype(np.uint16)
+    gc.collect()
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
 
     return data
 
@@ -93,18 +83,21 @@ def estimate_shading(
     shading_image: ArrayLike
         estimated shading image
     """
+
+    # GPU
+
+    import cupy as cp  # type: ignore
+    from cupyx.scipy import ndimage  # type: ignore
+
     maxz_images = []
     for image in images:
-        maxz_images.append(xp.squeeze(xp.max(image.result(),axis=0)))    
+        maxz_images.append(cp.squeeze(cp.max(image.result(),axis=0)))    
 
-    if CUPY_AVIALABLE:
-        maxz_images = xp.asnumpy(maxz_images).astype(np.uint16)
-        gc.collect()
-        cp.clear_memo()
-        cp._default_memory_pool.free_all_blocks()
-    else:
-        maxz_images = maxz_images.astype(np.uint16)
-
+    maxz_images = cp.asnumpy(maxz_images).astype(np.uint16)
+    gc.collect()
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
 
     original_print = builtins.print
     builtins.print = no_op
@@ -116,9 +109,10 @@ def estimate_shading(
     
     del basic
     gc.collect()
-    if CUPY_AVIALABLE:
-        cp.clear_memo()
-        cp._default_memory_pool.free_all_blocks()
+
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
     
     return shading_correction
 

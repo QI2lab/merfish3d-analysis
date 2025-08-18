@@ -19,27 +19,10 @@ History:
 
 import numpy as np
 from numpy.typing import ArrayLike
-from typing import Union, Sequence, Tuple, Optional
+from typing import Sequence, Tuple, Optional
 import SimpleITK as sitk
 import gc
-import warpfield
 
-try:
-    import cupy as cp # type: ignore
-    xp = cp
-    CUPY_AVAILABLE = True
-except ImportError:
-    xp = np
-    CUPY_AVAILABLE = False
-
-try:
-    from cucim.skimage.registration import phase_cross_correlation # type: ignore
-    from cucim.skimage.metrics import structural_similarity # type: ignore
-    CUCIM_AVAILABLE = True
-except ImportError:
-    from skimage.registration import phase_cross_correlation # type: ignore
-    from skimage.metrics import structural_similarity # type: ignore
-    CUCIM_AVAILABLE = False
 
 def compute_warpfield(
     img_ref: ArrayLike, 
@@ -64,27 +47,45 @@ def compute_warpfield(
     warp_field: ArrayLike
         warpfield matrix
     """
+    import cupy as cp
 
-    recipe = warpfield.Recipe() # initialized with a translation level, followed by an affine registration level
+    cp.cuda.Device(gpu_id).use()
+
+    from warpfield import Recipe, register_volumes
+
+    recipe = Recipe() # initialized with a translation level, followed by an affine registration level
     recipe.pre_filter.clip_thresh = 160 # clip DC background, if present
     recipe.pre_filter.soft_edge = [4, 32, 32]
 
     # affine level properties
     recipe.levels[-1].repeats = 0
 
-    recipe.add_level(block_size=[16, 48, 48])
-    recipe.levels[-1].block_stride = 0.75
-    recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
-    recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 2
-    
-    recipe.add_level(block_size=[4, 12, 12])
-    recipe.levels[-1].block_stride = 0.75
-    recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
-    recipe.levels[-1].smooth.long_range_ratio = 0.1
-    recipe.levels[-1].repeats = 2
+    if max(img_ref.shape) > 2048:
+        recipe.add_level(block_size=[21, 73, 73])
+        recipe.levels[-1].block_stride = 0.75
+        recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
+        recipe.levels[-1].smooth.long_range_ratio = 0.1
+        recipe.levels[-1].repeats = 2
 
-    warped_image, warp_map, _ = warpfield.register_volumes(
+        recipe.add_level(block_size=[5, 17, 17])
+        recipe.levels[-1].block_stride = 0.75
+        recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
+        recipe.levels[-1].smooth.long_range_ratio = 0.1
+        recipe.levels[-1].repeats = 2
+    else:
+        recipe.add_level(block_size=[15, 45, 45])
+        recipe.levels[-1].block_stride = 0.75
+        recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
+        recipe.levels[-1].smooth.long_range_ratio = 0.1
+        recipe.levels[-1].repeats = 2
+    
+        recipe.add_level(block_size=[3, 9, 9])
+        recipe.levels[-1].block_stride = 0.75
+        recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
+        recipe.levels[-1].smooth.long_range_ratio = 0.1
+        recipe.levels[-1].repeats = 2
+
+    warped_image, warp_map, _ = register_volumes(
         ref = img_ref, 
         vol = img_trg, 
         recipe = recipe,
@@ -95,6 +96,12 @@ def compute_warpfield(
     warp_field = cp.asnumpy(warp_map.warp_field).astype(np.float32)
     block_size = cp.asnumpy(warp_map.block_size).astype(np.float32)
     block_stride = cp.asnumpy(warp_map.block_stride).astype(np.float32)
+
+    del warp_map
+    gc.collect()
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
         
     return (warped_image, warp_field, block_size, block_stride)
 
@@ -171,8 +178,11 @@ def compute_rigid_transform(
     shift_xyz: Sequence[float]
         xyz shifts in pixels
     """
+    import cupy as cp # type: ignore
 
     with cp.cuda.Device(gpu_id):
+        from cucim.skimage.registration import phase_cross_correlation # type: ignore
+        from cucim.skimage.metrics import structural_similarity # type: ignore
    
         if projection is not None:
             if projection == 'z':
@@ -183,65 +193,40 @@ def compute_rigid_transform(
                 image2 = np.squeeze(np.max(image2,axis=1))
                     
         if projection == 'search':
-            if CUPY_AVAILABLE and CUCIM_AVAILABLE:
-                image1_cp = cp.asarray(image1)
-                ref_slice_idx = image1_cp.shape[0]//2
-                ref_slice = image1_cp[ref_slice_idx,:,:]
-                image2_cp = cp.asarray(image2)
-                ssim = []
-                for z_idx in range(image1.shape[0]):
-                    ssim_slice = structural_similarity(ref_slice.astype(cp.float32),
-                                                    image2_cp[z_idx,:].astype(cp.float32),
-                                                    data_range=1.0)
-                    ssim.append(cp.asnumpy(ssim_slice))
-                
-                ssim = np.array(ssim)
-                print(f"SSIM: {ssim}")
-                found_shift = float(ref_slice_idx - np.argmax(ssim))
-                print(f"Found shift: {found_shift}")
-                del image1_cp, image2_cp, ssim_slice, ssim
-            else:
-                ref_slice_idx = image1.shape[0]//2
-                ref_slice = image1[ref_slice_idx,:,:]
-                ssim = []
-                for z_idx in range(image1.shape[0]):
-                    ssim_slice = structural_similarity(ref_slice.astype(np.float32),
-                                                    image2[z_idx,:].astype(np.float32),
-                                                    data_range=1.0)
-                    ssim.append(ssim_slice)
-                
-                ssim = np.array(ssim)
-                found_shift = float(ref_slice_idx - np.argmax(ssim))
+
+            image1_cp = cp.asarray(image1)
+            ref_slice_idx = image1_cp.shape[0]//2
+            ref_slice = image1_cp[ref_slice_idx,:,:]
+            image2_cp = cp.asarray(image2)
+            ssim = []
+            for z_idx in range(image1.shape[0]):
+                ssim_slice = structural_similarity(ref_slice.astype(cp.float32),
+                                                image2_cp[z_idx,:].astype(cp.float32),
+                                                data_range=1.0)
+                ssim.append(cp.asnumpy(ssim_slice))
+            
+            ssim = np.array(ssim)
+            print(f"SSIM: {ssim}")
+            found_shift = float(ref_slice_idx - np.argmax(ssim))
+            print(f"Found shift: {found_shift}")
+            del image1_cp, image2_cp, ssim_slice, ssim
 
         else:
             # Perform Fourier cross-correlation
-            if CUPY_AVAILABLE and CUCIM_AVAILABLE:
-                if mask is not None:
-                    shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
-                                                            moving_image=cp.asarray(image2),
-                                                            upsample_factor=10,
-                                                            reference_mask=mask,
-                                                            disambiguate=True)
-                else:
-                    shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
-                                                            moving_image=cp.asarray(image2),
-                                                            upsample_factor=10,
-                                                            disambiguate=True)
-                shift = cp.asnumpy(shift_cp)
-                del shift_cp
+            
+            if mask is not None:
+                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
+                                                        moving_image=cp.asarray(image2),
+                                                        upsample_factor=10,
+                                                        reference_mask=mask,
+                                                        disambiguate=True)
             else:
-                if mask is not None:
-                    mask = np.zeros_like(image1)
-                    shift , _, _ = phase_cross_correlation(reference_image=image1, 
-                                                            moving_image=image2,
-                                                            upsample_factor=10,
-                                                            reference_mask=mask,
-                                                            disambiguate=True)
-                else:
-                    shift , _, _ = phase_cross_correlation(reference_image=image1, 
-                                                            moving_image=image2,
-                                                            upsample_factor=10,
-                                                            disambiguate=True)
+                shift_cp, _, _ = phase_cross_correlation(reference_image=cp.asarray(image1), 
+                                                        moving_image=cp.asarray(image2),
+                                                        upsample_factor=10,
+                                                        disambiguate=True)
+            shift = cp.asnumpy(shift_cp)
+            del shift_cp
         
         # Convert the shift to a list of doubles
         if projection is not None:
@@ -264,16 +249,30 @@ def compute_rigid_transform(
             shift_reversed = shift[::-1]
             shift_xyz = shift_reversed
 
+        gc.collect()
+
+        # Synchronize to make sure FFT work finished
+        cp.cuda.Stream.null.synchronize()
+
+        # Clear BOTH FFT plan caches for the *current* device
+        try:
+            cp.fft.config.get_plan_cache().clear()
+        except Exception:
+            pass
+        try:
+            import cupyx
+            cupyx.scipy.fft.clear_plan_cache()
+        except Exception:
+            pass
+
+        # Now free CuPy memory pools (after plans are cleared)
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+
         # Create an affine transform with the shift from the cross-correlation
         try:
             transform = sitk.TranslationTransform(3, shift_xyz)
         except:
             transform = None
-        
-        gc.collect()
-        cp.cuda.Stream.null.synchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
-
 
         return transform, shift_xyz
