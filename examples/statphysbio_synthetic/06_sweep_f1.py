@@ -12,6 +12,7 @@ import pandas as pd
 from scipy.spatial import cKDTree
 import numpy as np
 import json
+from typing import Sequence
 
 def calculate_F1_with_radius(
     qi2lab_coords: np.ndarray,
@@ -147,8 +148,9 @@ def calculate_F1(
 
 def decode_pixels(
     root_path: Path, 
-    mag_threshold: float, 
+    mag_threshold: Sequence[float,float], 
     ufish_threshold: float, 
+    minimum_pixels: float
 ):
     """Run pixel decoding with the given parameters.
     
@@ -156,8 +158,8 @@ def decode_pixels(
     ----------
     root_path : Path
         The root path of the experiment.
-    mag_threshold : float
-        The magnitude threshold
+    mag_threshold : Sequence[float,float]
+        The magnitude thresholds
     ufish_threshold : float
         The ufish threshold.
     """
@@ -173,11 +175,11 @@ def decode_pixels(
         verbose=0
     )
 
-    decoder._global_normalization_vectors()
+    #decoder._global_normalization_vectors()
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=1,
-        minimum_pixels=9,
+        n_iterations=2,
+        minimum_pixels=minimum_pixels,
         ufish_threshold=ufish_threshold,
         magnitude_threshold=mag_threshold
     )
@@ -185,7 +187,7 @@ def decode_pixels(
     decoder.decode_all_tiles(
         assign_to_cells=False,
         prep_for_baysor=False,
-        minimum_pixels=9,
+        minimum_pixels=minimum_pixels,
         magnitude_threshold=mag_threshold,
         ufish_threshold=ufish_threshold
     )
@@ -193,10 +195,12 @@ def decode_pixels(
 def sweep_decode_params(
     root_path: Path,
     gt_path: Path,
-    ufish_threshold_range: tuple[float] = (0.05, 0.35),
-    ufish_threshold_step: float = 0.05,
-    mag_threshold_range: tuple[float] = (1.0,2.05),
-    mag_threshold_step: float = 0.05,
+    ufish_threshold_range: tuple[float] = (0.05, 0.4),
+    ufish_threshold_step: float = 0.1,
+    mag_threshold_range: tuple[float] = (1.0,2.0),
+    mag_threshold_step: float = 0.1,
+    minimum_pixels_range: tuple[float] = (3.,11.),
+    minimum_pixels_step: float = 2.,
 ):
     """Sweep through decoding parameters and calculate F1 scores.
     
@@ -230,41 +234,51 @@ def sweep_decode_params(
         dtype=np.float32
     ).tolist()
 
+    pixels_values = np.arange(
+        minimum_pixels_range[0], 
+        minimum_pixels_range[1], 
+        minimum_pixels_step, 
+        dtype=np.float32
+    ).tolist()
+
     results = {}
     save_path = root_path / "decode_params_results.json"
 
 
-    for ufish in ufish_values:
-        for mag in mag_values:
-            params = {
-                "fdr": .05,
-                "min_pixels": 9,
-                "mag_thresh": round(mag,2),
-                "ufish_threshold": round(ufish, 2)
-            }
+    for pixels in pixels_values:
+        for ufish in ufish_values:
+            for mag in mag_values:
+                params = {
+                    "fdr": .05,
+                    "min_pixels": round(pixels,2),
+                    "mag_lower_thresh": round(mag,2),
+                    "mag_upper_thresh": 2.0,
+                    "ufish_threshold": round(ufish, 2)
+                }
 
-            try:
-                print(time_stamp(), f"ufish threshold: {round(ufish,2)}; magnitude threshold: {round(mag,2)}")
-                decode_pixels(
-                    root_path=root_path,
-                    mag_threshold=round(mag,2),
-                    ufish_threshold=round(ufish,2),
-                )
+                try:
+                    print(time_stamp(), f"min pixels: {round(pixels,2)}; ufish threshold: {round(ufish,2)}; magnitude threshold: {round(mag,2)}")
+                    decode_pixels(
+                        root_path=root_path,
+                        mag_threshold=(round(mag,2),2.0),
+                        ufish_threshold=round(ufish,2),
+                        minimum_pixels=round(pixels,2)
+                    )
 
-                result = calculate_F1(
-                    root_path=root_path,
-                    gt_path=gt_path,
-                    search_radius=0.75
-                )
-            except Exception as e:
-                result = {"error": str(e)}
+                    result = calculate_F1(
+                        root_path=root_path,
+                        gt_path=gt_path,
+                        search_radius=.75
+                    )
+                except Exception as e:
+                    result = {"error": str(e)}
 
-            results[str(params)] = result
+                results[str(params)] = result
 
-            with save_path.open(mode='w', encoding='utf-8') as file:
-                json.dump(results, file, indent=2)
+                with save_path.open(mode='w', encoding='utf-8') as file:
+                    json.dump(results, file, indent=2)
 
 if __name__ == "__main__":
-    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
-    gt_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/GT_spots.csv")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
+    gt_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/GT_spots.csv")
     sweep_decode_params(root_path=root_path, gt_path=gt_path)

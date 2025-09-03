@@ -225,7 +225,7 @@ class PixelDecoder:
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._distance_threshold = 0.5172  # default for HW4D4 code. TO DO: calculate based on self._num_on-bits
-        self._magnitude_threshold = 0.9  # default for HW4D4 code
+        self._magnitude_threshold = (1.1,2.0)  # default for HW4D4 code
 
     def _load_codebook(self):
         """Load and parse codebook into gene_id and codeword matrix."""
@@ -949,7 +949,7 @@ class PixelDecoder:
 
     def _decode_pixels(
         self, distance_threshold: float = 0.5172, 
-        magnitude_threshold: float = 1.0,
+        magnitude_threshold: Sequence[float,float] = (1.1, 2.0),
         gpu_id: int = 0
     ):
         """Decode pixels using the decoding matrix.
@@ -959,7 +959,7 @@ class PixelDecoder:
         distance_threshold : float, default 0.5172.
             Distance threshold for decoding. The default is for a 4-bit,
             4-distance Hamming codebook.
-        magnitude_threshold : float, default 1.0.
+        magnitude_threshold : Sequence[float,float], default (1.1, 2.0).
             Magnitude threshold for decoding. 
         """
 
@@ -1035,7 +1035,8 @@ class PixelDecoder:
                 decoded_trace = cp.full(distance_trace.shape[0], -1, dtype=cp.int16)
                 mask_trace = distance_trace < distance_threshold
                 decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
-                decoded_trace[pixel_magnitude_trace <= magnitude_threshold] = -1
+                decoded_trace[pixel_magnitude_trace <= magnitude_threshold[0]] = -1
+                decoded_trace[pixel_magnitude_trace > magnitude_threshold[1]] = -1
 
                 self._decoded_image[z_idx, :] = cp.asnumpy(
                     cp.reshape(cp.round(decoded_trace, 3), z_plane_shape[1:])
@@ -2030,6 +2031,138 @@ class PixelDecoder:
             )
             print("Dropped points: " + str(dropped_count))
 
+
+    def _remove_duplicates_within_tile(
+        self,
+        radius_xy: float = 0.75,
+        radius_z: float = 0.50,
+    ) -> None:
+        """Collapse near-duplicate detections within each tile *and same gene_id*.
+
+        Two rows are considered neighbors if and only if:
+        1) They belong to the same tile (``tile_idx``),
+        2) Their XY separation is within ``radius_xy`` (microns),
+        3) Their absolute Z separation is within ``radius_z`` (microns), and
+        4) Their identity matches (``gene_id`` is equal).
+
+        For each connected component (cluster) under this neighbor relation,
+        keep exactly one row: the one with the smallest ``distance_mean``.
+        Ties on ``distance_mean`` are broken deterministically by the original row
+        index (lower index wins).
+
+        Parameters
+        ----------
+        radius_xy : float, default 0.75
+            Neighborhood radius in the XY plane, in microns.
+        radius_z : float, default 0.50
+            Neighborhood half-extent along Z, in microns.
+
+        Modifies
+        --------
+        self._df_filtered_barcodes : pandas.DataFrame
+            Drops non-winning rows per cluster; resets index at the end.
+
+        Notes
+        -----
+        Expected columns: ``global_z``, ``global_y``, ``global_x``,
+        ``tile_idx``, ``gene_id``, ``distance_mean``.
+        """
+        df = self._df_filtered_barcodes
+        if df.empty or len(df) < 2:
+            return
+
+        # Stable order & deterministic tie-breaks
+        df.reset_index(drop=True, inplace=True)
+
+        coords = df[["global_z", "global_y", "global_x"]].to_numpy(dtype=float, copy=False)
+        tiles = df["tile_idx"].to_numpy()
+        genes = df["gene_id"].to_numpy()  # dtype can be int/str/object; equality works elementwise
+        dmean = df["distance_mean"].to_numpy(dtype=float, copy=False)
+
+        rows_to_drop: set[int] = set()
+
+        # Union–Find (Disjoint Set)
+        def uf_find(parent: np.ndarray, x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def uf_union(parent: np.ndarray, rank: np.ndarray, a: int, b: int) -> None:
+            ra, rb = uf_find(parent, a), uf_find(parent, b)
+            if ra == rb:
+                return
+            if rank[ra] < rank[rb]:
+                parent[ra] = rb
+            elif rank[ra] > rank[rb]:
+                parent[rb] = ra
+            else:
+                parent[rb] = ra
+                rank[ra] += 1
+
+        # Process each tile independently
+        for t in np.unique(tiles):
+            local_idx = np.flatnonzero(tiles == t)
+            if local_idx.size < 2:
+                continue
+
+            sub = coords[local_idx]
+            z_local = sub[:, 0]
+            xy_local = sub[:, 1:3]       # (Y, X)
+            genes_local = genes[local_idx]
+
+            # 1) XY-near candidate pairs
+            tree = cKDTree(xy_local)
+            pairs_local = tree.query_pairs(r=radius_xy)
+            if not pairs_local:
+                continue
+
+            # 2) Filter by Z window *and same gene_id*
+            filtered_pairs = [
+                (i, j)
+                for (i, j) in pairs_local
+                if (abs(z_local[i] - z_local[j]) <= radius_z) and (genes_local[i] == genes_local[j])
+            ]
+            if not filtered_pairs:
+                continue
+
+            # 3) Union–Find over local nodes
+            n = local_idx.size
+            parent = np.arange(n)
+            rank = np.zeros(n, dtype=np.int8)
+            for i_loc, j_loc in filtered_pairs:
+                uf_union(parent, rank, i_loc, j_loc)
+
+            # 4) Gather components
+            comps: dict[int, list[int]] = {}
+            for i_loc in range(n):
+                r = uf_find(parent, i_loc)
+                comps.setdefault(r, []).append(i_loc)
+
+            # 5) Keep exactly one best per multi-member component
+            for members in comps.values():
+                if len(members) < 2:
+                    continue
+                glob_members = local_idx[np.asarray(members)]
+                # Lexicographic: primary key is distance_mean, tie-breaker is original index
+                best_global = glob_members[np.lexsort((glob_members, dmean[glob_members]))][0]
+                for g in glob_members:
+                    if g != best_global:
+                        rows_to_drop.add(g)
+
+        if rows_to_drop:
+            df.drop(index=list(rows_to_drop), inplace=True)
+            df.reset_index(drop=True, inplace=True)
+
+        if getattr(self, "_verbose", 0) > 1:
+            dropped = dmean[list(rows_to_drop)] if rows_to_drop else np.array([], dtype=float)
+            avg = float(dropped.mean()) if dropped.size else 0.0
+            print(
+                "Average distance metric of dropped points (within-tile, same gene, clusters): "
+                + str(avg)
+            )
+            print("Dropped points: " + str(len(rows_to_drop)))
+
     def _display_results(self):
         """Display results using Napari."""
 
@@ -2116,7 +2249,7 @@ class PixelDecoder:
         display_results: bool = False,
         return_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9,
+        magnitude_threshold: Optional[Sequence[float,float]] = (1.1,2.0),
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.25,
@@ -2137,7 +2270,7 @@ class PixelDecoder:
             Return results as np.ndarray
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[float, default 0.9
+        magnitude_threshold: Optional[Sequence[float,float]], default (1.1, 2.0)
             L2-norm threshold
         minimum_pixels : Optional[float], default 3.0
             Minimum number of pixels for a barcode. 
@@ -2198,12 +2331,12 @@ class PixelDecoder:
 
     def optimize_normalization_by_decoding(
         self,
-        n_random_tiles: int = 10,
-        n_iterations: int = 10,
-        minimum_pixels: float = 3.0,
+        n_random_tiles: int = 5,
+        n_iterations: int = 15,
+        minimum_pixels: float = 9.0,
         ufish_threshold: float = 0.1,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9,
+        magnitude_threshold: Optional[Sequence[float,float]] = (1.1, 2.0)
     ):
         """Optimize normalization by decoding.
 
@@ -2221,7 +2354,7 @@ class PixelDecoder:
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[float, default 0.9
+        magnitude_threshold: Optional[Sequence[float,float], default (1.1,2.0)
             L2-norm threshold
         """
         if self._num_gpus < 1:
@@ -2305,7 +2438,7 @@ class PixelDecoder:
         assign_to_cells: bool = True,
         prep_for_baysor: bool = True,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[float] = 0.9,
+        magnitude_threshold: Optional[Sequence[float,float]] = (1.1,2.0),
         minimum_pixels: Optional[float] = 3.0,
         ufish_threshold: Optional[float] = 0.25,
         fdr_target: Optional[float] = 0.05,
@@ -2326,7 +2459,7 @@ class PixelDecoder:
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[float, default 0.9
+        magnitude_threshold: Optional[Sequence[float,float], default (1.1,2.0)
             L2-norm threshold
         """
         
@@ -2365,8 +2498,12 @@ class PixelDecoder:
         self._load_tile_decoding = True
         self._load_all_barcodes()
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
-        if len(all_tiles):
-            self._remove_duplicates_in_tile_overlap()
+        if len(all_tiles) or not(self._is_3D):
+            if not(self._is_3D):
+                radius_z = self._datastore.voxel_size_zyx_um[0]*3
+                self._remove_duplicates_within_tile(radius_z=radius_z)
+            else:
+                self._remove_duplicates_in_tile_overlap()
         if assign_to_cells:
             self._assign_cells()
         self._save_barcodes()

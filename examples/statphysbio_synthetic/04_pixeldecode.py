@@ -8,12 +8,13 @@ Shepherd 2024/12 - create script to run on simulation.
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
+from typing import Sequence
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 9,
-    ufish_threshold: float = 0.25,
-    magnitude_threshold: float = 1.5,
+    minimum_pixels_per_RNA: int = 3,
+    ufish_threshold: float = 0.1,
+    magnitude_threshold: Sequence[float,float] = (1.1, 2.0),
     fdr_target: float = .05
 ):
     """Perform pixel decoding.
@@ -47,7 +48,7 @@ def decode_pixels(
 
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=1,
+        n_iterations=10,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold
@@ -91,5 +92,5 @@ def decode_pixels(
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/sim_acquisition")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
     decode_pixels(root_path=root_path)
