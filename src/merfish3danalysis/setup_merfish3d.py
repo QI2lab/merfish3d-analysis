@@ -11,46 +11,41 @@ import sys
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
-# Base pip deps (pure-Python)
+# Base pip deps for the CURRENT env (optional, keep if you want the current env ready too)
 BASE_PIP_DEPS = [
-    "numpy",
+    "numpy==1.26.4",
     "numba",
     "llvmlite",
     "tbb",
     "tqdm",
     "ryomen",
     "tensorstore",
-    "cmap",
-    "napari[all]",
-    "zarr>=3.0.8",
-    "psfmodels",
-    #"tifffile>=2025.6.1",
     "nvidia-cuda-runtime-cu12==12.8.*",
     "onnx",
     "onnxruntime-gpu",
-    "napari[all]",
+    "napari[pyqt6]",
     "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
-    "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main",
     "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
+    "zarr>3.0.8",
+    "tifffile",
     "numcodecs",
-    "psfmodels",
     "cmap",
-    "SimpleITK", 
+    "psfmodels",
+    "SimpleITK",
     "ndstorage",
     "roifile",
     "tbb",
     "shapely",
-    "scikit-image",
-    "imbalanced-learn", 
-    "scikit-learn", 
+    "imbalanced-learn",
+    "scikit-learn",
     "rtree",
     "anndata",
     "fastparquet"
 ]
 
-# CUDA conda pkgs
+# CUDA conda pkgs (Linux)
 LINUX_CONDA_CUDA_PKGS = [
     "'cuda-version=12.8'",
     "'cuda-toolkit=12.8'",
@@ -62,59 +57,69 @@ LINUX_CONDA_CUDA_PKGS = [
     "cudnn",
     "cutensor",
     "nccl",
-    "'scipy >=1.11.4, <=1.15.3'",
     "pyopengl",
-    "pyimagej"
+    "pyimagej",
 ]
 
-WINDOWS_CONDA_CUDA_PKGS = [
-    "'cuda-version=12.8'",
-    "'cuda-toolkit=12.8'",
-    "cuda-cudart",
-    "cupy",
-    "scikit-image",
-    "cudnn",
-    "cutensor",
-    "cuda-nvcc",
+# Optional: jax local CUDA in CURRENT env
+LINUX_JAX_LIB = [
+    "jax[cuda12_local]==0.4.38",
 ]
 
-LINUX_JAX_LIB = {
-    "jax[cuda12_local]==0.4.38"
-}
+# multiview-stitcher env settings
+MVSTITCHER_ENV_NAME = "merfish3d_stitcher"
+MVSTITCHER_ENV_PY = "3.12"
 
-# Extra cucim Git URL for Windows
-WINDOWS_CUCIM_GIT = (
-    "git+https://github.com/rapidsai/cucim.git@v25.06.00#egg=cucim&subdirectory=python/cucim"
-)
+# These ensure all of your listed imports work in the multiview-stitcher env
+MVSTITCHER_ENV_PIP_IMPORTS = [
+    "pandas",
+    "roifile",
+    "shapely",
+]
 
-def run(command: str):
+def run(command: str, *, cwd: Path | None = None):
     typer.echo(f"$ {command}")
-    subprocess.run(command, shell=True, check=True)
+    subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
+
+def _which(names: list[str]) -> str | None:
+    for n in names:
+        if shutil.which(n):
+            return n
+    return None
 
 @app.command()
 def setup_cuda():
     """
-    1) Installs CUDA packages via conda (RAPIDS.ai channel), using OS-specific lists.
-    2) Writes a single activation hook (either .sh on Linux or .bat on Windows).
-    3) Installs all pip deps (on Windows including the extra cucim Git URL) in one call.
+    Linux-only setup:
+
+    1) Install CUDA packages via conda/mamba (rapidsai + conda-forge + nvidia).
+    2) Write a Linux activation hook exporting CUDA_PATH, etc.
+    3) (Optional) Prepare CURRENT env: torch/vision cu128, BASE_PIP_DEPS, jax local CUDA.
+    4) Create NEW env 'merfish3d_stitcher' (Python 3.12) and pip-install:
+         - core deps to satisfy your import list
+         - your repo (-e .)
+         - multiview-stitcher + ngff-zarr[tensorstore]>=0.16.0
+       Then smoke-test imports inside the new env.
     """
+    if platform.system() != "Linux":
+        typer.echo("Error: Linux only.", err=True)
+        raise typer.Exit(1)
+
     prefix = os.environ.get("CONDA_PREFIX")
     if not prefix:
         typer.echo("Error: activate your conda environment first.", err=True)
         raise typer.Exit(1)
 
-    installer = shutil.which("mamba") or shutil.which("conda")
+    installer = _which(["mamba", "conda"])
     if not installer:
         typer.echo("Error: neither mamba nor conda found.", err=True)
         raise typer.Exit(1)
 
-    is_windows = platform.system() == "Windows"
-    if is_windows:
-        run(f"{installer} install -y -c rapidsai -c conda-forge -c nvidia {' '.join(WINDOWS_CONDA_CUDA_PKGS)}")
-    else:
-        run(f"{installer} install -y -c rapidsai -c conda-forge -c nvidia {' '.join(LINUX_CONDA_CUDA_PKGS)}")
+    # 1) Core CUDA stack from conda
+    channels = "-c rapidsai -c conda-forge -c nvidia"
+    run(f"{installer} install -y {channels} {' '.join(LINUX_CONDA_CUDA_PKGS)}")
 
-    # Clear existing hooks
+    # 2) Linux activation hook
     activate_dir = Path(prefix) / "etc" / "conda" / "activate.d"
     activate_dir.mkdir(parents=True, exist_ok=True)
     for script in activate_dir.glob("*"):
@@ -123,52 +128,11 @@ def setup_cuda():
         except OSError:
             pass
 
-    if is_windows:
-# 1) Write the activation hook + which.bat shim
-        bat_hook = activate_dir / "cuda_override.bat"
-        content = (
-            f"@echo off\n"
-            f"REM Point at the conda-installed CUDA toolkit\n"
-            f"set \"CUDA_PATH={prefix}\\Library\\bin\"\n"
-            f"set \"CUDA_HOME=%CUDA_PATH%\"\n"
-            f"REM Prepend CUDA bin and lib to PATH\n"
-            f"set \"PATH=%CUDA_PATH%;{prefix}\\Library\\lib;%PATH%\"\n"
-            f"REM NVRTC must compile with C++17 and ignore deprecated dialect\n"
-            f"set \"NVRTC_OPTIONS=--std=c++17\"\n"
-            f"set \"CCCL_IGNORE_DEPRECATED_CPP_DIALECT=1\"\n"
-            f"REM which.bat shim for rapids-build-backend\n"
-            f"echo @echo off > \"{prefix}\\Scripts\\which.bat\"\n"
-            f"echo where %%* >> \"{prefix}\\Scripts\\which.bat\"\n"
-        )
-        bat_hook.write_text(content, encoding="utf-8")
-
-        # 2) Apply the same env changes right now
-        os.environ["CUDA_PATH"] = f"{prefix}\\Library\\bin"
-        os.environ["CUDA_HOME"] = os.environ["CUDA_PATH"]
-        os.environ["PATH"] = (
-            os.environ["CUDA_PATH"] + ";" +
-            f"{prefix}\\Library\\lib;" +
-            os.environ.get("PATH", "")
-        )
-        os.environ["NVRTC_OPTIONS"] = "--std=c++17"
-        os.environ["CCCL_IGNORE_DEPRECATED_CPP_DIALECT"] = "1"
-
-        system_where = Path(os.environ["WINDIR"]) / "System32" / "where.exe"
-        dest_which = Path(prefix) / "Scripts" / "which.exe"
-
-        # only copy if it doesn't already exist
-        if not dest_which.exists():
-            shutil.copy(system_where, dest_which)
-
-        # Ensure Scripts/ is at the front of PATH for the current process
-        scripts_dir = str(Path(prefix) / "Scripts")
-        os.environ["PATH"] = scripts_dir + os.pathsep + os.environ.get("PATH","")
-    else:
-        # Linux shell hook only
-        sh_hook = activate_dir / "cuda_override.sh"
-        env_lib = f"{prefix}/lib"
-        linux_cuda_root = f"{prefix}/targets/x86_64-linux"
-        sh_hook.write_text(f"""#!/usr/bin/env sh
+    sh_hook = activate_dir / "cuda_override.sh"
+    env_lib = f"{prefix}/lib"
+    linux_cuda_root = f"{prefix}/targets/x86_64-linux"
+    sh_hook.write_text(
+        f"""#!/usr/bin/env sh
 # Point at the conda-installed CUDA toolkit
 export CUDA_PATH="{linux_cuda_root}"
 export CUDA_HOME="$CUDA_PATH"
@@ -180,47 +144,40 @@ export LD_LIBRARY_PATH="$CUDA_PATH/lib:{env_lib}${{LD_LIBRARY_PATH:+:${{LD_LIBRA
 # NVRTC must compile with C++17 and ignore deprecated dialect
 export NVRTC_OPTIONS="--std=c++17"
 export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
-""")
-        sh_hook.chmod(sh_hook.stat().st_mode | stat.S_IEXEC)
+""",
+        encoding="utf-8",
+    )
+    sh_hook.chmod(sh_hook.stat().st_mode | stat.S_IEXEC)
 
-    # Single pip install for all deps
-    if is_windows:
-        
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", *BASE_PIP_DEPS],
-            check=True
-        )
-        
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-e", WINDOWS_CUCIM_GIT],
-                check=True
-            )
-        except Exception:
-            pass
-        
-        try:
-            run("python -m cupyx.tools.install_library --cuda 12.x --library nccl")
-        except Exception:
-            pass
-        
-    else:
-        run(f"pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
-        pip_deps = BASE_PIP_DEPS.copy()
-        deps_str = " ".join(shlex.quote(d) for d in pip_deps)
-        run(f"pip install {deps_str}")
-        
-        linux_dep_str = " ".join(shlex.quote(d) for d in LINUX_JAX_LIB)
-        run(f"pip install {linux_dep_str}")
-    if is_windows:
-        typer.echo(f"\nsetup complete!  Please 'conda deactivate' then 'conda activate env_name' to apply changes.")
-    else:
-        typer.echo(f"\nsetup complete!  Please 'conda deactivate' then 'conda activate {env_lib}' to apply changes.")
+    # 3) (Optional) Prep CURRENT env
+    run("python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
+    run(f"python -m pip install {' '.join(shlex.quote(d) for d in BASE_PIP_DEPS)}")
+    run(f"python -m pip install {' '.join(shlex.quote(d) for d in LINUX_JAX_LIB)}")
 
+    # 4) Create NEW env and install what you asked
+    run(f"{installer} create -y -n {MVSTITCHER_ENV_NAME} python={MVSTITCHER_ENV_PY} pip")
+    repo_dir = Path.cwd()
+
+    # Upgrade build tooling, then install the *imports* deps first
+    run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -U pip setuptools wheel")
+
+    # Install multiview-stitcher and minimial deps to use merfish3d-analysis datastore class
+    run(
+        f"""{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install \
+"multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main" \
+"ngff-zarr[tensorstore]>=0.16.0" """
+    )
+    run(
+        f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install "
+        + " ".join(shlex.quote(d) for d in MVSTITCHER_ENV_PIP_IMPORTS)
+    )
+    run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -e .", cwd=repo_dir)
+
+
+    typer.echo("\nSetup complete.\n")
 
 def main():
     app()
-
 
 if __name__ == "__main__":
     main()
