@@ -6,17 +6,12 @@ import shutil
 import platform
 from pathlib import Path
 import typer
-import sys
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
-# Base pip deps for the CURRENT env (optional, keep if you want the current env ready too)
+# Base pip deps for the merfish3d env
 BASE_PIP_DEPS = [
-    "numpy==1.26.4",
-    "numba",
-    "llvmlite",
-    "tbb",
     "tqdm",
     "ryomen",
     "tensorstore",
@@ -28,7 +23,6 @@ BASE_PIP_DEPS = [
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
-    "zarr>3.0.8",
     "tifffile",
     "numcodecs",
     "cmap",
@@ -36,13 +30,9 @@ BASE_PIP_DEPS = [
     "SimpleITK",
     "ndstorage",
     "roifile",
-    "tbb",
-    "shapely",
     "imbalanced-learn",
     "scikit-learn",
-    "rtree",
     "anndata",
-    "fastparquet"
 ]
 
 # CUDA conda pkgs (Linux)
@@ -50,6 +40,7 @@ LINUX_CONDA_CUDA_PKGS = [
     "'cuda-version=12.8'",
     "'cuda-toolkit=12.8'",
     "cuda-cudart",
+    "cuda-nvrtc",
     "cucim",
     "cuvs",
     "cupy",
@@ -59,6 +50,15 @@ LINUX_CONDA_CUDA_PKGS = [
     "nccl",
     "pyopengl",
     "pyimagej",
+    "'numpy=1.26.4'",
+    "scipy",
+    "shapely",
+    "rtree",
+    "numba",
+    "zarr>3.0.8",
+    "pandas",
+    "fastparquet",
+    "tbb"
 ]
 
 # Optional: jax local CUDA in CURRENT env
@@ -75,6 +75,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "pandas",
     "roifile",
     "shapely",
+    "fastparquet"
 ]
 
 def run(command: str, *, cwd: Path | None = None):
