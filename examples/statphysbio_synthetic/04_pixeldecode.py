@@ -14,7 +14,7 @@ def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 3,
     ufish_threshold: float = 0.1,
-    magnitude_threshold: Sequence[float,float] = (1.1, 2.0),
+    magnitude_threshold: Sequence[float] = (1.1, 2.0),
     fdr_target: float = .05
 ):
     """Perform pixel decoding.
@@ -23,14 +23,14 @@ def decode_pixels(
     ----------
     root_path: Path
         path to experiment
-    minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 9.
-    ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.25
-    magnitude_threshold: float
-        minimum magnitude across all normalized bits required to accept a spot. Default = 1.5
-    fdr_target : float
-        false discovery rate (FDR) target. Default = .05
+    minimum_pixels_per_RNA : int, default 9
+        minimum pixels with same barcode ID required to call a spot.
+    ufish_threshold : float, default 0.25
+        threshold to accept ufish prediction.
+    magnitude_threshold: Sequence[float], default (1.1,2.0)
+        minimum magnitude across all normalized bits required to accept a spot.
+    fdr_target : float, default .05
+        false discovery rate (FDR) target.
     """
 
     # initialize datastore
@@ -53,17 +53,7 @@ def decode_pixels(
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold
     )
-
-    # decoder.decode_one_tile(
-    #     tile_idx = 0,
-    #     gpu_id=0,
-    #     display_results=True,
-    #     magnitude_threshold=magnitude_threshold,
-    #     minimum_pixels=minimum_pixels_per_RNA,
-    #     ufish_threshold=ufish_threshold
-    # )
-    
-    
+        
     """
     if you need to access normalizations, they are class properties that can
     be accessed as follows:
@@ -92,5 +82,5 @@ def decode_pixels(
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250903_simulations/example_16bit_cells/0.315/sim_acquisition")
     decode_pixels(root_path=root_path)

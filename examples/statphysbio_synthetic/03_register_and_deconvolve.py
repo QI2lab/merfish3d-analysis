@@ -135,6 +135,6 @@ def global_register_data(
     datastore.datastore_state = datastore_state
     
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250903_simulations/example_16bit_cells/0.315//sim_acquisition")
     local_register_data(root_path)
     global_register_data(root_path,create_max_proj_tiff=False)

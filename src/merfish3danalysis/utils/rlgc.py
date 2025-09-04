@@ -428,9 +428,9 @@ def rlgc_biggs(
     recon = recon[:,pad_yx_before:-pad_yx_after,pad_yx_before:-pad_yx_after]
 
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
-    del recon_next, g1, g2, H_T_ones, recon, temp_g2, previous_recon, split1, split2
+    del recon_next, g1, g2, H_T_ones, recon, previous_recon, split1, split2
     if num_iters >= 2:
-        del numerator, denominator, alpha, temp
+        del numerator, denominator, alpha, temp, temp_g2
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
     gc.collect()
     cp.cuda.Stream.null.synchronize()

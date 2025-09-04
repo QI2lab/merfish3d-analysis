@@ -119,20 +119,22 @@ def calculate_F1(
     # Extract coordinates and gene_ids from analyzed
     qi2lab_coords = decoded_spots[['global_z', 'global_y', 'global_x']].to_numpy()
     qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
+    print(qi2lab_gene_ids)
 
     test_tile_data = datastore.load_local_corrected_image(tile=0,round=0,return_future=False)
 
 
     # Extract coordinates and gene_ids from ground truth
-    offset = [
-        0, 
-        test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1],
-        test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]
-    ]
+    # offset = [
+    #     0, 
+    #     test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1],
+    #     test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]
+    # ]
 
     gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy() # note the tranpose, simulation GT is swapped X & Y
-    gt_coords_offset = gt_coords + offset
+    gt_coords_offset = gt_coords
     gt_gene_ids = gene_ids[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
+    print(gt_gene_ids)
     
     results = calculate_F1_with_radius(
         qi2lab_coords,
@@ -145,7 +147,7 @@ def calculate_F1(
     return results
     
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
-    gt_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/GT_spots.csv")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250903_simulations/example_16bit_cells/0.315/sim_acquisition")
+    gt_path = Path(r"/media/dps/data2/qi2lab/20250903_simulations/example_16bit_cells/0.315/GT_spots.csv")
     results = calculate_F1(root_path=root_path,gt_path=gt_path,search_radius=1.0)
     print(results)

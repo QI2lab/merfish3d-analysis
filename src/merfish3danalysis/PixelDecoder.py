@@ -484,6 +484,7 @@ class PixelDecoder:
     def _iterative_normalization_vectors(self, gpu_id: int = 0):
         """Calculate iterative normalization and background vectors."""
         with cp.cuda.Device(gpu_id):
+
             df_barcodes_loaded_no_blanks = self._df_barcodes_loaded[
                 ~self._df_barcodes_loaded["gene_id"].str.startswith("Blank")
             ]
@@ -949,7 +950,7 @@ class PixelDecoder:
 
     def _decode_pixels(
         self, distance_threshold: float = 0.5172, 
-        magnitude_threshold: Sequence[float,float] = (1.1, 2.0),
+        magnitude_threshold: Sequence[float] = (1.1, 2.0),
         gpu_id: int = 0
     ):
         """Decode pixels using the decoding matrix.
@@ -959,7 +960,7 @@ class PixelDecoder:
         distance_threshold : float, default 0.5172.
             Distance threshold for decoding. The default is for a 4-bit,
             4-distance Hamming codebook.
-        magnitude_threshold : Sequence[float,float], default (1.1, 2.0).
+        magnitude_threshold : Sequence[float], default (1.1, 2.0).
             Magnitude threshold for decoding. 
         """
 
@@ -2249,7 +2250,7 @@ class PixelDecoder:
         display_results: bool = False,
         return_results: bool = False,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[Sequence[float,float]] = (1.1,2.0),
+        magnitude_threshold: Optional[Sequence[float]] = (1.1,2.0),
         minimum_pixels: Optional[float] = 3.0,
         use_normalization: Optional[bool] = True,
         ufish_threshold: Optional[float] = 0.25,
@@ -2270,7 +2271,7 @@ class PixelDecoder:
             Return results as np.ndarray
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[Sequence[float,float]], default (1.1, 2.0)
+        magnitude_threshold: Optional[Sequence[float]], default (1.1, 2.0)
             L2-norm threshold
         minimum_pixels : Optional[float], default 3.0
             Minimum number of pixels for a barcode. 
@@ -2336,7 +2337,7 @@ class PixelDecoder:
         minimum_pixels: float = 9.0,
         ufish_threshold: float = 0.1,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[Sequence[float,float]] = (1.1, 2.0)
+        magnitude_threshold: Optional[Sequence[float]] = (1.1, 2.0)
     ):
         """Optimize normalization by decoding.
 
@@ -2354,7 +2355,7 @@ class PixelDecoder:
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[Sequence[float,float], default (1.1,2.0)
+        magnitude_threshold: Optional[Sequence[float], default (1.1,2.0)
             L2-norm threshold
         """
         if self._num_gpus < 1:
@@ -2438,7 +2439,7 @@ class PixelDecoder:
         assign_to_cells: bool = True,
         prep_for_baysor: bool = True,
         lowpass_sigma: Optional[Sequence[float]] = (3, 1, 1),
-        magnitude_threshold: Optional[Sequence[float,float]] = (1.1,2.0),
+        magnitude_threshold: Optional[Sequence[float]] = (1.1,2.0),
         minimum_pixels: Optional[float] = 3.0,
         ufish_threshold: Optional[float] = 0.25,
         fdr_target: Optional[float] = 0.05,
@@ -2459,7 +2460,7 @@ class PixelDecoder:
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Optional[Sequence[float,float], default (1.1,2.0)
+        magnitude_threshold: Optional[Sequence[float], default (1.1,2.0)
             L2-norm threshold
         """
         
