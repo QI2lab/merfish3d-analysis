@@ -13,7 +13,7 @@ from typing import Sequence
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 3,
-    ufish_threshold: float = 0.1,
+    ufish_threshold: float = 0.25,
     magnitude_threshold: Sequence[float] = (1.1, 2.0),
     fdr_target: float = .05
 ):
@@ -82,5 +82,5 @@ def decode_pixels(
     
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250903_simulations/example_16bit_cells/0.315/sim_acquisition")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
     decode_pixels(root_path=root_path)

@@ -148,7 +148,7 @@ def calculate_F1(
 
 def decode_pixels(
     root_path: Path, 
-    mag_threshold: Sequence[float,float], 
+    mag_threshold: Sequence[float], 
     ufish_threshold: float, 
     minimum_pixels: float
 ):
@@ -178,7 +178,7 @@ def decode_pixels(
     #decoder._global_normalization_vectors()
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=2,
+        n_iterations=5,
         minimum_pixels=minimum_pixels,
         ufish_threshold=ufish_threshold,
         magnitude_threshold=mag_threshold
@@ -268,7 +268,7 @@ def sweep_decode_params(
                     result = calculate_F1(
                         root_path=root_path,
                         gt_path=gt_path,
-                        search_radius=.75
+                        search_radius=1.0
                     )
                 except Exception as e:
                     result = {"error": str(e)}
@@ -279,6 +279,6 @@ def sweep_decode_params(
                     json.dump(results, file, indent=2)
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/sim_acquisition")
-    gt_path = Path(r"/media/dps/data2/qi2lab/20250828_simulations/mauri_example_updated/example_16bit_cells/0.315/GT_spots.csv")
+    root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
+    gt_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/GT_spots.csv")
     sweep_decode_params(root_path=root_path, gt_path=gt_path)
