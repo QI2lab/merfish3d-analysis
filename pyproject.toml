@@ -58,3 +58,4 @@ Tracker = "https://github.com/qi2lab/merfish3d-analysis/issues"
 
 [project.scripts]
 setup-merfish3d = "merfish3danalysis.setup_merfish3d:main"
+setup-colab = "merfish3danalysis.setup_colab:main"
