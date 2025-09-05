@@ -92,7 +92,7 @@ app.pretty_exceptions_enable = False
 @app.command()
 def calculate_F1(
     root_path: Path,
-    search_radius: float
+    search_radius: float = 1.0
 ):
     """Calculate F1 using ground truth.
 
@@ -147,7 +147,8 @@ def calculate_F1(
         search_radius
     )
     
-    return results
+    print("F1 Score Results:")
+    print(results)
 
 def main():
     app()
