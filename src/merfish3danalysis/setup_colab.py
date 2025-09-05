@@ -83,7 +83,7 @@ def setup_colab():
             "nvidia-cublas-cu12 nvidia-cufft-cu12 nvidia-curand-cu12 "
             "nvidia-cusparse-cu12 nvidia-cusolver-cu12 "
             "nvidia-cuda-nvrtc-cu12 nvidia-nvjitlink-cu12 "
-            "nvidia-cudnn-cu12 nvidia-nccl-cu12 nvidia-cutensor-cu12"
+            "nvidia-cudnn-cu12 nvidia-nccl-cu12 cutensor-cu12"
         )
     except subprocess.CalledProcessError:
         print("Skipping optional NVIDIA CUDA component wheels.", file=sys.stderr)
