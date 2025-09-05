@@ -13,6 +13,7 @@ from scipy.spatial import cKDTree
 import numpy as np
 import json
 from typing import Sequence
+import typer
 
 def calculate_F1_with_radius(
     qi2lab_coords: np.ndarray,
@@ -111,10 +112,11 @@ def calculate_F1(
     """
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     gene_ids, _ = datastore.load_codebook_parsed()
     decoded_spots = datastore.load_global_filtered_decoded_spots()
+    gt_path = root_path / Path("GT_spots.csv")
     gt_spots = pd.read_csv(gt_path)
     gene_ids = np.array(gene_ids)
         
@@ -164,7 +166,7 @@ def decode_pixels(
         The ufish threshold.
     """
 
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     merfish_bits = datastore.num_bits
 
@@ -178,7 +180,7 @@ def decode_pixels(
     #decoder._global_normalization_vectors()
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=5,
+        n_iterations=10,
         minimum_pixels=minimum_pixels,
         ufish_threshold=ufish_threshold,
         magnitude_threshold=mag_threshold
@@ -192,9 +194,12 @@ def decode_pixels(
         ufish_threshold=ufish_threshold
     )
 
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def sweep_decode_params(
     root_path: Path,
-    gt_path: Path,
     ufish_threshold_range: tuple[float] = (0.05, 0.4),
     ufish_threshold_step: float = 0.1,
     mag_threshold_range: tuple[float] = (1.0,2.0),
@@ -277,6 +282,13 @@ def sweep_decode_params(
 
                 with save_path.open(mode='w', encoding='utf-8') as file:
                     json.dump(results, file, indent=2)
+
+def main():
+    app()
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
