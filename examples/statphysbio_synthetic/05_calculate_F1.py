@@ -11,6 +11,7 @@ from pathlib import Path
 from scipy.spatial import cKDTree
 import numpy as np
 from numpy.typing import ArrayLike
+import typer
 
 def calculate_F1_with_radius(
     qi2lab_coords: ArrayLike,
@@ -85,9 +86,12 @@ def calculate_F1_with_radius(
         "False Negatives": false_negatives,
     }
 
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def calculate_F1(
     root_path: Path,
-    gt_path: Path,
     search_radius: float
 ):
     """Calculate F1 using ground truth.
@@ -109,10 +113,11 @@ def calculate_F1(
     """
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     gene_ids, _ = datastore.load_codebook_parsed()
     decoded_spots = datastore.load_global_filtered_decoded_spots()
+    gt_path = root_path / Path("GT_spots.csv")
     gt_spots = pd.read_csv(gt_path)
     gene_ids = np.array(gene_ids)
         
@@ -143,9 +148,9 @@ def calculate_F1(
     )
     
     return results
-    
+
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
-    gt_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/GT_spots.csv")
-    results = calculate_F1(root_path=root_path,gt_path=gt_path,search_radius=1.0)
-    print(results)
+    main()
