@@ -9,7 +9,12 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
 from typing import Sequence
+import typer
 
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 3,
@@ -80,7 +85,8 @@ def decode_pixels(
         fdr_target=fdr_target
     )
     
+def main():
+    app()
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
-    decode_pixels(root_path=root_path)
+    main()
