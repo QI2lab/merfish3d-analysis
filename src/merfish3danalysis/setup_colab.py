@@ -35,6 +35,10 @@ BASE_PIP_DEPS = [
     "imbalanced-learn",
     "scikit-learn",
     "anndata",
+    "pandas",
+    "roifile",
+    "shapely",
+    "fastparquet"
 ]
 
 LINUX_JAX_LIB = [
@@ -67,18 +71,11 @@ def build_colab_base_deps():
     return deps
 
 def setup_colab():
-    # 0) Tooling
     run("python -m pip install -U pip setuptools wheel")
-
-    # 1) CUDA env (Colab)
     ensure_cuda_env()
-
-    # 2) Core GPU wheels
     run("python -m pip install cupy-cuda12x")                       # CuPy for CUDA 12.x
     run("python -m pip install cucim")                              # cuCIM
     run("python -m pip install cuvs-cu12 --extra-index-url=https://pypi.nvidia.com")  # cuVS
-
-    # 3) Optional NVIDIA user-space libs (redundant on Colab; skip on failure)
     try:
         run(
             "python -m pip install --no-warn-script-location "
@@ -91,20 +88,9 @@ def setup_colab():
     except subprocess.CalledProcessError:
         print("Skipping optional NVIDIA CUDA component wheels.", file=sys.stderr)
 
-    # 4) Your deps (GUI-free; plain cellpose)
     colab_deps = build_colab_base_deps()
     run("python -m pip install " + " ".join(shlex.quote(d) for d in colab_deps))
-
-    # 5) JAX — EXACT pin
     run("python -m pip install " + " ".join(shlex.quote(d) for d in LINUX_JAX_LIB))
-
-    # 6) Stitcher + ngff-zarr and minimal extras for your imports
-    run(
-        'python -m pip install '
-        '"multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main" '
-        '"ngff-zarr[tensorstore]>=0.16.0"'
-    )
-    run("python -m pip install pandas roifile shapely fastparquet")
 
     print("\nColab setup complete.")
 
