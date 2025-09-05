@@ -30,7 +30,7 @@ from skimage.measure import regionprops_table
 from typing import Union, Optional, Sequence, Tuple
 import pandas as pd
 from random import sample
-from tqdm import tqdm, trange
+from tqdm.auto import tqdm, trange
 from shapely.geometry import Point, Polygon
 from roifile import roiread
 import rtree

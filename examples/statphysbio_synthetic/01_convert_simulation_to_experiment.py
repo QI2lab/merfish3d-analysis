@@ -49,7 +49,6 @@ def convert_simulation(root_path: Path):
     # load simulated data
     simulation_data_path = root_path / Path("aligned_1.tiff")
     simulation_data = imread(simulation_data_path)
-    print(f"simulation shape: {simulation_data.shape}")
     # reshape simulation to match experimental design
     reshaped_simulation_data = simulation_data.reshape(
         num_rounds,

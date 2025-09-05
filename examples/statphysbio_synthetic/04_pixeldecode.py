@@ -8,7 +8,6 @@ Shepherd 2024/12 - create script to run on simulation.
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
-from typing import Sequence
 import typer
 
 app = typer.Typer()
@@ -41,7 +40,6 @@ def decode_pixels(
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    print(datastore.codebook)
     merfish_bits = datastore.num_bits
 
     # initialize decodor class

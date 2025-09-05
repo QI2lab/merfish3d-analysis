@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from psfmodels import make_psf
 from tifffile import imread
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from merfish3danalysis.utils.dataio import read_metadatafile
 from itertools import compress
 import typer
