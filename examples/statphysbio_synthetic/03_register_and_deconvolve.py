@@ -11,8 +11,15 @@ from pathlib import Path
 import numpy as np
 from tifffile import TiffWriter
 from typing import Optional
-from tqdm import tqdm
-import gc
+import typer
+
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
+def manage_data_registration_states(root_path: Path):
+    local_register_data(root_path)
+    global_register_data(root_path,create_max_proj_tiff=False)
 
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
@@ -133,8 +140,9 @@ def global_register_data(
     datastore_state.update({"GlobalRegistered": True})
     datastore_state.update({"Fused": True})
     datastore.datastore_state = datastore_state
-    
+
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition")
-    local_register_data(root_path)
-    global_register_data(root_path,create_max_proj_tiff=False)
+    main()

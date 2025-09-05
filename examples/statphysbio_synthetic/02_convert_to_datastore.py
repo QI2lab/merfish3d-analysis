@@ -30,7 +30,6 @@ from merfish3danalysis.utils.dataio import read_metadatafile
 from itertools import compress
 import typer
 
-
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
