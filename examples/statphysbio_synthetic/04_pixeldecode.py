@@ -41,6 +41,7 @@ def decode_pixels(
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
+    print(datastore.codebook)
     merfish_bits = datastore.num_bits
 
     # initialize decodor class

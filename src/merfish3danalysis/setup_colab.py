@@ -39,7 +39,8 @@ BASE_PIP_DEPS = [
     "roifile",
     "shapely",
     "fastparquet",
-    "pyimagej"
+    "pyimagej",
+    "rtree"
 ]
 
 LINUX_JAX_LIB = [
