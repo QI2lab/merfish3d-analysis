@@ -40,7 +40,8 @@ BASE_PIP_DEPS = [
     "shapely",
     "fastparquet",
     "pyimagej",
-    "rtree"
+    "rtree",
+    "numpy==1.26.4"
 ]
 
 LINUX_JAX_LIB = [
@@ -73,7 +74,7 @@ def build_colab_base_deps():
     return deps
 
 def setup_colab():
-    run("python -m pip install -U pip setuptools wheel")
+    run("python -m pip install -U pip setuptools wheel numpy==1.26.4")
     ensure_cuda_env()
     run("python -m pip install cupy-cuda12x")                       # CuPy for CUDA 12.x
     run("python -m pip install cucim")                              # cuCIM
