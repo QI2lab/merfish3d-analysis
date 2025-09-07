@@ -17,7 +17,7 @@ app.pretty_exceptions_enable = False
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 3,
-    ufish_threshold: float = 0.25,
+    ufish_threshold: float = 0.1,
     magnitude_threshold: list[float,float] = (1.1, 2.0),
     fdr_target: float = .05
 ):

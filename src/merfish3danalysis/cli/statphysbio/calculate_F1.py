@@ -131,8 +131,8 @@ def calculate_F1(
     # Extract coordinates and gene_ids from ground truth
     offset = [
         0, 
-        1*test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1],
-        1*test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]
+        1*test_tile_data.shape[1]/2*datastore.voxel_size_zyx_um[1]-datastore.voxel_size_zyx_um[1]/2,
+        1*test_tile_data.shape[2]/2*datastore.voxel_size_zyx_um[2]-datastore.voxel_size_zyx_um[2]/2
     ]
 
     gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy() # note the tranpose, simulation GT is swapped X & Y
