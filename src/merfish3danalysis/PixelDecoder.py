@@ -1108,9 +1108,9 @@ class PixelDecoder:
 
         Parameters
         ----------
-        minimum_pixels : int, default 2
+        minimum_pixels : int, default 9
             Minimum number of pixels for a barcode. 
-        maximum_pixels : int, default 100
+        maximum_pixels : int, default 1000
             Maximum number of pixels for a barcode. 
         """
 

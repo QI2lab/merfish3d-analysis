@@ -20,70 +20,156 @@ def calculate_F1_with_radius(
     gt_gene_ids: ArrayLike,
     radius: float
 ) -> dict:
-    """Calculate F1 score based on spatial proximity and gene identity.
-    
+    """
+    Compute F1 using greedy closest-first matching within a max radius, with same-gene and
+    one-to-one constraints.
+
+    Algorithm
+    ---------
+    1) For each gene present in both sets, find all qi2lab↔GT pairs within `radius` via KD-trees.
+    2) Concatenate all candidates across genes; sort by distance (ascending).
+    3) Greedily accept pairs if both endpoints are unused; remove both from consideration.
+    4) TP = #accepted pairs; FP = #qi2lab unmatched; FN = #GT unmatched.
+
     Parameters
     ----------
-    qi2lab_coords: ArrayLike
-        z,y,x coordinates for found spots in microns. World coordinates.
-    qi2lab_gene_ids: ArrayLike
-        matched gene ids for found spots
-    gt_coords: ArrayLike,
-        z,y,x, coordinates for ground truth spots in microns. World coordinates.
-    gt_gene_ids: ArrayLike
-        match gene ids for ground truth spots
-    radius: float
-        search radius in 3D
-    
+    qi2lab_coords : ArrayLike
+        (Nq, 3) z, y, x coordinates for found spots (microns; world coords).
+    qi2lab_gene_ids : ArrayLike
+        (Nq,) gene IDs for found spots.
+    gt_coords : ArrayLike
+        (Ng, 3) z, y, x coordinates for ground-truth spots (microns; world coords).
+    gt_gene_ids : ArrayLike
+        (Ng,) gene IDs for ground-truth spots.
+    radius : float
+        Maximum 3D distance (same units as coordinates) allowed for matching.
+
     Returns
     -------
-    resuts: dict
-        results for F1 calculation.
+    results : dict
+        {
+          "F1 Score": float,
+          "Precision": float,
+          "Recall": float,
+          "True Positives": int,
+          "False Positives": int,
+          "False Negatives": int,
+        }
     """
-    
-    gt_tree = cKDTree(gt_coords)
-    
-    true_positives = 0
-    false_positives = 0
-    false_negatives = 0
-    
-    matched_gt_indices = set() 
-    for i, query_coord in enumerate(qi2lab_coords):
-        qi2lab_gene_id = qi2lab_gene_ids[i]
+    qi2lab_coords = np.asarray(qi2lab_coords)
+    qi2lab_gene_ids = np.asarray(qi2lab_gene_ids)
+    gt_coords = np.asarray(gt_coords)
+    gt_gene_ids = np.asarray(gt_gene_ids)
 
-        nearby_indices = gt_tree.query_ball_point(query_coord, r=radius)
+    Nq = qi2lab_coords.shape[0]
+    Ng = gt_coords.shape[0]
 
-        if not nearby_indices:
-            false_positives += 1
+    # Short-circuit trivial cases
+    if Nq == 0 and Ng == 0:
+        return {
+            "F1 Score": 1.0,
+            "Precision": 1.0,
+            "Recall": 1.0,
+            "True Positives": 0,
+            "False Positives": 0,
+            "False Negatives": 0,
+        }
+    if Nq == 0:
+        return {
+            "F1 Score": 0.0,
+            "Precision": 0.0,
+            "Recall": 0.0 if Ng > 0 else 1.0,
+            "True Positives": 0,
+            "False Positives": 0,
+            "False Negatives": int(Ng),
+        }
+    if Ng == 0:
+        return {
+            "F1 Score": 0.0,
+            "Precision": 0.0,
+            "Recall": 0.0,
+            "True Positives": 0,
+            "False Positives": int(Nq),
+            "False Negatives": 0,
+        }
+
+    # Build candidate pairs within radius, per gene; merge globally
+    pair_q_idx_all: list[np.ndarray] = []
+    pair_g_idx_all: list[np.ndarray] = []
+    pair_dist_all:  list[np.ndarray] = []
+
+    common_genes = np.intersect1d(np.unique(qi2lab_gene_ids), np.unique(gt_gene_ids))
+    for gene in common_genes:
+        q_idx = np.flatnonzero(qi2lab_gene_ids == gene)
+        g_idx = np.flatnonzero(gt_gene_ids == gene)
+        if q_idx.size == 0 or g_idx.size == 0:
             continue
-        
-        match_found = False
-        for idx in nearby_indices:
-            if idx in matched_gt_indices:
+
+        q_pts = qi2lab_coords[q_idx]
+        g_pts = gt_coords[g_idx]
+
+        q_tree = cKDTree(q_pts)
+        g_tree = cKDTree(g_pts)
+        try:
+            dist_coo = q_tree.sparse_distance_matrix(
+                g_tree, max_distance=radius, output_type="coo_matrix"
+            )
+        except TypeError:
+            dist_coo = q_tree.sparse_distance_matrix(g_tree, max_distance=radius).tocoo()
+
+        if dist_coo.nnz == 0:
+            continue
+
+        # Local -> global index mapping
+        q_local = dist_coo.row
+        g_local = dist_coo.col
+        dists   = dist_coo.data
+
+        pair_q_idx_all.append(q_idx[q_local])
+        pair_g_idx_all.append(g_idx[g_local])
+        pair_dist_all.append(dists)
+
+    if not pair_q_idx_all:
+        # No candidates within radius at all
+        tp = 0
+        fp = int(Nq)
+        fn = int(Ng)
+    else:
+        pair_q_idx = np.concatenate(pair_q_idx_all)
+        pair_g_idx = np.concatenate(pair_g_idx_all)
+        pair_dist  = np.concatenate(pair_dist_all)
+
+        # Sort globally by distance (closest first)
+        order = np.argsort(pair_dist, kind="stable")
+        pair_q_idx = pair_q_idx[order]
+        pair_g_idx = pair_g_idx[order]
+
+        # Greedy selection with one-to-one constraint
+        q_used = np.zeros(Nq, dtype=bool)
+        g_used = np.zeros(Ng, dtype=bool)
+
+        tp = 0
+        for qi, gi in zip(pair_q_idx, pair_g_idx):
+            if q_used[qi] or g_used[gi]:
                 continue
-            
-            if gt_gene_ids[idx] == qi2lab_gene_id:
-                match_found = True
-                true_positives += 1
-                matched_gt_indices.add(idx)
-                break
+            q_used[qi] = True
+            g_used[gi] = True
+            tp += 1
 
-        if not match_found:
-            false_positives += 1
+        fp = int(Nq - tp)
+        fn = int(Ng - g_used.sum())
 
-    false_negatives = len(gt_gene_ids) - len(matched_gt_indices)
-
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
-    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
         "F1 Score": f1,
         "Precision": precision,
         "Recall": recall,
-        "True Positives": true_positives,
-        "False Positives": false_positives,
-        "False Negatives": false_negatives,
+        "True Positives": int(tp),
+        "False Positives": int(fp),
+        "False Negatives": int(fn),
     }
 
 app = typer.Typer()
