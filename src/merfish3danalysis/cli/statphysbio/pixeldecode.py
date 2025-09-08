@@ -50,13 +50,13 @@ def decode_pixels(
         verbose=1
     )
 
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=1,
-        n_iterations=10,
-        magnitude_threshold=magnitude_threshold,
-        minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold
-    )
+    # decoder.optimize_normalization_by_decoding(
+    #     n_random_tiles=1,
+    #     n_iterations=10,
+    #     magnitude_threshold=magnitude_threshold,
+    #     minimum_pixels=minimum_pixels_per_RNA,
+    #     ufish_threshold=ufish_threshold
+    # )
         
     """
     if you need to access normalizations, they are class properties that can
