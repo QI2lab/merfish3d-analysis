@@ -1790,7 +1790,6 @@ class PixelDecoder:
         self._df_barcodes_loaded["X"] = ~self._df_barcodes_loaded[
             "gene_id"
         ].str.startswith("Blank")
-        print(self._df_barcodes_loaded)
 
         if self._is_3D:
             columns = [
@@ -1818,7 +1817,7 @@ class PixelDecoder:
 
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns] #noqa
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns] #noqa
-        if len(df_false) > 0:
+        if len(df_false) > 1:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
             x = df_combined.drop("X", axis=1)
