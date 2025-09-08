@@ -1817,7 +1817,7 @@ class PixelDecoder:
 
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][columns] #noqa
         df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][columns] #noqa
-
+        print(df_false.head())
         if len(df_false) > 0:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
@@ -2069,7 +2069,6 @@ class PixelDecoder:
         ``tile_idx``, ``gene_id``, ``distance_mean``.
         """
         df = self._df_filtered_barcodes
-        print(df.head())
         if df.empty or len(df) < 2:
             return
 
