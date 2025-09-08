@@ -2069,6 +2069,7 @@ class PixelDecoder:
         ``tile_idx``, ``gene_id``, ``distance_mean``.
         """
         df = self._df_filtered_barcodes
+        print(df.head())
         if df.empty or len(df) < 2:
             return
 
@@ -2456,7 +2457,7 @@ class PixelDecoder:
             Number of iterations. 
         minimum_pixels : float, default 3.0
             Minimum number of pixels for a barcode. 
-        ufish_threshold : float, default 0.1
+        ufish_threshold : float, default 0.25
             Ufish threshold. 
         lowpass_sigma : Optional[Sequence[float]], default (3, 1, 1)
             Lowpass sigma.
