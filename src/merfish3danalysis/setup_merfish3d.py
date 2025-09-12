@@ -50,6 +50,7 @@ LINUX_CONDA_CUDA_PKGS = [
     "nccl",
     "pyopengl",
     "pyimagej",
+    "openjdk=11",
     "'numpy=1.26.4'",
     "scipy",
     "shapely",
@@ -67,7 +68,7 @@ LINUX_JAX_LIB = [
 ]
 
 # multiview-stitcher env settings
-MVSTITCHER_ENV_NAME = "merfish3d_stitcher"
+MVSTITCHER_ENV_NAME = "merfish3d-stitcher"
 MVSTITCHER_ENV_PY = "3.12"
 
 # These ensure all of your listed imports work in the multiview-stitcher env
