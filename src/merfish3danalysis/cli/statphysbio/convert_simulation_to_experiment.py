@@ -17,19 +17,20 @@ from merfish3danalysis.utils.dataio import read_metadatafile, write_metadata
 from typing import Optional
 import numpy as np
 import shutil
+import typer
 
-def convert_simulation(
-    root_path: Path,
-    output_path: Optional[Path] = None
-):
-    """Convert statphysbio simulation into a fake acquisition.
+
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
+def convert_simulation(root_path: Path):
+    """Convert statphysbio simulation into qi2lab acquisition format.
     
     Parameters
     ----------
     root_path: Path
         path to simulation
-    output_path: Optional[Path]
-        path to save fake acquisition. Default = None
     """
  
     # load metadata
@@ -48,7 +49,6 @@ def convert_simulation(
     # load simulated data
     simulation_data_path = root_path / Path("aligned_1.tiff")
     simulation_data = imread(simulation_data_path)
-    print(f"simulation shape: {simulation_data.shape}")
     # reshape simulation to match experimental design
     reshaped_simulation_data = simulation_data.reshape(
         num_rounds,
@@ -57,13 +57,7 @@ def convert_simulation(
         simulation_data.shape[-2],
         simulation_data.shape[-1]
     )
-    
-    # swap yellow and red channel to match how the microscope acquires data (red, yellow, blue)
-    print(f"reshaped simulation: {reshaped_simulation_data.shape}")
-    # reshaped_simulation_data[:,[0,1],:,:,:] = reshaped_simulation_data[:,[1,0],:,:,:]
-    # reshaped_simulation_data = np.swapaxes(reshaped_simulation_data,1,2)
-    print(f"reshaped simulation after swap: {reshaped_simulation_data.shape}")
-    
+       
     fake_stage_position_zyx_um = [
         0.0,
         -1*yx_pixel_um*(reshaped_simulation_data.shape[-2]//2),
@@ -133,7 +127,9 @@ def convert_simulation(
     sim_bitorder_path = root_path / Path("bit_order.csv")
     sim_acq_bitorder_path = simulated_acq_path / Path("bit_order.csv")
     shutil.copy(sim_bitorder_path, sim_acq_bitorder_path)
+
+def main():
+    app()
     
 if __name__ == "__main__":
-    root_path = Path(r"/home/dps/Documents/2025_merfish3d_paper/example_16bit_flat/0.315/")
-    convert_simulation(root_path=root_path)
+    main()

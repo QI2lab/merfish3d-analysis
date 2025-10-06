@@ -428,9 +428,9 @@ def rlgc_biggs(
     recon = recon[:,pad_yx_before:-pad_yx_after,pad_yx_before:-pad_yx_after]
 
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
-    del recon_next, g1, g2, H_T_ones, recon, temp_g2, previous_recon, split1, split2
+    del recon_next, g1, g2, H_T_ones, recon, previous_recon, split1, split2
     if num_iters >= 2:
-        del numerator, denominator, alpha, temp
+        del numerator, denominator, alpha, temp, temp_g2
     del Hu, Hu_safe, HTratio1, HTratio2, HTratio, consensus_map, otf, otfT, otfotfT, image_gpu
     gc.collect()
     cp.cuda.Stream.null.synchronize()
@@ -444,9 +444,11 @@ def chunked_rlgc(
     gpu_id: int = 0,
     crop_yx: int = 1500,
     overlap_yx: int = 32,
-    bkd: bool = False,
     eager_mode: bool = False,
-    ij = None
+    bkd: bool = False,
+    ij = None,
+    bkd_sub_radius: int = 200,
+    verbose: int = 0
 ) -> np.ndarray:
     """Chunked RLGC deconvolution.
     
@@ -458,14 +460,18 @@ def chunked_rlgc(
         point spread function (PSF) to use for deconvolution.
     gpu_id: int, default = 0
         which GPU to use
-    crop_yx: int, default = 1024
+    crop_yx: int, default = 1500
         size of the chunk to process at a time.
-    overlap_yx: int, default = 128
+    overlap_yx: int, default = 32
         size of the overlap between chunks.
-    sub_bkd: bool, default = False
-        subtract background using imagej
     eager_mode: bool, default = False
         Use stricter iteration cutoff, potentially leading to over-fitting.
+    bkd: bool, default = False
+        subtract background using imagej
+    ij: imagej instance, default = None
+        if provided, use this imagej instance for background subtraction.
+    bkd_sub_radius: int, default = 200
+        rolling ball radius for imagej background subtraction.
         
     Returns
     -------
@@ -479,19 +485,31 @@ def chunked_rlgc(
 
     # if requested, subtract background before deconvolution. This can help with registration across rounds.
     if bkd:
+        if ij is None:
+            import imagej
+            ij = imagej.init()
+            delete_ij = True
+        else:
+            delete_ij = False
         imp_array = ij.py.to_imageplus(image)
         imp_array.setStack(imp_array.getStack().duplicate())
         imp_array.show()
-        ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
+        ij.IJ.run(imp_array,"Subtract Background...", f"rolling={int(bkd_sub_radius)} disable stack")
         imp_array.show()
         ij.py.sync_image(imp_array)
         bkd_output = ij.py.from_java(imp_array.duplicate())
         imp_array.close()
         bkd_image = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
-        del imp_array, bkd_output
+        del image, imp_array, bkd_output
         gc.collect()
+        if delete_ij:
+            ij.dispose()
+            del ij
+            gc.collect()
     else:
         bkd_image = image.copy()
+        del image
+        gc.collect()
 
     # Check if deconvolution is tiled. If not, do full deconvolution in one go
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
@@ -502,11 +520,17 @@ def chunked_rlgc(
     else:
         output_sum   = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
-        crop_size = (bkd_image.shape[0], 1400, 1400)
-        overlap = (0, 64, 64)
+        crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
+        overlap = (0, overlap_yx, overlap_yx)
         slices = Slicer(bkd_image, crop_size=crop_size, overlap=overlap, pad = True)
+
+        if verbose >= 1:
+            from tqdm import tqdm
+            iterator = enumerate(tqdm(slices, desc="Chunks"))
+        else:
+            iterator = enumerate(slices)
         
-        for i, (crop, source, destination) in enumerate(slices):
+        for i, (crop, source, destination) in iterator:
             crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
              # --- Parse slices ---
             # Get source slices
@@ -542,16 +566,21 @@ def chunked_rlgc(
             output_sum[destination] += weighted_sub
             output_weight[destination] += weight_sub
 
+        del feather_weight, weighted_crop, weighted_sub, weight_sub
+        gc.collect()
         nonzero = output_weight > 0
         output  = np.zeros_like(output_sum, dtype=output_sum.dtype)
         output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
         output = output.clip(0,2**16-1).astype(np.uint16)
+        del output_sum, output_weight, nonzero
+        gc.collect()
 
     _fft_cache.clear()
     _H_T_cache.clear()
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
+    gc.collect()
 
     return output
 

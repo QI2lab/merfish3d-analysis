@@ -7,6 +7,7 @@ helpful to see it split out for now.
 IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
 then fill in the dictionary at the bottom of the script.
 
+Shepherd 2025/07 - refactor for CellposeSAM
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
@@ -72,20 +73,19 @@ def run_cellpose(root_path,
     del polyDT_fused
     
     # initialize cellpose model and options
-    model = models.Cellpose(gpu=True, model_type="cyto3")
+    model = models.CellposeModel(gpu=True)
     normalize = {
         "normalize": True,
         "percentile": cellpose_parameters['normalization'],
     }
 
     # run cellpose on polyDT max projection
-    masks, _, _, _ = model.eval(
+    masks, _, _ = model.eval(
         polyDT_max_projection,
         diameter=cellpose_parameters['diameter'],
-        channels=[0,0],
         flow_threshold=cellpose_parameters['flow_threshold'],
         cellprob_threshold=-cellpose_parameters['cellprob_threshold'],
-        niter=0,
+        niter=200,
         normalize=normalize)
     
     # save masks
@@ -134,11 +134,11 @@ def run_cellpose(root_path,
     pixel_spacing_rois = roiwrite(global_roi_path,global_spacing_rois)
         
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/zhuang/")
+    root_path = Path(r"/media/dps/data/zhuang")
     cellpose_parameters = {
-        'normalization' : [1.0,99.0],
-        'flow_threshold' : 0.4,
-        'cellprob_threshold' : 0.0,
-        'diameter': 37
+        'normalization' : [1.,99.0],
+        'flow_threshold' : 0.6,
+        'cellprob_threshold' : 1.0,
+        'diameter' : 20,
     }
     run_cellpose(root_path, cellpose_parameters)
