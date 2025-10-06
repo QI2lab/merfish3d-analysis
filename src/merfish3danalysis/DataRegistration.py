@@ -56,7 +56,7 @@ def _apply_first_polyDT_on_gpu(
     import io
     import contextlib
     import os
-    cp.cuda.Device(0).use()
+    cp.cuda.Device(gpu_id).use()
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
 
@@ -773,10 +773,6 @@ class DataRegistration:
         # 2) Grab all rounds IDs after round 0 and split into `num_gpus` chunks
         all_rounds = list(self._round_ids[1:])
         chunk_size = (len(all_rounds) + self._num_gpus - 1) // self._num_gpus  # ceiling division
-
-
-
-
 
         # 3) Launch one process per GPU (only as many as needed)
         processes = []

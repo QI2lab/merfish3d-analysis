@@ -163,6 +163,6 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data/zhuang/")
-    n_tiles = 2
+    root_path = Path(r"/media/dps/data/zhuang")
+    n_tiles = 10
     create_overview_image(root_path,n_tiles)
