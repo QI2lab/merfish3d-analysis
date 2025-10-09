@@ -9,20 +9,50 @@ The goal of this example is to retrieve a simulated 3D MERFISH experiment genera
 You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed and the synthetic dataset downloaded. The dataset is ~20 MB and you will need roughly another 20 MB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, pixel decoding, filtering, and cell assignment.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
-- [Synthetic 3D MERFISH data](https://drive.google.com/file/d/12D0VjfFSGjTsUAJdM0DUTvIdU0ReNGgG/view?usp=drive_link)
+- [Synthetic 3D MERFISH data]([https://drive.google.com/file/d/12D0VjfFSGjTsUAJdM0DUTvIdU0ReNGgG/view?usp=drive_link](https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1))
 
 ## Downloading the data
 
-All of the required code to process this data is in the Google Drive download. There should be one top-level directories in the downloaded folder, `fixed`. The directory structure is as follows:
+The Zenodo link contains four types of simulations: (1) MERFISH in cells; (2) MERFISH randomly distributed; (3) smFISH in cells; (4) smFISH randomly distributed. For each simulation type, there are three axial spacings: 0.315, 1.0, and 1.5 micrometers. The directory structure is as follows:
 
 ```bash
 /path/to/download/
-├── fixed/ 
-  ├── aligned_1.tif
-  ├── bit_order.csv
-  ├── codebook.csv
-  ├── GT_spots.csv
-  └── scan_metadata.csv
+├── example_16bit_cells/
+  ├── 0.315/
+    ├── beads
+        ├── codebook.csv
+        └── experiment_and_GT.h5
+    ├── aligned_1.tif
+    ├── bit_order.csv
+    ├── codebook.csv
+    ├── GT_spots.csv
+    ├── experiment_and_GT.h5
+    ├── norm_offset.json
+    └── scan_metadata.csv
+  ├── 1.0/
+    ├── beads/
+        ├── codebook.csv
+        └── experiment_and_GT.h5
+    ├── aligned_1.tif
+    ├── bit_order.csv
+    ├── codebook.csv
+    ├── GT_spots.csv
+    ├── experiment_and_GT.h5
+    ├── norm_offset.json
+    └── scan_metadata.csv
+  ├── 1.5/
+    ├── beads/
+        ├── codebook.csv
+        └── experiment_and_GT.h5
+    ├── aligned_1.tif
+    ├── bit_order.csv
+    ├── codebook.csv
+    ├── GT_spots.csv
+    ├── experiment_and_GT.h5
+    ├── norm_offset.json
+    └── scan_metadata.csv
+├── example_16bit_uniform/
+...
 ```
 
 ## Processing non-qi2lab data
@@ -31,41 +61,31 @@ Because this is a simulated experiment, it does not follow the standard metadata
 
 ## Processing steps
 
-For each of the python files in the [examples/statphybio_synthetic](https://github.com/QI2lab/merfish3d-analysis/tree/82db7cb6238f1361e497b7cd19b802a5effdf618/examples/statphysbio_synthetic) directory, you will need to scroll to the bottom and replace the path with the correct path. For example, in `01_convert_simulation_to_experiment.py` you'll want to change this section:
+We provide a command line interface (CLI) to run the simulation analysis. This consists of a series of commands for each processing step.
 
-```python
-if __name__ == "__main__":
-    root_path = Path(r"/path/to/download/")
-
-    convert_simulation(root_path=root_path)
+1. Simulation conversion
+```bash
+sim-convert /path/to/simulation/example_16bit_cells/0.315
 ```
-
-For all of the files in the example, you'll set the `root_path` to `root_path = Path(r"/path/to/download/raw_data")`. The package automatically places the datastore within that directory.
-
-Once that is done, you can run `01_convert_simulation_to_experiment.py`, `02_convert_to_datastore.py`, `03_register_and_deconvolve.py`, and `04_pixeldecode.py` without any further changes. 
-
-Depending on your computing hardware, you should expect ~1 minute for `01_convert_simulation_to_experiment.py`, ~1 minute for `02_convert_to_datastore.py`, <20 minutes for `03_register_and_deconolve.py`, and <20 minutes for  `04_pixeldecode.py`, depending on your hard disk and GPU configuration.
+2. Simulation to qi2lab datastore conversion
+```bash
+sim-datastore /path/to/simulation/example_16bit_cells/0.315
+```
+3. Data pre-processing
+```bash
+sim-preprocess /path/to/simulation/example_16bit_cells/0.315
+```
+4. Pixel decoding and RNA calling
+```bash
+sim-decode /path/to/simulation/example_16bit_cells/0.315
+```
+5. Calculate F1-score
+```bash
+sim-f1score /path/to/simulation/example_16bit_cells/0.315
+```
 
 ## Ensuring a sucessful run
 
-We have included the ground truth spots with the simulated synthetic data. You can run `05_calculate_F1.py` to calculate the F1 score for the default decoder settings. If you want to explore how the various decoder parameters impact accuracy, you can run `06_sweep_F1.py` to loop over many possible parameters and calculate the F1 score for each unique parameter set.
+If the runs are succesful, you should have F1 scores that match the following values:
 
-To run these functions, you'll need to make sure that the ground truth spots path is set at the end of the file.
 
-For `05_calculate_F1.py`,
-```python
-if __name__ == "__main__":
-    root_path = Path(r"/path/to/sim_acquisition")
-    gt_path = Path(r"/path/to/GT_spots.csv")
-    results = calculate_F1(root_path=root_path,gt_path=gt_path,search_radius=.75)
-    print(results)
-```
-
-and for `06_sweep_f1.py`,
-
-```python
-if __name__ == "__main__":
-    root_path = Path(r"/path/to/sim_acquisition")
-    gt_path = Path(r"/path/to/GT_spots.csv")
-    sweep_decode_params(root_path=root_path, gt_path=gt_path)
-```
