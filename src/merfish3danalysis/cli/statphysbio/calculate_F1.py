@@ -156,7 +156,7 @@ app.pretty_exceptions_enable = False
 @app.command()
 def calculate_F1(
     root_path: Path,
-    search_radius: float = 1.5
+    search_radius: float = 1.0
 ):
     """Calculate F1 using ground truth.
 
