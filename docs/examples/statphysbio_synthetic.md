@@ -6,7 +6,7 @@ The goal of this example is to retrieve and analyze simulated iterative RNA-FISH
 
 ## Try without installing: Google Colab Notebook
 
-If you would like to try out `merfish3d-analysis` without installing, there is an example notebook that can be run on Google Colab [here](https://colab.research.google.com/github/QI2lab/merfish3d-analysis/blob/main/examples/notebooks/Simulated_random_molecules.ipynb).
+If you would like to try out `merfish3d-analysis` without installing, there is an example notebook that can be run on Google Colab [here](https://colab.research.google.com/github/QI2lab/merfish3d-analysis/blob/main/examples/notebooks/Simulation_example.ipynb).
 
 ## Preliminaries
 
