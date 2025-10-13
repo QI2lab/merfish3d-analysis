@@ -62,7 +62,7 @@ def decode_pixels(
 
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
-        n_iterations=1,
+        n_iterations=3,
         distance_threshold=distance_threshold,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
