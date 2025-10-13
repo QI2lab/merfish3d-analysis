@@ -1,4 +1,4 @@
-# StatPhysBio synthetic data example
+# Synthetic data example
 
 ## Overview
 
