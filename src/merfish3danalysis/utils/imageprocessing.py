@@ -16,8 +16,6 @@ import gc
 from numpy.typing import ArrayLike
 from numba import njit, prange
 import builtins
-from basicpy import BaSiC
-
 
 def replace_hot_pixels(
     noise_map: ArrayLike, 
@@ -88,6 +86,7 @@ def estimate_shading(
 
     import cupy as cp  # type: ignore
     from cupyx.scipy import ndimage  # type: ignore
+    from basicpy import BaSiC # type: ignore
 
     maxz_images = []
     for image in images:
