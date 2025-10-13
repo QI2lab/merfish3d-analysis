@@ -1,37 +1,36 @@
-from typing import TYPE_CHECKING
+from typing import List
 import importlib
 import importlib.util as _ilus
+import pkgutil as _pkgutil
 
-# List the submodules you want to expose
-_submodules = ("dataio", "imageprocessing", "registration", "rlgc")
+__all__: List[str] = []
 
-# Only advertise submodules that actually exist (don’t import them yet)
-__all__ = [name for name in _submodules
-           if _ilus.find_spec(f"{__name__}.{name}") is not None]
+# Note: __path__ here refers to this subpackage's path.
+try:
+    _names = [m.name for m in _pkgutil.iter_modules(__path__)]  # type: ignore[name-defined]
+except Exception:
+    _names = []
 
-def _load_submodule(name: str):
-    """Import and cache a submodule on first attribute access."""
+for _name in _names:
+    # Only expose immediate child modules/packages that exist
+    if _ilus.find_spec(f"{__name__}.{_name}") is not None:
+        __all__.append(_name)
+
+def _lazy_import(name: str):
     module = importlib.import_module(f".{name}", __name__)
-    globals()[name] = module  # cache for subsequent lookups
+    globals()[name] = module
     return module
 
 def __getattr__(name: str):
-    """Lazy attribute access for listed submodules."""
     if name in __all__:
         try:
-            return _load_submodule(name)
-        except Exception as exc:  # wrap with a clearer error
+            return _lazy_import(name)
+        except Exception as exc:
             raise ImportError(
-                f"Failed to import submodule '{name}'. "
-                f"This submodule may require optional dependencies. "
-                f"Original error: {exc}"
+                f"Optional module '{__name__}.{name}' could not be imported; "
+                f"it may require environment-specific dependencies. Original error: {exc}"
             ) from exc
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-def __dir__():
-    # Make dir(pkg) show lazily-exposed names too
+def __dir__() -> list[str]:
     return sorted(list(globals().keys()) + __all__)
-
-# Help type checkers see the names without importing at runtime
-if TYPE_CHECKING:
-    from . import dataio, imageprocessing, registration, rlgc  # noqa: F401
