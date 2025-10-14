@@ -4,6 +4,9 @@ _WARNING: alpha software._ We are sharing this early in case it is useful to oth
 
 GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This package currently **Nvidia only** and **Linux only** due to RAPIDS.AI package availabilty. Documentation is available at [https://qi2lab.github.io/merfish3d-analysis/](https://qi2lab.github.io/merfish3d-analysis/).
 
+## Associated preprint publication
+[GPU-accelerated, self-optimizing processing for 3D multiplexed iterative RNA-FISH experiments](https://www.biorxiv.org/content/10.1101/2025.10.10.681751v1).
+
 ## Installation
 
 Create a python 3.12 environment using your favorite package manager, e.g.
@@ -47,4 +50,5 @@ If you plan on re-segmenting cells using decoded RNA, please follow the [Baysor 
 ## Documentation
 
 To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.
+
 
