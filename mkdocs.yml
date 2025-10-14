@@ -59,7 +59,6 @@ nav:
       - dataio: reference/modules/dataio.md
       - imageprocessing: reference/modules/imageprocessing.md
       - registration: reference/modules/registration.md
-      - opmtools: reference/modules/opmtools.md
   - Contributing: contributing.md
 
 plugins:
