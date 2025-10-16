@@ -2,12 +2,12 @@
 Perform registration on qi2labdatastore. By default creates a max 
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
+Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - rework for multiple GPU support.
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.DataRegistration import DataRegistration
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
 import numpy as np
@@ -16,6 +16,12 @@ from tqdm import tqdm
 from tifffile import TiffWriter
 from typing import Optional
 
+import typer
+
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def local_register_data(root_path: Path):
     """Register each tile across rounds in local coordinates.
 
@@ -24,6 +30,7 @@ def local_register_data(root_path: Path):
     root_path: Path
         path to experiment
     """
+    from merfish3danalysis.DataRegistration import DataRegistration
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
@@ -34,13 +41,12 @@ def local_register_data(root_path: Path):
         datastore=datastore, 
         perform_optical_flow=True, 
         overwrite_registered=True,
-        save_all_polyDT_registered=True,
-        num_gpus=2
+        save_all_polyDT_registered=False,
+        num_gpus=1
     )
 
     # run local registration across rounds
-    #registration_factory.register_all_tiles()
-    registration_factory.register_one_tile(tile_id = 24)
+    registration_factory.register_all_tiles()
 
     # update datastore state
     datastore_state = datastore.datastore_state
@@ -244,7 +250,8 @@ def global_register_data(
                 metadata=metadata
             )
     
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20250123_OB_22bit_duplicate/")
-    local_register_data(root_path)
-    global_register_data(root_path)
+    main()

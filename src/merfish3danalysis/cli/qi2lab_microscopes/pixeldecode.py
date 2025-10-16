@@ -10,12 +10,18 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
+import typer
 
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 9,
-    ufish_threshold: float = 0.05,
-    magnitude_threshold: float = 0.9,
+    num_gpus: int = 1,
+    minimum_pixels_per_RNA: int = 3,
+    ufish_threshold: float = 0.25,
+    magnitude_threshold: tuple[float,float]  =[0.9, 10.0],
     fdr_target: float = 0.05,
     run_baysor: bool = True,
 ):
@@ -30,13 +36,11 @@ def decode_pixels(
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
     ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.1
+        threshold to accept ufish prediction. Default = 0.25
+    magnitude_threshold : tuple[float,float]. Default = [0.9,10.0]
+        list of two floats [min, max] magnitude thresholds to accept a decoded pixel. 
     fdr_target : float
-        false discovery rate (FDR) target. Default = .2
-        NOTE: This is higher than usual, but we are finding that .05 is too 
-        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we 
-        have implemented. Ongoing effort to fully understand this issue using 
-        synthetic data.
+        false discovery rate (FDR) target. Default = .05
     run_baysor : bool
         flag to run Baysor segmentation. Default = True
     """
@@ -51,7 +55,7 @@ def decode_pixels(
         datastore=datastore, 
         use_mask=False, 
         merfish_bits=merfish_bits, 
-        num_gpus=2,
+        num_gpus=num_gpus,
         verbose=1,
         
     )
@@ -80,6 +84,8 @@ def decode_pixels(
         datastore.run_baysor()
         datastore.save_mtx()
 
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20250123_OB_22bit_duplicate/")
-    decode_pixels(root_path=root_path,run_baysor=False)
+    main()

@@ -7,6 +7,7 @@ helpful to see it split out for now.
 IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
 then fill in the dictionary at the bottom of the script.
 
+Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - refactor for CellposeSAM
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
@@ -18,37 +19,12 @@ import numpy as np
 from cellpose import models, io
 from roifile import roiread, roiwrite, ImagejRoi
 
-def warp_point(
-    pixel_space_point: np.ndarray,
-    spacing: np.ndarray,
-    origin: np.ndarray,
-    affine: np.ndarray
-) -> np.ndarray:
-    """Warp point from pixel space to global space using known transforms.
-    
-    Parameters
-    ----------
-    pixel_space_point : np.ndarray
-        point in the image coordinate system, zyx order
-    spacing: np.ndarray
-        pixel size in microns, zyx order
-    origin: np.ndarray
-        world coordinate origin (um), zyx order
-    affine: np.ndarray
-        4x4 affine matrix (um), zyx order
-        
-    Returns
-    -------
-    registered_space_point: np.ndarray
-        point in the world coordinate system (um), zyx order
-    
-    """
+import typer
 
-    physical_space_point = pixel_space_point * spacing + origin
-    registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
-    
-    return registered_space_point
+app = typer.Typer()
+app.pretty_exceptions_enable = False
 
+@app.command()
 def run_cellpose(root_path,
                  cellpose_parameters: dict):
     """Run cellpose and save ROIs
@@ -132,13 +108,40 @@ def run_cellpose(root_path,
     # write global coordinate ROIs
     global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
     pixel_spacing_rois = roiwrite(global_roi_path,global_spacing_rois)
+
+def warp_point(
+    pixel_space_point: np.ndarray,
+    spacing: np.ndarray,
+    origin: np.ndarray,
+    affine: np.ndarray
+) -> np.ndarray:
+    """Warp point from pixel space to global space using known transforms.
+    
+    Parameters
+    ----------
+    pixel_space_point : np.ndarray
+        point in the image coordinate system, zyx order
+    spacing: np.ndarray
+        pixel size in microns, zyx order
+    origin: np.ndarray
+        world coordinate origin (um), zyx order
+    affine: np.ndarray
+        4x4 affine matrix (um), zyx order
         
+    Returns
+    -------
+    registered_space_point: np.ndarray
+        point in the world coordinate system (um), zyx order
+    
+    """
+
+    physical_space_point = pixel_space_point * spacing + origin
+    registered_space_point = (np.array(affine) @ np.array(list(physical_space_point) + [1]))[:-1]
+    
+    return registered_space_point
+        
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/qi2lab/20250123_OB_22bit_duplicate/")
-    cellpose_parameters = {
-        'normalization' : [1.,99.0],
-        'flow_threshold' : 0.4,
-        'cellprob_threshold' : 1.0,
-        'diameter': 50.0
-    }
-    run_cellpose(root_path, cellpose_parameters)
+    main()
