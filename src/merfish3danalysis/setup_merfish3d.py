@@ -83,11 +83,64 @@ def run(command: str, *, cwd: Path | None = None):
     typer.echo(f"$ {command}")
     subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
 
-def _which(names: list[str]) -> str | None:
-    for n in names:
-        if shutil.which(n):
-            return n
-    return None
+def _find_installer() -> str:
+    """
+    Pick the package manager executable path, preferring Conda.
+    Order:
+      1) Explicit override via MERFISH3D_INSTALLER (absolute path or basename)
+      2) CONDA_EXE
+      3) MAMBA_EXE / MICROMAMBA_EXE
+      4) PATH lookups: conda, then mamba, then micromamba
+      5) Common locations relative to active env
+    """
+    # 1) Explicit user override (optional)
+    override = os.environ.get("MERFISH3D_INSTALLER")
+    if override:
+        # Accept absolute path or a basename on PATH
+        p = Path(override)
+        if p.exists():
+            return str(p)
+        exe = shutil.which(override)
+        if exe:
+            return exe
+        raise RuntimeError(f"MERFISH3D_INSTALLER={override!r} not found on disk or PATH")
+
+    # 2) Prefer Conda if available
+    conda_exe = os.environ.get("CONDA_EXE")
+    if conda_exe and Path(conda_exe).exists():
+        return conda_exe
+
+    # 3) Fall back to Mamba/MicroMamba env vars
+    for var in ("MAMBA_EXE", "MICROMAMBA_EXE"):
+        exe = os.environ.get(var)
+        if exe and Path(exe).exists():
+            return exe
+
+    # 4) PATH lookups (prefer conda)
+    for name in ("conda", "mamba", "micromamba"):
+        exe = shutil.which(name)
+        if exe:
+            return exe
+
+    # 5) Try common locations relative to active env
+    candidates: list[Path] = []
+    prefix = os.environ.get("CONDA_PREFIX") or os.environ.get("MAMBA_ROOT_PREFIX")
+    if prefix:
+        p = Path(prefix)
+        candidates += [
+            p / "bin" / "conda",
+            p / "bin" / "mamba",
+            p / "bin" / "micromamba",
+            p.parent / "condabin" / "conda",  # typical base/condabin/conda
+        ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+
+    raise RuntimeError(
+        "Neither conda nor (micro)mamba were found. Ensure CONDA_EXE is set or "
+        "'conda' is on PATH; alternatively set MERFISH3D_INSTALLER=conda."
+    )
 
 @app.command()
 def setup_cuda():
@@ -112,9 +165,11 @@ def setup_cuda():
         typer.echo("Error: activate your conda environment first.", err=True)
         raise typer.Exit(1)
 
-    installer = _which(["mamba", "conda"])
-    if not installer:
-        typer.echo("Error: neither mamba nor conda found.", err=True)
+    try:
+        installer = _find_installer()
+        typer.echo(f"Using installer: {installer}")
+    except RuntimeError as e:
+        typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
     # 1) Core CUDA stack from conda
