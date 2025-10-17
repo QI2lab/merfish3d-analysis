@@ -39,25 +39,25 @@ All of the commands given here are run from the terminal.
 
 Each command list below can be queried using `--help` to discover all of the available parameters, if the defaults are not correct for your dataset. For example,
 ```bash
-conda run -n merfished qi2lab-decode --help
+conda run --live-stream -n merfished qi2lab-decode --help
 ```
 
 ### Datastore creation including hot pixel correction, camera ADU to photoelectron conversion, illumination estimation, and flatfield correction
 
 ```bash
-conda run -n merfish3d qi2lab-datastore "/path/to/data" --num-gpus 2 --hot-pixel-image "hot_pixel_flir.tiff"
+conda run --live-stream -n merfish3d qi2lab-datastore "/path/to/data" --num-gpus 2 --hot-pixel-image "hot_pixel_flir.tiff"
 ```
 
 ### Pre-processing including deconvolution, drift correction, and neural network prediction of spots
 
 ```bash
-conda run -n merfish3d qi2lab-preprocess "/path/to/data" --num-gpus 2
+conda run --live-stream -n merfish3d qi2lab-preprocess "/path/to/data" --num-gpus 2
 ```
 
 ### Global registration and first round poly-dT tile fusion
 
 ```bash
-conda run -n merfish3d-stitcher qi2lab-globalregister "/path/to/data"
+conda run --live-stream -n merfish3d-stitcher qi2lab-globalregister "/path/to/data"
 ``` 
 
 ### poly-dT cell segmentation
@@ -65,7 +65,7 @@ conda run -n merfish3d-stitcher qi2lab-globalregister "/path/to/data"
 The values for Cellpose-SAM need to be pre-determined using the Cellpose GUI.
 
 ```bash
-conda run -n merfish3d qi2lab-segment "/path/to/data" --diameter 90 --normalization-low 0.5 --normalization-high 99.0 --cellprobthreshold 
+conda run --live-stream -n merfish3d qi2lab-segment "/path/to/data" --diameter 90 --normalization-low 0.5 --normalization-high 99.0 --cellprobthreshold 
 ```
 
 ### Pixel decoding including FDR filtering
@@ -73,5 +73,5 @@ conda run -n merfish3d qi2lab-segment "/path/to/data" --diameter 90 --normalizat
 Because there are 2 smFISH bits at the end of the codebook, we instruct the `merfish3d-analysis` pixel decoder to process only the initial 16 bits of the codebook.
 
 ```bash
-conda run -n merfish3d qi2lab-decode "/path/to/data" --perform-baysor True --num-gpus 2 --merfish-bits 16
+conda run --live-stream -n merfish3d qi2lab-decode "/path/to/data" --perform-baysor True --num-gpus 2 --merfish-bits 16
 ```
