@@ -192,7 +192,7 @@ def convert_data(
                 ni0=ri,
                 model="vectorial",
             ).astype(np.float32)
-            psf = psf / np.sum(psf, axis=(0, 1, 2))
+            #psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
         else:
             psf = make_psf(
@@ -207,7 +207,7 @@ def convert_data(
                 ni0=ri,
                 model="vectorial",
             ).astype(np.float32)
-            psf = psf / np.sum(psf, axis=(0, 1, 2))
+            #psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
     channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
     datastore.channel_psfs = channel_psfs

@@ -20,8 +20,9 @@ gc_update_kernel = ElementwiseKernel(
     'float32 recon, float32 gradient, float32 consensus_map, float32 H_T_ones',
     'float32 recon_next',
     '''
-    float step = recon / H_T_ones;
-    float upd  = recon + gradient * step;
+    float denom = (H_T_ones > 1e-6f) ? H_T_ones : 1e-6f;
+    float step  = recon / denom;
+    float upd   = recon + gradient * step;
     if (consensus_map < 0) {
         upd = recon;
     }
@@ -126,7 +127,7 @@ def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
     pad_z_after = pad_z - pad_z_before
     pad_width = ((pad_z_before, pad_z_after),(0, 0), (0, 0))
     padded_image = np.pad(
-        (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1).astype(np.uint16),
+        (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1),
         pad_width, mode="reflect"
     )
     return padded_image, pad_z_before, pad_z_after
@@ -181,7 +182,8 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
         psf = cp.roll(psf, -int(axis_size / 2), axis=axis)
     psf = cp.fft.ifftshift(psf)
     psf = psf / cp.sum(psf)
-    return cp.clip(psf,a_min=1e-12, a_max=2**16-1).astype(cp.float32)
+    psf = cp.maximum(psf, 0.0)  
+    return psf.astype(cp.float32)
 
 def fft_conv(image: cp.ndarray, OTF: cp.ndarray, shape) -> cp.ndarray:
     """Perform convolution via FFT: irfftn(rfftn(image) * OTF).
@@ -210,7 +212,7 @@ def fft_conv(image: cp.ndarray, OTF: cp.ndarray, shape) -> cp.ndarray:
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= OTF
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
-    cp.clip(ifft_buf, 1e-12, 2**16-1, out=ifft_buf)
+    cp.clip(ifft_buf, 0.0, 2**16-1, out=ifft_buf)
     return ifft_buf
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
@@ -251,7 +253,7 @@ def _get_H_T_ones(otf: cp.ndarray, otfT: cp.ndarray, shape: tuple[int,int,int]) 
     fft_buf[...] *= otfT
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
     _H_T_cache[shape] = ifft_buf
-    return cp.clip(ifft_buf,a_min=1e-12, a_max=2**16-1).astype(cp.float32)
+    return _H_T_cache[shape]
 
 def rlgc_biggs(
     image: np.ndarray,
@@ -299,15 +301,26 @@ def rlgc_biggs(
         psf = np.expand_dims(psf,axis=0)
     if image.ndim == 2:
         image = np.expand_dims(image,axis=0)
-    new_yx = next_gpu_fft_size(image.shape[-1]+1)
-    pad_yx = new_yx - image.shape[-1]
-    pad_yx_before = pad_yx // 2
-    pad_yx_after = pad_yx - pad_yx_before
+    _, y0, x0 = image.shape  # image is (z,y,x)
+
+    new_y = next_gpu_fft_size(y0)  # no +1 here
+    new_x = next_gpu_fft_size(x0)
+
+    pad_y = new_y - y0
+    pad_x = new_x - x0
+
+    pad_y_before = pad_y // 2
+    pad_y_after  = pad_y - pad_y_before
+
+    pad_x_before = pad_x // 2
+    pad_x_after  = pad_x - pad_x_before
+
     image_padded = np.pad(
         image,
-        pad_width=((0,0),(pad_yx_before,pad_yx_after),(pad_yx_before,pad_yx_after)),
-        mode="constant",
-        constant_values = np.median(image)
+        pad_width=((0, 0),
+                (pad_y_before, pad_y_after),
+                (pad_x_before, pad_x_after)),
+        mode="reflect"
     )
 
     if image.ndim == 3:
@@ -325,10 +338,10 @@ def rlgc_biggs(
         otfT = cp.conjugate(otf)
         del psf_gpu
         cp.get_default_memory_pool().free_all_blocks()
-    otfotfT = cp.clip(cp.real(otf * otfT).astype(cp.float32),a_min=1e-12, a_max=2**16-1).astype(cp.float32)
+    otfotfT = cp.real(otf * otfT).astype(cp.float32)
     shape = image_gpu.shape
     z, y, x = shape
-    recon = cp.full(shape, cp.mean(image_gpu), dtype=cp.float32)
+    recon = image_gpu.copy().astype(cp.float32)
     previous_recon = cp.empty_like(recon)
     previous_recon[...] = recon
     recon_next = cp.empty_like(recon)
@@ -425,7 +438,9 @@ def rlgc_biggs(
     else:
         recon = cp.squeeze(recon)
 
-    recon = recon[:,pad_yx_before:-pad_yx_after,pad_yx_before:-pad_yx_after]
+    y_end = -pad_y_after if pad_y_after > 0 else None
+    x_end = -pad_x_after if pad_x_after > 0 else None
+    recon = recon[:, pad_y_before:y_end, pad_x_before:x_end]
 
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
     del recon_next, g1, g2, H_T_ones, recon, previous_recon, split1, split2
@@ -555,8 +570,7 @@ def chunked_rlgc(
             if is_y_edge or is_x_edge:
                 feather_weight = np.ones_like(crop_array, dtype=np.float32)
             else:
-                feather_px = y_start
-                feather_weight = make_feather_weight(crop.shape, feather_px=feather_px)
+                feather_weight = make_feather_weight(crop.shape, feather_px=overlap_yx)
 
             # --- Apply weight to valid region only ---
             weighted_crop = crop_array * feather_weight

@@ -25,6 +25,7 @@ app.pretty_exceptions_enable = False
 def local_register_data(
     root_path: Path,
     num_gpus: int = 1,
+    decon: bool = True,
     opticalflow: bool = True,
     decon_allpolydT: bool = False,
     bkdsubtract_all_polydT: bool = True,
@@ -32,7 +33,7 @@ def local_register_data(
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
 ):
-    """Register each tile across rounds in local coordinates.
+    """Preprocess and register each tile across rounds in local coordinates.
 
     Parameters
     ----------
@@ -40,14 +41,19 @@ def local_register_data(
         path to experiment
     num_gpus: int, Default = 1
         number of gpus available.
+    decon: bool, Default = True
+        perform deconvolution on 1st round polydT and FISH readout images.
     opticalflow: bool, Default = True
         perform optical flow based registration. 
-    decon: bool, Default = True
-        perform deconvolution prior to registration. 
-    overwrite: bool, Default = True
-        overwrite existing registered data. 
+    decon_allpolydT: bool, Default = False
+        perform deconvolution prior to registration.
+    bkdsubtract_all_polydT: bool, Default = True
+        perform background subtraction prior to registration.
     save_all_polyDT_registered: bool, Default = False  
         save all registered polyDT images. 
+    overwrite: bool, Default = True
+        overwrite existing registered data. 
+
     """
     from merfish3danalysis.DataRegistration import DataRegistration
 
@@ -66,6 +72,9 @@ def local_register_data(
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon
     )
+
+    if not(decon):
+        registration_factory._decon = False
 
     # run local registration across rounds
     registration_factory.register_all_tiles()
