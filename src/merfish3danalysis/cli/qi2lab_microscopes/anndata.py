@@ -5,8 +5,15 @@ from scipy import sparse
 from pathlib import Path
 import json
 
-def baysor_csv_to_anndata(
+import typer
+
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
+def build_anndata(
     root_path: Path,
+    source: str = "baysor",
     confidence_cutoff: float = 0.7
 ):
     """
@@ -16,28 +23,31 @@ def baysor_csv_to_anndata(
     ----------
     root_path : str or Path
         Path to root data folder.
-    confidence_cutoff : float
-        Minimum assignment confidence to include a transcript.
+    source: str, default = "baysor"
+        Source of cell assignment. Options are "baysor" or "cellpose".
+    confidence_cutoff : float, default = 0.7
+        Minimum assignment confidence to include a transcript. Only used if source="baysor".
 
-    Returns
-    -------
-    AnnData
-        AnnData object with cell x gene count matrix.
     """
 
-    # Load segmentation.csv
-    segmentation_path = root_path / Path("qi2labdatastore/segmentation/segmentation.csv")
-    df = pd.read_csv(segmentation_path, usecols=["gene", "cell", "assignment_confidence"])
+    if source not in ["baysor", "cellpose"]:
+        raise ValueError('source must be "baysor" or "cellpose"')
+    if source == "baysor":
+        # Load segmentation.csv
+        segmentation_path = root_path / Path("qi2labdatastore/segmentation/segmentation.csv")
+        df = pd.read_csv(segmentation_path, usecols=["gene", "cell", "assignment_confidence"])
 
-    # Filter by confidence
-    df = df[df["assignment_confidence"] >= confidence_cutoff]
+        # Filter by confidence
+        df = df[df["assignment_confidence"] >= confidence_cutoff]
 
-    # Drop unassigned cells
-    df = df[df["cell"].notna() & (df["cell"] != "")]
+        # Drop unassigned cells
+        df = df[df["cell"].notna() & (df["cell"] != "")]
 
-    # Ensure consistent string types
-    df["cell"] = df["cell"].astype(str)
-    df["gene"] = df["gene"].astype(str)
+        # Ensure consistent string types
+        df["cell"] = df["cell"].astype(str)
+        df["gene"] = df["gene"].astype(str)
+    else:
+        raise ValueError("Cellpose source not yet implemented")
 
     # Pivot to get cells x genes matrix
     counts = df.groupby(["cell", "gene"]).size().unstack(fill_value=0)
@@ -76,8 +86,8 @@ def baysor_csv_to_anndata(
     adata.obsm['spatial'] = centroid_df.values
     adata.write(root_path / Path("qi2labdatastore/mtx_output/spatial_ad2.h5ad"))
 
+def main():
+    app()
+
 if __name__ == "__main__":
-    baysor_csv_to_anndata(
-        root_path=Path(r"/data/MERFISH/20241108_Bartelle_MouseMERFISH_LC/"),
-        confidence_cutoff=0.7
-        )
+    main()

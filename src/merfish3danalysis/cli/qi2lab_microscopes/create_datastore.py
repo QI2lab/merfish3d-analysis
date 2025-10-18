@@ -7,18 +7,25 @@ parameters are automatically extracted from the metadata written by qi2lab
 microscopes. For another microscope, you will need to write new code on how to
 extract the correct parameters.
 
-Required user parameters for system dependent variables are at end of script.
-
+Shepherd 2025/10 - change to CLI.
 Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
 import multiprocessing as mp
 mp.set_start_method('spawn', force=True)
+
+# ensure JAXLIB uses local CUDA
+import os
+prefix = os.environ["CONDA_PREFIX"]
+os.environ["XLA_PTXAS_PATH"] = f"{prefix}/bin/ptxas"
+os.environ["XLA_NVLINK_PATH"] = f"{prefix}/bin/nvlink"
+os.environ["XLA_FLAGS"] = f"--xla_gpu_cuda_data_dir={prefix}"
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
@@ -30,20 +37,25 @@ from tqdm import tqdm
 from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import replace_hot_pixels, estimate_shading, no_op
 from itertools import compress
-from typing import Optional
 import gc
 import builtins
 
+import typer
+
+app = typer.Typer()
+app.pretty_exceptions_enable = False
+
+@app.command()
 def convert_data(
     root_path: Path,
-    baysor_binary_path: Path,
-    baysor_options_path: Path,
-    julia_threads: int,
-    channel_names: Optional[list[str]] = ["alexa488", "atto565", "alexa647"],
-    hot_pixel_image_path: Optional[Path] = None,
-    output_path: Optional[Path] = None,
-    codebook_path: Optional[Path] = None,
-    bit_order_path: Optional[Path] = None,
+    baysor_binary_path: Path = None,
+    baysor_options_path: Path = None,
+    julia_threads: int = 1,
+    channel_names: list[str] = ["alexa488", "atto565", "alexa647"],
+    hot_pixel_image_path: Path = None,
+    output_path: Path = None,
+    codebook_path: Path = None,
+    bit_order_path: Path = None,
 ):
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -245,7 +257,7 @@ def convert_data(
             ni0=ri,
             model="vectorial",
         ).astype(np.float32)
-        psf = psf / np.sum(psf, axis=(0, 1, 2))
+        #psf = psf / np.sum(psf, axis=(0, 1, 2))
         channel_psfs.append(psf)
     channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
 
@@ -357,12 +369,8 @@ def convert_data(
                     print("Replacing data with zeros.\n")
                     raw_image = np.zeros(correct_shape, dtype=np.uint16)
                 else:                    
-                    # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
-                    # print("Found shape: " + str(raw_image.shape))
                     size_to_trim = raw_image.shape[1] - correct_shape[1]
                     raw_image = raw_image[:,size_to_trim:,:].copy()
-                    # print("Correct shape: " + str(correct_shape))
-                    # print("Corrected to shape: " + str(raw_image.shape) + "\n")
 
             # Correct if channels were acquired in reverse order (red->purple)
             if channel_order == "reversed":
@@ -468,7 +476,10 @@ def convert_data(
     # Calculate and apply flatfield corrections
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    n_flatfield_images = 100
+    if datastore.num_tiles > 100:
+        n_flatfield_images = 100
+    else:
+        n_flatfield_images = datastore.num_tiles
     sample_indices = np.asarray(np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False))
     data_camera_corrected = []
 
@@ -548,22 +559,8 @@ def convert_data(
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
 
+def main():
+    app()
+
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/server2/20250702_dual_instrument_WF_MERFISH/")
-    baysor_binary_path = Path(
-        r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
-    )
-    baysor_options_path = Path(
-        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/qi2lab_mouse/qi2lab_mouse.toml"
-    )
-    julia_threads = 20
-
-    hot_pixel_image_path = None
-
-    convert_data(
-        root_path=root_path,
-        baysor_binary_path=baysor_binary_path,
-        baysor_options_path=baysor_options_path,
-        julia_threads=julia_threads,
-        hot_pixel_image_path=hot_pixel_image_path
-    )
+    main()
