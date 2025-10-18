@@ -59,7 +59,7 @@ LINUX_CONDA_CUDA_PKGS = [
     "zarr>3.0.8",
     "pandas",
     "fastparquet",
-    "tbb"
+    "tbb",
 ]
 
 # Optional: jax local CUDA in CURRENT env
@@ -76,12 +76,14 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "pandas",
     "roifile",
     "shapely",
-    "fastparquet"
+    "fastparquet",
 ]
+
 
 def run(command: str, *, cwd: Path | None = None):
     typer.echo(f"$ {command}")
     subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
+
 
 def _find_installer() -> str:
     """
@@ -96,7 +98,6 @@ def _find_installer() -> str:
     # 1) Explicit user override (optional)
     override = os.environ.get("MERFISH3D_INSTALLER")
     if override:
-        # Accept absolute path or a basename on PATH
         p = Path(override)
         if p.exists():
             return str(p)
@@ -131,7 +132,7 @@ def _find_installer() -> str:
             p / "bin" / "conda",
             p / "bin" / "mamba",
             p / "bin" / "micromamba",
-            p.parent / "condabin" / "conda",  # typical base/condabin/conda
+            p.parent / "condabin" / "conda",
         ]
     for c in candidates:
         if c.exists():
@@ -142,19 +143,16 @@ def _find_installer() -> str:
         "'conda' is on PATH; alternatively set MERFISH3D_INSTALLER=conda."
     )
 
+
 @app.command()
 def setup_cuda():
     """
     Linux-only setup:
 
     1) Install CUDA packages via conda/mamba (rapidsai + conda-forge + nvidia).
-    2) Write a Linux activation hook exporting CUDA_PATH, etc.
-    3) (Optional) Prepare CURRENT env: torch/vision cu128, BASE_PIP_DEPS, jax local CUDA.
-    4) Create NEW env 'merfish3d_stitcher' (Python 3.12) and pip-install:
-         - core deps to satisfy your import list
-         - your repo (-e .)
-         - multiview-stitcher + ngff-zarr[tensorstore]>=0.16.0
-       Then smoke-test imports inside the new env.
+    2) Write activation hooks exporting CUDA_PATH and JAVA_HOME for this env.
+    3) (Optional) Prep CURRENT env: torch/vision cu128, BASE_PIP_DEPS, jax local CUDA.
+    4) Create NEW env 'merfish3d-stitcher' (Python 3.12) and pip-install useful deps.
     """
     if platform.system() != "Linux":
         typer.echo("Error: Linux only.", err=True)
@@ -172,25 +170,23 @@ def setup_cuda():
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
 
-    # 1) Core CUDA stack from conda
+    # 1) Core CUDA + OpenJDK stack from conda
     channels = "-c rapidsai -c conda-forge -c nvidia"
     run(f"{installer} install -y {channels} {' '.join(LINUX_CONDA_CUDA_PKGS)}")
 
-    # 2) Linux activation hook
+    # 2) Activation / deactivation hooks
     activate_dir = Path(prefix) / "etc" / "conda" / "activate.d"
+    deactivate_dir = Path(prefix) / "etc" / "conda" / "deactivate.d"
     activate_dir.mkdir(parents=True, exist_ok=True)
-    for script in activate_dir.glob("*"):
-        try:
-            script.unlink()
-        except OSError:
-            pass
+    deactivate_dir.mkdir(parents=True, exist_ok=True)
 
-    sh_hook = activate_dir / "cuda_override.sh"
+    # CUDA hook (kept; no longer deletes other hooks)
+    sh_cuda = activate_dir / "cuda_override.sh"
     env_lib = f"{prefix}/lib"
     linux_cuda_root = f"{prefix}/targets/x86_64-linux"
-    sh_hook.write_text(
+    sh_cuda.write_text(
         f"""#!/usr/bin/env sh
-# Point at the conda-installed CUDA toolkit
+# Conda-installed CUDA toolkit
 export CUDA_PATH="{linux_cuda_root}"
 export CUDA_HOME="$CUDA_PATH"
 export PATH="$CUDA_PATH/bin:$PATH"
@@ -204,7 +200,39 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
 """,
         encoding="utf-8",
     )
-    sh_hook.chmod(sh_hook.stat().st_mode | stat.S_IEXEC)
+    sh_cuda.chmod(sh_cuda.stat().st_mode | stat.S_IEXEC)
+
+    # NEW: Java hook — ensure JPype/pyimagej can see libjvm.so
+    sh_java = activate_dir / "java_openjdk.sh"
+    sh_java.write_text(
+        """#!/usr/bin/env sh
+# Point JAVA_HOME at the env's OpenJDK so JPype/scyjava can find libjvm.so
+export JAVA_HOME="${CONDA_PREFIX}"
+export PATH="$JAVA_HOME/bin:$PATH"
+
+# Helpful for debugging: remember the resolved libjvm path
+if [ -f "$JAVA_HOME/lib/server/libjvm.so" ]; then
+  export _CONDA_JAVA_LIBJVM="$JAVA_HOME/lib/server/libjvm.so"
+else
+  # Fallback for nonstandard layouts
+  _ALT_JVM="$(command -v find >/dev/null 2>&1 && find "$JAVA_HOME" -type f -name libjvm.so 2>/dev/null | head -n1)"
+  [ -n "$_ALT_JVM" ] && export _CONDA_JAVA_LIBJVM="$_ALT_JVM"
+fi
+""",
+        encoding="utf-8",
+    )
+    sh_java.chmod(sh_java.stat().st_mode | stat.S_IEXEC)
+
+    # Deactivation: clean up JAVA_HOME (leave PATH/LD_LIBRARY_PATH alone to avoid tricky string surgery)
+    sh_java_deact = deactivate_dir / "java_openjdk.sh"
+    sh_java_deact.write_text(
+        """#!/usr/bin/env sh
+unset JAVA_HOME
+unset _CONDA_JAVA_LIBJVM
+""",
+        encoding="utf-8",
+    )
+    sh_java_deact.chmod(sh_java_deact.stat().st_mode | stat.S_IEXEC)
 
     # 3) (Optional) Prep CURRENT env
     run("python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
@@ -218,7 +246,7 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
     # Upgrade build tooling, then install the *imports* deps first
     run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -U pip setuptools wheel")
 
-    # Install multiview-stitcher and minimial deps to use merfish3d-analysis datastore class
+    # Install multiview-stitcher and minimal deps to use merfish3d-analysis datastore class
     run(
         f"""{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install \
 "multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main" \
@@ -230,11 +258,12 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
     )
     run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -e .", cwd=repo_dir)
 
-
     typer.echo("\nSetup complete.\n")
+
 
 def main():
     app()
+
 
 if __name__ == "__main__":
     main()
