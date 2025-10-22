@@ -24,7 +24,7 @@ def decode_pixels(
     magnitude_threshold: tuple[float,float]  =[0.9, 10.0],
     fdr_target: float = 0.05,
     run_baysor: bool = True,
-    merfish_bits: int = 16,
+    merfish_bits: int = None,
 ):
     """Perform pixel decoding.
 
@@ -49,7 +49,10 @@ def decode_pixels(
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
-    merfish_bits = datastore.num_bits
+    if not(merfish_bits is None):
+        merfish_bits = datastore.num_bits
+
+    print(merfish_bits)
 
     # initialize decodor class
     decoder = PixelDecoder(
