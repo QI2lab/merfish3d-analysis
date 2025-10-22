@@ -97,9 +97,9 @@ def global_register_data(
                 reg_channel_index=0,
                 transform_key="stage_metadata",
                 new_transform_key="affine_registered",
-                #pre_registration_pruning_method="keep_axis_aligned",
                 registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
+                n_parallel_pairwise_regs=40
             )
 
     # extract and save transformations into datastore
@@ -182,9 +182,9 @@ def global_register_data(
             metadata={
                 'axes': 'YX',
                 'SignificantBits': 16,
-                'PhysicalSizeX': float(spacing[2]),
+                'PhysicalSizeX': float(spacing_zyx_um[2]),
                 'PhysicalSizeXUnit': 'µm',
-                'PhysicalSizeY': float(spacing[1]),
+                'PhysicalSizeY': float(spacing_zyx_um[1]),
                 'PhysicalSizeYUnit': 'µm',
             }
             options = dict(
@@ -197,8 +197,8 @@ def global_register_data(
             tif.write(
                 polyDT_max_projection,
                 resolution=(
-                    1e4 / float(spacing[1]),
-                    1e4 / float(spacing[2])
+                    1e4 / float(spacing_zyx_um[2]),
+                    1e4 / float(spacing_zyx_um[1])
                 ),
                 **options,
                 metadata=metadata
