@@ -26,6 +26,7 @@ def decode_pixels(
     run_baysor: bool = True,
     merfish_bits: int = None,
     smFISH: bool = False,
+    skip_optimization: bool = False
 ):
     """Perform pixel decoding.
 
@@ -63,14 +64,15 @@ def decode_pixels(
         smFISH=smFISH
     )
 
-    # optimize normalization weights through iterative decoding and update
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=20,
-        n_iterations=5,
-        minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold,
-        magnitude_threshold=magnitude_threshold
-    )
+    if not skip_optimization:
+        # optimize normalization weights through iterative decoding and update
+        decoder.optimize_normalization_by_decoding(
+            n_random_tiles=20,
+            n_iterations=5,
+            minimum_pixels=minimum_pixels_per_RNA,
+            ufish_threshold=ufish_threshold,
+            magnitude_threshold=magnitude_threshold
+        )
 
     # decode all tiles using iterative normalization weights
     decoder.decode_all_tiles(
