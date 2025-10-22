@@ -24,6 +24,7 @@ def decode_pixels(
     magnitude_threshold: tuple[float,float]  =[0.9, 10.0],
     fdr_target: float = 0.05,
     run_baysor: bool = True,
+    merfish_bits: int = 16,
 ):
     """Perform pixel decoding.
 
