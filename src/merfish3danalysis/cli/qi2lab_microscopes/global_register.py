@@ -45,13 +45,6 @@ def global_register_data(
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
 
-    # load tile positions
-    for tile_idx, tile_id in enumerate(datastore.tile_ids):
-        round_id = datastore.round_ids[0]
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
-            tile_id, round_id
-        )
-
     # convert local tiles from first round to multiscale spatial images
     msims = []
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
@@ -64,12 +57,18 @@ def global_register_data(
         tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
-        
-        tile_grid_positions = {
-            "z": np.round(tile_position_zyx_um[0], 2),
-            "y": np.round(tile_position_zyx_um[1], 2),
-            "x": np.round(tile_position_zyx_um[2], 2),
-        }
+        try:
+            tile_grid_positions = {
+                "z": np.round(tile_position_zyx_um[0], 2),
+                "y": np.round(tile_position_zyx_um[1], 2),
+                "x": np.round(tile_position_zyx_um[2], 2),
+            }
+        except:
+            tile_grid_positions = {
+                "z": 0,
+                "y": np.round(tile_position_zyx_um[0], 2),
+                "x": np.round(tile_position_zyx_um[1], 2),
+            }
 
         im_data = datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
@@ -99,7 +98,6 @@ def global_register_data(
                 new_transform_key="affine_registered",
                 registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
-                n_parallel_pairwise_regs=40
             )
 
     # extract and save transformations into datastore

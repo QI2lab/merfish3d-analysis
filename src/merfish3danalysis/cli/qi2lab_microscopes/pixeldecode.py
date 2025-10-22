@@ -25,6 +25,7 @@ def decode_pixels(
     fdr_target: float = 0.05,
     run_baysor: bool = True,
     merfish_bits: int = None,
+    smFISH: bool = False,
 ):
     """Perform pixel decoding.
 
@@ -59,7 +60,7 @@ def decode_pixels(
         merfish_bits=merfish_bits, 
         num_gpus=num_gpus,
         verbose=1,
-        
+        smFISH=smFISH
     )
 
     # optimize normalization weights through iterative decoding and update
