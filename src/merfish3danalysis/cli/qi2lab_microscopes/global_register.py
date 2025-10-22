@@ -182,9 +182,9 @@ def global_register_data(
             metadata={
                 'axes': 'YX',
                 'SignificantBits': 16,
-                'PhysicalSizeX': spacing_zyx_um[2],
+                'PhysicalSizeX': float(spacing_zyx_um[2]),
                 'PhysicalSizeXUnit': 'µm',
-                'PhysicalSizeY': spacing_zyx_um[1],
+                'PhysicalSizeY': float(spacing_zyx_um[1]),
                 'PhysicalSizeYUnit': 'µm',
             }
             options = dict(
@@ -197,8 +197,8 @@ def global_register_data(
             tif.write(
                 polyDT_max_projection,
                 resolution=(
-                    1e4 / spacing_zyx_um[1],
-                    1e4 / spacing_zyx_um[2]
+                    float(1e4 / spacing_zyx_um[1]),
+                    float(1e4 / spacing_zyx_um[2])
                 ),
                 **options,
                 metadata=metadata

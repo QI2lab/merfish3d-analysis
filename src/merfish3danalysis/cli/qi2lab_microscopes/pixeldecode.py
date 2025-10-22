@@ -52,8 +52,6 @@ def decode_pixels(
     if merfish_bits is None:
         merfish_bits = datastore.num_bits
 
-    print(merfish_bits)
-
     # initialize decodor class
     decoder = PixelDecoder(
         datastore=datastore, 
