@@ -16,21 +16,32 @@ import gc
 
 DEBUG = False
 
-# ---- Reference-accurate multiplicative update gated by consensus ----
-filter_update = ElementwiseKernel(
-    'float32 recon, float32 HTratio, float32 consensus_map',
-    'float32 out',
+# -----------------------------------------------------------------------------
+# High-speed fused CUDA kernel: additive RL step with GC gate + nonnegativity
+# -----------------------------------------------------------------------------
+gc_add_update_kernel = ElementwiseKernel(
+    # inputs
+    'float32 recon, float32 gradient, float32 H_T_ones, float32 local_dot',
+    # output
+    'float32 recon_next',
     r'''
-    // If consensus is negative, skip update (keep recon). Otherwise multiplicative RL step.
-    const bool skip = consensus_map < 0.0f;
-    float val = skip ? recon : (recon * HTratio);
-    out = (val < 0.0f) ? 0.0f : val;
+    // Scaled-gradient RL step (additive), gated by Gradient Consensus:
+    // step_size = recon / max(H_T_ones, 1e-6)
+    // if local_dot <= 0 --> step_size = 0
+    // recon_next = max(recon + gradient * step_size, 0)
+    const float denom = (H_T_ones > 1e-6f) ? H_T_ones : 1e-6f;
+    const float step  = (local_dot > 0.0f) ? (recon / denom) : 0.0f;
+    const float val   = recon + gradient * step;
+    recon_next = (val > 0.0f) ? val : 0.0f;
     ''',
-    'filter_update'
+    'gc_add_update_kernel'
 )
 
+# -----------------------------------------------------------------------------
 # Work-buffer caches for FFTs (kept for performance)
+# -----------------------------------------------------------------------------
 _fft_cache: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+_H_T_cache: dict[tuple[int, int, int], cp.ndarray] = {}
 
 
 def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64):
@@ -54,8 +65,8 @@ def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64):
         window = np.ones(length, dtype=np.float32)
         if feather > 0:
             ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, 2 * feather)))
-            window[:feather] = ramp[:feather]          # ramp up
-            window[-feather:] = ramp[feather:]         # ramp down
+            window[:feather] = ramp[:feather]
+            window[-feather:] = ramp[feather:]
         return window
 
     y_win = cosine_taper(shape[1], feather_px)
@@ -119,7 +130,7 @@ def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
     pad_z_after = pad_z_amt - pad_z_before
     pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
     padded_image = np.pad(
-        (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1),
+        (image.astype(np.float32) - float(bkd)).clip(0, None),
         pad_width, mode="reflect"
     )
     return padded_image, pad_z_before, pad_z_after
@@ -137,7 +148,7 @@ def remove_padding_z(
 
 
 def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
-    """Pad and center a PSF to match the target image shape, normalized to unit sum."""
+    """Pad and center a PSF to match the target image shape; normalize to unit sum."""
     psf = cp.zeros(image_shape, dtype=cp.float32)
     psf[:psf_temp.shape[0], :psf_temp.shape[1], :psf_temp.shape[2]] = psf_temp
 
@@ -155,8 +166,8 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
 
 
 def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> cp.ndarray:
-    """Convolution via FFT with cached work buffers:
-       irfftn( rfftn(image) * H ), result clipped to [0, 2^16-1] (float32).
+    """Perform convolution via FFT with cached buffers:
+       irfftn( rfftn(image) * H ). Enforce nonnegativity only.
     """
     if shape not in _fft_cache:
         z, y, x = shape
@@ -169,12 +180,12 @@ def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> c
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= H
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
-    cp.clip(ifft_buf, 0.0, 2**16 - 1, out=ifft_buf)
+    cp.maximum(ifft_buf, 0.0, out=ifft_buf)  # no upper clamp
     return ifft_buf
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
-    """Reference KLD with small stabilizer and normalization."""
+    """Compute Kullback–Leibler divergence with stabilizer and normalization."""
     p = p + 1e-4
     q = q + 1e-4
     p = p / cp.sum(p)
@@ -182,6 +193,16 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     kldiv = p * (cp.log(p) - cp.log(q))
     kldiv[cp.isnan(kldiv)] = 0
     return float(cp.sum(kldiv))
+
+
+def _get_H_T_ones(otf: cp.ndarray, otfT: cp.ndarray, shape: tuple[int, int, int]) -> cp.ndarray:
+    """Compute H_T(ones) with cache."""
+    if shape in _H_T_cache:
+        return _H_T_cache[shape]
+    ones = cp.ones(shape, dtype=cp.float32)
+    tmp = fft_conv(fft_conv(ones, otf, shape), otfT, shape)
+    _H_T_cache[shape] = tmp
+    return tmp
 
 
 def rlgc_biggs(
@@ -192,7 +213,7 @@ def rlgc_biggs(
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
     eager_mode: bool = False,
-    image_mean: float | None = None
+    image_mean: float | None = None  # unused now, kept for API compat
 ) -> np.ndarray:
     """
     Biggs–Andrews accelerated RLGC deconvolution (reference-accurate core).
@@ -265,40 +286,41 @@ def rlgc_biggs(
         del psf_gpu
         cp.get_default_memory_pool().free_all_blocks()
 
-    otfotfT = otf * otfT  # complex64; represents H^T H in frequency domain
+    otfotfT = otf * otfT  # H^T H in frequency domain
     shape = image_gpu.shape
     z, y, x = shape
 
-    # Initial recon
-    if image_mean is None:
-        recon = cp.mean(image_gpu) * cp.ones((z, y, x), dtype=cp.float32)
-    else:
-        recon = image_mean * cp.ones((z, y, x), dtype=cp.float32)
+    # ---- Ones initialization (item 5) ----
+    recon = cp.ones((z, y, x), dtype=cp.float32)
 
     previous_recon = cp.empty_like(recon)
     previous_recon[...] = recon
 
-    # Pre-allocates to reduce churn
+    # Pre-allocations
     Hu = cp.empty_like(recon)
     recon_next = cp.empty_like(recon)
 
-    # Biggs-Andrews state
+    # Biggs-Andrews state (kept)
     g1 = cp.zeros_like(recon)
     g2 = cp.zeros_like(recon)
+
+    # Precompute H_T(1) for scaled step size
+    H_T_ones = _get_H_T_ones(otf, otfT, shape)
 
     prev_kld1 = np.inf
     prev_kld2 = np.inf
     num_iters = 0
     start_time = timeit.default_timer()
+    eps = 1e-12
 
     while True:
         iter_start_time = timeit.default_timer()
 
-        # 50:50 split
+        # 50:50 split of the data (counts)
         split1 = rng.binomial(image_gpu.astype(cp.int64), p=0.5).astype(cp.float32)
         split2 = image_gpu - split1
 
-        # BA: y = recon + alpha * (recon - previous_recon)
+        # --- Biggs–Andrews momentum (kept) ---
         if num_iters >= 1:
             numerator = cp.sum(g1 * g2)
             denominator = cp.sum(g2 * g2) + 1e-12
@@ -310,15 +332,14 @@ def rlgc_biggs(
 
         y_vec = recon + alpha * (recon - previous_recon)
 
-        # Forward prediction
+        # Forward prediction at y_vec
         Hu[...] = fft_conv(y_vec, otf, shape)
 
-        # KLDs & stopping
+        # KLDs & stopping (kept)
         kld1 = kl_div(Hu, split1)
         kld2 = kl_div(Hu, split2)
 
         if eager_mode:
-            # play-it-safe: stop if EITHER increases or either KLD tiny
             if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-4) or (kld2 < 1e-4):
                 recon[...] = previous_recon
                 if DEBUG:
@@ -329,7 +350,6 @@ def rlgc_biggs(
                     )
                 break
         else:
-            # default: BOTH must increase to stop (or tiny)
             if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-4) or (kld2 < 1e-4):
                 recon[...] = previous_recon
                 if DEBUG:
@@ -343,25 +363,37 @@ def rlgc_biggs(
         prev_kld1 = kld1
         prev_kld2 = kld2
 
-        # BA bookkeeping: move recon forward to y
+        # Advance baseline to y_vec (BA bookkeeping)
         previous_recon[...] = recon
         recon[...] = y_vec
 
-        # RL ratios (exact reference scaling): H^T( split / (0.5*(Hu+eps)) )
-        eps = 1e-12
-        denom = 0.5 * (Hu + eps)
+        # ---- Additive scaled-gradient update with reference GC gate (item 4) ----
+        Hu_safe = Hu + eps
 
-        HTratio1 = fft_conv(split1 / denom, otfT, shape)
-        HTratio2 = fft_conv(split2 / denom, otfT, shape)
-        HTratio = HTratio1 + HTratio2
+        # Heads gradient (centered at 0.5)
+        heads_grad = fft_conv(split1 / Hu_safe - 0.5, otfT, shape)
 
-        # Consensus: blur ((HTratio1-1)*(HTratio2-1)) by H^T H
-        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
+        # Full-data gradient: H^T(d/Hu - 1)
+        full_ratio = fft_conv(image_gpu / Hu_safe, otfT, shape)  # H^T(d/Hu)
+        gradient = full_ratio - H_T_ones
 
-        # Gated multiplicative update
-        filter_update(recon, HTratio, consensus_map, recon_next)
+        # Tails gradient via reuse (gradient - heads_grad)
+        tails_grad = gradient - heads_grad
 
-        # BA vectors
+        # Consensus gate: (H^T H) * (heads_grad * tails_grad)
+        local_dot = fft_conv(heads_grad * tails_grad, otfotfT, shape)
+
+        # Fused kernel does: recon_next = max(recon + gradient * step, 0)
+        # where step = recon / max(H_T_ones, 1e-6) and zeroed if local_dot <= 0
+        gc_add_update_kernel(
+            recon,
+            gradient,
+            H_T_ones,
+            local_dot,
+            recon_next
+        )
+
+        # Biggs–Andrews vectors
         g2[...] = g1
         g1[...] = recon_next - y_vec
 
@@ -369,7 +401,7 @@ def rlgc_biggs(
         recon[...] = recon_next
 
         # Cleanup per-iter temporaries
-        del split1, split2, denom, HTratio1, HTratio2, HTratio, consensus_map
+        del split1, split2, Hu_safe, heads_grad, tails_grad, full_ratio, gradient, local_dot
 
         num_iters += 1
         if DEBUG:
@@ -379,9 +411,10 @@ def rlgc_biggs(
                 f"KLDs: {kld1:.4f} (split1), {kld2:.4f} (split2)."
             )
 
-    # Clip and unpad back to original
+    # Nonnegativity only (no upper clamp)
     recon = cp.maximum(recon, 0.0).astype(cp.float32)
 
+    # Unpad back to original
     if image.ndim == 3:
         recon = remove_padding_z(recon, pad_z_before, pad_z_after)
     else:
@@ -448,7 +481,7 @@ def chunked_rlgc(
     # Disable CuPy's FFT plan cache to avoid cross-tile bloat:
     cp.fft._cache.PlanCache(memsize=0)
 
-    # Optional ImageJ background subtraction (in RAM, before tiling)
+    # Optional ImageJ background subtraction
     if bkd:
         if ij is None:
             import imagej
@@ -465,7 +498,7 @@ def chunked_rlgc(
         ij.py.sync_image(imp_array)
         bkd_output = ij.py.from_java(imp_array.duplicate())
         imp_array.close()
-        bkd_image = np.swapaxes(bkd_output.data.transpose(2, 1, 0), 1, 2).clip(0, 2**16 - 1).astype(np.uint16).copy()
+        bkd_image = np.swapaxes(bkd_output.data.transpose(2, 1, 0), 1, 2).clip(0, None).astype(np.float32).copy()
         del image, imp_array, bkd_output
         gc.collect()
         if delete_ij:
@@ -473,20 +506,19 @@ def chunked_rlgc(
             del ij
             gc.collect()
     else:
-        bkd_image = image.copy()
+        bkd_image = image.astype(np.float32, copy=True)
         del image
         gc.collect()
 
-    # Full-frame path if tile not needed
+    # Full-frame path if tiling not needed
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
         output = rlgc_biggs(bkd_image, psf, 0, gpu_id, eager_mode=eager_mode)
-        output = output.clip(0, 2**16 - 1).astype(np.uint16)
+        output = np.maximum(output, 0.0).astype(np.float32)  # nonnegative
 
     # Tiled deconvolution with feathered blending
     else:
         output_sum = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
-        image_mean = float(np.mean(bkd_image))
 
         crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
@@ -499,7 +531,8 @@ def chunked_rlgc(
             iterator = enumerate(slices)
 
         for i, (crop, source, destination) in iterator:
-            crop_array = rlgc_biggs(crop, psf, 0, gpu_id, eager_mode=eager_mode, image_mean=image_mean)
+            crop_array = rlgc_biggs(crop, psf, 0, gpu_id, eager_mode=eager_mode)
+            crop_array = np.maximum(crop_array, 0.0, dtype=np.float32)
 
             # Resolve tile edge status to decide feathering
             z_slice, y_slice, x_slice = source[1:]
@@ -535,13 +568,14 @@ def chunked_rlgc(
         nonzero = output_weight > 0
         output = np.zeros_like(output_sum, dtype=output_sum.dtype)
         output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
-        output = output.clip(0, 2**16 - 1).astype(np.uint16)
+        output = np.maximum(output, 0.0, dtype=np.float32)  # nonnegative
 
         del output_sum, output_weight, nonzero
         gc.collect()
 
     # Clear caches and pools
     _fft_cache.clear()
+    _H_T_cache.clear()
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
