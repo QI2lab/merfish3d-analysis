@@ -262,7 +262,8 @@ def rlgc_biggs(
     gpu_id: int = 0,
     otf: cp.ndarray = None,
     otfT: cp.ndarray = None,
-    eager_mode: bool = False
+    eager_mode: bool = False,
+    image_mean: float = None
 ) -> np.ndarray:
     """
     Andrew–Biggs accelerated RLGC deconvolution with Gradient Consensus.
@@ -341,7 +342,11 @@ def rlgc_biggs(
     otfotfT = cp.real(otf * otfT).astype(cp.float32)
     shape = image_gpu.shape
     z, y, x = shape
-    recon = image_gpu.copy().astype(cp.float32)
+    if image_mean is None:
+        recon = cp.mean(image_gpu) * cp.ones((z,y,x), dtype=cp.float32)
+    else:
+        recon = image_mean * cp.ones((z,y,x), dtype=cp.float32)
+        
     previous_recon = cp.empty_like(recon)
     previous_recon[...] = recon
     recon_next = cp.empty_like(recon)
@@ -535,6 +540,7 @@ def chunked_rlgc(
     else:
         output_sum   = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
+        image_mean = float(np.mean(bkd_image))
         crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
         slices = Slicer(bkd_image, crop_size=crop_size, overlap=overlap, pad = True)
@@ -546,7 +552,7 @@ def chunked_rlgc(
             iterator = enumerate(slices)
         
         for i, (crop, source, destination) in iterator:
-            crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode)
+            crop_array = rlgc_biggs(crop, psf, bkd, gpu_id, eager_mode,image_mean)
              # --- Parse slices ---
             # Get source slices
             z_slice, y_slice, x_slice = source[1:]
