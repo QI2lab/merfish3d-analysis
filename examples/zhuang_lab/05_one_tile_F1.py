@@ -176,9 +176,9 @@ def calculate_F1_with_radius(
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 2,
-    ufish_threshold: float = 0.01,
-    magnitude_threshold: float = (.9,5.),
+    minimum_pixels_per_RNA: int = 3,
+    ufish_threshold: float = 0.25,
+    magnitude_threshold: float = (.9,10.),
 ):
     """Perform pixel decoding.
 
@@ -264,14 +264,13 @@ def decode_pixels(
     # print(f1)
     # print(f1.mean())
 
-    tile_idx = 40
+    tile_idx = 53
 
     image, scaled, mag, distance, decoded = decoder.decode_one_tile(
         tile_idx=tile_idx,
         display_results=False,
         return_results=True,
         magnitude_threshold=magnitude_threshold,
-        lowpass_sigma=(0,0,0),
         minimum_pixels=minimum_pixels_per_RNA,
         use_normalization=True,
         ufish_threshold=ufish_threshold
@@ -298,8 +297,8 @@ def decode_pixels(
     )
     df_RNA_filtered = df_RNA[mask].copy()
     #df_RNA_filtered = df_RNA_filtered[~df_RNA_filtered["target_molecule_name"].str.startswith("Blank-")]
-    df_RNA_filtered['global_x'] += affine_xform_um[1][3]- 5*datastore.voxel_size_zyx_um[1]
-    df_RNA_filtered['global_y'] += affine_xform_um[2][3]- 7*datastore.voxel_size_zyx_um[2]
+    df_RNA_filtered['global_x'] += affine_xform_um[1][3]#- 5*datastore.voxel_size_zyx_um[1]
+    df_RNA_filtered['global_y'] += affine_xform_um[2][3]#- 7*datastore.voxel_size_zyx_um[2]
     #df_RNA_filtered = df_RNA_filtered[df_RNA_filtered["global_z"]>0]
     merlin_coords = df_RNA_filtered[['global_z','global_x', 'global_y']].to_numpy()
     merlin_gene_ids = df_RNA_filtered['target_molecule_name'].to_numpy()
@@ -345,11 +344,11 @@ def decode_pixels(
     #     scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
     #     translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
     # )
-    viewer.add_image(
-        polyDT_image,
-        scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-        translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    )
+    # viewer.add_image(
+    #     polyDT_image,
+    #     scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
+    #     translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
+    # )
     viewer.add_image(
         mag,
         scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
@@ -360,8 +359,8 @@ def decode_pixels(
         scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
         translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
     )
-    viewer.add_points(merlin_coords,size=2.0,face_color="cyan")
-    viewer.add_points(qi2lab_coords,size=2.0,symbol='s',face_color="orange")
+    viewer.add_points(merlin_coords,size=0.5,face_color="cyan")
+    viewer.add_points(qi2lab_coords,size=0.5,symbol='s',face_color="orange")
     viewer.scale_bar.visible = True
     viewer.scale_bar.unit = 'um'
     napari.run()
