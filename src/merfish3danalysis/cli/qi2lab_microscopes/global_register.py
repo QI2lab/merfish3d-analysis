@@ -22,6 +22,7 @@ app.pretty_exceptions_enable = False
 @app.command()
 def global_register_data(
     root_path : Path, 
+    swap_yx: bool = False,
     create_max_proj_tiff: bool = True
 ):
     """Register all tiles in first round in global coordinates.
@@ -30,7 +31,8 @@ def global_register_data(
     ----------
     root_path: Path
         path to experiment
-    
+    swap_yx: bool, default False
+        swap y and x coordinates when loading stage positions.
     create_max_proj_tiff: Optional[bool]
         create max projection tiff in the segmentation/cellpose directory. 
         Default = True
@@ -58,11 +60,18 @@ def global_register_data(
             tile_id, round_id
         )
         try:
-            tile_grid_positions = {
-                "z": np.round(tile_position_zyx_um[0], 2),
-                "y": np.round(tile_position_zyx_um[1], 2),
-                "x": np.round(tile_position_zyx_um[2], 2),
-            }
+            if swap_yx:
+                tile_grid_positions = {
+                        "z": np.round(tile_position_zyx_um[1], 2),
+                        "y": np.round(tile_position_zyx_um[0], 2),
+                        "x": np.round(tile_position_zyx_um[2], 2),
+                    }
+            else:
+                tile_grid_positions = {
+                    "z": np.round(tile_position_zyx_um[0], 2),
+                    "y": np.round(tile_position_zyx_um[1], 2),
+                    "x": np.round(tile_position_zyx_um[2], 2),
+                }
         except:
             tile_grid_positions = {
                 "z": 0,
