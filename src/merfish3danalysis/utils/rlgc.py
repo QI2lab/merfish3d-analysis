@@ -1,61 +1,71 @@
-"""Richardson-Lucy Gradient Consensus deconvolution.
-
-Original idea for gradient consensus deconvolution from: James Maton and Andrew York, https://zenodo.org/records/10278919
-
-RLGC code based on James Manton's implementation, https://colab.research.google.com/drive/1mfVNSCaYHz1g56g92xBkIoa8190XNJpJ
-
-Biggs-Andrews acceleration based on their 1997 paper, https://doi.org/10.1364/AO.36.001766
 """
+Richardson–Lucy Gradient Consensus (RLGC) deconvolution (Manton-style core).
+
+Original idea for Gradient Consensus deconvolution:
+James Manton and Andrew York, https://zenodo.org/records/10278919
+
+Reference RLGC loop based on James Manton's implementation:
+https://colab.research.google.com/drive/1mfVNSCaYHz1g56g92xBkIoa8190XNJpJ
+
+Biggs–Andrews acceleration:
+Biggs & Andrews, 1997, https://doi.org/10.1364/AO.36.001766
+"""
+
+import gc
+import timeit
+from typing import Tuple
 
 import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
 from ryomen import Slicer
-import timeit
-import gc
 
 DEBUG = False
 
-# ---- Reference-accurate multiplicative update gated by consensus ----
+# -----------------------------------------------------------------------------
+# CUDA kernel: multiplicative RL step gated by consensus (reference-accurate)
+# -----------------------------------------------------------------------------
 filter_update = ElementwiseKernel(
-    'float32 recon, float32 HTratio, float32 consensus_map',
-    'float32 out',
-    r'''
-    // If consensus is negative, skip update (keep recon). Otherwise multiplicative RL step.
+    "float32 recon, float32 HTratio, float32 consensus_map",
+    "float32 out",
+    r"""
     const bool skip = consensus_map < 0.0f;
     float val = skip ? recon : (recon * HTratio);
     out = (val < 0.0f) ? 0.0f : val;
-    ''',
-    'filter_update'
+    """,
+    "filter_update",
 )
 
-# Work-buffer caches for FFTs (kept for performance)
-_fft_cache: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+# -----------------------------------------------------------------------------
+# FFT work-buffer cache (performance)
+# -----------------------------------------------------------------------------
+_fft_cache: dict[Tuple[int, int, int], Tuple[cp.ndarray, cp.ndarray]] = {}
 
 
-def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64):
+def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64) -> np.ndarray:
     """
-    Create a feathered weight mask using a cosine taper on Y/X axes only.
+    Create a feathered weight mask using a cosine taper on Y/X only.
+
     Z is uniform. Feather taper width is explicitly specified in pixels.
 
     Parameters
     ----------
-    shape : tuple[int, int, int]
-        Shape of the crop (z, y, x)
+    shape : tuple of int
+        Crop shape as (z, y, x).
     feather_px : int
-        Number of pixels to taper at each edge of Y and X
+        Number of pixels to taper at each Y/X edge.
 
     Returns
     -------
-    weight : np.ndarray
-        Feather mask of shape (z, y, x), values in [0, 1]
+    numpy.ndarray
+        Feather mask of shape (z, y, x), values in [0, 1].
     """
-    def cosine_taper(length, feather):
+    def cosine_taper(length: int, feather: int) -> np.ndarray:
         window = np.ones(length, dtype=np.float32)
         if feather > 0:
             ramp = 0.5 * (1 - np.cos(np.linspace(0, np.pi, 2 * feather)))
-            window[:feather] = ramp[:feather]          # ramp up
-            window[-feather:] = ramp[feather:]         # ramp down
+            window[:feather] = ramp[:feather]
+            window[-feather:] = ramp[feather:]
         return window
 
     y_win = cosine_taper(shape[1], feather_px)
@@ -67,7 +77,7 @@ def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64):
 
 def next_gpu_fft_size(x: int) -> int:
     """
-    Pick the smallest FFT-friendly size ≥ x whose only prime factors are 2 or 3.
+    Return the smallest FFT-friendly size ≥ ``x`` with prime factors in {2, 3}.
 
     Parameters
     ----------
@@ -77,7 +87,7 @@ def next_gpu_fft_size(x: int) -> int:
     Returns
     -------
     int
-        The next length ≥ x that is 2–3–smooth.
+        Next 2–3–smooth length ≥ ``x``.
     """
     if x <= 1:
         return 1
@@ -94,54 +104,85 @@ def next_gpu_fft_size(x: int) -> int:
 
 
 def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
-    """Pad z-axis of 3D array by the next 2–3–smooth length (zyx order).
+    """
+    Pad the Z axis of a 3D array to the next 2–3–smooth length (ZYX order).
+
+    A constant background is subtracted before padding and values are
+    clamped into [0, 65535] for numerical stability with uint16 inputs.
 
     Parameters
     ----------
-    image: np.ndarray
-        3D image to pad.
-    bkd: int
+    image : numpy.ndarray
+        3D image to pad, shaped (z, y, x).
+    bkd : int
         Background value to subtract before padding.
 
     Returns
     -------
-    padded_image: np.ndarray
+    padded_image : numpy.ndarray
         Padded 3D image.
-    pad_z_before: int
-        Amount of padding at the start of the z-axis.
-    pad_z_after: int
-        Amount of padding at the end of the z-axis.
+    pad_z_before : int
+        Z padding at the start.
+    pad_z_after : int
+        Z padding at the end.
     """
-    z, y, x = image.shape
+    z, _, _ = image.shape
     new_z = next_gpu_fft_size(z)
-    pad_z_amt = new_z - z
-    pad_z_before = pad_z_amt // 2
-    pad_z_after = pad_z_amt - pad_z_before
+    pad_amt = new_z - z
+    pad_z_before = pad_amt // 2
+    pad_z_after = pad_amt - pad_z_before
     pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
     padded_image = np.pad(
         (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1),
-        pad_width, mode="reflect"
+        pad_width,
+        mode="reflect",
     )
     return padded_image, pad_z_before, pad_z_after
 
 
-def remove_padding_z(
-    padded_image: np.ndarray,
-    pad_z_before: int,
-    pad_z_after: int
-) -> np.ndarray:
-    """Remove z-axis padding added by pad_z."""
+def remove_padding_z(padded_image: np.ndarray, pad_z_before: int, pad_z_after: int) -> np.ndarray:
+    """
+    Remove Z padding added by :func:`pad_z`.
+
+    Parameters
+    ----------
+    padded_image : numpy.ndarray
+        Padded 3D image.
+    pad_z_before : int
+        Z padding at the start.
+    pad_z_after : int
+        Z padding at the end.
+
+    Returns
+    -------
+    numpy.ndarray
+        Unpadded 3D image.
+    """
     if pad_z_before == 0 and pad_z_after == 0:
         return padded_image
     return padded_image[pad_z_before:-pad_z_after, :, :]
 
 
 def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarray:
-    """Pad and center a PSF to match the target image shape, normalized to unit sum."""
+    """
+    Pad and center a PSF to match the target image shape; normalize to unit sum.
+
+    Parameters
+    ----------
+    psf_temp : cupy.ndarray
+        Original PSF (Z, Y, X).
+    image_shape : tuple of int
+        Target shape (Z, Y, X).
+
+    Returns
+    -------
+    cupy.ndarray
+        Padded, centered, nonnegative PSF normalized to unit sum.
+    """
     psf = cp.zeros(image_shape, dtype=cp.float32)
     psf[:psf_temp.shape[0], :psf_temp.shape[1], :psf_temp.shape[2]] = psf_temp
 
-    # center
+    # Center the PSF
     for axis, axis_size in enumerate(psf.shape):
         psf = cp.roll(psf, int(axis_size / 2), axis=axis)
     for axis, axis_size in enumerate(psf_temp.shape):
@@ -155,8 +196,26 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
 
 
 def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> cp.ndarray:
-    """Convolution via FFT with cached work buffers:
-       irfftn( rfftn(image) * H ), result clipped to [0, 2^16-1] (float32).
+    """
+    Linear convolution via FFT with cached buffers (no clipping).
+
+    This computes ``irfftn(rfftn(image) * H, s=shape)`` with preallocated
+    work buffers. No clipping is applied here—this matches the reference
+    implementation used to compute predictions, ratios and consensus.
+
+    Parameters
+    ----------
+    image : cupy.ndarray
+        Input array in object space.
+    H : cupy.ndarray
+        Frequency-domain transfer function (RFFTN of PSF or its conjugate).
+    shape : tuple of int
+        Target inverse FFT shape (Z, Y, X).
+
+    Returns
+    -------
+    cupy.ndarray
+        Convolved array in object space (float32).
     """
     if shape not in _fft_cache:
         z, y, x = shape
@@ -169,12 +228,25 @@ def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> c
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= H
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
-    cp.clip(ifft_buf, 0.0, 2**16 - 1, out=ifft_buf)
     return ifft_buf
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
-    """Reference KLD with small stabilizer and normalization."""
+    """
+    Compute Kullback–Leibler divergence between two distributions.
+
+    Parameters
+    ----------
+    p : cupy.ndarray
+        First distribution (nonnegative).
+    q : cupy.ndarray
+        Second distribution (nonnegative).
+
+    Returns
+    -------
+    float
+        Sum over all elements of ``p * (log(p) - log(q))``, with NaNs set to 0.
+    """
     p = p + 1e-4
     q = q + 1e-4
     p = p / cp.sum(p)
@@ -191,40 +263,43 @@ def rlgc_biggs(
     gpu_id: int = 0,
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
-    eager_mode: bool = False,
-    image_mean: float | None = None
+    safe_mode: bool = True,
+    init_value: float = 1e-2,
 ) -> np.ndarray:
     """
-    Biggs–Andrews accelerated RLGC deconvolution (reference-accurate core).
+    Biggs–Andrews accelerated RLGC with multiplicative, GC-gated updates.
+
+    Core math matches the reference loop (fftconv, HTratio, consensus, BA).
 
     Parameters
     ----------
-    image: np.ndarray
-        3D image (zyx) to be deconvolved.
-    psf: np.ndarray
-        3D point-spread function. If `otf` and `otfT` are None, this PSF
+    image : numpy.ndarray
+        3D image (Z, Y, X) to be deconvolved.
+    psf : numpy.ndarray
+        3D point-spread function. If ``otf`` and ``otfT`` are None, this PSF
         will be padded and transformed to form the OTF internally.
-    bkd: int, default = 0
-        Constant background to subtract before deconvolution (applied by pad_z).
-    gpu_id: int, default = 0
+    bkd : int, default=0
+        Constant background to subtract before deconvolution (applied by
+        :func:`pad_z`).
+    gpu_id : int, default=0
         Which GPU to use.
-    otf, otfT: cp.ndarray, optional
-        Precomputed OTF and its conjugate in rfftn layout.
-    eager_mode: bool, default = False
+    otf, otfT : cupy.ndarray, optional
+        Precomputed OTF and its conjugate in RFFTN layout.
+    safe_mode : bool, default=True
         If True, stop when EITHER split KLD increases (play-it-safe).
         If False, stop only when BOTH split KLDs increase.
-    image_mean: float, optional
-        If provided, use as the constant initializer for recon.
+    init_value : float, default=1e-2
+        Constant initializer value for the reconstruction (low value, as requested).
 
     Returns
     -------
-    output: np.ndarray
-        Deconvolved 3D image (float32)
+    numpy.ndarray
+        Deconvolved 3D image (float32).
     """
     cp.cuda.Device(gpu_id).use()
     rng = cp.random.default_rng(42)
 
-    # Ensure 3D
+    # Ensure 3D inputs
     if psf.ndim == 2:
         psf = np.expand_dims(psf, axis=0)
     if image.ndim == 2:
@@ -232,7 +307,7 @@ def rlgc_biggs(
 
     _, y0, x0 = image.shape  # (z, y, x)
 
-    # YX padding to FFT-friendly sizes
+    # Pad Y/X to FFT-friendly sizes
     new_y = next_gpu_fft_size(y0)
     new_x = next_gpu_fft_size(x0)
     pad_y_before = (new_y - y0) // 2
@@ -242,10 +317,8 @@ def rlgc_biggs(
 
     image_padded = np.pad(
         image,
-        pad_width=((0, 0),
-                   (pad_y_before, pad_y_after),
-                   (pad_x_before, pad_x_after)),
-        mode="reflect"
+        pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
+        mode="reflect",
     )
 
     # Z padding (and background subtract inside pad_z)
@@ -265,40 +338,37 @@ def rlgc_biggs(
         del psf_gpu
         cp.get_default_memory_pool().free_all_blocks()
 
-    otfotfT = otf * otfT  # complex64; represents H^T H in frequency domain
+    otfotfT = otf * otfT  # H^T H in frequency domain
     shape = image_gpu.shape
     z, y, x = shape
 
-    # Initial recon
-    if image_mean is None:
-        recon = cp.mean(image_gpu) * cp.ones((z, y, x), dtype=cp.float32)
-    else:
-        recon = image_mean * cp.ones((z, y, x), dtype=cp.float32)
+    # Low constant init, as requested
+    recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
+    previous_recon = recon.copy()
 
-    previous_recon = cp.empty_like(recon)
-    previous_recon[...] = recon
-
-    # Pre-allocates to reduce churn
+    # Pre-allocations
     Hu = cp.empty_like(recon)
     recon_next = cp.empty_like(recon)
 
-    # Biggs-Andrews state
+    # Biggs–Andrews state
     g1 = cp.zeros_like(recon)
     g2 = cp.zeros_like(recon)
 
     prev_kld1 = np.inf
     prev_kld2 = np.inf
     num_iters = 0
-    start_time = timeit.default_timer()
+    if DEBUG:
+        start_time = timeit.default_timer()
 
     while True:
-        iter_start_time = timeit.default_timer()
+        if DEBUG:
+            iter_start_time = timeit.default_timer()
 
-        # 50:50 split
+        # 50:50 split of the data (counts)
         split1 = rng.binomial(image_gpu.astype(cp.int64), p=0.5).astype(cp.float32)
         split2 = image_gpu - split1
 
-        # BA: y = recon + alpha * (recon - previous_recon)
+        # BA momentum: y = recon + alpha * (recon - previous_recon)
         if num_iters >= 1:
             numerator = cp.sum(g1 * g2)
             denominator = cp.sum(g2 * g2) + 1e-12
@@ -310,33 +380,31 @@ def rlgc_biggs(
 
         y_vec = recon + alpha * (recon - previous_recon)
 
-        # Forward prediction
+        # Forward prediction (reference: no clipping)
         Hu[...] = fft_conv(y_vec, otf, shape)
 
         # KLDs & stopping
         kld1 = kl_div(Hu, split1)
         kld2 = kl_div(Hu, split2)
 
-        if eager_mode:
-            # play-it-safe: stop if EITHER increases or either KLD tiny
-            if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-4) or (kld2 < 1e-4):
+        if safe_mode:
+            # play-it-safe: stop if EITHER increases, or either KLD is tiny
+            if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-8) or (kld2 < 1e-8):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
                     print(
-                        f"Optimum result obtained after {num_iters - 1} iterations "
-                        f"in {total_time:.1f} seconds."
+                        f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
                     )
                 break
         else:
             # default: BOTH must increase to stop (or tiny)
-            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-4) or (kld2 < 1e-4):
+            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-8) or (kld2 < 1e-8):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
                     print(
-                        f"Optimum result obtained after {num_iters - 1} iterations "
-                        f"in {total_time:.1f} seconds."
+                        f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
                     )
                 break
 
@@ -347,7 +415,7 @@ def rlgc_biggs(
         previous_recon[...] = recon
         recon[...] = y_vec
 
-        # RL ratios (exact reference scaling): H^T( split / (0.5*(Hu+eps)) )
+        # RL ratios: H^T( split / (0.5*(Hu+eps)) )
         eps = 1e-12
         denom = 0.5 * (Hu + eps)
 
@@ -355,7 +423,7 @@ def rlgc_biggs(
         HTratio2 = fft_conv(split2 / denom, otfT, shape)
         HTratio = HTratio1 + HTratio2
 
-        # Consensus: blur ((HTratio1-1)*(HTratio2-1)) by H^T H
+        # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
         consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
 
         # Gated multiplicative update
@@ -379,7 +447,7 @@ def rlgc_biggs(
                 f"KLDs: {kld1:.4f} (split1), {kld2:.4f} (split2)."
             )
 
-    # Clip and unpad back to original
+    # Enforce nonnegativity and unpad back to original
     recon = cp.maximum(recon, 0.0).astype(cp.float32)
 
     if image.ndim == 3:
@@ -393,7 +461,7 @@ def rlgc_biggs(
 
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
 
-    # Aggressive cleanup
+    # Cleanup
     del recon_next, g1, g2, recon, previous_recon, Hu, otf, otfT, otfotfT, image_gpu
     gc.collect()
     cp.cuda.Stream.null.synchronize()
@@ -408,47 +476,51 @@ def chunked_rlgc(
     gpu_id: int = 0,
     crop_yx: int = 1500,
     overlap_yx: int = 32,
-    eager_mode: bool = False,
+    safe_mode: bool = True,
     bkd: bool = False,
     ij=None,
     bkd_sub_radius: int = 200,
-    verbose: int = 0
+    verbose: int = 0,
+    init_value: float = 1e-2,
 ) -> np.ndarray:
-    """Chunked RLGC deconvolution with feathered blending.
+    """
+    Chunked RLGC deconvolution with feathered blending.
 
     Parameters
     ----------
-    image: np.ndarray
+    image : numpy.ndarray
         3D image to be deconvolved.
-    psf: np.ndarray
-        Point spread function (PSF) to use for deconvolution.
-    gpu_id: int, default = 0
+    psf : numpy.ndarray
+        Point-spread function (PSF) to use for deconvolution.
+    gpu_id : int, default=0
         Which GPU to use.
-    crop_yx: int, default = 1500
-        Size of the tile in Y and X.
-    overlap_yx: int, default = 32
+    crop_yx : int, default=1500
+        Tile size in Y and X.
+    overlap_yx : int, default=32
         Overlap width in pixels between tiles (for feathering).
-    eager_mode: bool, default = False
+    safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
-    bkd: bool, default = False
+    bkd : bool, default=False
         Subtract background using ImageJ rolling-ball before deconvolution.
-    ij: imagej instance, optional
-        If provided and bkd=True, use this ImageJ instance.
-    bkd_sub_radius: int, default = 200
+    ij : object, optional
+        If provided and ``bkd=True``, use this ImageJ instance.
+    bkd_sub_radius : int, default=200
         Rolling-ball radius for background subtraction.
-    verbose: int, default = 0
-        If >=1, show a tqdm over tiles.
+    verbose : int, default=0
+        If ≥ 1, show a tqdm over tiles.
+    init_value : float, default=1e-2
+        Constant initializer used for all tiles (keeps tiles consistent).
 
     Returns
     -------
-    output: np.ndarray
-        Deconvolved image (uint16).
+    numpy.ndarray
+        Deconvolved image (uint16 for convenience).
     """
     cp.cuda.Device(gpu_id).use()
-    # Disable CuPy's FFT plan cache to avoid cross-tile bloat:
+    # Avoid cuFFT plan accumulation across tiles
     cp.fft._cache.PlanCache(memsize=0)
 
-    # Optional ImageJ background subtraction (in RAM, before tiling)
+    # Optional ImageJ background subtraction (CPU side)
     if bkd:
         if ij is None:
             import imagej
@@ -465,7 +537,9 @@ def chunked_rlgc(
         ij.py.sync_image(imp_array)
         bkd_output = ij.py.from_java(imp_array.duplicate())
         imp_array.close()
-        bkd_image = np.swapaxes(bkd_output.data.transpose(2, 1, 0), 1, 2).clip(0, 2**16 - 1).astype(np.uint16).copy()
+        bkd_image = np.swapaxes(
+            bkd_output.data.transpose(2, 1, 0), 1, 2
+        ).clip(0, 2**16 - 1).astype(np.uint16).copy()
         del image, imp_array, bkd_output
         gc.collect()
         if delete_ij:
@@ -477,16 +551,15 @@ def chunked_rlgc(
         del image
         gc.collect()
 
-    # Full-frame path if tile not needed
+    # Full-frame path if tiling not needed
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
-        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, eager_mode=eager_mode)
+        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, safe_mode=safe_mode, init_value=init_value)
         output = output.clip(0, 2**16 - 1).astype(np.uint16)
 
     # Tiled deconvolution with feathered blending
     else:
         output_sum = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
-        image_mean = float(np.mean(bkd_image))
 
         crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
@@ -498,11 +571,18 @@ def chunked_rlgc(
         else:
             iterator = enumerate(slices)
 
-        for i, (crop, source, destination) in iterator:
-            crop_array = rlgc_biggs(crop, psf, 0, gpu_id, eager_mode=eager_mode, image_mean=image_mean)
+        for _, (crop, source, destination) in iterator:
+            crop_array = rlgc_biggs(
+                crop,
+                psf,
+                0,
+                gpu_id,
+                safe_mode=safe_mode,
+                init_value=init_value,  # keep all tiles on same baseline
+            )
 
             # Resolve tile edge status to decide feathering
-            z_slice, y_slice, x_slice = source[1:]
+            _, y_slice, x_slice = source[1:]
 
             def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
                 start = s.start if s.start is not None else 0
