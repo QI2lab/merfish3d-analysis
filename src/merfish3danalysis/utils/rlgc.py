@@ -103,7 +103,7 @@ def next_gpu_fft_size(x: int) -> int:
         n += 1
 
 
-def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
+def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
     Pad the Z axis of a 3D array to the next 2–3–smooth length (ZYX order).
 
@@ -114,8 +114,6 @@ def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
     ----------
     image : numpy.ndarray
         3D image to pad, shaped (z, y, x).
-    bkd : int
-        Background value to subtract before padding.
 
     Returns
     -------
@@ -133,7 +131,7 @@ def pad_z(image: np.ndarray, bkd: int = 0) -> tuple[np.ndarray, int, int]:
     pad_z_after = pad_amt - pad_z_before
     pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
     padded_image = np.pad(
-        (image.astype(np.float32) - float(bkd)).clip(0, 2**16 - 1),
+        image,
         pad_width,
         mode="reflect",
     )
@@ -259,12 +257,11 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
 def rlgc_biggs(
     image: np.ndarray,
     psf: np.ndarray,
-    bkd: int = 0,
     gpu_id: int = 0,
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
-    init_value: float = 1e-2,
+    init_value: float = 1,
 ) -> np.ndarray:
     """
     Biggs–Andrews accelerated RLGC with multiplicative, GC-gated updates.
@@ -278,9 +275,6 @@ def rlgc_biggs(
     psf : numpy.ndarray
         3D point-spread function. If ``otf`` and ``otfT`` are None, this PSF
         will be padded and transformed to form the OTF internally.
-    bkd : int, default=0
-        Constant background to subtract before deconvolution (applied by
-        :func:`pad_z`).
     gpu_id : int, default=0
         Which GPU to use.
     otf, otfT : cupy.ndarray, optional
@@ -288,8 +282,8 @@ def rlgc_biggs(
     safe_mode : bool, default=True
         If True, stop when EITHER split KLD increases (play-it-safe).
         If False, stop only when BOTH split KLDs increase.
-    init_value : float, default=1e-2
-        Constant initializer value for the reconstruction (low value, as requested).
+    init_value : float, default = 1
+        Constant initializer value for the reconstruction.
 
     Returns
     -------
@@ -323,7 +317,7 @@ def rlgc_biggs(
 
     # Z padding (and background subtract inside pad_z)
     if image.ndim == 3:
-        image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded, bkd)
+        image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded)
         image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
         del image_gpu_np
     else:
@@ -481,7 +475,7 @@ def chunked_rlgc(
     ij=None,
     bkd_sub_radius: int = 200,
     verbose: int = 0,
-    init_value: float = 1e-2,
+    init_value: float = 1,
 ) -> np.ndarray:
     """
     Chunked RLGC deconvolution with feathered blending.
@@ -507,9 +501,9 @@ def chunked_rlgc(
     bkd_sub_radius : int, default=200
         Rolling-ball radius for background subtraction.
     verbose : int, default=0
-        If ≥ 1, show a tqdm over tiles.
-    init_value : float, default=1e-2
-        Constant initializer used for all tiles (keeps tiles consistent).
+        If ≥ 1, show a tqdm over subtiles.
+    init_value : float, default = 1
+        Constant initializer used for all subtiles in chunked deconvolution.
 
     Returns
     -------
@@ -553,7 +547,7 @@ def chunked_rlgc(
 
     # Full-frame path if tiling not needed
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
-        output = rlgc_biggs(bkd_image, psf, 0, gpu_id, safe_mode=safe_mode, init_value=init_value)
+        output = rlgc_biggs(bkd_image, psf, gpu_id, safe_mode=safe_mode, init_value=init_value)
         output = output.clip(0, 2**16 - 1).astype(np.uint16)
 
     # Tiled deconvolution with feathered blending
@@ -567,7 +561,7 @@ def chunked_rlgc(
 
         if verbose >= 1:
             from tqdm import tqdm
-            iterator = enumerate(tqdm(slices, desc="Chunks"))
+            iterator = enumerate(tqdm(slices, desc="Chunks",leave=False))
         else:
             iterator = enumerate(slices)
 
@@ -575,13 +569,12 @@ def chunked_rlgc(
             crop_array = rlgc_biggs(
                 crop,
                 psf,
-                0,
                 gpu_id,
                 safe_mode=safe_mode,
-                init_value=init_value,  # keep all tiles on same baseline
+                init_value=init_value
             )
 
-            # Resolve tile edge status to decide feathering
+            # Resolve subtile edge status to decide feathering
             _, y_slice, x_slice = source[1:]
 
             def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
@@ -608,7 +601,6 @@ def chunked_rlgc(
             output_sum[destination] += weighted_sub
             output_weight[destination] += weight_sub
 
-        # Blend
         del feather_weight, weighted_crop, weighted_sub, weight_sub
         gc.collect()
 
