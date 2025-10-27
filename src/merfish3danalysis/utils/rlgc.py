@@ -25,15 +25,27 @@ DEBUG = False
 # -----------------------------------------------------------------------------
 # CUDA kernel: multiplicative RL step gated by consensus (reference-accurate)
 # -----------------------------------------------------------------------------
+filter_update_ba = ElementwiseKernel(
+    'float32 recon, float32 HTratio, float32 consensus_map',
+    'float32 out',
+    '''
+    bool skip = consensus_map < 0;
+    out = skip ? recon : recon * HTratio;
+    out = out < 0 ? 0 : out
+    ''',
+    'filter_update_ba'
+)
+
+
+# Define a CUDA kernel for application of consensus map
 filter_update = ElementwiseKernel(
-    "float32 recon, float32 HTratio, float32 consensus_map",
-    "float32 out",
-    r"""
-    const bool skip = consensus_map < 0.0f;
-    float val = skip ? recon : (recon * HTratio);
-    out = (val < 0.0f) ? 0.0f : val;
-    """,
-    "filter_update",
+    'float32 recon, float32 HTratio, float32 consensus_map',
+    'float32 out',
+    '''
+    bool skip = consensus_map < 0;
+    out = skip ? recon : recon * HTratio
+    ''',
+    'filter_update'
 )
 
 # -----------------------------------------------------------------------------
@@ -103,7 +115,7 @@ def next_gpu_fft_size(x: int) -> int:
         n += 1
 
 
-def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
+def pad_z(image: np.ndarray,init_value:float = None) -> tuple[np.ndarray, int, int]:
     """
     Pad the Z axis of a 3D array to the next 2–3–smooth length (ZYX order).
 
@@ -133,8 +145,8 @@ def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
     padded_image = np.pad(
         image,
         pad_width,
-        mode="reflect",
-    )
+        mode="reflect"
+    ).astype(np.uint16)
     return padded_image, pad_z_before, pad_z_after
 
 
@@ -187,7 +199,6 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
         psf = cp.roll(psf, -int(axis_size / 2), axis=axis)
 
     psf = cp.fft.ifftshift(psf)
-    psf = cp.maximum(psf, 0.0)
     s = cp.sum(psf)
     psf = psf / (s if s != 0 else 1.0)
     return psf.astype(cp.float32)
@@ -227,6 +238,7 @@ def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> c
     fft_buf[...] *= H
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
     return ifft_buf
+    #return cp.fft.irfftn(cp.fft.rfftn(image) * H, s=shape)
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
@@ -251,10 +263,192 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     q = q / cp.sum(q)
     kldiv = p * (cp.log(p) - cp.log(q))
     kldiv[cp.isnan(kldiv)] = 0
-    return float(cp.sum(kldiv))
+    kldiv = cp.sum(kldiv)
+    return kldiv
 
 
 def rlgc_biggs(
+    image: np.ndarray,
+    psf: np.ndarray,
+    gpu_id: int = 0,
+    otf: cp.ndarray | None = None,
+    otfT: cp.ndarray | None = None,
+    init_value: float = 1,
+) -> np.ndarray:
+    """
+    Richardson–Lucy Gradient Consensus.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        3D image (Z, Y, X) to be deconvolved.
+    psf : numpy.ndarray
+        3D point-spread function. If ``otf`` and ``otfT`` are None, this PSF
+        will be padded and transformed to form the OTF internally.
+    gpu_id : int, default=0
+        Which GPU to use.
+    otf, otfT : cupy.ndarray, optional
+        Precomputed OTF and its conjugate in RFFTN layout.
+    init_value : float, default = 1
+        Constant initializer value for the reconstruction.
+
+    Returns
+    -------
+    numpy.ndarray
+        Deconvolved 3D image (float32).
+    """
+    cp.cuda.Device(gpu_id).use()
+    rng = cp.random.default_rng(42)
+
+    # Ensure 3D inputs
+    if psf.ndim == 2:
+        psf = np.expand_dims(psf, axis=0)
+    if image.ndim == 2:
+        image = np.expand_dims(image, axis=0)
+
+    _, y0, x0 = image.shape  # (z, y, x)
+
+    # Pad Y/X to FFT-friendly sizes
+    new_y = next_gpu_fft_size(y0)
+    new_x = next_gpu_fft_size(x0)
+    pad_y_before = (new_y - y0) // 2
+    pad_y_after = (new_y - y0) - pad_y_before
+    pad_x_before = (new_x - x0) // 2
+    pad_x_after = (new_x - x0) - pad_x_before
+
+
+    image_padded = np.pad(
+        image,
+        pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
+        mode="reflect",
+    ).astype(np.uint16)
+
+    # Z padding
+    if image.ndim == 3:
+        image_padded, pad_z_before, pad_z_after = pad_z(image_padded,init_value)
+        image_gpu = cp.asarray(image_padded, dtype=cp.float32)
+        
+        del image_padded
+    else:
+        image_gpu = cp.asarray(image_padded, dtype=cp.float32)[cp.newaxis, ...]
+        del image_padded
+
+    # OTFs
+    if (otf is None) or (otfT is None):
+        # Pad PSF to image size first
+        psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
+        otf = cp.fft.rfftn(psf_gpu)
+        otfT = cp.conjugate(otf)
+        del psf_gpu
+        cp.get_default_memory_pool().free_all_blocks()
+    else:
+        otfT = cp.conjugate(otf) if otfT is None else otfT
+
+    otfotfT = otf * otfT  # H^T H in frequency domain
+    shape = image_gpu.shape
+    z, y, x = shape
+
+    # Low constant init, as requested
+    recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
+
+    # Pre-allocations
+    Hu = cp.empty_like(recon)
+    previous_recon = cp.empty_like(recon)
+    recon_next = cp.empty_like(recon)
+
+    prev_kld1 = np.inf
+    prev_kld2 = np.inf
+    num_iters = 0
+    if DEBUG:
+        start_time = timeit.default_timer()
+
+    while True:
+        if DEBUG:
+            iter_start_time = timeit.default_timer()
+
+        # 50:50 split of the data (counts)
+        split1 = rng.binomial(image_gpu.astype("int64"), p=0.5)
+        split2 = image_gpu - split1
+        print("split1 max:", cp.max(split1).get(), " min:", cp.min(split1).get())
+        print("split2 max:", cp.max(split2).get(), " min:", cp.min(split2).get())
+
+        # Forward prediction
+        Hu[...] = fft_conv(recon, otf, shape)
+        print("Hu max:", cp.max(Hu).get(), " min:", cp.min(Hu).get())
+
+        # KLDs & stopping
+        kldim = kl_div(Hu, image_gpu)
+        kld1 = kl_div(Hu, split1)
+        kld2 = kl_div(Hu, split2)
+
+        if (kld1 > prev_kld1) and (kld2 > prev_kld2):
+            recon[...] = previous_recon
+            if DEBUG:
+                total_time = timeit.default_timer() - start_time
+                print(
+                    f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
+                )
+            break
+
+        prev_kld1 = kld1
+        prev_kld2 = kld2
+
+        # RL ratios: H^T( split / (0.5*(Hu+eps)) )
+        eps = 1e-12
+        HTratio1 = fft_conv(cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
+        HTratio2 = fft_conv(cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
+        print("HTratio1 max:", cp.max(HTratio1).get(), " min:", cp.min(HTratio1).get())
+        print("HTratio2 max:", cp.max(HTratio2).get(), " min:", cp.min(HTratio2).get())
+        HTratio = HTratio1 + HTratio2
+
+        previous_recon[...] = recon
+
+        # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
+        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, shape)
+
+        # Gated multiplicative update
+        filter_update(recon, HTratio, consensus_map,recon_next)
+
+        recon[...] = recon_next
+
+        num_iters += 1
+        if DEBUG:
+            calc_time = timeit.default_timer() - iter_start_time
+            min_HTratio = cp.min(HTratio)
+            max_HTratio = cp.max(HTratio)
+            max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
+            print(
+                f"Iteration {num_iters:03d} completed in {calc_time:.2f}s. "
+                f"KLDs: {kldim:.6f} (image), {kld1:.6f} (split1), {kld2:.6f} (split2)."
+                f"Update range : {min_HTratio:.3f} to {max_HTratio:.3f}."
+                f"Largest relative delta = {max_relative_delta:.5f}."
+            )
+        # Cleanup per-iter temporaries
+        del split1, split2, HTratio1, HTratio2, HTratio, consensus_map
+
+    # Enforce nonnegativity and unpad back to original
+    recon = cp.maximum(recon, 0.0)
+
+    if image.ndim == 3:
+        recon = remove_padding_z(recon, pad_z_before, pad_z_after)
+    else:
+        recon = cp.squeeze(recon)
+
+    y_end = -pad_y_after if pad_y_after > 0 else None
+    x_end = -pad_x_after if pad_x_after > 0 else None
+    recon = recon[:, pad_y_before:y_end, pad_x_before:x_end]
+
+    recon_cpu = cp.asnumpy(recon).astype(np.float32)
+
+    # Cleanup
+    del recon, Hu, otf, otfT, otfotfT, image_gpu
+    gc.collect()
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
+    return recon_cpu
+
+def rlgc_biggs_ba(
     image: np.ndarray,
     psf: np.ndarray,
     gpu_id: int = 0,
@@ -264,9 +458,7 @@ def rlgc_biggs(
     init_value: float = 1,
 ) -> np.ndarray:
     """
-    Biggs–Andrews accelerated RLGC with multiplicative, GC-gated updates.
-
-    Core math matches the reference loop (fftconv, HTratio, consensus, BA).
+    Biggs–Andrews accelerated Richardson–Lucy Gradient Consensus.
 
     Parameters
     ----------
@@ -313,12 +505,13 @@ def rlgc_biggs(
         image,
         pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
         mode="reflect",
-    )
+    ).astype(np.uint16)
 
-    # Z padding (and background subtract inside pad_z)
+    # Z padding
     if image.ndim == 3:
         image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded)
         image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
+        
         del image_gpu_np
     else:
         image_gpu = cp.asarray(image_padded, dtype=cp.float32)[cp.newaxis, ...]
@@ -326,11 +519,14 @@ def rlgc_biggs(
 
     # OTFs
     if (otf is None) or (otfT is None):
+        # Pad PSF to image size first
         psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
         otf = cp.fft.rfftn(psf_gpu)
         otfT = cp.conjugate(otf)
         del psf_gpu
         cp.get_default_memory_pool().free_all_blocks()
+    else:
+        otfT = cp.conjugate(otf) if otfT is None else otfT
 
     otfotfT = otf * otfT  # H^T H in frequency domain
     shape = image_gpu.shape
@@ -341,8 +537,8 @@ def rlgc_biggs(
     previous_recon = recon.copy()
 
     # Pre-allocations
-    Hu = cp.empty_like(recon)
     recon_next = cp.empty_like(recon)
+    Hu = cp.empty_like(recon)
 
     # Biggs–Andrews state
     g1 = cp.zeros_like(recon)
@@ -365,24 +561,27 @@ def rlgc_biggs(
         # BA momentum: y = recon + alpha * (recon - previous_recon)
         if num_iters >= 1:
             numerator = cp.sum(g1 * g2)
-            denominator = cp.sum(g2 * g2) + 1e-12
+            denominator = cp.sum(g2 * g2)
             alpha = numerator / denominator
             alpha = cp.clip(alpha, 0.0, 1.0)
+            if cp.isnan(alpha):
+                alpha = 0.0
             alpha = float(alpha)
+            alpha = 0.0
         else:
             alpha = 0.0
 
         y_vec = recon + alpha * (recon - previous_recon)
 
-        # Forward prediction (reference: no clipping)
+        # Forward prediction
         Hu[...] = fft_conv(y_vec, otf, shape)
 
         # KLDs & stopping
+        kldim = kl_div(Hu, image_gpu)
         kld1 = kl_div(Hu, split1)
         kld2 = kl_div(Hu, split2)
 
         if safe_mode:
-            # play-it-safe: stop if EITHER increases, or either KLD is tiny
             if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-8) or (kld2 < 1e-8):
                 recon[...] = previous_recon
                 if DEBUG:
@@ -392,8 +591,7 @@ def rlgc_biggs(
                     )
                 break
         else:
-            # default: BOTH must increase to stop (or tiny)
-            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-8) or (kld2 < 1e-8):
+            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-3) or (kld2 < 1e-3):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
@@ -411,38 +609,39 @@ def rlgc_biggs(
 
         # RL ratios: H^T( split / (0.5*(Hu+eps)) )
         eps = 1e-12
-        denom = 0.5 * (Hu + eps)
-
-        HTratio1 = fft_conv(split1 / denom, otfT, shape)
-        HTratio2 = fft_conv(split2 / denom, otfT, shape)
+        HTratio1 = fft_conv(cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
+        HTratio2 = fft_conv(cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
         HTratio = HTratio1 + HTratio2
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
         consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
 
         # Gated multiplicative update
-        filter_update(recon, HTratio, consensus_map, recon_next)
+        filter_update_ba(recon, HTratio, consensus_map,recon_next)
 
         # BA vectors
         g2[...] = g1
         g1[...] = recon_next - y_vec
 
-        # Swap to recon
         recon[...] = recon_next
-
-        # Cleanup per-iter temporaries
-        del split1, split2, denom, HTratio1, HTratio2, HTratio, consensus_map
 
         num_iters += 1
         if DEBUG:
             calc_time = timeit.default_timer() - iter_start_time
+            min_HTratio = cp.min(HTratio)
+            max_HTratio = cp.max(HTratio)
+            max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
             print(
-                f"Iteration {num_iters:03d} completed in {calc_time:.3f}s. "
-                f"KLDs: {kld1:.4f} (split1), {kld2:.4f} (split2)."
+                f"Iteration {num_iters:03d} completed in {calc_time:.2f}s. "
+                f"KLDs: {kldim:.6f} (image), {kld1:.6f} (split1), {kld2:.6f} (split2)."
+                f"Update range : {min_HTratio:.3f} to {max_HTratio:.3f}."
+                f"Largest relative delta = {max_relative_delta:.5f}."
             )
+        # Cleanup per-iter temporaries
+        del split1, split2, HTratio1, HTratio2, HTratio, consensus_map
 
     # Enforce nonnegativity and unpad back to original
-    recon = cp.maximum(recon, 0.0).astype(cp.float32)
+    recon = cp.maximum(recon, 0.0)
 
     if image.ndim == 3:
         recon = remove_padding_z(recon, pad_z_before, pad_z_after)
@@ -456,13 +655,12 @@ def rlgc_biggs(
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
 
     # Cleanup
-    del recon_next, g1, g2, recon, previous_recon, Hu, otf, otfT, otfotfT, image_gpu
+    del g1, g2, recon, previous_recon, Hu, otf, otfT, otfotfT, image_gpu
     gc.collect()
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
     return recon_cpu
-
 
 def chunked_rlgc(
     image: np.ndarray,
@@ -474,8 +672,7 @@ def chunked_rlgc(
     bkd: bool = False,
     ij=None,
     bkd_sub_radius: int = 200,
-    verbose: int = 0,
-    init_value: float = 1,
+    verbose: int = 0
 ) -> np.ndarray:
     """
     Chunked RLGC deconvolution with feathered blending.
@@ -502,13 +699,11 @@ def chunked_rlgc(
         Rolling-ball radius for background subtraction.
     verbose : int, default=0
         If ≥ 1, show a tqdm over subtiles.
-    init_value : float, default = 1
-        Constant initializer used for all subtiles in chunked deconvolution.
 
     Returns
     -------
     numpy.ndarray
-        Deconvolved image (uint16 for convenience).
+        Deconvolved image (float32).
     """
     cp.cuda.Device(gpu_id).use()
     # Avoid cuFFT plan accumulation across tiles
@@ -547,11 +742,11 @@ def chunked_rlgc(
 
     # Full-frame path if tiling not needed
     if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
-        output = rlgc_biggs(bkd_image, psf, gpu_id, safe_mode=safe_mode, init_value=init_value)
-        output = output.clip(0, 2**16 - 1).astype(np.uint16)
+        output = rlgc_biggs(bkd_image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(bkd_image)))
 
     # Tiled deconvolution with feathered blending
     else:
+        init_value = np.mean(bkd_image)
         output_sum = np.zeros_like(bkd_image, dtype=np.float32)
         output_weight = np.zeros_like(bkd_image, dtype=np.float32)
 
@@ -566,11 +761,10 @@ def chunked_rlgc(
             iterator = enumerate(slices)
 
         for _, (crop, source, destination) in iterator:
-            crop_array = rlgc_biggs(
+            crop_array = rlgc_biggs_ba(
                 crop,
                 psf,
                 gpu_id,
-                safe_mode=safe_mode,
                 init_value=init_value
             )
 
@@ -607,7 +801,6 @@ def chunked_rlgc(
         nonzero = output_weight > 0
         output = np.zeros_like(output_sum, dtype=output_sum.dtype)
         output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
-        output = output.clip(0, 2**16 - 1).astype(np.uint16)
 
         del output_sum, output_weight, nonzero
         gc.collect()
