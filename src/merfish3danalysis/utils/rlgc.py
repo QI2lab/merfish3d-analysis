@@ -14,7 +14,6 @@ Biggs & Andrews, 1997, https://doi.org/10.1364/AO.36.001766
 import gc
 import timeit
 from typing import Tuple
-
 import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
@@ -266,188 +265,6 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     kldiv = cp.sum(kldiv)
     return kldiv
 
-
-def rlgc_biggs(
-    image: np.ndarray,
-    psf: np.ndarray,
-    gpu_id: int = 0,
-    otf: cp.ndarray | None = None,
-    otfT: cp.ndarray | None = None,
-    init_value: float = 1,
-) -> np.ndarray:
-    """
-    Richardson–Lucy Gradient Consensus.
-
-    Parameters
-    ----------
-    image : numpy.ndarray
-        3D image (Z, Y, X) to be deconvolved.
-    psf : numpy.ndarray
-        3D point-spread function. If ``otf`` and ``otfT`` are None, this PSF
-        will be padded and transformed to form the OTF internally.
-    gpu_id : int, default=0
-        Which GPU to use.
-    otf, otfT : cupy.ndarray, optional
-        Precomputed OTF and its conjugate in RFFTN layout.
-    init_value : float, default = 1
-        Constant initializer value for the reconstruction.
-
-    Returns
-    -------
-    numpy.ndarray
-        Deconvolved 3D image (float32).
-    """
-    cp.cuda.Device(gpu_id).use()
-    rng = cp.random.default_rng(42)
-
-    # Ensure 3D inputs
-    if psf.ndim == 2:
-        psf = np.expand_dims(psf, axis=0)
-    if image.ndim == 2:
-        image = np.expand_dims(image, axis=0)
-
-    _, y0, x0 = image.shape  # (z, y, x)
-
-    # Pad Y/X to FFT-friendly sizes
-    new_y = next_gpu_fft_size(y0)
-    new_x = next_gpu_fft_size(x0)
-    pad_y_before = (new_y - y0) // 2
-    pad_y_after = (new_y - y0) - pad_y_before
-    pad_x_before = (new_x - x0) // 2
-    pad_x_after = (new_x - x0) - pad_x_before
-
-
-    image_padded = np.pad(
-        image,
-        pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
-        mode="reflect",
-    ).astype(np.uint16)
-
-    # Z padding
-    if image.ndim == 3:
-        image_padded, pad_z_before, pad_z_after = pad_z(image_padded,init_value)
-        image_gpu = cp.asarray(image_padded, dtype=cp.float32)
-        
-        del image_padded
-    else:
-        image_gpu = cp.asarray(image_padded, dtype=cp.float32)[cp.newaxis, ...]
-        del image_padded
-
-    # OTFs
-    if (otf is None) or (otfT is None):
-        # Pad PSF to image size first
-        psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
-        otf = cp.fft.rfftn(psf_gpu)
-        otfT = cp.conjugate(otf)
-        del psf_gpu
-        cp.get_default_memory_pool().free_all_blocks()
-    else:
-        otfT = cp.conjugate(otf) if otfT is None else otfT
-
-    otfotfT = otf * otfT  # H^T H in frequency domain
-    shape = image_gpu.shape
-    z, y, x = shape
-
-    # Low constant init, as requested
-    recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
-
-    # Pre-allocations
-    Hu = cp.empty_like(recon)
-    previous_recon = cp.empty_like(recon)
-    recon_next = cp.empty_like(recon)
-
-    prev_kld1 = np.inf
-    prev_kld2 = np.inf
-    num_iters = 0
-    if DEBUG:
-        start_time = timeit.default_timer()
-
-    while True:
-        if DEBUG:
-            iter_start_time = timeit.default_timer()
-
-        # 50:50 split of the data (counts)
-        split1 = rng.binomial(image_gpu.astype("int64"), p=0.5)
-        split2 = image_gpu - split1
-        print("split1 max:", cp.max(split1).get(), " min:", cp.min(split1).get())
-        print("split2 max:", cp.max(split2).get(), " min:", cp.min(split2).get())
-
-        # Forward prediction
-        Hu[...] = fft_conv(recon, otf, shape)
-        print("Hu max:", cp.max(Hu).get(), " min:", cp.min(Hu).get())
-
-        # KLDs & stopping
-        kldim = kl_div(Hu, image_gpu)
-        kld1 = kl_div(Hu, split1)
-        kld2 = kl_div(Hu, split2)
-
-        if (kld1 > prev_kld1) and (kld2 > prev_kld2):
-            recon[...] = previous_recon
-            if DEBUG:
-                total_time = timeit.default_timer() - start_time
-                print(
-                    f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
-                )
-            break
-
-        prev_kld1 = kld1
-        prev_kld2 = kld2
-
-        # RL ratios: H^T( split / (0.5*(Hu+eps)) )
-        eps = 1e-12
-        HTratio1 = fft_conv(cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
-        HTratio2 = fft_conv(cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
-        print("HTratio1 max:", cp.max(HTratio1).get(), " min:", cp.min(HTratio1).get())
-        print("HTratio2 max:", cp.max(HTratio2).get(), " min:", cp.min(HTratio2).get())
-        HTratio = HTratio1 + HTratio2
-
-        previous_recon[...] = recon
-
-        # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
-        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, shape)
-
-        # Gated multiplicative update
-        filter_update(recon, HTratio, consensus_map,recon_next)
-
-        recon[...] = recon_next
-
-        num_iters += 1
-        if DEBUG:
-            calc_time = timeit.default_timer() - iter_start_time
-            min_HTratio = cp.min(HTratio)
-            max_HTratio = cp.max(HTratio)
-            max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
-            print(
-                f"Iteration {num_iters:03d} completed in {calc_time:.2f}s. "
-                f"KLDs: {kldim:.6f} (image), {kld1:.6f} (split1), {kld2:.6f} (split2)."
-                f"Update range : {min_HTratio:.3f} to {max_HTratio:.3f}."
-                f"Largest relative delta = {max_relative_delta:.5f}."
-            )
-        # Cleanup per-iter temporaries
-        del split1, split2, HTratio1, HTratio2, HTratio, consensus_map
-
-    # Enforce nonnegativity and unpad back to original
-    recon = cp.maximum(recon, 0.0)
-
-    if image.ndim == 3:
-        recon = remove_padding_z(recon, pad_z_before, pad_z_after)
-    else:
-        recon = cp.squeeze(recon)
-
-    y_end = -pad_y_after if pad_y_after > 0 else None
-    x_end = -pad_x_after if pad_x_after > 0 else None
-    recon = recon[:, pad_y_before:y_end, pad_x_before:x_end]
-
-    recon_cpu = cp.asnumpy(recon).astype(np.float32)
-
-    # Cleanup
-    del recon, Hu, otf, otfT, otfotfT, image_gpu
-    gc.collect()
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    cp.get_default_pinned_memory_pool().free_all_blocks()
-    return recon_cpu
-
 def rlgc_biggs_ba(
     image: np.ndarray,
     psf: np.ndarray,
@@ -582,7 +399,7 @@ def rlgc_biggs_ba(
         kld2 = kl_div(Hu, split2)
 
         if safe_mode:
-            if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-8) or (kld2 < 1e-8):
+            if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-4) or (kld2 < 1e-4):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
@@ -591,7 +408,7 @@ def rlgc_biggs_ba(
                     )
                 break
         else:
-            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-3) or (kld2 < 1e-3):
+            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-4) or (kld2 < 1e-4):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
@@ -669,9 +486,6 @@ def chunked_rlgc(
     crop_yx: int = 1500,
     overlap_yx: int = 32,
     safe_mode: bool = True,
-    bkd: bool = False,
-    ij=None,
-    bkd_sub_radius: int = 200,
     verbose: int = 0
 ) -> np.ndarray:
     """
@@ -691,14 +505,8 @@ def chunked_rlgc(
         Overlap width in pixels between tiles (for feathering).
     safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
-    bkd : bool, default=False
-        Subtract background using ImageJ rolling-ball before deconvolution.
-    ij : object, optional
-        If provided and ``bkd=True``, use this ImageJ instance.
-    bkd_sub_radius : int, default=200
-        Rolling-ball radius for background subtraction.
     verbose : int, default=0
-        If ≥ 1, show a tqdm over subtiles.
+        If ≥ 1, show a progress bar over subtiles.
 
     Returns
     -------
@@ -709,54 +517,23 @@ def chunked_rlgc(
     # Avoid cuFFT plan accumulation across tiles
     cp.fft._cache.PlanCache(memsize=0)
 
-    # Optional ImageJ background subtraction (CPU side)
-    if bkd:
-        if ij is None:
-            import imagej
-            ij = imagej.init()
-            delete_ij = True
-        else:
-            delete_ij = False
-
-        imp_array = ij.py.to_imageplus(image)
-        imp_array.setStack(imp_array.getStack().duplicate())
-        imp_array.show()
-        ij.IJ.run(imp_array, "Subtract Background...", f"rolling={int(bkd_sub_radius)} disable stack")
-        imp_array.show()
-        ij.py.sync_image(imp_array)
-        bkd_output = ij.py.from_java(imp_array.duplicate())
-        imp_array.close()
-        bkd_image = np.swapaxes(
-            bkd_output.data.transpose(2, 1, 0), 1, 2
-        ).clip(0, 2**16 - 1).astype(np.uint16).copy()
-        del image, imp_array, bkd_output
-        gc.collect()
-        if delete_ij:
-            ij.dispose()
-            del ij
-            gc.collect()
-    else:
-        bkd_image = image.copy()
-        del image
-        gc.collect()
-
     # Full-frame path if tiling not needed
-    if crop_yx >= bkd_image.shape[1] and crop_yx >= bkd_image.shape[2]:
-        output = rlgc_biggs(bkd_image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(bkd_image)))
+    if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
+        output = rlgc_biggs(image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image)))
 
     # Tiled deconvolution with feathered blending
     else:
-        init_value = np.mean(bkd_image)
-        output_sum = np.zeros_like(bkd_image, dtype=np.float32)
-        output_weight = np.zeros_like(bkd_image, dtype=np.float32)
+        init_value = np.mean(image)
+        output_sum = np.zeros_like(image, dtype=np.float32)
+        output_weight = np.zeros_like(image, dtype=np.float32)
 
-        crop_size = (bkd_image.shape[0], crop_yx, crop_yx)
+        crop_size = (image.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
-        slices = Slicer(bkd_image, crop_size=crop_size, overlap=overlap, pad=True)
+        slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad=True)
 
         if verbose >= 1:
-            from tqdm import tqdm
-            iterator = enumerate(tqdm(slices, desc="Chunks",leave=False))
+            from rich.progress import track
+            iterator = track(enumerate(slices), description="Chunks", total=len(slices), transient=True)
         else:
             iterator = enumerate(slices)
 
@@ -765,6 +542,7 @@ def chunked_rlgc(
                 crop,
                 psf,
                 gpu_id,
+                safe_mode=safe_mode,
                 init_value=init_value
             )
 
