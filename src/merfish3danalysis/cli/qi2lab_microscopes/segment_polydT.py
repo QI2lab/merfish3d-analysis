@@ -25,8 +25,13 @@ app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 @app.command()
-def run_cellpose(root_path,
-                 cellpose_parameters: dict):
+def run_cellpose(
+    root_path: Path,
+    normalization: tuple[float,float] = [1.0, 99.0],
+    diameter: int = 30,
+    flow_threshold: float = 0.4,
+    cellprob_threshold: float = 0.0
+):
     """Run cellpose and save ROIs
 
     Parameters
@@ -40,6 +45,8 @@ def run_cellpose(root_path,
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
+
+
     
     # load downsampled, fused polyDT image and coordinates 
     polyDT_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
@@ -52,15 +59,15 @@ def run_cellpose(root_path,
     model = models.CellposeModel(gpu=True)
     normalize = {
         "normalize": True,
-        "percentile": cellpose_parameters['normalization'],
+        "percentile": normalization,
     }
 
     # run cellpose on polyDT max projection
     masks, _, _ = model.eval(
         polyDT_max_projection,
-        diameter=cellpose_parameters['diameter'],
-        flow_threshold=cellpose_parameters['flow_threshold'],
-        cellprob_threshold=-cellpose_parameters['cellprob_threshold'],
+        diameter=diameter,
+        flow_threshold=flow_threshold,
+        cellprob_threshold=-cellprob_threshold,
         niter=200,
         normalize=normalize)
     

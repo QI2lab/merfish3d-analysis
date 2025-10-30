@@ -22,6 +22,7 @@ app.pretty_exceptions_enable = False
 @app.command()
 def global_register_data(
     root_path : Path, 
+    swap_yx: bool = False,
     create_max_proj_tiff: bool = True
 ):
     """Register all tiles in first round in global coordinates.
@@ -30,7 +31,8 @@ def global_register_data(
     ----------
     root_path: Path
         path to experiment
-    
+    swap_yx: bool, default False
+        swap y and x coordinates when loading stage positions.
     create_max_proj_tiff: Optional[bool]
         create max projection tiff in the segmentation/cellpose directory. 
         Default = True
@@ -45,13 +47,6 @@ def global_register_data(
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
 
-    # load tile positions
-    for tile_idx, tile_id in enumerate(datastore.tile_ids):
-        round_id = datastore.round_ids[0]
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
-            tile_id, round_id
-        )
-
     # convert local tiles from first round to multiscale spatial images
     msims = []
     for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
@@ -64,12 +59,25 @@ def global_register_data(
         tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
         )
-        
-        tile_grid_positions = {
-            "z": np.round(tile_position_zyx_um[0], 2),
-            "y": np.round(tile_position_zyx_um[1], 2),
-            "x": np.round(tile_position_zyx_um[2], 2),
-        }
+        try:
+            if swap_yx:
+                tile_grid_positions = {
+                        "z": np.round(tile_position_zyx_um[1], 2),
+                        "y": np.round(tile_position_zyx_um[0], 2),
+                        "x": np.round(tile_position_zyx_um[2], 2),
+                    }
+            else:
+                tile_grid_positions = {
+                    "z": np.round(tile_position_zyx_um[0], 2),
+                    "y": np.round(tile_position_zyx_um[1], 2),
+                    "x": np.round(tile_position_zyx_um[2], 2),
+                }
+        except:
+            tile_grid_positions = {
+                "z": 0,
+                "y": np.round(tile_position_zyx_um[0], 2),
+                "x": np.round(tile_position_zyx_um[1], 2),
+            }
 
         im_data = datastore.load_local_registered_image(
             tile=tile_id, round=round_id, return_future=False
@@ -97,7 +105,6 @@ def global_register_data(
                 reg_channel_index=0,
                 transform_key="stage_metadata",
                 new_transform_key="affine_registered",
-                #pre_registration_pruning_method="keep_axis_aligned",
                 registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
             )
@@ -182,9 +189,9 @@ def global_register_data(
             metadata={
                 'axes': 'YX',
                 'SignificantBits': 16,
-                'PhysicalSizeX': spacing_zyx_um[2],
+                'PhysicalSizeX': float(spacing_zyx_um[2]),
                 'PhysicalSizeXUnit': 'µm',
-                'PhysicalSizeY': spacing_zyx_um[1],
+                'PhysicalSizeY': float(spacing_zyx_um[1]),
                 'PhysicalSizeYUnit': 'µm',
             }
             options = dict(
@@ -197,8 +204,8 @@ def global_register_data(
             tif.write(
                 polyDT_max_projection,
                 resolution=(
-                    1e4 / spacing_zyx_um[1],
-                    1e4 / spacing_zyx_um[2]
+                    1e4 / float(spacing_zyx_um[2]),
+                    1e4 / float(spacing_zyx_um[1])
                 ),
                 **options,
                 metadata=metadata

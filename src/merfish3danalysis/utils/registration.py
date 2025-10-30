@@ -54,7 +54,7 @@ def compute_warpfield(
     from warpfield import Recipe, register_volumes
 
     recipe = Recipe() # initialized with a translation level, followed by an affine registration level
-    recipe.pre_filter.clip_thresh = 160 # clip DC background, if present
+    recipe.pre_filter.clip_thresh = 0 # clip DC background, if present
     recipe.pre_filter.soft_edge = [4, 32, 32]
 
     # affine level properties
@@ -73,13 +73,13 @@ def compute_warpfield(
         recipe.levels[-1].smooth.long_range_ratio = 0.1
         recipe.levels[-1].repeats = 2
     else:
-        recipe.add_level(block_size=[15, 45, 45])
+        recipe.add_level(block_size=[21, 73, 73])
         recipe.levels[-1].block_stride = 0.75
         recipe.levels[-1].smooth.sigmas = [1., 3.0, 3.0]
         recipe.levels[-1].smooth.long_range_ratio = 0.1
         recipe.levels[-1].repeats = 2
     
-        recipe.add_level(block_size=[3, 9, 9])
+        recipe.add_level(block_size=[5, 17, 17])
         recipe.levels[-1].block_stride = 0.75
         recipe.levels[-1].smooth.sigmas = [1.5, 5.0, 5.0]
         recipe.levels[-1].smooth.long_range_ratio = 0.1
