@@ -77,7 +77,7 @@ def _apply_first_polyDT_on_gpu(
     )
 
     dr._datastore.save_local_registered_image(
-        ref_image_decon,
+        ref_image_decon.clip(0,2**16-1).astype(np.uint16),
         tile=dr._tile_id,
         deconvolution=True,
         round=dr._round_ids[0]
@@ -339,7 +339,7 @@ def _apply_bits_on_gpu(
     import onnxruntime as ort
     ort.set_default_logger_severity(3)
     from ufish.api import UFish
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, rlgc_biggs
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
     from merfish3danalysis.utils.registration import apply_transform
 
 
@@ -363,11 +363,11 @@ def _apply_bits_on_gpu(
                 if dr._datastore.microscope_type == "2D":
                     decon_image = np.zeros_like(corrected_image,dtype=np.float32)
                     for z_idx in range(corrected_image.shape[0]):
-                        decon_image[z_idx,:] = rlgc_biggs(
+                        decon_image[z_idx,:] = chunked_rlgc(
                             image = corrected_image[z_idx,:],
                             psf = dr._psfs[psf_idx,:],
                             gpu_id = gpu_id,
-                            eager_mode=False
+                            crop_yx=corrected_image.shape[-1]
                         )
                     decon_image = decon_image.clip(0,2**16-1).astype(np.uint16)
                 else:
