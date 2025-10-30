@@ -6,6 +6,8 @@ cross-correlation and optical flow techniques.
 
 History:
 ---------
+- **2025/29**:
+    - Refactored to move background subtraction out of deconvolution step.
 - **2025/07**:
     - Implement anistropic downsampling for registration.
     - Implement RLGC deconvolution.
@@ -143,17 +145,8 @@ def _apply_polyDT_on_gpu(
                     return_future=False
                 )
                 if dr._bkd_subtract_polyDT:
-                    imp_array = ij.py.to_imageplus(ref_image)
-                    imp_array.setStack(imp_array.getStack().duplicate())
-                    imp_array.show()
-                    ij.IJ.run(imp_array,"Subtract Background...", "rolling=200 disable stack")
-                    imp_array.show()
-                    ij.py.sync_image(imp_array)
-                    bkd_output = ij.py.from_java(imp_array.duplicate())
-                    imp_array.close()
-                    ref_image_bkd = np.swapaxes(bkd_output.data.transpose(2,1,0),1,2).clip(0,2**16-1).astype(np.uint16).copy()
-                    ref_image_decon_float = ref_image_bkd.copy().astype(np.float32)
-                    del imp_array, ref_image, bkd_output, ref_image_bkd
+                    from merfish3danalysis.utils.imageprocessing import subtract_background_imagej
+                    ref_image_decon_float = subtract_background_imagej(ref_image,200)
                 else:
                     ref_image_decon_float = ref_image.copy().astype(np.float32)
                     del ref_image
