@@ -35,18 +35,6 @@ filter_update_ba = ElementwiseKernel(
     'filter_update_ba'
 )
 
-
-# Define a CUDA kernel for application of consensus map
-filter_update = ElementwiseKernel(
-    'float32 recon, float32 HTratio, float32 consensus_map',
-    'float32 out',
-    '''
-    bool skip = consensus_map < 0;
-    out = skip ? recon : recon * HTratio
-    ''',
-    'filter_update'
-)
-
 # -----------------------------------------------------------------------------
 # FFT work-buffer cache (performance)
 # -----------------------------------------------------------------------------

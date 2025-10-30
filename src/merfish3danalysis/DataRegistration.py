@@ -186,6 +186,7 @@ def _apply_polyDT_on_gpu(
                         gpu_id=gpu_id,
                         crop_yx = dr._crop_yx_decon,
                     )
+                    mov_image_decon = mov_image_decon.clip(0,2**16-1).astype(np.uint16)
                     del bkd_image
             else:
                 if dr._bkd_subtract_polyDT:
@@ -376,6 +377,7 @@ def _apply_bits_on_gpu(
                         gpu_id = gpu_id,
                         crop_yx = dr._crop_yx_decon
                     )
+                    decon_image = decon_image.clip(0,2**16-1).astype(np.uint16)
             else:
                 decon_image = corrected_image.copy()
 
