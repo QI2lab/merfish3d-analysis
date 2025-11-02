@@ -128,6 +128,7 @@ def convert_data(
     builtins.print = original_print
     channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
     ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
+    print(ndtiff_metadata)
     try:
         camera_id = ndtiff_metadata["Camera-CameraName"]
         camera_id_alt = None
@@ -142,6 +143,8 @@ def convert_data(
         camera = "flir"
         e_per_ADU = 0.03  # this comes from separate calibration
         offset = 0.0  # this comes from separate calibration
+
+    print(camera_id)
     try:
         binning = metadata["binning"]
     except Exception:
