@@ -64,6 +64,9 @@ def decode_pixels(
         smFISH=smFISH
     )
 
+    if smFISH:
+        decoder._distance_threshold = 1.0
+
     if not skip_optimization:
         # optimize normalization weights through iterative decoding and update
         decoder.optimize_normalization_by_decoding(
