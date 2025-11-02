@@ -118,7 +118,13 @@ def convert_data(
     )
     original_print = builtins.print
     builtins.print = no_op
-    dataset = Dataset(str(dataset_path))
+    try:
+        dataset = Dataset(str(dataset_path))
+    except:
+        dataset_path = root_path / Path(
+            root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_2"
+        )
+        dataset = Dataset(str(dataset_path))
     builtins.print = original_print
     channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
     ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
