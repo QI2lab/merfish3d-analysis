@@ -118,7 +118,13 @@ def convert_data(
     )
     original_print = builtins.print
     builtins.print = no_op
-    dataset = Dataset(str(dataset_path))
+    try:
+        dataset = Dataset(str(dataset_path))
+    except:
+        dataset_path = root_path / Path(
+            root_name + "_r" + str(1).zfill(4) + "_tile" + str(0).zfill(4) + "_2"
+        )
+        dataset = Dataset(str(dataset_path))
     builtins.print = original_print
     channel_to_test = dataset.get_image_coordinates_list()[0]["channel"]
     ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=0)
@@ -136,6 +142,7 @@ def convert_data(
         camera = "flir"
         e_per_ADU = 0.03  # this comes from separate calibration
         offset = 0.0  # this comes from separate calibration
+
     try:
         binning = metadata["binning"]
     except Exception:
@@ -353,7 +360,29 @@ def convert_data(
 
             # load raw data and make sure it is the right shape. If not, write
             # zeros for this round/stage position.
-            raw_image = imread(image_path)
+            try:
+                raw_image = imread(image_path)
+            except:
+                image_path = (
+                    root_path
+                    / Path(
+                        root_name
+                        + "_r"
+                        + str(round_idx + 1).zfill(4)
+                        + "_tile"
+                        + str(tile_idx).zfill(4)
+                        + "_2"
+                    )
+                    / Path(
+                        root_name
+                        + "_r"
+                        + str(round_idx + 1).zfill(4)
+                        + "_tile"
+                        + str(tile_idx).zfill(4)
+                        + "_NDTiffStack.tif"
+                    )
+                )
+                raw_image = imread(image_path)
             if camera == "orcav3":
                 raw_image = np.swapaxes(raw_image, 0, 1)
                 if tile_idx == 0 and round_idx == 0:
