@@ -510,7 +510,7 @@ class PixelDecoder:
             barcode_background = []
             for index, row in df_barcodes_loaded_no_blanks.iterrows():
 
-                if self._smFISH == False:
+                if not self._smFISH:
                     selected_columns = [
                         f'bit{int(row["on_bit_1"]):02d}_mean_intensity',
                         f'bit{int(row["on_bit_2"]):02d}_mean_intensity',
@@ -1235,7 +1235,7 @@ class PixelDecoder:
                     df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
 
-                    if self._smFISH == False:
+                    if not self._smFISH:
                         df_barcode["on_bit_1"] = on_bits_indices[0] + 1
                         df_barcode["on_bit_2"] = on_bits_indices[1] + 1
                         df_barcode["on_bit_3"] = on_bits_indices[2] + 1
@@ -1384,7 +1384,7 @@ class PixelDecoder:
 
                     df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
-                    if self._smFISH == False:
+                    if not self._smFISH:
                         df_barcode["on_bit_1"] = on_bits_indices[0] + 1
                         df_barcode["on_bit_2"] = on_bits_indices[1] + 1
                         df_barcode["on_bit_3"] = on_bits_indices[2] + 1
