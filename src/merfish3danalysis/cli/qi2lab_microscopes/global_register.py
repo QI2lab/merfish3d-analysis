@@ -36,7 +36,7 @@ def batch_using_joblib(func, block_ids, n_jobs):
 @app.command()
 def global_register_data(
     root_path : Path,
-    fused_chunk_size = 128,
+    fused_chunk_size: int = 128,
     n_jobs: int = 16,
     swap_yx: bool = False,
     create_max_proj_tiff: bool = True
