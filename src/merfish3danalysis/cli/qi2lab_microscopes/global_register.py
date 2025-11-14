@@ -35,7 +35,9 @@ def batch_using_joblib(func, block_ids, n_jobs):
 
 @app.command()
 def global_register_data(
-    root_path : Path, 
+    root_path : Path,
+    fused_chunk_size = 128,
+    n_jobs: int = 16,
     swap_yx: bool = False,
     create_max_proj_tiff: bool = True
 ):
@@ -45,11 +47,14 @@ def global_register_data(
     ----------
     root_path: Path
         path to experiment
+    fused_chunk_size: int, default 128
+        fused image chunk size
+    n_jobs: int, default 16
+        number of parallel fusion jobs to run
     swap_yx: bool, default False
         swap y and x coordinates when loading stage positions.
-    create_max_proj_tiff: Optional[bool]
+    create_max_proj_tiff: bool, default = True
         create max projection tiff in the segmentation/cellpose directory. 
-        Default = True
     """
 
     from multiview_stitcher import spatial_image_utils as si_utils
@@ -156,15 +161,15 @@ def global_register_data(
             "y": voxel_zyx_um[1] * np.round(voxel_zyx_um[0] / voxel_zyx_um[1], 1),
             "x": voxel_zyx_um[2] * np.round(voxel_zyx_um[0] / voxel_zyx_um[2], 1),
         },
-        output_chunksize=128,
+        output_chunksize=fused_chunk_size,
         output_zarr_url=output_zarr_path,
         zarr_options={"ome_zarr": False},
         batch_options={
             # "batch_func": misc_utils.process_batch_using_ray,
             "batch_func": batch_using_joblib,
-            "n_batch": 32, # number of chunk fusions to schedule / submit at a time
+            "n_batch": n_jobs, # number of chunk fusions to schedule / submit at a time
             "batch_func_kwargs": {
-                'n_jobs': 32 # (note the change in parameter name)
+                'n_jobs': n_jobs # (note the change in parameter name)
             },
         },
     )
