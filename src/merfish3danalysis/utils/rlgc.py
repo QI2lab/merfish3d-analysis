@@ -225,7 +225,6 @@ def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> c
     fft_buf[...] *= H
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
     return ifft_buf
-    #return cp.fft.irfftn(cp.fft.rfftn(image) * H, s=shape)
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
@@ -337,7 +336,6 @@ def rlgc_biggs_ba(
     shape = image_gpu.shape
     z, y, x = shape
 
-    # Low constant init, as requested
     recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
     previous_recon = recon.copy()
 
@@ -472,7 +470,7 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 1500,
-    overlap_yx: int = 32,
+    overlap_yx: int = 128,
     safe_mode: bool = True,
     verbose: int = 0
 ) -> np.ndarray:
@@ -489,7 +487,7 @@ def chunked_rlgc(
         Which GPU to use.
     crop_yx : int, default=1500
         Tile size in Y and X.
-    overlap_yx : int, default=32
+    overlap_yx : int, default=128
         Overlap width in pixels between tiles (for feathering).
     safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
