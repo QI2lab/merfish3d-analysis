@@ -220,6 +220,65 @@ def downsample_axis(
 
     return downsampled_image
 
+def subtract_background_imagej(
+    image: np.ndarray, 
+    bkd_sub_radius=50, 
+):
+    """Subtract background from a 3D image using ImageJ's rolling ball algorithm.
+    
+    Parameters
+    ----------
+    image : np.ndarray
+        3D numpy array representing the image (Z, Y, X).
+    bkd_sub_radius : float, optional
+        Radius for background subtraction. Default is 50.
+    ij : imagej.ImageJ, optional
+        An existing ImageJ instance. If None, a new instance will be created.
+    Returns
+    -------
+    bkd_image : np.ndarray
+        Background subtracted 3D image as a numpy array (Z, Y, X).
+    """
+    
+
+    import imagej
+    import io
+    import contextlib
+    import os
+    import time
+
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stderr(stderr_buffer):
+        ij_success = False
+        while not(ij_success):
+            try:
+                os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
+                ij = imagej.init()
+                ij_success = True
+            except:
+                time.sleep(.5)
+                ij_success = False
+
+    imp_array = ij.py.to_imageplus(image)
+    imp_array.setStack(imp_array.getStack().duplicate())
+    imp_array.show()
+    ij.IJ.run(imp_array, "Subtract Background...", f"rolling={int(bkd_sub_radius)} disable stack")
+    imp_array.show()
+    ij.py.sync_image(imp_array)
+    bkd_output = ij.py.from_java(imp_array.duplicate())
+    imp_array.close()
+    bkd_image = np.swapaxes(
+        bkd_output.data.transpose(2, 1, 0), 1, 2
+    ).clip(0, 2**16 - 1).astype(np.uint16).copy()
+    del image, imp_array, bkd_output
+    gc.collect()
+
+    ij.dispose()
+    del ij
+    gc.collect()
+
+    return bkd_image
+
 def no_op(*args, **kwargs):
     """Function to monkey patch print to suppress output.
     

@@ -128,3 +128,4 @@ test_pixeldecode.py
 test_round_alignment.py
 output.mp4
 3.0.8
+src/merfish3danalysis/utils/rlgc_diag.py
