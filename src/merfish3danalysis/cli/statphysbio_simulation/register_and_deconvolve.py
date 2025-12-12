@@ -38,6 +38,7 @@ def local_register_data(root_path: Path):
     registration_factory = DataRegistration(
         datastore=datastore, 
         perform_optical_flow=False, 
+        bkd_subtract_polyDT=False,
         overwrite_registered=True,
         save_all_polyDT_registered=False
     )

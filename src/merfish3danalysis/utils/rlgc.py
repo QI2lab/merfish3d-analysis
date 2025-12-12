@@ -534,7 +534,7 @@ def chunked_rlgc(
     cp.fft._cache.PlanCache(memsize=0)
 
     # Full-frame path if tiling not needed
-    if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
+    if crop_yx >= image.shape[-2] and crop_yx >= image.shape[-1]:
         output = rlgc_biggs_ba(image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image)))
 
     # Tiled deconvolution with feathered blending
