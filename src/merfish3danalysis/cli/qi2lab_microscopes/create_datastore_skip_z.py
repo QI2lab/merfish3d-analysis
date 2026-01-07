@@ -46,7 +46,7 @@ app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 @app.command()
-def convert_data(
+def convert_data_skip_z(
     root_path: Path,
     baysor_binary_path: Path = None,
     baysor_options_path: Path = None,
@@ -56,6 +56,7 @@ def convert_data(
     output_path: Path = None,
     codebook_path: Path = None,
     bit_order_path: Path = None,
+    z_step: int = 1
 ):
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -84,7 +85,8 @@ def convert_data(
         imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
     """
-
+    z_start = 0
+    
     # load codebook
     # --------------
     if codebook_path is None:
@@ -193,7 +195,8 @@ def convert_data(
             ),
             3,
         )
-        voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
+        dz_eff = z_pixel_um * z_step
+        voxel_size_zyx_um = [dz_eff, yx_pixel_um, yx_pixel_um]
 
         del next_ndtiff_metadata
 
@@ -325,7 +328,7 @@ def convert_data(
             builtins.print = original_print
             x_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["XPosition_um_Intended"]),2)
             y_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["YPosition_um_Intended"]),2)
-            z_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=0)["ZPosition_um_Intended"]),2)
+            z_pos_um = np.round(float(dataset.read_metadata(channel=channel_to_test, z=z_start)["ZPosition_um_Intended"]),2)
             temp = [z_pos_um,y_pos_um,x_pos_um]
             position_list.append(np.asarray(temp))
             del dataset
@@ -420,6 +423,10 @@ def convert_data(
                 hot_pixel_corrected = True
             else:
                 hot_pixel_corrected = False
+
+            # --- z subsampling / offset ---
+            Z_full = raw_image.shape[1]  # assumes raw_image is (C, Z, Y, X) after swapaxes
+            raw_image = raw_image[:, z_start:Z_full:z_step, :, :].copy()
 
             # load stage position
             if int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1:
