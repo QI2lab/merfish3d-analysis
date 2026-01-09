@@ -289,13 +289,11 @@ def convert_data_skip_z(
     datastore.codebook = codebook
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
-    try:
-        datastore.microscope_type = metadata["experiment_type"]
-    except Exception:
-        if z_pixel_um < 0.5:
-            datastore.microscope_type = "3D"
-        else:
-            datastore.microscope_type = "2D"
+
+    if dz_eff < 0.5:
+        datastore.microscope_type = "3D"
+    else:
+        datastore.microscope_type = "2D"
     datastore.camera_model = camera
     try:
         datastore.tile_overlap = metadata["tile_overlap"]
@@ -426,7 +424,6 @@ def convert_data_skip_z(
 
             # --- z subsampling / offset ---
             Z_full = raw_image.shape[1]  # assumes raw_image is (C, Z, Y, X) after swapaxes
-            raw_image = raw_image[:, z_start:Z_full:z_step, :, :].copy()
 
             # load stage position
             if int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1:
@@ -449,7 +446,7 @@ def convert_data_skip_z(
 
             # write fidicual data (ch_idx = 0) and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[0, :]).astype(np.uint16),
+                np.squeeze(raw_image[0, z_start:Z_full:z_step, :]).astype(np.uint16),
                 tile=tile_idx,
                 psf_idx=0,
                 gain_correction=gain_corrected,
@@ -473,7 +470,7 @@ def convert_data_skip_z(
 
             # write first readout channel (ch_idx = 1) and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[1, :]).astype(np.uint16),
+                np.squeeze(raw_image[1, z_start:Z_full:z_step, :]).astype(np.uint16),
                 tile=tile_idx,
                 psf_idx=1,
                 gain_correction=gain_corrected,
@@ -489,7 +486,7 @@ def convert_data_skip_z(
 
             # write second readout channel (ch_idx = 2) and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[2, :]).astype(np.uint16),
+                np.squeeze(raw_image[2, z_start:Z_full:z_step, :]).astype(np.uint16),
                 tile=tile_idx,
                 psf_idx=2,
                 gain_correction=gain_corrected,
