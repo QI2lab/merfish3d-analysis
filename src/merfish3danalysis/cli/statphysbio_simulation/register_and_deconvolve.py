@@ -40,6 +40,7 @@ def local_register_data(root_path: Path):
     registration_factory = DataRegistration(
         datastore=datastore,
         perform_optical_flow=False,
+        bkd_subtract_polyDT=False,
         overwrite_registered=True,
         save_all_polyDT_registered=False,
     )
@@ -70,9 +71,7 @@ def global_register_data(root_path: Path, create_max_proj_tiff: Optional[bool] =
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
 
-    affine_zyx_px = np.array(
-        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32
-    )
+    affine_zyx_px = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32)
 
     origin = np.asarray([0.0, 0.0, 0.0], dtype=np.float32)
 
@@ -86,9 +85,7 @@ def global_register_data(root_path: Path, create_max_proj_tiff: Optional[bool] =
     )
 
     datastore.save_global_fidicual_image(
-        fused_image=datastore.load_local_registered_image(
-            tile=0, round=0, return_future=False
-        ),
+        fused_image=datastore.load_local_registered_image(tile=0, round=0, return_future=False),
         affine_zyx_um=affine_zyx_px,
         origin_zyx_um=origin,
         spacing_zyx_um=spacing,
@@ -97,25 +94,16 @@ def global_register_data(root_path: Path, create_max_proj_tiff: Optional[bool] =
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
         # load downsampled, fused polyDT image and coordinates
-        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
-            return_future=False
-        )
+        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
 
         # create max projection
         polyDT_max_projection = np.max(np.squeeze(polyDT_fused), axis=0)
         del polyDT_fused
 
         filename = "polyDT_max_projection.ome.tiff"
-        cellpose_path = (
-            datastore._datastore_path / Path("segmentation") / Path("cellpose")
-        )
+        cellpose_path = datastore._datastore_path / Path("segmentation") / Path("cellpose")
         cellpose_path.mkdir(exist_ok=True)
-        filename_path = (
-            datastore._datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path(filename)
-        )
+        filename_path = datastore._datastore_path / Path("segmentation") / Path("cellpose") / Path(filename)
         with TiffWriter(filename_path, bigtiff=True) as tif:
             metadata = {
                 "axes": "YX",
@@ -148,9 +136,7 @@ def global_register_data(root_path: Path, create_max_proj_tiff: Optional[bool] =
 
 def main():
     # app()
-    manage_data_registration_states(
-        r"/home/hblanc01/Data/density_smFISH_flat/Nmols_1500/sim_acquisition"
-    )
+    manage_data_registration_states(r"/home/hblanc01/Data/density_smFISH_flat/Nmols_1500/sim_acquisition")
 
 
 if __name__ == "__main__":

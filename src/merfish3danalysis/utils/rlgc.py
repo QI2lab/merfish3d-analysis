@@ -260,6 +260,8 @@ def rlgc_biggs_ba(
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
     init_value: float = 1,
+    limit: float = 0.2,
+    max_delta: float = 0.02,
 ) -> np.ndarray:
     """
     Biggs–Andrews accelerated Richardson–Lucy Gradient Consensus.
@@ -278,14 +280,21 @@ def rlgc_biggs_ba(
     safe_mode : bool, default=True
         If True, stop when EITHER split KLD increases (play-it-safe).
         If False, stop only when BOTH split KLDs increase.
-    init_value : float, default = 1
+    init_value : float, default=1
         Constant initializer value for the reconstruction.
+    limit : float, default=0.01
+        Minimum fraction of pixels that must be updated per iteration before
+        early stopping is triggered.
+    max_delta : float, default=0.01
+        Maximum allowed relative update magnitude before early stopping is
+        triggered.
 
     Returns
     -------
     numpy.ndarray
         Deconvolved 3D image (float32).
     """
+
     cp.cuda.Device(gpu_id).use()
     rng = cp.random.default_rng(42)
 
@@ -335,6 +344,7 @@ def rlgc_biggs_ba(
     otfotfT = otf * otfT  # H^T H in frequency domain
     shape = image_gpu.shape
     z, y, x = shape
+    num_pixels = z * y * x
 
     recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
     previous_recon = recon.copy()
@@ -428,6 +438,9 @@ def rlgc_biggs_ba(
 
         recon[...] = recon_next
 
+        num_updated = num_pixels - cp.sum(consensus_map < 0)
+        max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
+
         num_iters += 1
         if DEBUG:
             calc_time = timeit.default_timer() - iter_start_time
@@ -442,6 +455,23 @@ def rlgc_biggs_ba(
             )
         # Cleanup per-iter temporaries
         del split1, split2, HTratio1, HTratio2, HTratio, consensus_map
+
+        if num_updated / num_pixels < limit:
+            if DEBUG:
+                print("Hit limit")
+            break
+
+        # (2) Hit max delta: updates have become very small
+        if max_relative_delta < max_delta:
+            if DEBUG:
+                print("Hit max delta")
+            break
+
+        # (3) Auto delta: updates small relative to overall image intensity
+        if max_relative_delta < 5.0 / cp.max(image_gpu):
+            if DEBUG:
+                print("Hit auto delta")
+            break
 
     # Enforce nonnegativity and unpad back to original
     recon = cp.maximum(recon, 0.0)
@@ -504,7 +534,7 @@ def chunked_rlgc(
     cp.fft._cache.PlanCache(memsize=0)
 
     # Full-frame path if tiling not needed
-    if crop_yx >= image.shape[1] and crop_yx >= image.shape[2]:
+    if crop_yx >= image.shape[-2] and crop_yx >= image.shape[-1]:
         output = rlgc_biggs_ba(image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image)))
 
     # Tiled deconvolution with feathered blending

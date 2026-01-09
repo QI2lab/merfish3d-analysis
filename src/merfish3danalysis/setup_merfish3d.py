@@ -145,7 +145,13 @@ def _find_installer() -> str:
 
 
 @app.command()
-def setup_cuda():
+def setup_cuda(    
+    headless: bool = typer.Option(
+        False,
+        "--headless",
+        help="Skip GUI dependencies such as napari[pyqt6] and cellpose[gui].",
+    )
+):
     """
     Linux-only setup:
 
@@ -236,7 +242,15 @@ unset _CONDA_JAVA_LIBJVM
 
     # 3) (Optional) Prep CURRENT env
     run("python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
-    run(f"python -m pip install {' '.join(shlex.quote(d) for d in BASE_PIP_DEPS)}")
+    if headless:
+        pip_deps = [
+            d
+            for d in BASE_PIP_DEPS
+            if not d.startswith("napari[") and not d.startswith("cellpose[")
+        ]
+    else:
+        pip_deps = BASE_PIP_DEPS
+    run(f"python -m pip install {' '.join(shlex.quote(d) for d in pip_deps)}")
     run(f"python -m pip install {' '.join(shlex.quote(d) for d in LINUX_JAX_LIB)}")
 
     # 4) Create NEW env and install what you asked
