@@ -77,6 +77,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "roifile",
     "shapely",
     "fastparquet",
+    "joblib",
 ]
 
 
