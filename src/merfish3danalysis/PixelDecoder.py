@@ -39,6 +39,7 @@ import warnings
 import tempfile
 import shutil
 from datetime import datetime
+import time 
 
 # filter warning from skimage
 warnings.filterwarnings(
@@ -1115,33 +1116,35 @@ class PixelDecoder:
 
         return registered_space_point
 
-    def _extract_barcodes(
-        self, 
-        minimum_pixels: int = 9, 
-        maximum_pixels: int = 1000,
-        gpu_id: int = 0
-    ):
+    @staticmethod
+    def calculate_signal_bkd_means(row: pd.Series) -> pd.Series:
+        """Calculate signal and background means based on on_bits"""
+        on_bits = np.array([row["on_bit_1"], row["on_bit_2"], row["on_bit_3"], row["on_bit_4"]])
+
+        signal_mean_columns = [f"bit{int(bit):02d}_mean_intensity" for bit in on_bits]
+        bkd_mean_columns = [f"bit{int(bit):02d}_mean_intensity" for bit in range(1, 16 + 1) if bit not in on_bits]
+
+        signal_mean = row[signal_mean_columns].mean()
+        bkd_mean = row[bkd_mean_columns].mean()
+
+        return pd.Series({"signal_mean": signal_mean, "bkd_mean": bkd_mean})
+
+    def _extract_barcodes(self, minimum_pixels: int = 9, maximum_pixels: int = 1000, gpu_id: int = 0):
         """Extract barcodes from decoded image.
 
         Parameters
         ----------
         minimum_pixels : int, default 9
-            Minimum number of pixels for a barcode. 
+            Minimum number of pixels for a barcode.
         maximum_pixels : int, default 1000
-            Maximum number of pixels for a barcode. 
+            Maximum number of pixels for a barcode.
         """
-
         self._df_barcodes = pd.DataFrame()
 
         with cp.cuda.Device(gpu_id):
             if self._verbose > 1:
                 print("extract barcodes")
-            if self._verbose >= 1:
-                iterable_barcode = tqdm(
-                    range(self._codebook_matrix.shape[0]), desc="barcode", leave=False
-                )
-            else:
-                iterable_barcode = range(self._codebook_matrix.shape[0])
+
             decoded_image = cp.asarray(self._decoded_image, dtype=cp.int16)
             if self._optimize_normalization_weights:
                 if self._filter_type == "lp":
@@ -1163,312 +1166,177 @@ class PixelDecoder:
                     axis=0,
                 ).transpose(1, 2, 3, 0)
 
-            for barcode_index in iterable_barcode:
-                on_bits_indices = np.where(self._codebook_matrix[barcode_index])[0]
+            if self._verbose > 1:
+                start_all_label = time.perf_counter()
 
-                if len(on_bits_indices) == 1 and not(self._smFISH):
-                    break
+            if self._is_3D:
+                # Convert decoded image to label image
+                if self._verbose > 1:
+                    print("")
+                    print("label image")
+                all_genes_label = label(decoded_image, background=-1, connectivity=3)
 
-                if self._is_3D:
-                    if self._verbose > 1:
-                        print("")
-                        print("label image")
-                    labeled_image = label(decoded_image == barcode_index, connectivity=3)
+                # Remove large objects
+                if self._verbose > 1:
+                    print("remove large")
+                pixel_counts = cp.bincount(all_genes_label.ravel())
+                large_labels = cp.where(pixel_counts >= maximum_pixels)[0]
+                large_label_mask = cp.zeros_like(all_genes_label, dtype=bool)
+                large_label_mask = cp.isin(all_genes_label, large_labels)
+                all_genes_label[large_label_mask] = 0
 
-                    if self._verbose > 1:
-                        print("remove large")
-                    pixel_counts = cp.bincount(labeled_image.ravel())
-                    large_labels = cp.where(pixel_counts >= maximum_pixels)[0]
-                    large_label_mask = cp.zeros_like(labeled_image, dtype=bool)
-                    large_label_mask = cp.isin(labeled_image, large_labels)
-                    labeled_image[large_label_mask] = 0
+                # Remove small objects
+                if self._verbose > 1:
+                    print("remove small")
+                all_genes_label = remove_small_objects(all_genes_label, min_size=(minimum_pixels - 1), connectivity=3)
 
-                    if self._verbose > 1:
-                        print("remove small")
-                    labeled_image = remove_small_objects(
-                        labeled_image, min_size=(minimum_pixels - 1), connectivity=3
-                    )
-                    if self._verbose > 1:
-                        print("regionprops table")
+            else:
+                # Convert decoded image to label image
+                if self._verbose > 1:
+                    print("")
+                    print("label image")
 
-                    labeled_image = cp.asnumpy(labeled_image).astype(np.int64)
+                # only same-Z neighbors are connected
+                all_genes_label = cp.zeros_like(decoded_image)
+                for z_id in range(decoded_image.shape[0]):
+                    all_genes_label[z_id] = label(decoded_image[z_id], background=-1, connectivity=3)
 
-                    props = regionprops_table(
-                        labeled_image,
-                        intensity_image=intensity_image,
-                        properties=[
-                            "label",
-                            "area",
-                            "centroid",
-                            "intensity_mean",
-                            "inertia_tensor_eigvals",
-                        ]
-                    )
-                    df_barcode = pd.DataFrame(props)
+                # Remove large objects
+                if self._verbose > 1:
+                    print("remove large")
+                pixel_counts = cp.bincount(all_genes_label.ravel())
+                large_labels = cp.where(pixel_counts >= maximum_pixels)[0]
+                large_label_mask = cp.zeros_like(all_genes_label, dtype=bool)
+                large_label_mask = cp.isin(all_genes_label, large_labels)
+                all_genes_label[large_label_mask] = 0
 
-                    props_magnitude = regionprops_table(
-                        labeled_image,
-                        intensity_image=self._magnitude_image,
-                        properties=[
-                            "label",
-                            "intensity_mean",
-                        ]
-                    )
-                    df_magnitude = pd.DataFrame(props_magnitude)
+                # Remove small objects
+                if self._verbose > 1:
+                    print("remove small")
+                all_genes_label = remove_small_objects(all_genes_label, min_size=minimum_pixels)
 
-                    del labeled_image, props, props_magnitude
-                    gc.collect()
-                    cp.cuda.Stream.null.synchronize()
-                    cp.get_default_memory_pool().free_all_blocks()
-                    cp.get_default_pinned_memory_pool().free_all_blocks()
-                    
-                    df_magnitude = df_magnitude.rename(
-                        columns={'intensity_mean': 'magnitude_mean'}
-                    )
-                    df_barcode = df_barcode.merge(
-                        df_magnitude[["label", "magnitude_mean"]],
-                        on="label",
-                        how="left",
-                    )
+            # Move label image and decoded image back to cpu
+            all_genes_label = cp.asnumpy(all_genes_label)
+            decoded_image = cp.asnumpy(decoded_image)
 
-                    df_barcode.drop(columns="label", inplace=True)
-                    df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
+            if self._verbose > 1:
+                end_getlabel = time.perf_counter()
+                print(f"Time to get label img: {(end_getlabel - start_all_label):.4f} seconds")
 
+            if self._verbose > 1:
+                print("regionprops table")
+            props_all_genes_label = regionprops_table(
+                all_genes_label,
+                intensity_image=intensity_image,
+                properties=[
+                    "label",
+                    "area",
+                    "centroid",
+                    "intensity_mean",
+                    "inertia_tensor_eigvals",
+                ],
+            )
+            df_barcode = pd.DataFrame(props_all_genes_label)
 
-                    if not self._smFISH:
-                        df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                        df_barcode["on_bit_2"] = on_bits_indices[1] + 1
-                        df_barcode["on_bit_3"] = on_bits_indices[2] + 1
-                        df_barcode["on_bit_4"] = on_bits_indices[3] + 1
-                    else:
-                        df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                    df_barcode["barcode_id"] = df_barcode.apply(
-                        lambda x: (barcode_index + 1), axis=1
-                    )
-                    df_barcode["gene_id"] = df_barcode.apply(
-                        lambda x: self._gene_ids[barcode_index], axis=1
-                    )
-                    df_barcode["tile_idx"] = self._tile_idx
+            # Add info from magnitude_image into df_barcode
+            props_magnitude = regionprops_table(
+                all_genes_label,
+                intensity_image=self._magnitude_image,
+                properties=[
+                    "label",
+                    "intensity_mean",
+                ],
+            )
+            df_magnitude = pd.DataFrame(props_magnitude)
+            df_magnitude = df_magnitude.rename(columns={"intensity_mean": "magnitude_mean"})
+            df_barcode = df_barcode.merge(
+                df_magnitude[["label", "magnitude_mean"]],
+                on="label",
+                how="left",
+            )
 
-                    df_barcode.rename(columns={"centroid-0": "z"}, inplace=True)
-                    df_barcode.rename(columns={"centroid-1": "y"}, inplace=True)
-                    df_barcode.rename(columns={"centroid-2": "x"}, inplace=True)
+            # Add info from decoded_image into df_barcode
+            props_barcode_id = regionprops_table(
+                all_genes_label,
+                intensity_image=decoded_image,
+                properties=[
+                    "label",
+                    "intensity_mean",
+                ],
+            )
+            df_barcode_id = pd.DataFrame(props_barcode_id)
+            df_barcode_id = df_barcode_id.rename(columns={"intensity_mean": "barcode_id"})
+            df_barcode_id["barcode_id"] = df_barcode_id["barcode_id"].astype(int)
 
-                    if self._z_crop:
-                        df_barcode["z"] = df_barcode["z"] + self._z_range[0]
+            df_barcode = df_barcode.merge(
+                df_barcode_id[["label", "barcode_id"]],
+                on="label",
+                how="left",
+            )
 
-                    df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
-                    df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
-                    df_barcode["tile_x"] = np.round(df_barcode["x"], 0).astype(int)
-                    pts = df_barcode[["z", "y", "x"]].to_numpy()
-                    for pt_idx, pt in enumerate(pts):
-                        pts[pt_idx, :] = self._warp_pixel(
-                            pts[pt_idx, :].copy(), self._spacing, self._origin, self._affine
-                        )
+            df_barcode.drop(columns="label", inplace=True)
+            df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
-                    df_barcode["global_z"] = np.round(pts[:, 0], 2)
-                    df_barcode["global_y"] = np.round(pts[:, 1], 2)
-                    df_barcode["global_x"] = np.round(pts[:, 2], 2)
+            df_barcode["gene_id"] = df_barcode["barcode_id"].map(lambda x: self._gene_ids[int(x)])
 
-                    df_barcode.rename(
-                        columns={"intensity_mean-0": "distance_mean"}, inplace=True
-                    )
-                    for i in range(1, self._n_merfish_bits + 1):
-                        df_barcode.rename(
-                            columns={
-                                "intensity_mean-" + str(i): "bit"
-                                + str(i).zfill(2)
-                                + "_mean_intensity"
-                            },
-                            inplace=True,
-                        )
+            if not self._smFISH:
+                df_barcode["on_bit_1"] = df_barcode["barcode_id"].map(
+                    lambda x: np.where(self._codebook_matrix[int(x)])[0][0] + 1
+                )
+                df_barcode["on_bit_2"] = df_barcode["barcode_id"].map(
+                    lambda x: np.where(self._codebook_matrix[int(x)])[0][1] + 1
+                )
+                df_barcode["on_bit_3"] = df_barcode["barcode_id"].map(
+                    lambda x: np.where(self._codebook_matrix[int(x)])[0][2] + 1
+                )
+                df_barcode["on_bit_4"] = df_barcode["barcode_id"].map(
+                    lambda x: np.where(self._codebook_matrix[int(x)])[0][3] + 1
+                )
+            else:
+                df_barcode["on_bit_1"] = df_barcode["barcode_id"].map(
+                    lambda x: np.where(self._codebook_matrix[int(x)])[0][0] + 1
+                )
 
-                    on_bits = on_bits_indices + np.ones(4)
+            df_barcode["barcode_id"] += 1
+            df_barcode["tile_idx"] = self._tile_idx
 
-                    signal_mean_columns = [
-                        f"bit{int(bit):02d}_mean_intensity" for bit in on_bits
-                    ]
-                    bkd_mean_columns = [
-                        f"bit{int(bit):02d}_mean_intensity"
-                        for bit in range(1, self._n_merfish_bits + 1)
-                        if bit not in on_bits
-                    ]
+            df_barcode.rename(columns={"centroid-0": "z"}, inplace=True)
+            df_barcode.rename(columns={"centroid-1": "y"}, inplace=True)
+            df_barcode.rename(columns={"centroid-2": "x"}, inplace=True)
+            if self._z_crop:
+                df_barcode["z"] = df_barcode["z"] + self._z_range[0]
 
-                    df_barcode["signal_mean"] = df_barcode[signal_mean_columns].mean(axis=1)
-                    df_barcode["bkd_mean"] = df_barcode[bkd_mean_columns].mean(axis=1)
-                    df_barcode["s-b_mean"] = (
-                        df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-                    )
+            df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
+            df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
+            df_barcode["tile_x"] = np.round(df_barcode["x"], 0).astype(int)
 
-                    if self._verbose > 1:
-                        print("dataframe aggregation")
-                    if barcode_index == 0:
-                        self._df_barcodes = df_barcode.copy()
-                    else:
-                        if not df_barcode.empty:
-                            self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
-                            self._df_barcodes.reset_index(drop=True, inplace=True)
+            pts = df_barcode[["z", "y", "x"]].to_numpy()
+            for pt_idx, pt in enumerate(pts):
+                pts[pt_idx, :] = self._warp_pixel(pts[pt_idx, :].copy(), self._spacing, self._origin, self._affine)
 
-                    del df_barcode
-                    gc.collect()
-                else:
-                    if self._verbose > 1:
-                        print("")
-                        print("label image")
+            df_barcode["global_z"] = np.round(pts[:, 0], 2)
+            df_barcode["global_y"] = np.round(pts[:, 1], 2)
+            df_barcode["global_x"] = np.round(pts[:, 2], 2)
 
-                    from cupyx.scipy import ndimage as cpx_ndi
-                    structure = cp.zeros((3, 3, 3), dtype=cp.uint8)
-                    structure[1, :, :] = 1  # only same-Z neighbors are connected
-                    structure[1, 0, 0] = 0
-                    structure[1, 0, 2] = 0
-                    structure[1, 2, 0] = 0
-                    structure[1, 2, 2] = 0
-                    labeled_image, _ = cpx_ndi.label(decoded_image == barcode_index, structure=structure)
+            df_barcode.rename(columns={"intensity_mean-0": "distance_mean"}, inplace=True)
+            for i in range(1, self._n_merfish_bits + 1):
+                df_barcode.rename(
+                    columns={"intensity_mean-" + str(i): "bit" + str(i).zfill(2) + "_mean_intensity"},
+                    inplace=True,
+                )
 
-                    if self._verbose > 1:
-                        print("remove large")
-                    pixel_counts = cp.bincount(labeled_image.ravel())
-                    large_labels = cp.where(pixel_counts > maximum_pixels)[0]
-                    large_label_mask = cp.zeros_like(labeled_image, dtype=bool)
-                    large_label_mask = cp.isin(labeled_image, large_labels)
-                    labeled_image[large_label_mask] = 0
+            # Apply the function to calculate signal and background means
+            signal_bkd_df = df_barcode.apply(self.calculate_signal_bkd_means, axis=1)
+            df_barcode["signal_mean"] = signal_bkd_df["signal_mean"]
+            df_barcode["bkd_mean"] = signal_bkd_df["bkd_mean"]
+            df_barcode["s-b_mean"] = df_barcode["signal_mean"] - df_barcode["bkd_mean"]
 
-                    if self._verbose > 1:
-                        print("remove small")
-                    labeled_image = remove_small_objects(
-                        labeled_image, min_size=minimum_pixels
-                    )
-                    if self._verbose > 1:
-                        print("regionprops table")
+            if self._verbose > 1:
+                end_all_label = time.perf_counter()
+                print(f"Time for all label at once: {(end_all_label - start_all_label):.4f} seconds")
 
-                    labeled_image = cp.asnumpy(labeled_image).astype(np.int64)
-                    props = regionprops_table(
-                        labeled_image,
-                        intensity_image=intensity_image,
-                        properties=[
-                            "label",
-                            "area",
-                            "centroid",
-                            "intensity_mean",
-                            "inertia_tensor_eigvals",
-                        ],
-                    )
-                    df_barcode = pd.DataFrame(props)
-
-                    props_magnitude = regionprops_table(
-                        labeled_image,
-                        intensity_image=self._magnitude_image,
-                        properties=[
-                            "label",
-                            "intensity_mean",
-                        ]
-                    )
-                    df_magnitude = pd.DataFrame(props_magnitude)
-
-                    del labeled_image, props, props_magnitude
-                    gc.collect()
-                    cp.cuda.Stream.null.synchronize()
-                    cp.get_default_memory_pool().free_all_blocks()
-                    cp.get_default_pinned_memory_pool().free_all_blocks()
-                    
-                    if not (df_magnitude.index.empty):
-                        df_magnitude = df_magnitude.rename(
-                            columns={'intensity_mean': 'magnitude_mean'}
-                        )
-                        df_barcode = df_barcode.merge(
-                            df_magnitude[["label", "magnitude_mean"]],
-                            on="label",
-                            how="left",
-                        )
-                        df_barcode.drop(columns="label", inplace=True)
-
-                    df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
-
-                    if not self._smFISH:
-                        df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                        df_barcode["on_bit_2"] = on_bits_indices[1] + 1
-                        df_barcode["on_bit_3"] = on_bits_indices[2] + 1
-                        df_barcode["on_bit_4"] = on_bits_indices[3] + 1
-                    else:
-                        df_barcode["on_bit_1"] = on_bits_indices[0] + 1
-                    df_barcode["barcode_id"] = df_barcode.apply(
-                        lambda x: (barcode_index + 1), axis=1
-                    )
-                    df_barcode["gene_id"] = df_barcode.apply(
-                        lambda x: self._gene_ids[barcode_index], axis=1
-                    )
-                    df_barcode["tile_idx"] = self._tile_idx
-
-                    
-                    df_barcode.rename(columns={"centroid-0": "z"}, inplace=True)
-                    df_barcode.rename(columns={"centroid-1": "y"}, inplace=True)
-                    df_barcode.rename(columns={"centroid-2": "x"}, inplace=True)
-
-                    if self._z_crop:
-                        df_barcode["z"] = df_barcode["z"] + self._z_range[0]
-
-                    df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
-                    df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
-                    df_barcode["tile_x"] = np.round(df_barcode["x"], 0).astype(int)
-
-                    pts = df_barcode[["z", "y", "x"]].to_numpy()
-                    for pt_idx, pt in enumerate(pts):
-                        pts[pt_idx, :] = self._warp_pixel(
-                            pts[pt_idx, :].copy(),
-                            self._spacing,
-                            self._origin,
-                            self._affine,
-                        )
-
-                    df_barcode["global_z"] = np.round(pts[:, 0], 2)
-                    df_barcode["global_y"] = np.round(pts[:, 1], 2)
-                    df_barcode["global_x"] = np.round(pts[:, 2], 2)
-
-                    df_barcode.rename(
-                        columns={"intensity_mean-0": "distance_mean"}, inplace=True
-                    )
-                    for i in range(1, self._n_merfish_bits + 1):
-                        df_barcode.rename(
-                            columns={
-                                "intensity_mean-" + str(i): "bit"
-                                + str(i).zfill(2)
-                                + "_mean_intensity"
-                            },
-                            inplace=True,
-                        )
-
-                    on_bits = on_bits_indices + np.ones(4)
-
-                    signal_mean_columns = [
-                        f"bit{int(bit):02d}_mean_intensity" for bit in on_bits
-                    ]
-                    bkd_mean_columns = [
-                        f"bit{int(bit):02d}_mean_intensity"
-                        for bit in range(1, self._n_merfish_bits + 1)
-                        if bit not in on_bits
-                    ]
-
-                    df_barcode["signal_mean"] = df_barcode[signal_mean_columns].mean(
-                        axis=1
-                    )
-                    df_barcode["bkd_mean"] = df_barcode[bkd_mean_columns].mean(axis=1)
-                    df_barcode["s-b_mean"] = (
-                        df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-                    )
-
-                    if self._verbose > 1:
-                        print("dataframe aggregation")
-                    if barcode_index == 0:
-                        self._df_barcodes = df_barcode.copy()
-                    else:
-                        if not df_barcode.empty:
-                            self._df_barcodes = pd.concat([self._df_barcodes, df_barcode])
-                            self._df_barcodes.reset_index(drop=True, inplace=True)
-
-                    del df_barcode
-                    gc.collect()
-
-            del decoded_image, intensity_image
+            self._df_barcodes = df_barcode.copy()
+            del df_barcode, all_genes_label, decoded_image, intensity_image
             gc.collect()
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
