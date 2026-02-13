@@ -1,5 +1,5 @@
 """
-Perform registration on qi2labdatastore. By default creates a max 
+Perform registration on qi2labdatastore. By default creates a max
 projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
 
 Shepherd 2025/10 - change to CLI.
@@ -8,39 +8,48 @@ Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from pathlib import Path
-import numpy as np
 import gc
-from tqdm import tqdm
-from tifffile import TiffWriter
+from collections.abc import Callable, Sequence
+from pathlib import Path
+
+import numpy as np
 import typer
 from joblib import Parallel, delayed
+from tifffile import TiffWriter
+from tqdm import tqdm
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
-def batch_using_joblib(func, block_ids, n_jobs):
+
+def batch_using_joblib(
+    func: Callable[[int], None], block_ids: Sequence[int], n_jobs: int
+) -> None:
+    """Apply `func` to each block id in parallel using joblib.
+
+    Parameters
+    ----------
+    func
+        Function applied to each block id.
+    block_ids
+        Block IDs to process.
+    n_jobs
+        Number of parallel workers (joblib semantics).
     """
-    A batch function that uses joblib for parallel processing.
-    1. func: function to apply to each block_id
-    2. block_ids: list of block IDs to process
-    3. n_jobs: number of parallel jobs to run
-    """
-    Parallel(n_jobs=n_jobs)(
-        delayed(func)(block_id) for block_id in block_ids
-    )
+    Parallel(n_jobs=n_jobs)(delayed(func)(block_id) for block_id in block_ids)
     return
+
 
 @app.command()
 def global_register_data(
-    root_path : Path,
+    root_path: Path,
     fused_chunk_size: int = 128,
     n_jobs: int = 16,
     swap_yx: bool = False,
-    create_max_proj_tiff: bool = True
-):
+    create_max_proj_tiff: bool = True,
+) -> None:
     """Register all tiles in first round in global coordinates.
 
     Parameters
@@ -54,13 +63,13 @@ def global_register_data(
     swap_yx: bool, default False
         swap y and x coordinates when loading stage positions.
     create_max_proj_tiff: bool, default = True
-        create max projection tiff in the segmentation/cellpose directory. 
+        create max projection tiff in the segmentation/cellpose directory.
     """
 
-    from multiview_stitcher import spatial_image_utils as si_utils
-    from multiview_stitcher import msi_utils, registration, fusion
-    import dask.diagnostics
     import dask.array as da
+    import dask.diagnostics
+    from multiview_stitcher import fusion, msi_utils, registration
+    from multiview_stitcher import spatial_image_utils as si_utils
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
@@ -68,34 +77,36 @@ def global_register_data(
 
     # convert local tiles from first round to multiscale spatial images
     msims = []
-    for tile_idx, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
+    for _, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
         round_id = datastore.round_ids[0]
 
         voxel_zyx_um = datastore.voxel_size_zyx_um
 
         scale = {"z": voxel_zyx_um[0], "y": voxel_zyx_um[1], "x": voxel_zyx_um[2]}
 
-        tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
-            tile_id, round_id
+        tile_position_zyx_um, affine_zyx_px = (
+            datastore.load_local_stage_position_zyx_um(tile_id, round_id)
         )
-        try:
+        has_z = tile_position_zyx_um.size >= 3  # expects z,y,x
+        if has_z:
             if swap_yx:
                 tile_grid_positions = {
-                        "z": np.round(tile_position_zyx_um[1], 2),
-                        "y": np.round(tile_position_zyx_um[0], 2),
-                        "x": np.round(tile_position_zyx_um[2], 2),
-                    }
+                    "z": float(np.round(tile_position_zyx_um[1], 2)),
+                    "y": float(np.round(tile_position_zyx_um[0], 2)),
+                    "x": float(np.round(tile_position_zyx_um[2], 2)),
+                }
             else:
                 tile_grid_positions = {
-                    "z": np.round(tile_position_zyx_um[0], 2),
-                    "y": np.round(tile_position_zyx_um[1], 2),
-                    "x": np.round(tile_position_zyx_um[2], 2),
+                    "z": float(np.round(tile_position_zyx_um[0], 2)),
+                    "y": float(np.round(tile_position_zyx_um[1], 2)),
+                    "x": float(np.round(tile_position_zyx_um[2], 2)),
                 }
-        except:
+        else:
+            # 2D fallback: treat input as y,x (or x,y) depending on your convention
             tile_grid_positions = {
-                "z": 0,
-                "y": np.round(tile_position_zyx_um[0], 2),
-                "x": np.round(tile_position_zyx_um[1], 2),
+                "z": 0.0,
+                "y": float(np.round(tile_position_zyx_um[0], 2)),
+                "x": float(np.round(tile_position_zyx_um[1], 2)),
             }
 
         im_data = datastore.load_local_registered_image(
@@ -115,7 +126,7 @@ def global_register_data(
         msims.append(msim)
         del im_data
         gc.collect()
-        
+
     # perform registration in three steps, from most downsampling to least.
     with dask.config.set(**{"array.slicing.split_large_chunks": False}):
         with dask.diagnostics.ProgressBar():
@@ -126,7 +137,7 @@ def global_register_data(
                 new_transform_key="affine_registered",
                 registration_binning={"z": 3, "y": 6, "x": 6},
                 post_registration_do_quality_filter=True,
-                n_parallel_pairwise_regs=20
+                n_parallel_pairwise_regs=20,
             )
 
     # extract and save transformations into datastore
@@ -167,9 +178,9 @@ def global_register_data(
         batch_options={
             # "batch_func": misc_utils.process_batch_using_ray,
             "batch_func": batch_using_joblib,
-            "n_batch": n_jobs, # number of chunk fusions to schedule / submit at a time
+            "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
             "batch_func_kwargs": {
-                'n_jobs': n_jobs # (note the change in parameter name)
+                "n_jobs": n_jobs  # (note the change in parameter name)
             },
         },
     )
@@ -202,48 +213,59 @@ def global_register_data(
     datastore_state.update({"GlobalRegistered": True})
     datastore_state.update({"Fused": True})
     datastore.datastore_state = datastore_state
-    
+
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
-        # load downsampled, fused polyDT image and coordinates 
-        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
-        
+        # load downsampled, fused polyDT image and coordinates
+        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
+            return_future=False
+        )
+
         # create max projection
-        polyDT_max_projection = np.max(np.squeeze(polyDT_fused),axis=0)
+        polyDT_max_projection = np.max(np.squeeze(polyDT_fused), axis=0)
         del polyDT_fused
-        
-        filename = 'polyDT_max_projection.ome.tiff'
-        cellpose_path = datastore._datastore_path / Path("segmentation") / Path("cellpose")
+
+        filename = "polyDT_max_projection.ome.tiff"
+        cellpose_path = (
+            datastore._datastore_path / Path("segmentation") / Path("cellpose")
+        )
         cellpose_path.mkdir(exist_ok=True)
-        filename_path = datastore._datastore_path / Path("segmentation") / Path("cellpose") / Path(filename)
+        filename_path = (
+            datastore._datastore_path
+            / Path("segmentation")
+            / Path("cellpose")
+            / Path(filename)
+        )
         with TiffWriter(filename_path, bigtiff=True) as tif:
-            metadata={
-                'axes': 'YX',
-                'SignificantBits': 16,
-                'PhysicalSizeX': float(spacing_zyx_um[2]),
-                'PhysicalSizeXUnit': 'µm',
-                'PhysicalSizeY': float(spacing_zyx_um[1]),
-                'PhysicalSizeYUnit': 'µm',
+            metadata = {
+                "axes": "YX",
+                "SignificantBits": 16,
+                "PhysicalSizeX": float(spacing_zyx_um[2]),
+                "PhysicalSizeXUnit": "µm",
+                "PhysicalSizeY": float(spacing_zyx_um[1]),
+                "PhysicalSizeYUnit": "µm",
             }
-            options = dict(
-                compression='zlib',
-                compressionargs={'level': 8},
-                predictor=True,
-                photometric='minisblack',
-                resolutionunit='CENTIMETER',
-            )
+            options = {
+                "compression": "zlib",
+                "compressionargs": {"level": 8},
+                "predictor": True,
+                "photometric": "minisblack",
+                "resolutionunit": "CENTIMETER",
+            }
             tif.write(
                 polyDT_max_projection,
                 resolution=(
                     1e4 / float(spacing_zyx_um[2]),
-                    1e4 / float(spacing_zyx_um[1])
+                    1e4 / float(spacing_zyx_um[1]),
                 ),
                 **options,
-                metadata=metadata
+                metadata=metadata,
             )
-    
-def main():
+
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()

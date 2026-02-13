@@ -13,25 +13,31 @@ Shepherd 2024/12 - refactor
 Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
+
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
 import multiprocessing as mp
-mp.set_start_method('spawn', force=True)
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
+mp.set_start_method("spawn", force=True)
+
+from itertools import compress
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import typer
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm.auto import tqdm
+
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import read_metadatafile
-from itertools import compress
-import typer
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
+
 
 @app.command()
 def convert_data(
@@ -39,12 +45,12 @@ def convert_data(
     baysor_binary_path: str = r"/path/to/baysor",
     baysor_options_path: str = r"/path/to/baysor_options.toml",
     julia_threads: int = 20,
-    channel_names: list[str] = ["alexa488", "atto565", "alexa647"],
-    hot_pixel_image_path: Path = None,
-    output_path: Path = None,
-    codebook_path: Path = None,
-    bit_order_path: Path = None,
-):
+    channel_names: list[str] | None = None,
+    hot_pixel_image_path: Path | None = None,
+    output_path: Path | None = None,
+    codebook_path: Path | None = None,
+    bit_order_path: Path | None = None,
+) -> None:
     """Convert qi2lab microscope data to qi2lab datastore.
 
     Parameters
@@ -75,6 +81,8 @@ def convert_data(
 
     # load codebook
     # --------------
+    if channel_names is None:
+        channel_names = ["alexa488", "atto565", "alexa647"]
     if codebook_path is None:
         codebook = pd.read_csv(root_path / Path("codebook.csv"))
     else:
@@ -97,7 +105,7 @@ def convert_data(
     num_rounds = metadata["num_r"]
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
-    num_z  = metadata["num_z"]
+    num_z = metadata["num_z"]
 
     camera = "synthetic"
     e_per_ADU = metadata["gain"]
@@ -108,33 +116,34 @@ def convert_data(
         metadata["yellow_active"],
         metadata["red_active"],
     ]
- 
+
     channel_order_bool = metadata["channels_reversed"]
     if channel_order_bool:
         channel_order = "reversed"
     else:
         channel_order = "forward"
 
-    voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"], metadata["yx_pixel_um"]]
+    voxel_size_zyx_um = [
+        metadata["z_step_um"],
+        metadata["yx_pixel_um"],
+        metadata["yx_pixel_um"],
+    ]
     na = metadata["na"]
     ri = metadata["ri"]
-    
+
     ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
     em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
     channel_idxs = list(range(num_ch))
     channels_in_data = list(compress(channel_idxs, channels_active))
 
     if hot_pixel_image_path is None:
-        noise_map = None
+        pass
     else:
-        noise_map = imread(hot_pixel_image_path)
-    
-    affine_zyx_px = np.array([
-        [1,0,0,0],
-        [0,1,0,0],
-        [0,0,1,0],
-        [0,0,0,1]
-    ],dtype=np.float32)
+        imread(hot_pixel_image_path)
+
+    affine_zyx_px = np.array(
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=np.float32
+    )
 
     # initialize datastore
     if output_path is None:
@@ -161,7 +170,7 @@ def convert_data(
             datastore.microscope_type = "3D"
         else:
             datastore.microscope_type = "2D"
-    
+
     datastore.camera_model = camera
     try:
         datastore.tile_overlap = metadata["tile_overlap"]
@@ -172,8 +181,6 @@ def convert_data(
     datastore.ri = ri
     datastore.binning = binning
     datastore.voxel_size_zyx_um = voxel_size_zyx_um
-
-
 
     # generate PSFs
     # --------------
@@ -192,7 +199,7 @@ def convert_data(
                 ni0=ri,
                 model="vectorial",
             ).astype(np.float32)
-            #psf = psf / np.sum(psf, axis=(0, 1, 2))
+            # psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
         else:
             psf = make_psf(
@@ -207,7 +214,7 @@ def convert_data(
                 ni0=ri,
                 model="vectorial",
             ).astype(np.float32)
-            #psf = psf / np.sum(psf, axis=(0, 1, 2))
+            # psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
     channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
     datastore.channel_psfs = channel_psfs
@@ -234,10 +241,10 @@ def convert_data(
             stage_x = np.round(float(stage_positions["stage_x"]), 2)
             stage_y = np.round(float(stage_positions["stage_y"]), 2)
             stage_z = np.round(float(stage_positions["stage_y"]), 2)
-            temp = [stage_z,stage_y,stage_x]
+            temp = [stage_z, stage_y, stage_x]
             position_list.append(np.asarray(temp))
         position_list = np.asarray(position_list)
-        
+
         for tile_idx in tqdm(range(num_tiles), desc="tile", leave=False):
             # initialize datastore tile
             # this creates the directory structure and links fiducial rounds <-> readout bits
@@ -247,8 +254,21 @@ def convert_data(
             # load raw image
             image_path = (
                 root_path
-                / Path(root_name+ "_r"+ str(round_idx + 1).zfill(4)+ "_tile"+ str(tile_idx).zfill(4)+ "_1")
-                / Path("data_r"+str(round_idx+1).zfill(4)+"_tile"+str(tile_idx).zfill(4)+".tif")
+                / Path(
+                    root_name
+                    + "_r"
+                    + str(round_idx + 1).zfill(4)
+                    + "_tile"
+                    + str(tile_idx).zfill(4)
+                    + "_1"
+                )
+                / Path(
+                    "data_r"
+                    + str(round_idx + 1).zfill(4)
+                    + "_tile"
+                    + str(tile_idx).zfill(4)
+                    + ".tif"
+                )
             )
 
             # load raw data and make sure it is the right shape. If not, write
@@ -259,16 +279,21 @@ def convert_data(
             else:
                 if raw_image is None or raw_image.shape != correct_shape:
                     if raw_image.shape[0] < correct_shape[0]:
-                        print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
+                        print(
+                            "\nround="
+                            + str(round_idx + 1)
+                            + "; tile="
+                            + str(tile_idx + 1)
+                        )
                         print("Found shape: " + str(raw_image.shape))
                         print("Correct shape: " + str(correct_shape))
                         print("Replacing data with zeros.\n")
                         raw_image = np.zeros(correct_shape, dtype=np.uint16)
-                    else:                    
+                    else:
                         # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
                         # print("Found shape: " + str(raw_image.shape))
                         size_to_trim = raw_image.shape[1] - correct_shape[1]
-                        raw_image = raw_image[:,size_to_trim:,:].copy()
+                        raw_image = raw_image[:, size_to_trim:, :].copy()
                         # print("Correct shape: " + str(correct_shape))
                         # print("Corrected to shape: " + str(raw_image.shape) + "\n")
 
@@ -284,13 +309,13 @@ def convert_data(
             hot_pixel_corrected = False
 
             # load stage position
-            corrected_y = position_list[tile_idx,1]
-            corrected_x = position_list[tile_idx,2]
-            
-            corrected_x = np.round(corrected_x,2)
-            corrected_y = np.round(corrected_y,2)
-            stage_z = np.round(position_list[tile_idx,0],2)
-            
+            corrected_y = position_list[tile_idx, 1]
+            corrected_x = position_list[tile_idx, 2]
+
+            corrected_x = np.round(corrected_x, 2)
+            corrected_y = np.round(corrected_y, 2)
+            stage_z = np.round(position_list[tile_idx, 0], 2)
+
             stage_pos_zyx_um = np.asarray(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
@@ -307,10 +332,7 @@ def convert_data(
             )
 
             datastore.save_local_stage_position_zyx_um(
-                stage_pos_zyx_um, 
-                affine_zyx_px,
-                tile=tile_idx, 
-                round=round_idx
+                stage_pos_zyx_um, affine_zyx_px, tile=tile_idx, round=round_idx
             )
 
             datastore.save_local_wavelengths_um(
@@ -350,15 +372,21 @@ def convert_data(
                 tile=tile_idx,
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
-  
-    datastore.noise_map = np.zeros((3, correct_shape[1], correct_shape[2]), dtype=np.float32)  
-    datastore._shading_maps = np.ones((3, correct_shape[1], correct_shape[2]), dtype=np.float32)
+
+    datastore.noise_map = np.zeros(
+        (3, correct_shape[1], correct_shape[2]), dtype=np.float32
+    )
+    datastore._shading_maps = np.ones(
+        (3, correct_shape[1], correct_shape[2]), dtype=np.float32
+    )
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
 
-def main():
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()

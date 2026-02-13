@@ -1,24 +1,26 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-from tifffile import imread
-from pathlib import Path
 import json
-import pandas as pd
-from tqdm import tqdm
-import zarr
+from pathlib import Path
 
-def create_overview_image(root_path: Path, n_tiles: int = 2):
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import zarr
+from tifffile import imread
+from tqdm import tqdm
+
+
+def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
     """Load and create blended tile overview image.
-    
-    This function loads 3D tiles, performs a maximum z-projection, and provides 
+
+    This function loads 3D tiles, performs a maximum z-projection, and provides
     blended global images for both (y,x) and (x,y) in the stage positions file.
-    It is also possible to test image flips and stage reversals with this 
+    It is also possible to test image flips and stage reversals with this
     approach with minor modifications.
-    
+
     It is currently hard-coded to work with the Zhuang lab example as part of
     the merfish3d-analysis documentation.
-    
+
     Parameters
     ----------
     root_path: Path
@@ -26,19 +28,23 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
     n_tiles: int, default 2
         number of tiles to load
     """
-    
+
     # Load n_tiles
     tiles = []
     for tile_idx in tqdm(range(n_tiles), desc="loading tiles"):
-        tile_path = root_path / Path(f"mop/mouse_sample1_raw/mouse1_sample1_raw/aligned_images{tile_idx}.tif")
-        store = imread(tile_path, mode='r', aszarr=True)
-        z = zarr.open(store, mode='r')
+        tile_path = root_path / Path(
+            f"mop/mouse_sample1_raw/mouse1_sample1_raw/aligned_images{tile_idx}.tif"
+        )
+        store = imread(tile_path, mode="r", aszarr=True)
+        z = zarr.open(store, mode="r")
         tiles.append(np.max(z[38, :].astype(np.uint16), axis=0))
     tiles = np.asarray(tiles)
 
     # Load the spatial calibration (microns per pixel)
-    microscope_json_path = root_path / Path(r"mop/mouse_sample1_raw/additional_files/microscope.json")
-    with open(microscope_json_path, 'r') as file:
+    microscope_json_path = root_path / Path(
+        r"mop/mouse_sample1_raw/additional_files/microscope.json"
+    )
+    with open(microscope_json_path) as file:
         data = json.load(file)
     yx_pixel_size_um = float(data["microns_per_pixel"])
 
@@ -60,17 +66,21 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
         tile_extents_yx_order.append(
             [
                 tile_translations[tile_idx, 1] / yx_pixel_size_um,  # x_min
-                tile_translations[tile_idx, 1] / yx_pixel_size_um + tiles[tile_idx, :].shape[1],  # x_max
+                tile_translations[tile_idx, 1] / yx_pixel_size_um
+                + tiles[tile_idx, :].shape[1],  # x_max
                 tile_translations[tile_idx, 0] / yx_pixel_size_um,  # y_min
-                tile_translations[tile_idx, 0] / yx_pixel_size_um + tiles[tile_idx, :].shape[0],  # y_max
+                tile_translations[tile_idx, 0] / yx_pixel_size_um
+                + tiles[tile_idx, :].shape[0],  # y_max
             ]
         )
         tile_extents_xy_order.append(
             [
                 tile_translations[tile_idx, 0] / yx_pixel_size_um,  # x_min
-                tile_translations[tile_idx, 0] / yx_pixel_size_um + tiles[tile_idx, :].shape[0],  # x_max
+                tile_translations[tile_idx, 0] / yx_pixel_size_um
+                + tiles[tile_idx, :].shape[0],  # x_max
                 tile_translations[tile_idx, 1] / yx_pixel_size_um,  # y_min
-                tile_translations[tile_idx, 1] / yx_pixel_size_um + tiles[tile_idx, :].shape[1],  # y_max
+                tile_translations[tile_idx, 1] / yx_pixel_size_um
+                + tiles[tile_idx, :].shape[1],  # y_max
             ]
         )
     tile_extents_yx_order = np.asarray(tile_extents_yx_order)
@@ -88,12 +98,24 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
     y_max_xy_order = np.max(tile_extents_xy_order[:, 3])
 
     # Create blending canvases
-    canvas_yx = np.zeros((int(np.ceil(y_max_yx_order - y_min_yx_order)), 
-                        int(np.ceil(x_max_yx_order - x_min_yx_order)), 3), dtype=np.float32)
+    canvas_yx = np.zeros(
+        (
+            int(np.ceil(y_max_yx_order - y_min_yx_order)),
+            int(np.ceil(x_max_yx_order - x_min_yx_order)),
+            3,
+        ),
+        dtype=np.float32,
+    )
     weights_yx = np.zeros(canvas_yx.shape[:2], dtype=np.float32)
 
-    canvas_xy = np.zeros((int(np.ceil(y_max_xy_order - y_min_xy_order)), 
-                        int(np.ceil(x_max_xy_order - x_min_xy_order)), 3), dtype=np.float32)
+    canvas_xy = np.zeros(
+        (
+            int(np.ceil(y_max_xy_order - y_min_xy_order)),
+            int(np.ceil(x_max_xy_order - x_min_xy_order)),
+            3,
+        ),
+        dtype=np.float32,
+    )
     weights_xy = np.zeros(canvas_xy.shape[:2], dtype=np.float32)
 
     # Define colormaps for alternating colors
@@ -143,20 +165,20 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
 
     # Plot the z max projections of the tiles assuming the stage file is in (y,x) order
     plt.figure(figsize=(10, 10))
-    plt.imshow(canvas_yx, origin='lower')
-    plt.xlabel('X (pixels)')
-    plt.ylabel('Y (pixels)')
-    plt.title('Tiles assuming (y,x) order')
+    plt.imshow(canvas_yx, origin="lower")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
+    plt.title("Tiles assuming (y,x) order")
     plt.grid(False)
-    
+
     plt.show()
 
     # Plot the z max projections of the tiles assuming the stage file is in (x,y) order
     plt.figure(figsize=(10, 10))
-    plt.imshow(canvas_xy, origin='lower')
-    plt.xlabel('X (pixels)')
-    plt.ylabel('Y (pixels)')
-    plt.title('Tiles assuming (x,y) order')
+    plt.imshow(canvas_xy, origin="lower")
+    plt.xlabel("X (pixels)")
+    plt.ylabel("Y (pixels)")
+    plt.title("Tiles assuming (x,y) order")
     plt.grid(False)
 
     plt.show()
@@ -165,4 +187,4 @@ def create_overview_image(root_path: Path, n_tiles: int = 2):
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data/zhuang")
     n_tiles = 10
-    create_overview_image(root_path,n_tiles)
+    create_overview_image(root_path, n_tiles)

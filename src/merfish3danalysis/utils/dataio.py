@@ -12,23 +12,24 @@ History:
                Reduced dask dependencies.
 """
 
-import re
-from typing import Union, Sequence, Optional
-from numpy.typing import ArrayLike
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from tifffile import imread
-from datetime import datetime
-import scipy.sparse as sparse
-import scipy.io as sio
-import subprocess
 import csv
+import re
+import subprocess
+from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import scipy.io as sio
+import scipy.sparse as sparse
 import zarr
+from numpy.typing import ArrayLike
+from tifffile import imread
 
 
-def read_metadatafile(fname: Union[str,Path]) -> dict:
-    """Read metadata from csv file. 
+def read_metadatafile(fname: str | Path) -> dict:
+    """Read metadata from csv file.
 
     Parameters
     ----------
@@ -43,7 +44,7 @@ def read_metadatafile(fname: Union[str,Path]) -> dict:
 
     scan_data_raw_lines = []
 
-    with open(fname, "r") as f:
+    with open(fname) as f:
         for line in f:
             scan_data_raw_lines.append(line.replace("\n", ""))
 
@@ -66,60 +67,34 @@ def read_metadatafile(fname: Union[str,Path]) -> dict:
 
     # convert to dictionary
     metadata = {}
-    for t, v in zip(titles, vals):
+    for t, v in zip(titles, vals, strict=False):
         metadata[t] = v
 
     return metadata
 
-def read_config_file(config_path: Union[Path,str]) -> dict:
-    """Read config data from csv file. 
-    
+
+def read_config_file(config_path: Path | str) -> dict:
+    """Read config data from csv file.
+
     Parameters
     ----------
     config_path: Path
         Location of configuration file
-    
+
     Returns
     -------
     dict_from_csv: dict
         instrument configuration metadata
     """
 
-    dict_from_csv = pd.read_csv(config_path, header=None, index_col=0).squeeze("columns").to_dict()
+    dict_from_csv = (
+        pd.read_csv(config_path, header=None, index_col=0).squeeze("columns").to_dict()
+    )
 
     return dict_from_csv
 
-def read_fluidics_program(program_path: Union[Path,str]) -> pd.DataFrame:
-    """Read fluidics program from CSV file as pandas dataframe.
 
-    Parameters
-    ----------
-    program_path: Path
-        location of fluidics program
-
-    Returns
-    -------
-    df_fluidics: Dataframe
-        dataframe containing fluidics program 
-    """
-
-    try:                
-        df_fluidics = pd.read_csv(program_path)            
-        df_fluidics = df_fluidics[["round", "source", "time", "pump"]]
-        df_fluidics.dropna(axis=0, how='any', inplace=True)
-        df_fluidics["round"] = df_fluidics["round"].astype(int)
-        df_fluidics["pump"] = df_fluidics["pump"].astype(int)
-
-        print("Fluidics program loaded")
-    except Exception as e:
-        raise Exception("Error in loading fluidics file:\n", e)
-
-    return df_fluidics
-
-def write_metadata(
-    data_dict: dict, 
-    save_path: Union[str,Path]
-):
+def write_metadata(data_dict: dict, save_path: str | Path) -> None:
     """Write dictionary as CSV file.
 
     Parameters
@@ -129,12 +104,13 @@ def write_metadata(
     save_path: Union[str,Path]
         path for file
     """
-    
+
     pd.DataFrame([data_dict]).to_csv(save_path)
-    
-def return_data_zarr(dataset_path: Union[Path,str],
-                     ch_idx : int,
-                     ch_idx_offset: Optional[int] = 0) -> ArrayLike:
+
+
+def return_data_zarr(
+    dataset_path: Path | str, ch_idx: int, ch_idx_offset: int | None = 0
+) -> ArrayLike:
     """Return NDTIFF data as a numpy array via tiffile.
 
     Parameters
@@ -151,22 +127,23 @@ def return_data_zarr(dataset_path: Union[Path,str],
     data: ArrayLike
         data stack
     """
-    
-    ndtiff_zarr_store = imread(dataset_path, mode='r+', aszarr=True)
-    ndtiff_zarr = zarr.open(ndtiff_zarr_store, mode='r+')
-    first_dim = str(ndtiff_zarr.attrs['_ARRAY_DIMENSIONS'][0])
 
-    if first_dim == 'C':
-        data = np.asarray(ndtiff_zarr[ch_idx-ch_idx_offset, :],dtype=np.uint16)
+    ndtiff_zarr_store = imread(dataset_path, mode="r+", aszarr=True)
+    ndtiff_zarr = zarr.open(ndtiff_zarr_store, mode="r+")
+    first_dim = str(ndtiff_zarr.attrs["_ARRAY_DIMENSIONS"][0])
+
+    if first_dim == "C":
+        data = np.asarray(ndtiff_zarr[ch_idx - ch_idx_offset, :], dtype=np.uint16)
     else:
-        data = np.asarray(ndtiff_zarr[:,ch_idx-ch_idx_offset,:],dtype=np.uint16)
+        data = np.asarray(ndtiff_zarr[:, ch_idx - ch_idx_offset, :], dtype=np.uint16)
     del ndtiff_zarr_store, ndtiff_zarr
-    
+
     return np.squeeze(data)
-    
-def time_stamp():
+
+
+def time_stamp() -> str:
     """Generate timestamp string.
-    
+
     Returns
     -------
     timestamp: str
@@ -174,14 +151,13 @@ def time_stamp():
     """
 
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
+
 def create_mtx(
-    spots_path: Union[Path,str], 
-    output_dir_path: Union[Path,str], 
-    confidence_cutoff: float = 0.7
-):
+    spots_path: Path | str, output_dir_path: Path | str, confidence_cutoff: float = 0.7
+) -> None:
     """Create a sparse matrix in MTX format from Baysor output.
-    
+
     Parameters
     ----------
     spots_path: Union[Path,str]
@@ -191,28 +167,29 @@ def create_mtx(
     confidence_cutoff: float
         Confidence cutoff for transcript assignment
     """
-        
+
     # Read 5 columns from transcripts Parquet file
     if spots_path.suffix == ".csv":
-        transcripts_df = pd.read_csv(spots_path,
-                                    usecols=["gene",
-                                            "cell",
-                                            "assignment_confidence"])
-        transcripts_df['cell'] = transcripts_df['cell'].replace('', pd.NA).dropna().str.split('-').str[1]
+        transcripts_df = pd.read_csv(
+            spots_path, usecols=["gene", "cell", "assignment_confidence"]
+        )
+        transcripts_df["cell"] = (
+            transcripts_df["cell"].replace("", pd.NA).dropna().str.split("-").str[1]
+        )
     else:
-        transcripts_df = pd.read_parquet(spots_path,
-                            columns=["gene",
-                                    "cell",
-                                    "assignment_confidence"])
-    
-    
-    transcripts_df['cell'] = pd.to_numeric(transcripts_df['cell'], errors='coerce').fillna(0).astype(int)
+        transcripts_df = pd.read_parquet(
+            spots_path, columns=["gene", "cell", "assignment_confidence"]
+        )
+
+    transcripts_df["cell"] = (
+        pd.to_numeric(transcripts_df["cell"], errors="coerce").fillna(0).astype(int)
+    )
 
     # Find distinct set of features.
     features = transcripts_df["gene"].dropna().unique()
 
     # Create lookup dictionary
-    feature_to_index = dict()
+    feature_to_index = {}
     for index, val in enumerate(features):
         feature_to_index[str(val)] = index
 
@@ -224,15 +201,15 @@ def create_mtx(
     matrix = pd.DataFrame(0, index=range(len(features)), columns=cells, dtype=np.int32)
 
     # Iterate through all transcripts
-    for index, row in transcripts_df.iterrows():
-        feature = str(row['gene'])
-        cell = row['cell']
-        conf = row['assignment_confidence']
+    for _, row in transcripts_df.iterrows():
+        feature = str(row["gene"])
+        cell = row["cell"]
+        conf = row["assignment_confidence"]
 
         # Ignore transcript below user-specified cutoff
         if conf < confidence_cutoff:
             continue
-        
+
         # If cell is not 0 at this point, it means the transcript is associated with a cell
         if cell != 0:
             # Increment count in feature-cell matrix
@@ -241,10 +218,13 @@ def create_mtx(
     # Call a helper function to create Seurat and Scanpy compatible MTX output
     write_sparse_mtx(output_dir_path, matrix, cells, features)
 
-def write_sparse_mtx(output_dir_path : Union[Path,str], 
-                     matrix: ArrayLike, 
-                     cells: Sequence[str], 
-                     features: Sequence[str]):
+
+def write_sparse_mtx(
+    output_dir_path: Path | str,
+    matrix: ArrayLike,
+    cells: Sequence[str],
+    features: Sequence[str],
+) -> None:
     """Write sparse matrix in MTX format.
 
     Parameters
@@ -258,19 +238,27 @@ def write_sparse_mtx(output_dir_path : Union[Path,str],
     features: Sequence[str]
         Feature names
     """
-    
+
     sparse_mat = sparse.coo_matrix(matrix.values)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
     write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
-    write_tsv(output_dir_path / "features.tsv", [[str(f), str(f), "Blank Codeword" if str(f).startswith("Blank") else "Gene Expression"] for f in features])
-    subprocess.run(f"gzip -f {str(output_dir_path)}/*", shell=True)
+    write_tsv(
+        output_dir_path / "features.tsv",
+        [
+            [
+                str(f),
+                str(f),
+                "Blank Codeword" if str(f).startswith("Blank") else "Gene Expression",
+            ]
+            for f in features
+        ],
+    )
+    subprocess.run(f"gzip -f {output_dir_path!s}/*", shell=True)
 
-def write_tsv(
-    filename: Union[str, Path], 
-    data: Sequence[Union[str, Sequence[str]]]
-):
+
+def write_tsv(filename: str | Path, data: Sequence[str | Sequence[str]]) -> None:
     """Write data to TSV file.
-    
+
     Parameters
     ----------
     filename: Union[str, Path]
@@ -279,7 +267,7 @@ def write_tsv(
         Data to write
     """
 
-    with open(filename, 'w', newline='') as tsvfile:
-        writer = csv.writer(tsvfile, delimiter='\t', lineterminator='\n')
+    with open(filename, "w", newline="") as tsvfile:
+        writer = csv.writer(tsvfile, delimiter="\t", lineterminator="\n")
         for item in data:
             writer.writerow([item] if isinstance(item, str) else item)

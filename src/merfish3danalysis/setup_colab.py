@@ -41,44 +41,78 @@ BASE_PIP_DEPS = [
     "fastparquet",
     "pyimagej",
     "rtree",
-    "numpy==1.26.4"
+    "numpy==1.26.4",
 ]
 
 LINUX_JAX_LIB = [
     "jax[cuda12_local]==0.4.38",
 ]
 
-def run(cmd, cwd=None):
-    print("$ {}".format(cmd), flush=True)
-    subprocess.run(cmd, shell=True, check=True, cwd=str(cwd) if cwd else None)
 
-def ensure_cuda_env():
+def run(cmd: str, cwd: str | Path | None = None) -> None:
+    """Run a shell command and stream output.
+
+    Parameters
+    ----------
+    cmd
+        Shell command to execute (passed to ``subprocess.run`` with ``shell=True``).
+    cwd
+        Working directory for the command. If provided, it is converted to a string.
+    """
+    print(f"$ {cmd}", flush=True)
+    subprocess.run(
+        cmd,
+        shell=True,
+        check=True,
+        cwd=str(cwd) if cwd is not None else None,
+    )
+
+
+def ensure_cuda_env() -> None:
     cuda_root = Path("/usr/local/cuda")
     if cuda_root.exists():
         os.environ["CUDA_HOME"] = str(cuda_root)
         os.environ["CUDA_PATH"] = str(cuda_root)
-        os.environ["PATH"] = "{}:{}".format(f"{cuda_root}/bin", os.environ.get("PATH", ""))
+        os.environ["PATH"] = "{}:{}".format(
+            f"{cuda_root}/bin", os.environ.get("PATH", "")
+        )
         ld = f"{cuda_root}/lib64"
         if "LD_LIBRARY_PATH" in os.environ:
-            os.environ["LD_LIBRARY_PATH"] = "{}:{}".format(ld, os.environ["LD_LIBRARY_PATH"])
+            os.environ["LD_LIBRARY_PATH"] = "{}:{}".format(
+                ld, os.environ["LD_LIBRARY_PATH"]
+            )
         else:
             os.environ["LD_LIBRARY_PATH"] = ld
-        print("Using CUDA at {}".format(cuda_root))
+        print(f"Using CUDA at {cuda_root}")
     else:
-        print("Warning: /usr/local/cuda not found; continuing without CUDA env hints.", file=sys.stderr)
+        print(
+            "Warning: /usr/local/cuda not found; continuing without CUDA env hints.",
+            file=sys.stderr,
+        )
 
-def build_colab_base_deps():
-    deps = []
+
+def build_colab_base_deps() -> list[str]:
+    """Build the list of base pip dependencies for Colab setup.
+
+    Returns
+    -------
+    list[str]
+        Dependency specifiers suitable for passing to pip (e.g. ``pip install ...``).
+    """
+    deps: list[str] = []
     for d in BASE_PIP_DEPS:
         deps.append(d)
     return deps
 
-def setup_colab():
+
+def setup_colab() -> None:
     run("python -m pip install -U pip setuptools wheel numpy==1.26.4")
     ensure_cuda_env()
-    run("python -m pip install cupy-cuda12x")                       # CuPy for CUDA 12.x
-    run("python -m pip install cucim")                              # cuCIM
-    run("python -m pip install cuvs-cu12 --extra-index-url=https://pypi.nvidia.com")  # cuVS
+    run("python -m pip install cupy-cuda12x")  # CuPy for CUDA 12.x
+    run("python -m pip install cucim")  # cuCIM
+    run(
+        "python -m pip install cuvs-cu12 --extra-index-url=https://pypi.nvidia.com"
+    )  # cuVS
     try:
         run(
             "python -m pip install --no-warn-script-location "
@@ -97,8 +131,10 @@ def setup_colab():
 
     print("\nColab setup complete.")
 
-def main():
+
+def main() -> None:
     setup_colab()
+
 
 if __name__ == "__main__":
     main()

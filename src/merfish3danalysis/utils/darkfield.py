@@ -1,8 +1,10 @@
-import cupy as cp
-from cupyx.scipy.special import j1
-from cupyx.scipy.ndimage import minimum_filter, gaussian_filter, convolve
-import numpy as np
 from typing import Any
+
+import cupy as cp
+import numpy as np
+from cupyx.scipy.ndimage import gaussian_filter, minimum_filter
+from cupyx.scipy.special import j1
+
 
 def window_sum_filter(image2d: cp.ndarray, r: int) -> cp.ndarray:
     """
@@ -26,20 +28,18 @@ def window_sum_filter(image2d: cp.ndarray, r: int) -> cp.ndarray:
     m, n = image2d.shape
     im_cum = cp.cumsum(image2d, axis=0)
     sum_img = cp.empty_like(image2d)
-    sum_img[:r+1, :] = im_cum[r:2*r+1, :]
-    sum_img[r+1:m-r, :] = im_cum[2*r+1:m, :] - im_cum[:m-2*r-1, :]
-    sum_img[m-r:m, :] = (
-        im_cum[m-1, :][None, :].repeat(r, axis=0)
-        - im_cum[m-2*r-1:m-r-1, :]
+    sum_img[: r + 1, :] = im_cum[r : 2 * r + 1, :]
+    sum_img[r + 1 : m - r, :] = im_cum[2 * r + 1 : m, :] - im_cum[: m - 2 * r - 1, :]
+    sum_img[m - r : m, :] = (
+        im_cum[m - 1, :][None, :].repeat(r, axis=0)
+        - im_cum[m - 2 * r - 1 : m - r - 1, :]
     )
     im_cum2 = cp.cumsum(sum_img, axis=1)
-    sum_img[:, :r+1] = im_cum2[:, r:2*r+1]
-    sum_img[:, r+1:n-r] = (
-        im_cum2[:, 2*r+1:n] - im_cum2[:, :n-2*r-1]
-    )
-    sum_img[:, n-r:n] = (
-        im_cum2[:, n-1][:, None].repeat(r, axis=1)
-        - im_cum2[:, n-2*r-1:n-r-1]
+    sum_img[:, : r + 1] = im_cum2[:, r : 2 * r + 1]
+    sum_img[:, r + 1 : n - r] = im_cum2[:, 2 * r + 1 : n] - im_cum2[:, : n - 2 * r - 1]
+    sum_img[:, n - r : n] = (
+        im_cum2[:, n - 1][:, None].repeat(r, axis=1)
+        - im_cum2[:, n - 2 * r - 1 : n - r - 1]
     )
     return sum_img
 
@@ -91,11 +91,7 @@ def hpgauss(h: int, w: int, sigma: float) -> cp.ndarray:
 
 
 def psf_generator(
-    lam: float,
-    pixel_size: float,
-    na: float,
-    w: int,
-    factor: float
+    lam: float, pixel_size: float, na: float, w: int, factor: float
 ) -> cp.ndarray:
     """
     Generate a pupil-based PSF matching MATLAB's generator.
@@ -122,20 +118,14 @@ def psf_generator(
     X, Y = cp.meshgrid(coords, coords)
     scale = 2 * cp.pi * na / lam * pixel_size * factor
     eps = cp.finfo(cp.float32).eps
-    R = cp.sqrt(
-        cp.minimum(X, cp.abs(X - w))**2
-        + cp.minimum(Y, cp.abs(Y - w))**2
-    )
-    psf = cp.abs(2 * j1(scale * R + eps) / (scale * R + eps))**2
+    R = cp.sqrt(cp.minimum(X, cp.abs(X - w)) ** 2 + cp.minimum(Y, cp.abs(Y - w)) ** 2)
+    psf = cp.abs(2 * j1(scale * R + eps) / (scale * R + eps)) ** 2
     psf /= psf.sum()
     return cp.fft.fftshift(psf)
 
 
 def separate_hi_lo(
-    image2d: cp.ndarray,
-    params: dict[str, Any],
-    deg: float,
-    divide: float
+    image2d: cp.ndarray, params: dict[str, Any], deg: float, divide: float
 ) -> tuple[cp.ndarray, cp.ndarray, cp.ndarray, cp.ndarray]:
     """
     Separate high and low frequency components of a 2D slice.
@@ -157,8 +147,8 @@ def separate_hi_lo(
         High-frequency, low-frequency, low-pass kernel, and envelope.
     """
     nx, ny = image2d.shape
-    res = 0.5 * params['emwavelength'] / params['NA'] / params['factor']
-    k_m = ny / (res / params['pixelsize'])
+    res = 0.5 * params["emwavelength"] / params["NA"] / params["factor"]
+    k_m = ny / (res / params["pixelsize"])
     kc = int(cp.floor(k_m * 0.2).item())
     sigma_lp = kc * 2 / 2.355
     lp = lpgauss(nx, ny, sigma_lp * 2 * divide)
@@ -171,10 +161,7 @@ def separate_hi_lo(
     return hi, lo, lp, el
 
 
-def confirm_block(
-    params: dict[str, Any],
-    lp: cp.ndarray
-) -> int:
+def confirm_block(params: dict[str, Any], lp: cp.ndarray) -> int:
     """
     Compute PSF block size from low-frequency support.
 
@@ -191,22 +178,21 @@ def confirm_block(
         Block radius where PSF drops below threshold.
     """
     psf = psf_generator(
-        params['emwavelength'],
-        params['pixelsize'],
-        params['NA'],
-        params['Nx'],
-        params['factor'],
+        params["emwavelength"],
+        params["pixelsize"],
+        params["NA"],
+        params["Nx"],
+        params["factor"],
     )
     psf_lo = cp.abs(
-        cp.fft.ifft2(cp.fft.fftshift(cp.fft.fft2(psf)))
-        * cp.fft.fftshift(lp)
+        cp.fft.ifft2(cp.fft.fftshift(cp.fft.fft2(psf))) * cp.fft.fftshift(lp)
     )
     psf_lo /= psf_lo.max()
-    center = params['Nx'] // 2
-    for i in range(center, params['Nx']):
+    center = params["Nx"] // 2
+    for i in range(center, params["Nx"]):
         if psf_lo[i, center] < 0.01:
             return i - center
-    return params['Nx'] - center
+    return params["Nx"] - center
 
 
 def dehaze_fast2(
@@ -215,7 +201,7 @@ def dehaze_fast2(
     win_size: int,
     el: cp.ndarray,
     dep: float,
-    thres: float
+    thres: float,
 ) -> cp.ndarray:
     """
     Fast dehazing for a 2D slice.
@@ -262,10 +248,7 @@ def dehaze_fast2(
     return get_radiance(rep_atm, image2d, refined)
 
 
-def get_dark_channel(
-    image2d: cp.ndarray,
-    win_size: int
-) -> cp.ndarray:
+def get_dark_channel(image2d: cp.ndarray, win_size: int) -> cp.ndarray:
     """
     Compute dark channel via local minimum with Inf padding.
 
@@ -281,15 +264,10 @@ def get_dark_channel(
     cp.ndarray
         Dark channel image.
     """
-    return minimum_filter(
-        image2d, size=win_size, mode='reflect'
-    )
+    return minimum_filter(image2d, size=win_size, mode="reflect")
 
 
-def get_atmosphere(
-    image2d: cp.ndarray,
-    dark_channel: cp.ndarray
-) -> float:
+def get_atmosphere(image2d: cp.ndarray, dark_channel: cp.ndarray) -> float:
     """
     Estimate atmospheric light from dark channel.
 
@@ -312,10 +290,7 @@ def get_atmosphere(
 
 
 def get_transmission_estimate(
-    rep_atm: float,
-    image2d: cp.ndarray,
-    omega: float,
-    win_size: int
+    rep_atm: float, image2d: cp.ndarray, omega: float, win_size: int
 ) -> cp.ndarray:
     """
     Estimate transmission based on dark channel.
@@ -340,10 +315,7 @@ def get_transmission_estimate(
 
 
 def guided_filter(
-    guide: cp.ndarray,
-    target: cp.ndarray,
-    r: int,
-    eps: float
+    guide: cp.ndarray, target: cp.ndarray, r: int, eps: float
 ) -> cp.ndarray:
     """
     Perform guided filtering on 2D image.
@@ -388,9 +360,7 @@ def guided_filter(
 
 
 def get_radiance(
-    rep_atm: float,
-    image2d: cp.ndarray,
-    transmission: cp.ndarray
+    rep_atm: float, image2d: cp.ndarray, transmission: cp.ndarray
 ) -> cp.ndarray:
     """
     Recover scene radiance from transmission.
@@ -418,7 +388,7 @@ def dark_sectioning(
     emwavelength: float,
     na: float,
     pixel_size: float,
-    factor: float
+    factor: float,
 ) -> np.ndarray:
     """
     Perform 3D dark-sectioning dehazing on an image stack.
@@ -453,42 +423,34 @@ def dark_sectioning(
     # Make square by padding smaller dimension
     if ny0 < nx0:
         image0 = cp.pad(
-            image0,
-            ((0, 0), (0, nx0 - ny0), (0, 0)),
-            mode='constant',
-            constant_values=0
+            image0, ((0, 0), (0, nx0 - ny0), (0, 0)), mode="constant", constant_values=0
         )
     elif ny0 > nx0:
         image0 = cp.pad(
-            image0,
-            ((0, ny0 - nx0), (0, 0), (0, 0)),
-            mode='constant',
-            constant_values=0
+            image0, ((0, ny0 - nx0), (0, 0), (0, 0)), mode="constant", constant_values=0
         )
     nx, ny, nz = image0.shape
 
     pad_size = 40
     padx = nx // pad_size + 1
     pady = ny // pad_size + 1
-    pad_mode = 'symmetric'
+    pad_mode = "symmetric"
     denoise = False
 
     # Initial padding for convolution
-    image = cp.zeros((nx + 2*padx, ny + 2*pady, nz), dtype=cp.float32)
+    image = cp.zeros((nx + 2 * padx, ny + 2 * pady, nz), dtype=cp.float32)
     for j in range(nz):
         image[:, :, j] = cp.pad(
-            image0[:, :, j],
-            ((padx, padx), (pady, pady)),
-            mode=pad_mode
+            image0[:, :, j], ((padx, padx), (pady, pady)), mode=pad_mode
         )
 
     params: dict[str, Any] = {
-        'Nx': image.shape[0],
-        'Ny': image.shape[1],
-        'NA': na,
-        'emwavelength': emwavelength,
-        'pixelsize': pixel_size,
-        'factor': factor
+        "Nx": image.shape[0],
+        "Ny": image.shape[1],
+        "NA": na,
+        "emwavelength": emwavelength,
+        "pixelsize": pixel_size,
+        "factor": factor,
     }
     background = False
     thres = 50
@@ -502,38 +464,30 @@ def dark_sectioning(
     else:
         maxtime = 1
         deg_mat = [10]
-        dep_mat = [.7]
+        dep_mat = [0.7]
         hl_mat = [2]
 
     result_stack = cp.zeros((nx, ny, nz), dtype=cp.float32)
     for t in range(maxtime):
         for j in range(nz):
-            hi, lo, lp, el = separate_hi_lo(
-                image[:, :, j], params, deg_mat[t], divide
-            )
+            hi, lo, lp, el = separate_hi_lo(image[:, :, j], params, deg_mat[t], divide)
             block = confirm_block(params, lp)
             lo_proc = dehaze_fast2(lo, 0.95, block, el, dep_mat[t], thres)
             res = lo_proc / hl_mat[t] + hi
-            result_stack[:, :, j] = res[
-                padx:padx+nx, pady:pady+ny
-            ]
+            result_stack[:, :, j] = res[padx : padx + nx, pady : pady + ny]
         for j in range(nz):
             image[:, :, j] = cp.pad(
-                result_stack[:, :, j],
-                ((padx, padx), (pady, pady)),
-                mode=pad_mode
+                result_stack[:, :, j], ((padx, padx), (pady, pady)), mode=pad_mode
             )
 
     if denoise:
         result_final = cp.zeros_like(result_stack)
         for j in range(nz):
             tmp = cp.pad(
-                result_stack[:, :, j],
-                ((padx, padx), (pady, pady)),
-                mode=pad_mode
+                result_stack[:, :, j], ((padx, padx), (pady, pady)), mode=pad_mode
             )
-            tmp1 = gaussian_filter(tmp, sigma=1, mode='reflect')
-            result_final[:, :, j] = tmp1[padx:padx+nx, pady:pady+ny]
+            tmp1 = gaussian_filter(tmp, sigma=1, mode="reflect")
+            result_final[:, :, j] = tmp1[padx : padx + nx, pady : pady + ny]
     else:
         result_final = result_stack
 
@@ -545,7 +499,6 @@ def dark_sectioning(
     # Move result back to CPU
     output_cpu = cp.asnumpy(result_final.transpose(2, 1, 0)).astype(np.uint16)
 
-
     del result_final
     del result_stack
     del image
@@ -554,7 +507,7 @@ def dark_sectioning(
 
     # Free any cached FFT and memory-pool blocks
     try:
-        cp.fft.clear_plan_cache()      # drop cuFFT plans
+        cp.fft.clear_plan_cache()  # drop cuFFT plans
     except AttributeError:
         # older CuPy: no public API, but you already set PlanCache(memsize=0) earlier
         pass

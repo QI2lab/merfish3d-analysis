@@ -1,10 +1,11 @@
 import os
+import platform
 import shlex
+import shutil
 import stat
 import subprocess
-import shutil
-import platform
 from pathlib import Path
+
 import typer
 
 app = typer.Typer()
@@ -83,7 +84,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
 ]
 
 
-def run(command: str, *, cwd: Path | None = None):
+def run(command: str, *, cwd: Path | None = None) -> None:
     typer.echo(f"$ {command}")
     subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
 
@@ -107,7 +108,9 @@ def _find_installer() -> str:
         exe = shutil.which(override)
         if exe:
             return exe
-        raise RuntimeError(f"MERFISH3D_INSTALLER={override!r} not found on disk or PATH")
+        raise RuntimeError(
+            f"MERFISH3D_INSTALLER={override!r} not found on disk or PATH"
+        )
 
     # 2) Prefer Conda if available
     conda_exe = os.environ.get("CONDA_EXE")
@@ -148,13 +151,13 @@ def _find_installer() -> str:
 
 
 @app.command()
-def setup_cuda(    
+def setup_cuda(
     headless: bool = typer.Option(
         False,
         "--headless",
         help="Skip GUI dependencies such as napari[pyqt6] and cellpose[gui].",
-    )
-):
+    ),
+) -> None:
     """
     Linux-only setup:
 
@@ -177,7 +180,7 @@ def setup_cuda(
         typer.echo(f"Using installer: {installer}")
     except RuntimeError as e:
         typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(code=1) from None
 
     # 1) Core CUDA + OpenJDK stack from conda
     channels = "-c rapidsai -c conda-forge -c nvidia"
@@ -244,7 +247,9 @@ unset _CONDA_JAVA_LIBJVM
     sh_java_deact.chmod(sh_java_deact.stat().st_mode | stat.S_IEXEC)
 
     # 3) (Optional) Prep CURRENT env
-    run("python -m pip install --upgrade-strategy only-if-needed torch torchvision cuda-bindings==12.8.* --index-url https://download.pytorch.org/whl/cu128")
+    run(
+        "python -m pip install --upgrade-strategy only-if-needed torch torchvision cuda-bindings==12.8.* --index-url https://download.pytorch.org/whl/cu128"
+    )
     if headless:
         pip_deps = [
             d
@@ -257,11 +262,15 @@ unset _CONDA_JAVA_LIBJVM
     run(f"python -m pip install {' '.join(shlex.quote(d) for d in LINUX_JAX_LIB)}")
 
     # 4) Create NEW env and install what you asked
-    run(f"{installer} create -y -n {MVSTITCHER_ENV_NAME} python={MVSTITCHER_ENV_PY} pip")
+    run(
+        f"{installer} create -y -n {MVSTITCHER_ENV_NAME} python={MVSTITCHER_ENV_PY} pip"
+    )
     repo_dir = Path.cwd()
 
     # Upgrade build tooling, then install the *imports* deps first
-    run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -U pip setuptools wheel")
+    run(
+        f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -U pip setuptools wheel"
+    )
 
     # Install multiview-stitcher and minimal deps to use merfish3d-analysis datastore class
     run(
@@ -273,12 +282,15 @@ unset _CONDA_JAVA_LIBJVM
         f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install "
         + " ".join(shlex.quote(d) for d in MVSTITCHER_ENV_PIP_IMPORTS)
     )
-    run(f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -e .", cwd=repo_dir)
+    run(
+        f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -e .",
+        cwd=repo_dir,
+    )
 
     typer.echo("\nSetup complete.\n")
 
 
-def main():
+def main() -> None:
     app()
 
 

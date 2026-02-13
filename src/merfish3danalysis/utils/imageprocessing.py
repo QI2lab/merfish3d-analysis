@@ -11,16 +11,17 @@ History:
                and chunked GPU deconvolution.
 """
 
-import numpy as np
-import gc
-from numpy.typing import ArrayLike
-from numba import njit, prange
 import builtins
+import gc
+from typing import Any
+
+import numpy as np
+from numba import njit, prange
+from numpy.typing import ArrayLike
+
 
 def replace_hot_pixels(
-    noise_map: ArrayLike, 
-    data: ArrayLike, 
-    threshold: float = 375.0
+    noise_map: ArrayLike, data: ArrayLike, threshold: float = 375.0
 ) -> ArrayLike:
     """Replace hot pixels with median values surrounding them.
 
@@ -30,6 +31,8 @@ def replace_hot_pixels(
         darkfield image collected at long exposure time to get hot pixels
     data: ArrayLike
         ND data [broadcast_dim,z,y,x]
+    threshold: float, default = 375.0
+        threshold to determine hot pixel
 
     Returns
     -------
@@ -66,16 +69,15 @@ def replace_hot_pixels(
 
     return data
 
-def estimate_shading(
-    images: list[ArrayLike]
-) -> ArrayLike:
+
+def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     """Estimate shading using stack of images and BaSiCPy.
-    
+
     Parameters
     ----------
     images: ArrayLike
         4D image stack [p,z,y,x]
-        
+
     Returns
     -------
     shading_image: ArrayLike
@@ -85,12 +87,11 @@ def estimate_shading(
     # GPU
 
     import cupy as cp  # type: ignore
-    from cupyx.scipy import ndimage  # type: ignore
-    from basicpy import BaSiC # type: ignore
+    from basicpy import BaSiC  # type: ignore
 
     maxz_images = []
     for image in images:
-        maxz_images.append(cp.squeeze(cp.max(image.result(),axis=0)))    
+        maxz_images.append(cp.squeeze(cp.max(image.result(), axis=0)))
 
     maxz_images = cp.asnumpy(maxz_images).astype(np.uint16)
     gc.collect()
@@ -104,18 +105,23 @@ def estimate_shading(
     basic.autotune(maxz_images[:])
     basic.fit(maxz_images[:])
     builtins.print = original_print
-    shading_correction = basic.flatfield.astype(np.float32) / np.max(basic.flatfield.astype(np.float32),axis=(0,1))
-    
+    shading_correction = basic.flatfield.astype(np.float32) / np.max(
+        basic.flatfield.astype(np.float32), axis=(0, 1)
+    )
+
     del basic
     gc.collect()
 
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
-    
+
     return shading_correction
 
-def downsample_image_anisotropic(image: ArrayLike, level: tuple[int,int,int] = (2,6,6)) -> ArrayLike:
+
+def downsample_image_anisotropic(
+    image: ArrayLike, level: tuple[int, int, int] = (2, 6, 6)
+) -> ArrayLike:
     """Numba accelerated anisotropic downsampling
 
     Parameters
@@ -139,11 +145,7 @@ def downsample_image_anisotropic(image: ArrayLike, level: tuple[int,int,int] = (
 
 
 @njit(parallel=True)
-def downsample_axis(
-    image: ArrayLike, 
-    level: int = 2, 
-    axis: int = 0
-) -> ArrayLike:
+def downsample_axis(image: ArrayLike, level: int = 2, axis: int = 0) -> ArrayLike:
     """Numba accelerated downsampling for 3D images along a specified axis.
 
     Parameters
@@ -220,12 +222,13 @@ def downsample_axis(
 
     return downsampled_image
 
+
 def subtract_background_imagej(
-    image: np.ndarray, 
-    bkd_sub_radius=50, 
-):
+    image: np.ndarray,
+    bkd_sub_radius: int = 50,
+) -> np.ndarray:
     """Subtract background from a 3D image using ImageJ's rolling ball algorithm.
-    
+
     Parameters
     ----------
     image : np.ndarray
@@ -239,37 +242,48 @@ def subtract_background_imagej(
     bkd_image : np.ndarray
         Background subtracted 3D image as a numpy array (Z, Y, X).
     """
-    
 
-    import imagej
-    import io
     import contextlib
+    import io
     import os
     import time
 
+    import imagej
+
     stderr_buffer = io.StringIO()
     with contextlib.redirect_stderr(stderr_buffer):
-        ij_success = False
-        while not(ij_success):
+        for _attempt in range(20):  # ~10s if sleep=0.5
             try:
                 os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
                 ij = imagej.init()
-                ij_success = True
-            except:
-                time.sleep(.5)
-                ij_success = False
+                break
+            except (RuntimeError, OSError):
+                time.sleep(0.5)
+        else:
+            # exhausted retries
+            raise RuntimeError(
+                "ImageJ initialization failed after retries. "
+                f"Last stderr:\n{stderr_buffer.getvalue()}"
+            )
 
     imp_array = ij.py.to_imageplus(image)
     imp_array.setStack(imp_array.getStack().duplicate())
     imp_array.show()
-    ij.IJ.run(imp_array, "Subtract Background...", f"rolling={int(bkd_sub_radius)} disable stack")
+    ij.IJ.run(
+        imp_array,
+        "Subtract Background...",
+        f"rolling={int(bkd_sub_radius)} disable stack",
+    )
     imp_array.show()
     ij.py.sync_image(imp_array)
     bkd_output = ij.py.from_java(imp_array.duplicate())
     imp_array.close()
-    bkd_image = np.swapaxes(
-        bkd_output.data.transpose(2, 1, 0), 1, 2
-    ).clip(0, 2**16 - 1).astype(np.uint16).copy()
+    bkd_image = (
+        np.swapaxes(bkd_output.data.transpose(2, 1, 0), 1, 2)
+        .clip(0, 2**16 - 1)
+        .astype(np.uint16)
+        .copy()
+    )
     del image, imp_array, bkd_output
     gc.collect()
 
@@ -279,9 +293,10 @@ def subtract_background_imagej(
 
     return bkd_image
 
-def no_op(*args, **kwargs):
+
+def no_op(*args: Any, **kwargs: Any) -> None:
     """Function to monkey patch print to suppress output.
-    
+
     Parameters
     ----------
     args: Any
@@ -289,5 +304,5 @@ def no_op(*args, **kwargs):
     kwargs: Any
         keyword arguments
     """
-    
+
     pass
