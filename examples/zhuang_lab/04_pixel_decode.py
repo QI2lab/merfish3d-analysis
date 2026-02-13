@@ -1,26 +1,26 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
-Shepherd 2025/07 - refactor for multiple GPU suport.
+Shepherd 2025/07 - refactor for multiple GPU support.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+from pathlib import Path
+
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from pathlib import Path
-import pandas as pd
-import numpy as np
+
 
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
     ufish_threshold: float = 0.01,
-    magnitude_threshold: float = (.1,10.),
+    magnitude_threshold: float = (0.1, 10.0),
     fdr_target: float = 0.3,
     run_baysor: bool = False,
-):
+) -> None:
     """Perform pixel decoding.
 
     Parameters
@@ -34,13 +34,13 @@ def decode_pixels(
     ufish_threshold : float
         threshold to accept ufish prediction. Default = 0.1
     magnitude_threshold: tuple[float,float], default = (1.,5.)
-        lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because 
+        lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because
         spots are normalized to median spot value, not maximum.
     fdr_target : float
         false discovery rate (FDR) target. Default = .2
-        NOTE: This is higher than usual, but we are finding that .05 is too 
-        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we 
-        have implemented. Ongoing effort to fully understand this issue using 
+        NOTE: This is higher than usual, but we are finding that .05 is too
+        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we
+        have implemented. Ongoing effort to fully understand this issue using
         synthetic data.
     run_baysor : bool
         flag to run Baysor segmentation. Default = True
@@ -53,13 +53,12 @@ def decode_pixels(
 
     # initialize decodor class
     decoder = PixelDecoder(
-        datastore=datastore, 
-        use_mask=False, 
-        merfish_bits=merfish_bits, 
+        datastore=datastore,
+        use_mask=False,
+        merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=1,
     )
-
 
     # optimize normalization weights through iterative decoding and update
     decoder.optimize_normalization_by_decoding(
@@ -67,7 +66,7 @@ def decode_pixels(
         n_iterations=5,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold,
-        magnitude_threshold=magnitude_threshold
+        magnitude_threshold=magnitude_threshold,
     )
 
     # decode all tiles using iterative normalization weights
@@ -85,6 +84,7 @@ def decode_pixels(
         datastore.run_baysor()
         datastore.save_mtx()
 
+
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data/zhuang")
-    decode_pixels(root_path=root_path,run_baysor=False)
+    decode_pixels(root_path=root_path, run_baysor=False)
