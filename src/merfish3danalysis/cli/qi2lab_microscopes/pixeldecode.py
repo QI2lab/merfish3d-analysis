@@ -23,10 +23,11 @@ def decode_pixels(
     ufish_threshold: float = 0.25,
     magnitude_threshold: tuple[float,float]  =[0.9, 10.0],
     fdr_target: float = 0.05,
-    run_baysor: bool = True,
+    run_baysor: bool = False,
     merfish_bits: int = None,
     smFISH: bool = False,
-    skip_optimization: bool = False
+    skip_optimization: bool = False,
+    reprocess_existing: bool = False
 ):
     """Perform pixel decoding.
 
@@ -34,6 +35,8 @@ def decode_pixels(
     ----------
     root_path: Path
         path to experiment
+    num_gpus : int
+        number of gpus to use. Default = 1.
     merfish_bits : int
         number of bits in codebook
     minimum_pixels_per_RNA : int
@@ -45,7 +48,9 @@ def decode_pixels(
     fdr_target : float
         false discovery rate (FDR) target. Default = .05
     run_baysor : bool
-        flag to run Baysor segmentation. Default = True
+        flag to run Baysor segmentation. Default = False
+    reprocess_existing : bool
+        flag to reprocess existing decoded data. Default = False
     """
 
     # initialize datastore
@@ -67,30 +72,38 @@ def decode_pixels(
     if smFISH:
         decoder._distance_threshold = 1.0
 
-    if not skip_optimization:
-        # optimize normalization weights through iterative decoding and update
-        decoder.optimize_normalization_by_decoding(
-            n_random_tiles=20,
-            n_iterations=5,
+    if not(reprocess_existing):
+        if not skip_optimization:
+            # optimize normalization weights through iterative decoding and update
+            decoder.optimize_normalization_by_decoding(
+                n_random_tiles=20,
+                n_iterations=5,
+                minimum_pixels=minimum_pixels_per_RNA,
+                ufish_threshold=ufish_threshold,
+                magnitude_threshold=magnitude_threshold
+            )
+
+        # decode all tiles using iterative normalization weights
+        decoder.decode_all_tiles(
+            assign_to_cells=True,
+            prep_for_baysor=True,
+            magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
             ufish_threshold=ufish_threshold,
-            magnitude_threshold=magnitude_threshold
+            fdr_target=fdr_target,
         )
-
-    # decode all tiles using iterative normalization weights
-    decoder.decode_all_tiles(
-        assign_to_cells=True,
-        prep_for_baysor=True,
-        magnitude_threshold=magnitude_threshold,
-        minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold,
-        fdr_target=fdr_target,
-    )
+    else:
+        decoder.optimize_filtering(
+            assign_to_cells=True,
+            prep_for_baysor=True,
+            fdr_target=fdr_target
+        )
 
     # resegment data using baysor and cellpose prior assignments
     if run_baysor:
         datastore.run_baysor()
         datastore.save_mtx()
+
 
 def main():
     app()
