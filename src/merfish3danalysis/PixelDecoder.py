@@ -1167,7 +1167,7 @@ class PixelDecoder:
                 on_bits_indices = np.where(self._codebook_matrix[barcode_index])[0]
 
                 if len(on_bits_indices) == 1 and not(self._smFISH):
-                    break
+                    continue
 
                 if self._is_3D:
                     if self._verbose > 1:
@@ -2599,13 +2599,14 @@ class PixelDecoder:
         all_tiles = list(range(len(self._datastore.tile_ids)))
         if not(self._verbose == 0):
             self._verbose = 2
+        self._filter_all_barcodes(fdr_target=fdr_target)
         if len(all_tiles) or not(self._is_3D):
             if not(self._is_3D):
                 radius_z = self._datastore.voxel_size_zyx_um[0]*2
                 self._remove_duplicates_within_tile(radius_z=radius_z)
             else:
                 self._remove_duplicates_in_tile_overlap()
-        self._filter_all_barcodes(fdr_target=fdr_target)
+        
         if not(self._verbose == 0):
             self._verbose = 1
 
