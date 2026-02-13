@@ -16,6 +16,7 @@ BASE_PIP_DEPS = [
     "ryomen",
     "tensorstore",
     "nvidia-cuda-runtime-cu12==12.8.*",
+    "cuda-bindings==12.8.*",
     "onnx",
     "onnxruntime-gpu",
     "napari[pyqt6]",
@@ -39,6 +40,7 @@ BASE_PIP_DEPS = [
 LINUX_CONDA_CUDA_PKGS = [
     "'cuda-version=12.8'",
     "'cuda-toolkit=12.8'",
+    "'cuda-bindings=12.8.*'",
     "cuda-cudart",
     "cuda-nvrtc",
     "cucim",
@@ -52,12 +54,12 @@ LINUX_CONDA_CUDA_PKGS = [
     "pyimagej",
     "openjdk=11",
     "'numpy=1.26.4'",
-    "scipy",
+    "'scipy=1.12.0'",
     "shapely",
     "rtree",
     "numba",
-    "zarr>3.0.8",
-    "pandas",
+    "'zarr>3.0.8'",
+    "'pandas=2.3.3'",
     "fastparquet",
     "tbb",
 ]
@@ -242,7 +244,7 @@ unset _CONDA_JAVA_LIBJVM
     sh_java_deact.chmod(sh_java_deact.stat().st_mode | stat.S_IEXEC)
 
     # 3) (Optional) Prep CURRENT env
-    run("python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128")
+    run("python -m pip install --upgrade-strategy only-if-needed torch torchvision cuda-bindings==12.8.* --index-url https://download.pytorch.org/whl/cu128")
     if headless:
         pip_deps = [
             d
