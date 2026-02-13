@@ -1,21 +1,20 @@
-import pandas as pd
+import json
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
+import typer
 from anndata import AnnData
 from scipy import sparse
-from pathlib import Path
-import json
-
-import typer
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
+
 @app.command()
 def build_anndata(
-    root_path: Path,
-    source: str = "baysor",
-    confidence_cutoff: float = 0.7
-):
+    root_path: Path, source: str = "baysor", confidence_cutoff: float = 0.7
+) -> None:
     """
     Converts a Baysor segmentation.csv to an AnnData object.
 
@@ -34,8 +33,12 @@ def build_anndata(
         raise ValueError('source must be "baysor" or "cellpose"')
     if source == "baysor":
         # Load segmentation.csv
-        segmentation_path = root_path / Path("qi2labdatastore/segmentation/segmentation.csv")
-        df = pd.read_csv(segmentation_path, usecols=["gene", "cell", "assignment_confidence"])
+        segmentation_path = root_path / Path(
+            "qi2labdatastore/segmentation/segmentation.csv"
+        )
+        df = pd.read_csv(
+            segmentation_path, usecols=["gene", "cell", "assignment_confidence"]
+        )
 
         # Filter by confidence
         df = df[df["assignment_confidence"] >= confidence_cutoff]
@@ -58,7 +61,9 @@ def build_anndata(
     adata.var_names = counts.columns  # genes
 
     # Loading Baysor segmentations
-    polygons_json_path = root_path / Path("qi2labdatastore/segmentation/segmentation_polygons_2d.json")
+    polygons_json_path = root_path / Path(
+        "qi2labdatastore/segmentation/segmentation_polygons_2d.json"
+    )
 
     # Load the JSON file
     with open(polygons_json_path) as f:
@@ -66,14 +71,14 @@ def build_anndata(
 
     # Extract centroids
     centroids = {}
-    for feature in data['features']:
-        cell_id = feature['id']
-        coords = np.array(feature['geometry']['coordinates'][0])
+    for feature in data["features"]:
+        cell_id = feature["id"]
+        coords = np.array(feature["geometry"]["coordinates"][0])
         centroid = coords.mean(axis=0)
         centroids[cell_id] = centroid
 
     # Create a DataFrame of centroids
-    centroid_df = pd.DataFrame.from_dict(centroids, orient='index', columns=['x', 'y'])
+    centroid_df = pd.DataFrame.from_dict(centroids, orient="index", columns=["x", "y"])
 
     # Align with AnnData
     # Ensure that adata.obs_names are strings
@@ -83,11 +88,13 @@ def build_anndata(
     centroid_df = centroid_df.reindex(adata.obs_names)
 
     # Add to AnnData and save to file
-    adata.obsm['spatial'] = centroid_df.values
+    adata.obsm["spatial"] = centroid_df.values
     adata.write(root_path / Path("qi2labdatastore/mtx_output/spatial_ad2.h5ad"))
 
-def main():
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,5 @@
 """
-Richardson–Lucy Gradient Consensus (RLGC) deconvolution (Manton-style core).
+Richardson-Lucy Gradient Consensus (RLGC) deconvolution (Manton-style core).
 
 Original idea for Gradient Consensus deconvolution:
 James Manton and Andrew York, https://zenodo.org/records/10278919
@@ -7,13 +7,13 @@ James Manton and Andrew York, https://zenodo.org/records/10278919
 Reference RLGC loop based on James Manton's implementation:
 https://colab.research.google.com/drive/1mfVNSCaYHz1g56g92xBkIoa8190XNJpJ
 
-Biggs–Andrews acceleration:
+Biggs-Andrews acceleration:
 Biggs & Andrews, 1997, https://doi.org/10.1364/AO.36.001766
 """
 
 import gc
 import timeit
-from typing import Tuple
+
 import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
@@ -25,23 +25,25 @@ DEBUG = False
 # CUDA kernel: multiplicative RL step gated by consensus (reference-accurate)
 # -----------------------------------------------------------------------------
 filter_update_ba = ElementwiseKernel(
-    'float32 recon, float32 HTratio, float32 consensus_map',
-    'float32 out',
-    '''
+    "float32 recon, float32 HTratio, float32 consensus_map",
+    "float32 out",
+    """
     bool skip = consensus_map < 0;
     out = skip ? recon : recon * HTratio;
     out = out < 0 ? 0 : out
-    ''',
-    'filter_update_ba'
+    """,
+    "filter_update_ba",
 )
 
 # -----------------------------------------------------------------------------
 # FFT work-buffer cache (performance)
 # -----------------------------------------------------------------------------
-_fft_cache: dict[Tuple[int, int, int], Tuple[cp.ndarray, cp.ndarray]] = {}
+_fft_cache: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
 
 
-def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64) -> np.ndarray:
+def make_feather_weight(
+    shape: tuple[int, int, int], feather_px: int = 64
+) -> np.ndarray:
     """
     Create a feathered weight mask using a cosine taper on Y/X only.
 
@@ -59,6 +61,7 @@ def make_feather_weight(shape: tuple[int, int, int], feather_px: int = 64) -> np
     numpy.ndarray
         Feather mask of shape (z, y, x), values in [0, 1].
     """
+
     def cosine_taper(length: int, feather: int) -> np.ndarray:
         window = np.ones(length, dtype=np.float32)
         if feather > 0:
@@ -86,7 +89,7 @@ def next_gpu_fft_size(x: int) -> int:
     Returns
     -------
     int
-        Next 2–3–smooth length ≥ ``x``.
+        Next 2-3-smooth length ≥ ``x``.
     """
     if x <= 1:
         return 1
@@ -102,9 +105,9 @@ def next_gpu_fft_size(x: int) -> int:
         n += 1
 
 
-def pad_z(image: np.ndarray,init_value:float = None) -> tuple[np.ndarray, int, int]:
+def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
-    Pad the Z axis of a 3D array to the next 2–3–smooth length (ZYX order).
+    Pad the Z axis of a 3D array to the next 2-3-smooth length (ZYX order).
 
     A constant background is subtracted before padding and values are
     clamped into [0, 65535] for numerical stability with uint16 inputs.
@@ -129,15 +132,13 @@ def pad_z(image: np.ndarray,init_value:float = None) -> tuple[np.ndarray, int, i
     pad_z_before = pad_amt // 2
     pad_z_after = pad_amt - pad_z_before
     pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
-    padded_image = np.pad(
-        image,
-        pad_width,
-        mode="reflect"
-    ).astype(np.uint16)
+    padded_image = np.pad(image, pad_width, mode="reflect").astype(np.uint16)
     return padded_image, pad_z_before, pad_z_after
 
 
-def remove_padding_z(padded_image: np.ndarray, pad_z_before: int, pad_z_after: int) -> np.ndarray:
+def remove_padding_z(
+    padded_image: np.ndarray, pad_z_before: int, pad_z_after: int
+) -> np.ndarray:
     """
     Remove Z padding added by :func:`pad_z`.
 
@@ -177,7 +178,7 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
         Padded, centered, nonnegative PSF normalized to unit sum.
     """
     psf = cp.zeros(image_shape, dtype=cp.float32)
-    psf[:psf_temp.shape[0], :psf_temp.shape[1], :psf_temp.shape[2]] = psf_temp
+    psf[: psf_temp.shape[0], : psf_temp.shape[1], : psf_temp.shape[2]] = psf_temp
 
     # Center the PSF
     for axis, axis_size in enumerate(psf.shape):
@@ -191,7 +192,9 @@ def pad_psf(psf_temp: cp.ndarray, image_shape: tuple[int, int, int]) -> cp.ndarr
     return psf.astype(cp.float32)
 
 
-def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> cp.ndarray:
+def fft_conv(
+    image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]
+) -> cp.ndarray:
     """
     Linear convolution via FFT with cached buffers (no clipping).
 
@@ -229,7 +232,7 @@ def fft_conv(image: cp.ndarray, H: cp.ndarray, shape: tuple[int, int, int]) -> c
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     """
-    Compute Kullback–Leibler divergence between two distributions.
+    Compute Kullback-Leibler divergence between two distributions.
 
     Parameters
     ----------
@@ -252,6 +255,7 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
     kldiv = cp.sum(kldiv)
     return kldiv
 
+
 def rlgc_biggs_ba(
     image: np.ndarray,
     psf: np.ndarray,
@@ -264,7 +268,7 @@ def rlgc_biggs_ba(
     max_delta: float = 0.02,
 ) -> np.ndarray:
     """
-    Biggs–Andrews accelerated Richardson–Lucy Gradient Consensus.
+    Biggs-Andrews accelerated Richardson-Lucy Gradient Consensus.
 
     Parameters
     ----------
@@ -324,7 +328,7 @@ def rlgc_biggs_ba(
     if image.ndim == 3:
         image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded)
         image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
-        
+
         del image_gpu_np
     else:
         image_gpu = cp.asarray(image_padded, dtype=cp.float32)[cp.newaxis, ...]
@@ -353,7 +357,7 @@ def rlgc_biggs_ba(
     recon_next = cp.empty_like(recon)
     Hu = cp.empty_like(recon)
 
-    # Biggs–Andrews state
+    # Biggs-Andrews state
     g1 = cp.zeros_like(recon)
     g2 = cp.zeros_like(recon)
 
@@ -395,22 +399,27 @@ def rlgc_biggs_ba(
         kld2 = kl_div(Hu, split2)
 
         if safe_mode:
-            if (kld1 > prev_kld1) or (kld2 > prev_kld2) or (kld1 < 1e-4) or (kld2 < 1e-4):
+            if (
+                (kld1 > prev_kld1)
+                or (kld2 > prev_kld2)
+                or (kld1 < 1e-4)
+                or (kld2 < 1e-4)
+            ):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
-                    print(
-                        f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
-                    )
+                    print(f"Optimum after {num_iters - 1} iters in {total_time:.1f} s.")
                 break
         else:
-            if ((kld1 > prev_kld1) and (kld2 > prev_kld2)) or (kld1 < 1e-4) or (kld2 < 1e-4):
+            if (
+                ((kld1 > prev_kld1) and (kld2 > prev_kld2))
+                or (kld1 < 1e-4)
+                or (kld2 < 1e-4)
+            ):
                 recon[...] = previous_recon
                 if DEBUG:
                     total_time = timeit.default_timer() - start_time
-                    print(
-                        f"Optimum after {num_iters - 1} iters in {total_time:.1f} s."
-                    )
+                    print(f"Optimum after {num_iters - 1} iters in {total_time:.1f} s.")
                 break
 
         prev_kld1 = kld1
@@ -422,15 +431,21 @@ def rlgc_biggs_ba(
 
         # RL ratios: H^T( split / (0.5*(Hu+eps)) )
         eps = 1e-12
-        HTratio1 = fft_conv(cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
-        HTratio2 = fft_conv(cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape)
+        HTratio1 = fft_conv(
+            cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape
+        )
+        HTratio2 = fft_conv(
+            cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape
+        )
         HTratio = HTratio1 + HTratio2
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
-        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
+        consensus_map = fft_conv(
+            (HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape
+        )
 
         # Gated multiplicative update
-        filter_update_ba(recon, HTratio, consensus_map,recon_next)
+        filter_update_ba(recon, HTratio, consensus_map, recon_next)
 
         # BA vectors
         g2[...] = g1
@@ -495,6 +510,7 @@ def rlgc_biggs_ba(
     cp.get_default_pinned_memory_pool().free_all_blocks()
     return recon_cpu
 
+
 def chunked_rlgc(
     image: np.ndarray,
     psf: np.ndarray,
@@ -502,7 +518,7 @@ def chunked_rlgc(
     crop_yx: int = 1500,
     overlap_yx: int = 128,
     safe_mode: bool = True,
-    verbose: int = 0
+    verbose: int = 0,
 ) -> np.ndarray:
     """
     Chunked RLGC deconvolution with feathered blending.
@@ -535,7 +551,9 @@ def chunked_rlgc(
 
     # Full-frame path if tiling not needed
     if crop_yx >= image.shape[-2] and crop_yx >= image.shape[-1]:
-        output = rlgc_biggs_ba(image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image)))
+        output = rlgc_biggs_ba(
+            image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image))
+        )
 
     # Tiled deconvolution with feathered blending
     else:
@@ -549,17 +567,19 @@ def chunked_rlgc(
 
         if verbose >= 1:
             from rich.progress import track
-            iterator = track(enumerate(slices), description="Chunks", total=len(slices), transient=True)
+
+            iterator = track(
+                enumerate(slices),
+                description="Chunks",
+                total=len(slices),
+                transient=True,
+            )
         else:
             iterator = enumerate(slices)
 
         for _, (crop, source, destination) in iterator:
             crop_array = rlgc_biggs_ba(
-                crop,
-                psf,
-                gpu_id,
-                safe_mode=safe_mode,
-                init_value=init_value
+                crop, psf, gpu_id, safe_mode=safe_mode, init_value=init_value
             )
 
             # Resolve subtile edge status to decide feathering

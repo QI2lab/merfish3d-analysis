@@ -5,20 +5,23 @@ Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script to run on simulation.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
-import pandas as pd
 from pathlib import Path
-from scipy.spatial import cKDTree
+
 import numpy as np
-from numpy.typing import ArrayLike
+import pandas as pd
 import typer
+from numpy.typing import ArrayLike
+from scipy.spatial import cKDTree
+
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
 
 def calculate_F1_with_radius(
     qi2lab_coords: ArrayLike,
     qi2lab_gene_ids: ArrayLike,
     gt_coords: ArrayLike,
     gt_gene_ids: ArrayLike,
-    radius: float
+    radius: float,
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
     """
     Greedy closest-first matching within `radius`, with strict same-gene and one-to-one constraints.
@@ -37,27 +40,51 @@ def calculate_F1_with_radius(
     # Trivial cases
     if Nq == 0 and Ng == 0:
         return (
-            {"F1 Score": 1.0, "Precision": 1.0, "Recall": 1.0,
-             "True Positives": 0, "False Positives": 0, "False Negatives": 0},
-            np.empty((0, 3), float), np.empty((0, 3), float), np.empty((0, 3), float)
+            {
+                "F1 Score": 1.0,
+                "Precision": 1.0,
+                "Recall": 1.0,
+                "True Positives": 0,
+                "False Positives": 0,
+                "False Negatives": 0,
+            },
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
         )
     if Nq == 0:
         return (
-            {"F1 Score": 0.0, "Precision": 0.0, "Recall": 0.0 if Ng > 0 else 1.0,
-             "True Positives": 0, "False Positives": 0, "False Negatives": int(Ng)},
-            np.empty((0, 3), float), np.empty((0, 3), float), gt_coords.copy()
+            {
+                "F1 Score": 0.0,
+                "Precision": 0.0,
+                "Recall": 0.0 if Ng > 0 else 1.0,
+                "True Positives": 0,
+                "False Positives": 0,
+                "False Negatives": int(Ng),
+            },
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
+            gt_coords.copy(),
         )
     if Ng == 0:
         return (
-            {"F1 Score": 0.0, "Precision": 0.0, "Recall": 0.0,
-             "True Positives": 0, "False Positives": int(Nq), "False Negatives": 0},
-            np.empty((0, 3), float), qi2lab_coords.copy(), np.empty((0, 3), float)
+            {
+                "F1 Score": 0.0,
+                "Precision": 0.0,
+                "Recall": 0.0,
+                "True Positives": 0,
+                "False Positives": int(Nq),
+                "False Negatives": 0,
+            },
+            np.empty((0, 3), float),
+            qi2lab_coords.copy(),
+            np.empty((0, 3), float),
         )
 
     # Build candidate pairs within radius, per shared gene (strict same-gene pooling)
     pair_q_idx_all: list[np.ndarray] = []
     pair_g_idx_all: list[np.ndarray] = []
-    pair_dist_all:  list[np.ndarray] = []
+    pair_dist_all: list[np.ndarray] = []
 
     common_genes = np.intersect1d(np.unique(qi2lab_gene_ids), np.unique(gt_gene_ids))
     for gene in common_genes:
@@ -76,7 +103,9 @@ def calculate_F1_with_radius(
                 g_tree, max_distance=radius, output_type="coo_matrix"
             )
         except TypeError:  # SciPy<1.8 fallback
-            dist_coo = q_tree.sparse_distance_matrix(g_tree, max_distance=radius).tocoo()
+            dist_coo = q_tree.sparse_distance_matrix(
+                g_tree, max_distance=radius
+            ).tocoo()
 
         if dist_coo.nnz == 0:
             continue
@@ -96,7 +125,7 @@ def calculate_F1_with_radius(
     else:
         pair_q_idx = np.concatenate(pair_q_idx_all)
         pair_g_idx = np.concatenate(pair_g_idx_all)
-        pair_dist  = np.concatenate(pair_dist_all)
+        pair_dist = np.concatenate(pair_dist_all)
 
         # Sort by distance ascending; stable for deterministic ties
         order = np.argsort(pair_dist, kind="stable")
@@ -109,7 +138,7 @@ def calculate_F1_with_radius(
         matched_q = []
         matched_g = []
 
-        for qi, gi in zip(pair_q_idx, pair_g_idx):
+        for qi, gi in zip(pair_q_idx, pair_g_idx, strict=False):
             if q_used[qi] or g_used[gi]:
                 continue
             # This should always pass because pairs were built per gene; keep anyway:
@@ -137,8 +166,8 @@ def calculate_F1_with_radius(
     fp = int((~q_used).sum())
     fn = int((~g_used).sum())
     precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) else 0.0
-    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
     results = {
         "F1 Score": f1,
@@ -150,14 +179,13 @@ def calculate_F1_with_radius(
     }
     return results, tp_coords, fp_coords, fn_coords
 
+
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
+
 @app.command()
-def calculate_F1(
-    root_path: Path,
-    search_radius: float = 1.0
-):
+def calculate_F1(root_path: Path, search_radius: float = 1.0) -> None:
     """Calculate F1 using ground truth.
 
     Parameters
@@ -169,11 +197,11 @@ def calculate_F1(
     search_radius: float
         search radius for a sphere in microns. Should be 2-3x the z step,
         depending on the amount of low-pass blur applied.
-        
+
     Returns
     -------
     results: dict
-        dictionary of results for F1 score calculation 
+        dictionary of results for F1 score calculation
     """
 
     # initialize datastore
@@ -184,38 +212,40 @@ def calculate_F1(
     gt_path = root_path / Path("GT_spots.csv")
     gt_spots = pd.read_csv(gt_path)
     gene_ids = np.array(gene_ids)
-    image = datastore.load_local_corrected_image(tile=0, round=0,return_future=False)
-        
+    image = datastore.load_local_corrected_image(tile=0, round=0, return_future=False)
+
     # Extract coordinates and gene_ids from analyzed
-    qi2lab_coords = decoded_spots[['global_z', 'global_y', 'global_x']].to_numpy()
-    qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
- 
+    qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy()
+    qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
+
     # Extract coordinates and gene_ids from ground truth
-    gt_coords = gt_spots[['Z', 'X', 'Y']].to_numpy() # note the tranpose, simulation GT is swapped X & Y
+    gt_coords = gt_spots[
+        ["Z", "X", "Y"]
+    ].to_numpy()  # note the transpose, simulation GT is swapped X & Y
 
     # re-center the ground truth to start at (0,0) in (y,x)
     gt_coords_offset = [
-            0, 
-            (1.*image[0].shape[-2]/2)*datastore.voxel_size_zyx_um[1]-datastore.voxel_size_zyx_um[1]/2,
-            (1.*image[0].shape[-1]/2)*datastore.voxel_size_zyx_um[2]-datastore.voxel_size_zyx_um[2]/2,
-        ]
+        0,
+        (1.0 * image[0].shape[-2] / 2) * datastore.voxel_size_zyx_um[1]
+        - datastore.voxel_size_zyx_um[1] / 2,
+        (1.0 * image[0].shape[-1] / 2) * datastore.voxel_size_zyx_um[2]
+        - datastore.voxel_size_zyx_um[2] / 2,
+    ]
 
     gt_coords = gt_coords + gt_coords_offset
-    gt_gene_ids = gene_ids[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
-    
+    gt_gene_ids = gene_ids[(gt_spots["Gene_label"].to_numpy(dtype=int) - 1)]
+
     results, _, _, _ = calculate_F1_with_radius(
-        qi2lab_coords,
-        qi2lab_gene_ids,
-        gt_coords,
-        gt_gene_ids,
-        search_radius
+        qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, search_radius
     )
-    
+
     print("F1 Score Results:")
     print(results)
 
-def main():
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()

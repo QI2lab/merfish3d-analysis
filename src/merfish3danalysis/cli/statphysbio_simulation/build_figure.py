@@ -1,21 +1,23 @@
-import napari
-from tifffile import imread
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import napari
+import numpy as np
+import pandas as pd
+import typer
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
-import typer
+from tifffile import imread
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
+
 
 def calculate_F1_with_radius(
     qi2lab_coords: ArrayLike,
     qi2lab_gene_ids: ArrayLike,
     gt_coords: ArrayLike,
     gt_gene_ids: ArrayLike,
-    radius: float
+    radius: float,
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
     """
     Greedy closest-first matching within `radius`, with strict same-gene and one-to-one constraints.
@@ -34,27 +36,51 @@ def calculate_F1_with_radius(
     # Trivial cases
     if Nq == 0 and Ng == 0:
         return (
-            {"F1 Score": 1.0, "Precision": 1.0, "Recall": 1.0,
-             "True Positives": 0, "False Positives": 0, "False Negatives": 0},
-            np.empty((0, 3), float), np.empty((0, 3), float), np.empty((0, 3), float)
+            {
+                "F1 Score": 1.0,
+                "Precision": 1.0,
+                "Recall": 1.0,
+                "True Positives": 0,
+                "False Positives": 0,
+                "False Negatives": 0,
+            },
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
         )
     if Nq == 0:
         return (
-            {"F1 Score": 0.0, "Precision": 0.0, "Recall": 0.0 if Ng > 0 else 1.0,
-             "True Positives": 0, "False Positives": 0, "False Negatives": int(Ng)},
-            np.empty((0, 3), float), np.empty((0, 3), float), gt_coords.copy()
+            {
+                "F1 Score": 0.0,
+                "Precision": 0.0,
+                "Recall": 0.0 if Ng > 0 else 1.0,
+                "True Positives": 0,
+                "False Positives": 0,
+                "False Negatives": int(Ng),
+            },
+            np.empty((0, 3), float),
+            np.empty((0, 3), float),
+            gt_coords.copy(),
         )
     if Ng == 0:
         return (
-            {"F1 Score": 0.0, "Precision": 0.0, "Recall": 0.0,
-             "True Positives": 0, "False Positives": int(Nq), "False Negatives": 0},
-            np.empty((0, 3), float), qi2lab_coords.copy(), np.empty((0, 3), float)
+            {
+                "F1 Score": 0.0,
+                "Precision": 0.0,
+                "Recall": 0.0,
+                "True Positives": 0,
+                "False Positives": int(Nq),
+                "False Negatives": 0,
+            },
+            np.empty((0, 3), float),
+            qi2lab_coords.copy(),
+            np.empty((0, 3), float),
         )
 
     # Build candidate pairs within radius, per shared gene (strict same-gene pooling)
     pair_q_idx_all: list[np.ndarray] = []
     pair_g_idx_all: list[np.ndarray] = []
-    pair_dist_all:  list[np.ndarray] = []
+    pair_dist_all: list[np.ndarray] = []
 
     common_genes = np.intersect1d(np.unique(qi2lab_gene_ids), np.unique(gt_gene_ids))
     for gene in common_genes:
@@ -73,7 +99,9 @@ def calculate_F1_with_radius(
                 g_tree, max_distance=radius, output_type="coo_matrix"
             )
         except TypeError:  # SciPy<1.8 fallback
-            dist_coo = q_tree.sparse_distance_matrix(g_tree, max_distance=radius).tocoo()
+            dist_coo = q_tree.sparse_distance_matrix(
+                g_tree, max_distance=radius
+            ).tocoo()
 
         if dist_coo.nnz == 0:
             continue
@@ -93,7 +121,7 @@ def calculate_F1_with_radius(
     else:
         pair_q_idx = np.concatenate(pair_q_idx_all)
         pair_g_idx = np.concatenate(pair_g_idx_all)
-        pair_dist  = np.concatenate(pair_dist_all)
+        pair_dist = np.concatenate(pair_dist_all)
 
         # Sort by distance ascending; stable for deterministic ties
         order = np.argsort(pair_dist, kind="stable")
@@ -106,7 +134,7 @@ def calculate_F1_with_radius(
         matched_q = []
         matched_g = []
 
-        for qi, gi in zip(pair_q_idx, pair_g_idx):
+        for qi, gi in zip(pair_q_idx, pair_g_idx, strict=False):
             if q_used[qi] or g_used[gi]:
                 continue
             # This should always pass because pairs were built per gene; keep anyway:
@@ -134,8 +162,8 @@ def calculate_F1_with_radius(
     fp = int((~q_used).sum())
     fn = int((~g_used).sum())
     precision = tp / (tp + fp) if (tp + fp) else 0.0
-    recall    = tp / (tp + fn) if (tp + fn) else 0.0
-    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
     results = {
         "F1 Score": f1,
@@ -149,9 +177,9 @@ def calculate_F1_with_radius(
 
 
 @app.command()
-def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells"):
+def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> None:
     """Build figure for different z spacings.
-    
+
     Parameters
     ----------
     root_path: Path
@@ -168,79 +196,98 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells"):
     points = []
     f1 = []
     for z in z_spacings:
-        temp = imread(top_path / Path(str(z)) / Path("sim_acquisition") / Path("data_r0001_tile0000_1") / Path("data_r0001_tile0000.tif"))
+        temp = imread(
+            top_path
+            / Path(str(z))
+            / Path("sim_acquisition")
+            / Path("data_r0001_tile0000_1")
+            / Path("data_r0001_tile0000.tif")
+        )
         metadata = pd.read_csv(top_path / Path(str(z)) / Path("scan_metadata.csv"))
         print(float(metadata["axial_step_size [micron]"]))
         print(float(metadata["pixel_size [micron]"]))
-        if not(z == "0.315"):
+        if z == "0.315":
+            image_0315_voxel = np.array(
+                [
+                    float(metadata["axial_step_size [micron]"]),
+                    float(metadata["pixel_size [micron]"]),
+                    float(metadata["pixel_size [micron]"]),
+                ]
+            )
+            images.append(temp)
+        else:
             temp_filled = np.zeros_like(images[0])
             if z == "1.0":
-                image_10_voxel = np.array([
-                    float(metadata["axial_step_size [micron]"]), 
-                    float(metadata["pixel_size [micron]"]), 
-                    float(metadata["pixel_size [micron]"])
-                ])
+                image_10_voxel = np.array(
+                    [
+                        float(metadata["axial_step_size [micron]"]),
+                        float(metadata["pixel_size [micron]"]),
+                        float(metadata["pixel_size [micron]"]),
+                    ]
+                )
                 for z_idx in range(temp.shape[1]):
-                    temp_filled[:, int(np.floor(z_idx*image_10_voxel[0]/image_0315_voxel[0])),:,:] = temp[:,z_idx,:,:]
+                    temp_filled[
+                        :,
+                        int(np.floor(z_idx * image_10_voxel[0] / image_0315_voxel[0])),
+                        :,
+                        :,
+                    ] = temp[:, z_idx, :, :]
             elif z == "1.5":
-                image_15_voxel = np.array([
-                    float(metadata["axial_step_size [micron]"]), 
-                    float(metadata["pixel_size [micron]"]), 
-                    float(metadata["pixel_size [micron]"])
-                ])
+                image_15_voxel = np.array(
+                    [
+                        float(metadata["axial_step_size [micron]"]),
+                        float(metadata["pixel_size [micron]"]),
+                        float(metadata["pixel_size [micron]"]),
+                    ]
+                )
                 for z_idx in range(temp.shape[1]):
-                    temp_filled[:, int(np.floor(z_idx*image_15_voxel[0]/image_0315_voxel[0])),:,:] = temp[:,z_idx,:,:]
+                    temp_filled[
+                        :,
+                        int(np.floor(z_idx * image_15_voxel[0] / image_0315_voxel[0])),
+                        :,
+                        :,
+                    ] = temp[:, z_idx, :, :]
             images.append(temp_filled)
-        else:
-            image_0315_voxel = np.array([
-                float(metadata["axial_step_size [micron]"]), 
-                float(metadata["pixel_size [micron]"]), 
-                float(metadata["pixel_size [micron]"])
-            ])
-            images.append(temp)
 
         gt_spots = pd.read_csv(top_path / Path(str(z)) / Path("GT_spots.csv"))
         codebook = pd.read_csv(top_path / Path(str(z)) / Path("codebook.csv"))
-        codebook_genes = codebook['gene_id'].to_numpy()
-        
-        decoded_spots = pd.read_parquet(top_path / Path(str(z)) / Path("sim_acquisition") / Path("qi2labdatastore") / Path("all_tiles_filtered_decoded_features") / Path("decoded_features.parquet"))
-        qi2lab_coords = decoded_spots[['global_z', 'global_y', 'global_x']].to_numpy()
-        qi2lab_gene_ids = decoded_spots['gene_id'].to_numpy()
-        gt_coords = gt_spots[['Z','X','Y']].to_numpy()
-        gt_gene_ids = codebook_genes[(gt_spots['Gene_label'].to_numpy(dtype=int)-1)]
+        codebook_genes = codebook["gene_id"].to_numpy()
+
+        decoded_spots = pd.read_parquet(
+            top_path
+            / Path(str(z))
+            / Path("sim_acquisition")
+            / Path("qi2labdatastore")
+            / Path("all_tiles_filtered_decoded_features")
+            / Path("decoded_features.parquet")
+        )
+        qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy()
+        qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
+        gt_coords = gt_spots[["Z", "X", "Y"]].to_numpy()
+        gt_gene_ids = codebook_genes[(gt_spots["Gene_label"].to_numpy(dtype=int) - 1)]
         gt_coords_offset = [
-            0, 
-            (1.*images[0].shape[-2]/2)*image_0315_voxel[1]-image_0315_voxel[1]/2,
-            (1.*images[0].shape[-1]/2)*image_0315_voxel[2]-image_0315_voxel[2]/2,
+            0,
+            (1.0 * images[0].shape[-2] / 2) * image_0315_voxel[1]
+            - image_0315_voxel[1] / 2,
+            (1.0 * images[0].shape[-1] / 2) * image_0315_voxel[2]
+            - image_0315_voxel[2] / 2,
         ]
 
         gt_coords = gt_coords + gt_coords_offset
 
         if z == "0.315":
             z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords,
-                qi2lab_gene_ids,
-                gt_coords,
-                gt_gene_ids,
-                1.0
+                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
             )
 
         elif z == "1.0":
             z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords,
-                qi2lab_gene_ids,
-                gt_coords,
-                gt_gene_ids,
-                1.0
+                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
             )
 
         elif z == "1.5":
             z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords,
-                qi2lab_gene_ids,
-                gt_coords,
-                gt_gene_ids,
-                1.0
+                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
             )
 
         # Build one points array + one categorical status property
@@ -276,35 +323,121 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells"):
 
     viewer = napari.Viewer()
 
-    layer6 = viewer.add_points(points[2][:, [0, 2]], name="1.5 RNA XZ", scale=[1,1], size=.75, properties={"status": status[2]}, face_color="status")
+    layer6 = viewer.add_points(
+        points[2][:, [0, 2]],
+        name="1.5 RNA XZ",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[2]},
+        face_color="status",
+    )
     layer6.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
-    layer5 = viewer.add_points(points[1][:, [0, 2]], name="1.0 RNA XZ", scale=[1,1], size=.75, properties={"status": status[1]}, face_color="status")
+    layer5 = viewer.add_points(
+        points[1][:, [0, 2]],
+        name="1.0 RNA XZ",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[1]},
+        face_color="status",
+    )
     layer5.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
-    layer4 = viewer.add_points(points[0][:, [0, 2]], name=".315 RNA XZ", scale=[1,1], size=.75, properties={"status": status[0]}, face_color="status")
+    layer4 = viewer.add_points(
+        points[0][:, [0, 2]],
+        name=".315 RNA XZ",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[0]},
+        face_color="status",
+    )
     layer4.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
 
-    viewer.add_image(np.squeeze(np.max(np.swapaxes(images[2],1,2),axis=1)), name="1.5 bit 1 XZ", scale=[image_0315_voxel[0],image_0315_voxel[1]], colormap='gray', blending='additive', contrast_limits=[0,4000])
-    viewer.add_image(np.squeeze(np.max(np.swapaxes(images[1],1,2),axis=1)), name="1.0 bit 1 XZ", scale=[image_0315_voxel[0],image_0315_voxel[1]], colormap='gray', blending='additive', contrast_limits=[0,4000])
-    viewer.add_image(np.squeeze(np.max(np.swapaxes(images[0],1,2),axis=1)), name="0.315 bit 1 XZ", scale=[image_0315_voxel[0],image_0315_voxel[1]], colormap='gray', blending='additive', contrast_limits=[0,4000])
+    viewer.add_image(
+        np.squeeze(np.max(np.swapaxes(images[2], 1, 2), axis=1)),
+        name="1.5 bit 1 XZ",
+        scale=[image_0315_voxel[0], image_0315_voxel[1]],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
+    viewer.add_image(
+        np.squeeze(np.max(np.swapaxes(images[1], 1, 2), axis=1)),
+        name="1.0 bit 1 XZ",
+        scale=[image_0315_voxel[0], image_0315_voxel[1]],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
+    viewer.add_image(
+        np.squeeze(np.max(np.swapaxes(images[0], 1, 2), axis=1)),
+        name="0.315 bit 1 XZ",
+        scale=[image_0315_voxel[0], image_0315_voxel[1]],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
 
-    layer3 = viewer.add_points(points[2][:, [1, 2]], name="1.5 RNA XY", scale=[1,1], size=.75, properties={"status": status[2]}, face_color="status")
+    layer3 = viewer.add_points(
+        points[2][:, [1, 2]],
+        name="1.5 RNA XY",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[2]},
+        face_color="status",
+    )
     layer3.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
-    layer2 = viewer.add_points(points[1][:, [1, 2]], name="1.0 RNA XY", scale=[1,1], size=.75, properties={"status": status[1]}, face_color="status")
+    layer2 = viewer.add_points(
+        points[1][:, [1, 2]],
+        name="1.0 RNA XY",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[1]},
+        face_color="status",
+    )
     layer2.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
-    layer1 = viewer.add_points(points[0][:, [1, 2]], name=".315 RNA XY", scale=[1,1], size=.75, properties={"status": status[0]}, face_color="status")
+    layer1 = viewer.add_points(
+        points[0][:, [1, 2]],
+        name=".315 RNA XY",
+        scale=[1, 1],
+        size=0.75,
+        properties={"status": status[0]},
+        face_color="status",
+    )
     layer1.face_color_cycle = {"TP": "gray", "FP": "cyan", "FN": "orange"}
 
-    viewer.add_image(np.max(images[2],axis=1), name="1.5 bit 1 XY", scale=image_0315_voxel[1:], colormap='gray', blending='additive', contrast_limits=[0,4000])
-    viewer.add_image(np.max(images[1],axis=1), name="1.0 bit 1 XY", scale=image_0315_voxel[1:], colormap='gray', blending='additive', contrast_limits=[0,4000])
-    viewer.add_image(np.max(images[0],axis=1), name="0.315 bit 1 XY", scale=image_0315_voxel[1:], colormap='gray', blending='additive', contrast_limits=[0,4000])
+    viewer.add_image(
+        np.max(images[2], axis=1),
+        name="1.5 bit 1 XY",
+        scale=image_0315_voxel[1:],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
+    viewer.add_image(
+        np.max(images[1], axis=1),
+        name="1.0 bit 1 XY",
+        scale=image_0315_voxel[1:],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
+    viewer.add_image(
+        np.max(images[0], axis=1),
+        name="0.315 bit 1 XY",
+        scale=image_0315_voxel[1:],
+        colormap="gray",
+        blending="additive",
+        contrast_limits=[0, 4000],
+    )
 
-    viewer.scale_bar.unit = 'um'
+    viewer.scale_bar.unit = "um"
     viewer.scale_bar.visible = True
 
     napari.run()
 
-def main():
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()

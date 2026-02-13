@@ -5,24 +5,27 @@ Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script to run on simulation.
 """
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.PixelDecoder import PixelDecoder
 from pathlib import Path
+
 import typer
+
+from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
+
 
 @app.command()
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
-    distance_threshold: float = .5176,
+    distance_threshold: float = 0.5176,
     ufish_threshold: float = 0.2,
-    magnitude_threshold: tuple[float,float]  =[0.9, 10.0],
-    fdr_target: float = .05,
+    magnitude_threshold: tuple[float, float] = [0.9, 10.0],
+    fdr_target: float = 0.05,
     smFISH: bool = False,
-):
+) -> None:
     """Perform pixel decoding.
 
     Parameters
@@ -47,14 +50,14 @@ def decode_pixels(
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     merfish_bits = datastore.num_bits
-    
+
     # initialize decodor class
     decoder = PixelDecoder(
-        datastore=datastore, 
-        use_mask=False, 
-        merfish_bits=merfish_bits, 
+        datastore=datastore,
+        use_mask=False,
+        merfish_bits=merfish_bits,
         verbose=1,
-        smFISH=smFISH
+        smFISH=smFISH,
     )
     if smFISH:
         distance_threshold = 1.0
@@ -68,7 +71,7 @@ def decode_pixels(
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold,
     )
-    
+
     decoder.decode_all_tiles(
         assign_to_cells=False,
         prep_for_baysor=False,
@@ -76,11 +79,13 @@ def decode_pixels(
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         ufish_threshold=ufish_threshold,
-        fdr_target=fdr_target
+        fdr_target=fdr_target,
     )
-    
-def main():
+
+
+def main() -> None:
     app()
+
 
 if __name__ == "__main__":
     main()
