@@ -213,7 +213,7 @@ datastore.datastore_state = datastore_state
           └── <spacing_zyx_um> (voxel size used during global registration, this must match <voxel_size_zyx_um>; unit: microns)
         ├── camera_data/ (gain and offset corrected data in zyx order)
         ├── corrected_data/ (gain and offset corrected data in zyx order)
-        ├── of_xyz_3x_downsample/ (3x downsampled optical flow field for round 0 alginment in pixels)
+        ├── of_xyz_3x_downsample/ (3x downsampled optical flow field for round 0 alignment in pixels)
         ├── registered_decon_data/ (deconvolved, registered back to round 0 image data in zyx order)
         ├── ... 
         └── roundNNNN.zarr/

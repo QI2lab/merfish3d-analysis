@@ -10,7 +10,7 @@ If you would like to try out `merfish3d-analysis` without installing, there is a
 
 ## Preliminaries
 
-You need to make sure you have a working python enviornment with `merfish3d-analysis` properly installed and the synthetic dataset downloaded. The dataset is ~1 GB and you will need roughly another 1 GB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, pixel decoding, filtering, and cell assignment.
+You need to make sure you have a working python environment with `merfish3d-analysis` properly installed and the synthetic dataset downloaded. The dataset is ~1 GB and you will need roughly another 1 GB of temporary space to create the `qi2labDataStore` structure we use to perform tile registration, pixel decoding, filtering, and cell assignment.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [simulation data](https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1)
@@ -88,9 +88,9 @@ conda run -n merfish3d --live-stream bash -lc "sim-decode /path/to/simulation/ex
 conda run -n merfish3d --live-stream bash -lc "sim-f1score /path/to/simulation/example_16bit_cells/0.315"
 ```
 
-## Ensuring a sucessful run
+## Ensuring a successful run
 
-If the runs are succesful, you should have F1 scores that match the following values:
+If the runs are successful, you should have F1 scores that match the following values:
 
 | Simulation Type | Axial Spacing (µm) | Precision | Recall | F1 score |
 | --------------- | ------------------ | --------- | ------ | -------- |
