@@ -1357,8 +1357,9 @@ class PixelDecoder:
 
             # barcode_id is 1-based, matches old code
             df_barcode["barcode_id"] = df_barcode["decoded_id"].astype(np.int32) + 1
-            df_barcode["gene_id"] = self._gene_ids[
-                df_barcode["decoded_id"].to_numpy(dtype=np.int32)
+            df_barcode["gene_id"] = [
+                self._gene_ids[x]
+                for x in df_barcode["decoded_id"].to_numpy(dtype=np.int32)
             ]
             df_barcode["tile_idx"] = self._tile_idx
 
