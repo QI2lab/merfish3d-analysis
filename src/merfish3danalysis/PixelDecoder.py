@@ -1461,7 +1461,7 @@ class PixelDecoder:
             df_barcode["signal_mean"] = signal_sum / float(n_on)
             df_barcode["bkd_mean"] = (total_sum - signal_sum) / denom
             df_barcode["s-b_mean"] = df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-            df_barcode = df_barcode.drop(columns=["label"])
+            df_barcode = df_barcode.drop(columns=["label", "decoded_id"])
 
             if self._df_barcodes.empty:
                 self._df_barcodes = df_barcode.copy()
@@ -1856,7 +1856,7 @@ class PixelDecoder:
             ]
 
         df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"]][columns]
-        df_false = self._df_barcodes_loaded[not self._df_barcodes_loaded["X"]][columns]
+        df_false = self._df_barcodes_loaded[~self._df_barcodes_loaded["X"]][columns]
         if len(df_false) > 1:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
