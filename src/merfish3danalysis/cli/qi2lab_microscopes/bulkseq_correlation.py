@@ -14,6 +14,7 @@
 # - file1a/file1b: .txt / .csv / .parquet (only the specified gene column is used; counts = occurrences)
 # - file2: .txt (contains gene + FPKM)
 # - Optional: filter file1a/file1b rows to keep only those with cell_id > 0
+#
 
 from pathlib import Path
 
@@ -29,7 +30,7 @@ def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
     p = Path(path)
     if not p.exists():
         typer.secho(f"ERROR: file1 not found: {p}", fg=typer.colors.RED)
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
     ext = p.suffix.lower()
     try:
         if ext == ".parquet":
@@ -41,18 +42,13 @@ def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
                 df = pd.read_csv(p, sep=sep_override)
             else:
                 df = pd.read_csv(p, sep=None, engine="python")  # sniff
-        else:
-            typer.secho(
-                f"ERROR: file1 must be .txt, .csv, or .parquet (got {ext}).",
-                fg=typer.colors.RED,
-            )
-            raise typer.Exit(code=2)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         typer.secho(
-            f"ERROR: failed to read file1 ({p}): {e}",
+            f"...{e}...",
             fg=typer.colors.RED,
+            err=True,
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
     return df
 
 
@@ -71,12 +67,13 @@ def _load_file2_txt(path: str, sep_override: str) -> pd.DataFrame:
         if sep_override:
             return pd.read_csv(p, sep=sep_override)
         return pd.read_csv(p, sep=None, engine="python")  # sniff
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         typer.secho(
             f"ERROR: failed to read file2 ({p}): {e}",
             fg=typer.colors.RED,
         )
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
+
 
 def _drop_gene_prefixes(s: pd.Series, prefixes: list[str]) -> pd.Series:
     """
@@ -92,6 +89,7 @@ def _drop_gene_prefixes(s: pd.Series, prefixes: list[str]) -> pd.Series:
     mask = ~s.str.upper().str.startswith(prefixes_upper)
     # Keep non-matching entries; turn matches into NaN
     return s.where(mask)
+
 
 def _strip_trailing_dash_number(s: pd.Series) -> pd.Series:
     """
@@ -160,12 +158,7 @@ def _counts_vs_fpkm(
             raise typer.Exit(code=2)
 
     # ---- File1 normalization & counting ----
-    genes1 = (
-        df1_work[gene_col1]
-        .dropna()
-        .astype(str)
-        .pipe(_strip_trailing_dash_number)
-    )
+    genes1 = df1_work[gene_col1].dropna().astype(str).pipe(_strip_trailing_dash_number)
 
     # Drop genes starting with any of the requested prefixes
     genes1 = _drop_gene_prefixes(genes1, drop_prefix)
@@ -176,21 +169,13 @@ def _counts_vs_fpkm(
     # Ignore "Blank" (after normalization)
     genes1 = genes1[genes1.str.upper() != "BLANK"]
 
-    counts_df = (
-        genes1.value_counts()
-        .rename_axis("gene_id")
-        .reset_index(name="count")
-    )
+    counts_df = genes1.value_counts().rename_axis("gene_id").reset_index(name="count")
     counts_df["count"] = counts_df["count"].astype("int64")
     print(genes1)
 
     # ---- File2 normalization & FPKM aggregation ----
     df2 = df2.copy()
-    df2[gene_col2] = (
-        df2[gene_col2]
-        .astype(str)
-        .pipe(_strip_trailing_dash_number)
-    )
+    df2[gene_col2] = df2[gene_col2].astype(str).pipe(_strip_trailing_dash_number)
 
     # Apply prefix dropping (creates NaNs for dropped genes)
     df2[gene_col2] = _drop_gene_prefixes(df2[gene_col2], drop_prefix)
@@ -241,7 +226,7 @@ def _pearson_loglog_x_fpkm_y_counts(merged: pd.DataFrame) -> float:
 @app.command(
     help=(
         "One or two file1 inputs vs one file2: FPKM on X, counts on Y; "
-        "filter by FPKM and optional cell_id>0; no trend lines; 2× styling; only r."
+        "filter by FPKM and optional cell_id>0; no trend lines; 2x styling; only r."
     ),
 )
 def main(
@@ -318,13 +303,13 @@ def main(
             "(used only if --file1b and --only-cell-id-positive)."
         ),
     ),
-    drop_prefix: list[str] = typer.Option(
+    drop_prefix: list[str] = typer.Option(  # noqa: B008
         [],
         "--drop-prefix",
         help="Remove any genes whose name begins with this prefix (case-insensitive). "
-            "May be passed multiple times. Applied after normalization.",
-    )
-):
+        "May be passed multiple times. Applied after normalization.",
+    ),
+) -> None:
     # Validate second dataset arguments
     if file1b is not None and gene_col1b is None:
         typer.secho(
@@ -351,12 +336,12 @@ def main(
         only_cell_id_positive,
         cellid_col1a,
         "file1a",
-        drop_prefix
+        drop_prefix,
     )
 
     merged_b: pd.DataFrame | None = None
     if df1b is not None and gene_col1b is not None:
-        merged_b, unmatched_b = _counts_vs_fpkm(
+        merged_b, _unmatched_b = _counts_vs_fpkm(
             df1b,
             df2,
             gene_col1b,
@@ -398,7 +383,7 @@ def main(
     labelA = "merfish3d"
     labelB = "merlin"
 
-    # ---- Styling: ~2× bigger everything ----
+    # ---- Styling: ~2x bigger everything ----
     scale = 2.0
     base_font = 12.0
     plt.rcParams.update(
@@ -483,7 +468,7 @@ def main(
         )
 
     # Legend only if we actually have labels
-    handles, labels = ax.get_legend_handles_labels()
+    _handles, labels = ax.get_legend_handles_labels()
     if any(labels):
         ax.legend(frameon=False, loc="center left", bbox_to_anchor=(1.02, 0.5))
 
