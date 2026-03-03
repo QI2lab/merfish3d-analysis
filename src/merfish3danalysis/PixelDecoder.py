@@ -1750,9 +1750,33 @@ class PixelDecoder:
         from sklearn.neural_network import MLPClassifier
         from sklearn.preprocessing import StandardScaler
 
-        self._df_barcodes_loaded["X"] = ~self._df_barcodes_loaded[
+        # Discard smFISH barcodes
+        smFISH_barcode_count = np.sum(
+            [
+                len(np.where(self._codebook_matrix[x])[0]) == 1
+                for x in range(self._codebook_matrix.shape[0])
+            ]
+        )
+        print(f"smFISH_barcode_count {smFISH_barcode_count}")
+        mask_smFISH_barcodes = np.array(
+            [
+                len(np.where(self._codebook_matrix[x])[0]) == 1
+                for x in range(self._codebook_matrix.shape[0])
+            ]
+        )
+        smFISH_barcodes = np.array(self._gene_ids)[mask_smFISH_barcodes]
+        self._df_barcodes_loaded["is_smFISH"] = self._df_barcodes_loaded[
             "gene_id"
-        ].str.startswith("Blank")
+        ].isin(smFISH_barcodes)
+        df_barcodes_to_filter = self._df_barcodes_loaded[
+            ~self._df_barcodes_loaded["is_smFISH"]
+        ].copy()
+        df_smFISH_barcodes = self._df_barcodes_loaded[
+            self._df_barcodes_loaded["is_smFISH"]
+        ].copy()
+        df_barcodes_to_filter["X"] = ~df_barcodes_to_filter["gene_id"].str.startswith(
+            "Blank"
+        )
         if self._is_3D:
             columns = [
                 "X",
@@ -1774,12 +1798,8 @@ class PixelDecoder:
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
             ]
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == True][  # noqa
-            columns
-        ]
-        df_false = self._df_barcodes_loaded[self._df_barcodes_loaded["X"] == False][  # noqa
-            columns
-        ]
+        df_true = df_barcodes_to_filter[df_barcodes_to_filter["X"]][columns]
+        df_false = df_barcodes_to_filter[(~df_barcodes_to_filter["X"])][columns]
 
         if len(df_false) > 0:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
@@ -1814,8 +1834,8 @@ class PixelDecoder:
             if self._verbose > 1:
                 print("predicting on full data")
 
-            full_data_scaled = scaler.transform(self._df_barcodes_loaded[columns[1:]])
-            self._df_barcodes_loaded["predicted_probability"] = mlp.predict_proba(
+            full_data_scaled = scaler.transform(df_barcodes_to_filter[columns[1:]])
+            df_barcodes_to_filter["predicted_probability"] = mlp.predict_proba(
                 full_data_scaled
             )[:, 1]
 
@@ -1825,10 +1845,10 @@ class PixelDecoder:
             coarse_threshold = 0
             for threshold in np.arange(0, 1, 0.1):  # Coarse step: 0.1
                 fdr = self.calculate_fdr(
-                    self._df_barcodes_loaded,
+                    df_barcodes_to_filter,
                     threshold,
                     self._blank_count,
-                    self._barcode_count,
+                    self._barcode_count - smFISH_barcode_count,
                     self._verbose,
                 )
                 if fdr <= fdr_target:
@@ -1840,29 +1860,34 @@ class PixelDecoder:
                 coarse_threshold - 0.1, coarse_threshold + 0.1, 0.01
             ):
                 fdr = self.calculate_fdr(
-                    self._df_barcodes_loaded,
+                    df_barcodes_to_filter,
                     threshold,
                     self._blank_count,
-                    self._barcode_count,
+                    self._barcode_count - smFISH_barcode_count,
                     self._verbose,
                 )
                 if fdr <= fdr_target:
                     fine_threshold = threshold
                     break
 
-            df_above_threshold = self._df_barcodes_loaded[
-                self._df_barcodes_loaded["predicted_probability"] > fine_threshold
+            df_above_threshold = df_barcodes_to_filter[
+                df_barcodes_to_filter["predicted_probability"] > fine_threshold
             ]
-            self._df_filtered_barcodes = df_above_threshold[
+            columns_filtered = [
+                "tile_idx",
+                "gene_id",
+                "global_z",
+                "global_y",
+                "global_x",
+                "distance_mean",
+            ]
+            self._df_filtered_barcodes = pd.concat(
                 [
-                    "tile_idx",
-                    "gene_id",
-                    "global_z",
-                    "global_y",
-                    "global_x",
-                    "distance_mean",
-                ]
-            ].copy()
+                    df_above_threshold[columns_filtered],
+                    df_smFISH_barcodes[columns_filtered],
+                ],
+                ignore_index=True,
+            )
             self._df_filtered_barcodes["cell_id"] = -1
             self._barcodes_filtered = True
 
@@ -1886,7 +1911,6 @@ class PixelDecoder:
         else:
             self._df_filtered_barcodes = self._df_barcodes_loaded.copy()
             self._df_filtered_barcodes["cell_id"] = -1
-            self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
 
     def _filter_all_barcodes_LR(self, fdr_target: float = 0.05) -> None:
@@ -1906,9 +1930,33 @@ class PixelDecoder:
         from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
 
-        self._df_barcodes_loaded["X"] = ~self._df_barcodes_loaded[
+        # Discard smFISH barcodes
+        smFISH_barcode_count = np.sum(
+            [
+                len(np.where(self._codebook_matrix[x])[0]) == 1
+                for x in range(self._codebook_matrix.shape[0])
+            ]
+        )
+        print(f"smFISH_barcode_count {smFISH_barcode_count}")
+        mask_smFISH_barcodes = np.array(
+            [
+                len(np.where(self._codebook_matrix[x])[0]) == 1
+                for x in range(self._codebook_matrix.shape[0])
+            ]
+        )
+        smFISH_barcodes = np.array(self._gene_ids)[mask_smFISH_barcodes]
+        self._df_barcodes_loaded["is_smFISH"] = self._df_barcodes_loaded[
             "gene_id"
-        ].str.startswith("Blank")
+        ].isin(smFISH_barcodes)
+        df_barcodes_to_filter = self._df_barcodes_loaded[
+            ~self._df_barcodes_loaded["is_smFISH"]
+        ].copy()
+        df_smFISH_barcodes = self._df_barcodes_loaded[
+            self._df_barcodes_loaded["is_smFISH"]
+        ].copy()
+        df_barcodes_to_filter["X"] = ~df_barcodes_to_filter["gene_id"].str.startswith(
+            "Blank"
+        )
 
         if self._is_3D:
             columns = [
@@ -1933,9 +1981,8 @@ class PixelDecoder:
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
             ]
-
-        df_true = self._df_barcodes_loaded[self._df_barcodes_loaded["X"]][columns]
-        df_false = self._df_barcodes_loaded[not self._df_barcodes_loaded["X"]][columns]
+        df_true = df_barcodes_to_filter[df_barcodes_to_filter["X"]][columns]
+        df_false = df_barcodes_to_filter[~df_barcodes_to_filter["X"]][columns]
         if len(df_false) > 1:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
@@ -1970,8 +2017,8 @@ class PixelDecoder:
             if self._verbose > 1:
                 print("predicting on full data")
 
-            full_data_scaled = scaler.transform(self._df_barcodes_loaded[columns[1:]])
-            self._df_barcodes_loaded["predicted_probability"] = logistic.predict_proba(
+            full_data_scaled = scaler.transform(df_barcodes_to_filter[columns[1:]])
+            df_barcodes_to_filter["predicted_probability"] = logistic.predict_proba(
                 full_data_scaled
             )[:, 1]
 
@@ -1981,10 +2028,10 @@ class PixelDecoder:
             coarse_threshold = 0
             for threshold in np.arange(0, 1, 0.1):
                 fdr = self.calculate_fdr(
-                    self._df_barcodes_loaded,
+                    df_barcodes_to_filter,
                     threshold,
                     self._blank_count,
-                    self._barcode_count,
+                    self._barcode_count - smFISH_barcode_count,
                     self._verbose,
                 )
                 if fdr <= fdr_target:
@@ -1996,29 +2043,34 @@ class PixelDecoder:
                 coarse_threshold - 0.1, coarse_threshold + 0.1, 0.01
             ):
                 fdr = self.calculate_fdr(
-                    self._df_barcodes_loaded,
+                    df_barcodes_to_filter,
                     threshold,
                     self._blank_count,
-                    self._barcode_count,
+                    self._barcode_count - smFISH_barcode_count,
                     self._verbose,
                 )
                 if fdr <= fdr_target:
                     fine_threshold = threshold
                     break
 
-            df_above_threshold = self._df_barcodes_loaded[
-                self._df_barcodes_loaded["predicted_probability"] > fine_threshold
+            df_above_threshold = df_barcodes_to_filter[
+                df_barcodes_to_filter["predicted_probability"] > fine_threshold
             ]
-            self._df_filtered_barcodes = df_above_threshold[
+            columns_filtered = [
+                "tile_idx",
+                "gene_id",
+                "global_z",
+                "global_y",
+                "global_x",
+                "distance_mean",
+            ]
+            self._df_filtered_barcodes = pd.concat(
                 [
-                    "tile_idx",
-                    "gene_id",
-                    "global_z",
-                    "global_y",
-                    "global_x",
-                    "distance_mean",
-                ]
-            ].copy()
+                    df_above_threshold[columns_filtered],
+                    df_smFISH_barcodes[columns_filtered],
+                ],
+                ignore_index=True,
+            )
             self._df_filtered_barcodes["cell_id"] = -1
             self._barcodes_filtered = True
 
@@ -2042,7 +2094,6 @@ class PixelDecoder:
         else:
             self._df_filtered_barcodes = self._df_barcodes_loaded.copy()
             self._df_filtered_barcodes["cell_id"] = -1
-            self._df_filtered_barcodes.drop("X", axis=1, inplace=True)
             self._barcodes_filtered = True
             if self._verbose >= 1:
                 print("Insufficient Blank barcodes called for filtering.")
@@ -2660,6 +2711,8 @@ class PixelDecoder:
         # load all barcodes and filter
         self._load_tile_decoding = True
         self._load_all_barcodes()
+        if self._verbose >= 1:
+            print(f"Number of loaded barcodes: {len(self._df_barcodes_loaded)}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
             radius_z = self._datastore.voxel_size_zyx_um[0]
@@ -2698,11 +2751,13 @@ class PixelDecoder:
 
         self._load_tile_decoding = True
         self._load_all_barcodes()
+        if self._verbose >= 1:
+            print(f"Number of loaded barcodes: {len(self._df_barcodes_loaded)}")
         self._load_tile_decoding = False
         all_tiles = list(range(len(self._datastore.tile_ids)))
         if not (self._verbose == 0):
             self._verbose = 2
-        self._filter_all_barcodes(fdr_target=fdr_target)
+        self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
                 radius_z = self._datastore.voxel_size_zyx_um[0] * 2
@@ -2716,6 +2771,8 @@ class PixelDecoder:
         if assign_to_cells:
             self._assign_cells()
         self._save_barcodes()
+        if self._verbose >= 1:
+            print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
         if prep_for_baysor:
             self._reformat_barcodes_for_baysor()
 
