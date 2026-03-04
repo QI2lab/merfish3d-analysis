@@ -72,7 +72,7 @@ From the overlap area, it appears that the `xy` order interpretation (on the rig
   </a>
 </div>
 
-The check with the first tissue slice on the slide confirms that we need to interpret the stage positions in `xy` order, while we know Python intreprets the data in the tif files as `yx` order. To account for this and correctly register the data, we have to swap the xy axes. This can be accomplished by swapping the last two axes of the tif,
+The check with the first tissue slice on the slide confirms that we need to interpret the stage positions in `xy` order, while we know Python interprets the data in the tif files as `yx` order. To account for this and correctly register the data, we have to swap the xy axes. This can be accomplished by swapping the last two axes of the tif,
 
 ```python
 flipped_image = np.swapaxes(raw_image,axes=(-2,-1))
