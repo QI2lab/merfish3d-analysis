@@ -85,7 +85,8 @@ dev = [
     "pytest-mock",
     "ruff", 
     "ty",
-    "pre-commit"
+    "pre-commit",
+    "pyinstrument"
 ]
 docs = [
     "mkdocs",
