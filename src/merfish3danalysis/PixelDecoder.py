@@ -401,8 +401,10 @@ class PixelDecoder:
                     decon_image = self._datastore.load_local_registered_image(
                         tile=tile_id, bit=bit_id, return_future=False
                     )
-                    spot_detector_image = self._datastore.load_local_spot_detector_image(
-                        tile=tile_id, bit=bit_id, return_future=False
+                    spot_detector_image = (
+                        self._datastore.load_local_spot_detector_image(
+                            tile=tile_id, bit=bit_id, return_future=False
+                        )
                     )
 
                     current_image = cp.where(
@@ -727,7 +729,9 @@ class PixelDecoder:
 
             if self._z_crop:
                 current_mask = np.asarray(
-                    spot_detector_image[self._z_range[0] : self._z_range[1], :].result(),
+                    spot_detector_image[
+                        self._z_range[0] : self._z_range[1], :
+                    ].result(),
                     dtype=np.float32,
                 )
                 images.append(
@@ -743,7 +747,9 @@ class PixelDecoder:
                     )
                 )
             else:
-                current_mask = np.asarray(spot_detector_image.result(), dtype=np.float32)
+                current_mask = np.asarray(
+                    spot_detector_image.result(), dtype=np.float32
+                )
                 images.append(
                     np.where(
                         current_mask > spot_detector_threshold,

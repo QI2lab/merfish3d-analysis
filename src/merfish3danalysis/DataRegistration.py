@@ -82,7 +82,9 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         deconvolution=True,
         round=dr._round_ids[0],
     )
-    print(time_stamp(), f"Finished fiducial tile id: {dr._tile_id}; round id: round001.")
+    print(
+        time_stamp(), f"Finished fiducial tile id: {dr._tile_id}; round id: round001."
+    )
 
     del raw0, ref_image_decon
     gc.collect()
