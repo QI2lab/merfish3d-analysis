@@ -50,7 +50,7 @@ import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
-def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     import cupy as cp
 
     cp.cuda.Device(gpu_id).use()
@@ -60,7 +60,7 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         tile=dr._tile_id, round=0, return_future=False
     )
 
-    if dr._bkd_subtract_polyDT:
+    if dr._bkd_subtract_fiducial:
         from merfish3danalysis.utils.imageprocessing import subtract_background_imagej
 
         bkd_image = subtract_background_imagej(raw0, 200)
@@ -82,7 +82,7 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         deconvolution=True,
         round=dr._round_ids[0],
     )
-    print(time_stamp(), f"Finished polyDT tile id: {dr._tile_id}; round id: round001.")
+    print(time_stamp(), f"Finished fiducial tile id: {dr._tile_id}; round id: round001.")
 
     del raw0, ref_image_decon
     gc.collect()
@@ -92,9 +92,9 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     return True
 
 
-def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
-    Run the “deconvolve→rigid+optical-flow” loop for a subset of polyDT rounds on a single GPU.
+    Run the “deconvolve→rigid+optical-flow” loop for a subset of fiducial rounds on a single GPU.
 
     Parameters
     ----------
@@ -130,7 +130,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
             has_reg_decon_data = True
 
         if not (has_reg_decon_data) or dr._overwrite_registered:
-            if dr._decon_polyDT:
+            if dr._decon_fiducial:
                 ref_image_decon_float = dr._datastore.load_local_registered_image(
                     tile=dr._tile_id, round=dr._round_ids[0], return_future=False
                 ).astype(np.float32)
@@ -138,7 +138,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                 ref_image = dr._datastore.load_local_corrected_image(
                     tile=dr._tile_id, round=dr._round_ids[0], return_future=False
                 )
-                if dr._bkd_subtract_polyDT:
+                if dr._bkd_subtract_fiducial:
                     from merfish3danalysis.utils.imageprocessing import (
                         subtract_background_imagej,
                     )
@@ -152,8 +152,8 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                 tile=dr._tile_id, round=round_id, return_future=False
             )
 
-            if dr._decon_polyDT:
-                if dr._bkd_subtract_polyDT:
+            if dr._decon_fiducial:
+                if dr._bkd_subtract_fiducial:
                     from merfish3danalysis.utils.imageprocessing import (
                         subtract_background_imagej,
                     )
@@ -189,7 +189,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                     )
                     del bkd_image
             else:
-                if dr._bkd_subtract_polyDT:
+                if dr._bkd_subtract_fiducial:
                     from merfish3danalysis.utils.imageprocessing import (
                         subtract_background_imagej,
                     )
@@ -282,7 +282,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                     np.uint16
                 )
 
-            if dr.save_all_polyDT_registered:
+            if dr.save_all_fiducial_registered:
                 dr._datastore.save_local_registered_image(
                     registered_image=data_registered.astype(np.uint16),
                     tile=dr._tile_id,
@@ -291,7 +291,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                 )
             print(
                 time_stamp(),
-                f"Finished polyDT tile id: {dr._tile_id}; round id: {round_id}.",
+                f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
             )
 
             del data_registered
@@ -525,16 +525,16 @@ class DataRegistration:
     ----------
     datastore : qi2labDataStore
         Initialized qi2labDataStore object
-    decon_polyDT: bool, default False
-        Deconvolve ALL polyDT rounds. False = only deconvolve round 1 for downstream stitching.
-    bkd_subtract_polyDT: bool, default True
-        Background subtraction ALL polyDT rounds.
+    decon_fiducial: bool, default False
+        Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream stitching.
+    bkd_subtract_fiducial: bool, default True
+        Background subtraction ALL fiducial rounds.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
     perform_optical_flow: bool, default False
         Perform optical flow registration
-    save_all_polyDT_registered: bool, default True
-        Save fidicual polyDT rounds > 1. These are not used for analysis.
+    save_all_fiducial_registered: bool, default True
+        Save fidicual fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
@@ -547,24 +547,24 @@ class DataRegistration:
     def __init__(
         self,
         datastore: qi2labDataStore,
-        decon_polyDT: bool = False,
-        bkd_subtract_polyDT: bool = True,
+        decon_fiducial: bool = False,
+        bkd_subtract_fiducial: bool = True,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
-        save_all_polyDT_registered: bool = False,
+        save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
         use_batched_2d_decon: bool | None = None,
     ) -> None:
         self._datastore = datastore
-        self._decon_polyDT = decon_polyDT
+        self._decon_fiducial = decon_fiducial
         self._tile_ids = self._datastore.tile_ids
         self._round_ids = self._datastore.round_ids
         self._bit_ids = self._datastore.bit_ids
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
-        self._bkd_subtract_polyDT = bkd_subtract_polyDT
+        self._bkd_subtract_fiducial = bkd_subtract_fiducial
         if use_batched_2d_decon is None:
             self._use_batched_2d_decon = self._datastore.microscope_type == "2D"
         else:
@@ -574,7 +574,7 @@ class DataRegistration:
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
-        self.save_all_polyDT_registered = save_all_polyDT_registered
+        self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon = True
         self._original_print = builtins.print
 
@@ -754,7 +754,7 @@ class DataRegistration:
             has_reg_decon_data = True
 
         if not (has_reg_decon_data) or self._overwrite_registered:
-            p_first = mp.Process(target=_apply_first_polyDT_on_gpu, args=(self, 0))
+            p_first = mp.Process(target=_apply_first_fiducial_on_gpu, args=(self, 0))
             p_first.start()
             p_first.join()
 
@@ -784,7 +784,7 @@ class DataRegistration:
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
             try:
                 # Inside child, logical device 0 maps to this physical GPU.
-                p = mp.Process(target=_apply_polyDT_on_gpu, args=(self, subset, 0))
+                p = mp.Process(target=_apply_fiducial_on_gpu, args=(self, subset, 0))
                 p.start()
                 processes.append(p)
             finally:

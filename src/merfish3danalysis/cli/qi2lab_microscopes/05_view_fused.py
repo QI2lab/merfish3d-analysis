@@ -54,7 +54,7 @@ def view_fused(root_path: Path) -> None:
     # populate napari viewer with all channels
     viewer = napari.Viewer()
     for ch_idx, omezarr_path in enumerate(omezarr_paths):
-        # use different contrast limits for polyDT vs FISH channels
+        # use different contrast limits for fiducial vs FISH channels
         if ch_idx == 0:
             contrast_limits = [0, 1000]
         else:

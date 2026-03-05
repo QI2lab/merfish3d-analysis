@@ -289,7 +289,7 @@ def decode_pixels(
     qi2lab_gene_ids = decoded_spots_filter["gene_id"].to_numpy()
     # qi2lab_coords[:,0] = qi2lab_coords[:,0] * 1.5
 
-    # polyDT_image = datastore.load_local_registered_image(
+    # fiducial_image = datastore.load_local_registered_image(
     #     tile=tile_idx,
     #     round=0,
     #     return_future=False
@@ -322,7 +322,7 @@ def decode_pixels(
     #     # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
     # )
     # viewer.add_image(
-    #     polyDT_image,
+    #     fiducial_image,
     #     scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
     #     translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
     # )

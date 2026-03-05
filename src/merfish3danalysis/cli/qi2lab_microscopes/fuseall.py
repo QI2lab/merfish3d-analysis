@@ -29,7 +29,7 @@ mp.set_start_method("spawn", force=True)
 def fuse_all_channels(root_path: Path) -> None:
     """Register all channels across all tiles.
 
-    Registration is performed using the polyDT channel.
+    Registration is performed using the fiducial channel.
 
     Parameters
     ----------
@@ -42,7 +42,7 @@ def fuse_all_channels(root_path: Path) -> None:
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     gene_ids = list(datastore.codebook["gene_id"])
-    channel_ids = ["polyDT", *gene_ids]
+    channel_ids = ["fiducial", *gene_ids]
 
     im_data = datastore.load_local_registered_image(
         tile=0, round=0, return_future=False
@@ -78,7 +78,7 @@ def fuse_all_channels(root_path: Path) -> None:
         im_data = da.zeros((1, im_shape[0], im_shape[1], im_shape[2]), dtype=np.uint16)
 
         input_path = (
-            datastore_path / Path("polyDT") / Path(tile_id) / Path("round001.zarr")
+            datastore_path / Path("fiducial") / Path(tile_id) / Path("round001.zarr")
         )
         store = zarr.DirectoryStore(str(input_path))
         im_data[0, :] = da.from_zarr(store, component="registered_decon_data").astype(
@@ -114,7 +114,7 @@ def fuse_all_channels(root_path: Path) -> None:
             post_registration_do_quality_filter=True,
         )
 
-    print("\nLazy loading and fusing full-resolution polyDT and readouts...")
+    print("\nLazy loading and fusing full-resolution fiducial and readouts...")
     tile_ids = datastore.tile_ids
 
     for ch_idx in tqdm(range(len(channel_ids)), desc="channel"):
@@ -140,11 +140,11 @@ def fuse_all_channels(root_path: Path) -> None:
             # lazy load tile data
             tile_id = tile_ids[tile_idx]
 
-            # lazy load deconvolved polyDT
+            # lazy load deconvolved fiducial
             if ch_idx == 0:
                 input_path = (
                     datastore_path
-                    / Path("polyDT")
+                    / Path("fiducial")
                     / Path(tile_id)
                     / Path("round001.zarr")
                 )

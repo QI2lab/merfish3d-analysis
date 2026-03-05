@@ -1,6 +1,6 @@
 """
 Perform registration on qi2labdatastore. By default creates a max
-projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
+projection downsampled fiducial OME-TIFF for cellpose parameter optimization.
 
 Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - rework for multiple GPU support.
@@ -216,16 +216,16 @@ def global_register_data(
 
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
-        # load downsampled, fused polyDT image and coordinates
-        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
+        # load downsampled, fused fiducial image and coordinates
+        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
             return_future=False
         )
 
         # create max projection
-        polyDT_max_projection = np.max(np.squeeze(polyDT_fused), axis=0)
-        del polyDT_fused
+        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+        del fiducial_fused
 
-        filename = "polyDT_max_projection.ome.tiff"
+        filename = "fiducial_max_projection.ome.tiff"
         cellpose_path = (
             datastore._datastore_path / Path("segmentation") / Path("cellpose")
         )
@@ -253,7 +253,7 @@ def global_register_data(
                 "resolutionunit": "CENTIMETER",
             }
             tif.write(
-                polyDT_max_projection,
+                fiducial_max_projection,
                 resolution=(
                     1e4 / float(spacing_zyx_um[2]),
                     1e4 / float(spacing_zyx_um[1]),

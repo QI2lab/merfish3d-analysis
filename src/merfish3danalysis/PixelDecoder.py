@@ -192,7 +192,7 @@ class PixelDecoder:
     verbose: int, default 1
         control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
     use_mask: bool, default False
-        use mask stored in polyDT directory
+        use mask stored in fiducial directory
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.

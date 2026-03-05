@@ -97,11 +97,11 @@ datastore.initialize_tile(tile_idx)
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-polyDT_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[0,:]
+fiducial_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[0,:]
 
-# save image data for tile = 0, round = 0, polyDT
+# save image data for tile = 0, round = 0, fiducial
 datastore.save_local_corrected_image(
-    polyDT_data,
+    fiducial_data,
     tile=0,
     psf_idx=0,
     gain_correction=True,
@@ -110,12 +110,12 @@ datastore.save_local_corrected_image(
     round=0,
 )
 
-# save stage position for tile = 0, round = 0, polyDT
+# save stage position for tile = 0, round = 0, fiducial
 datastore.save_local_stage_position_zyx_um(
     [1000., 200., 500.], tile=0, round=0
 )
 
-# save excitation and emission wavelengths for tile = 0, round = 0, polyDT
+# save excitation and emission wavelengths for tile = 0, round = 0, fiducial
 # this position is used for any bits linked to this round
 datastore.save_local_wavelengths_um(
     (.488, .520),
@@ -188,7 +188,7 @@ datastore.datastore_state = datastore_state
       └── <exp_codebook>
     ├── camera_noise_map/ (camera noise map array)
     └── psf_data/ (psf arrays)
-  ├── polyDT/ (raw and processed data for polyDT label)
+  ├── fiducial/ (raw and processed data for fiducial label)
     ├── tile0000/
       ├── round0000.zarr/
         ├── .zattrs

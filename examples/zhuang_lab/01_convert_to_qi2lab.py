@@ -73,7 +73,7 @@ def convert_data(
     }
     codebook.rename(columns=bit_mapping, inplace=True)
 
-    # experimental order. 19 rounds with two readouts per round. The 20th round is polyDT and DAPI.
+    # experimental order. 19 rounds with two readouts per round. The 20th round is fiducial and DAPI.
     # The actual experiment is more complicated, but the BIL dataset has already parsed the data.
     experiment_order = np.zeros((19, 3))
     for i in range(19):
@@ -189,8 +189,8 @@ def convert_data(
         raw_image = (raw_image * e_per_ADU).astype(np.uint16)
 
         # write fidicual data first.
-        # Write the same polyDT for each round, as the data is already locally registered.
-        # The metadata tells us polyDT is the 39th entry
+        # Write the same fiducial for each round, as the data is already locally registered.
+        # The metadata tells us fiducial is the 39th entry
         # The Zhuang data is both transposed and flipped, which we fix when writing the data
         psf_idx = 0
         for _round_idx, round_id in enumerate(
