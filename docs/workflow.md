@@ -62,7 +62,7 @@ flowchart TD
 flowchart TD
  subgraph s2["MERFISH preprocessing"]
         n17["Deconvolution"]
-        n18["U-FISH prediction"]
+        n18["spot_detector prediction"]
         n19["Tile warping"]
   end
  subgraph s3["Fiducial preprocessing"]

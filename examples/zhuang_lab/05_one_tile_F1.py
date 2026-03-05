@@ -186,7 +186,7 @@ def calculate_F1_with_radius(
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
-    ufish_threshold: float = 0.1,
+    spot_detector_threshold: float = 0.1,
     magnitude_threshold: float = (0.5, 10.0),
 ) -> None:
     """Perform pixel decoding.
@@ -199,8 +199,8 @@ def decode_pixels(
         number of bits in codebook
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
-    ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.1
+    spot_detector_threshold : float
+        threshold to accept spot_detector prediction. Default = 0.1
     magnitude_threshold: tuple[float,float], default = (1.,5.)
         lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because
         spots are normalized to median spot value, not maximum.
@@ -229,7 +229,7 @@ def decode_pixels(
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         use_normalization=True,
-        ufish_threshold=ufish_threshold,
+        spot_detector_threshold=spot_detector_threshold,
         lowpass_sigma=(0, 0, 0),
     )
     _stage_zyx_um, _affine_xform_um = datastore.load_local_stage_position_zyx_um(

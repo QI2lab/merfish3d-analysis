@@ -948,10 +948,10 @@ class qi2labDataStore:
         self._fiducial_root_path.mkdir()
         self._readouts_root_path = self._datastore_path / Path(r"readouts")
         self._readouts_root_path.mkdir()
-        self._ufish_localizations_root_path = self._datastore_path / Path(
-            r"ufish_localizations"
+        self._spot_detector_localizations_root_path = self._datastore_path / Path(
+            r"spot_detector_localizations"
         )
-        self._ufish_localizations_root_path.mkdir()
+        self._spot_detector_localizations_root_path.mkdir()
         self._decoded_root_path = self._datastore_path / Path(r"decoded")
         self._decoded_root_path.mkdir()
         self._fused_root_path = self._datastore_path / Path(r"fused")
@@ -1257,8 +1257,8 @@ class qi2labDataStore:
         self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations.zarr")
         self._fiducial_root_path = self._datastore_path / Path(r"fiducial")
         self._readouts_root_path = self._datastore_path / Path(r"readouts")
-        self._ufish_localizations_root_path = self._datastore_path / Path(
-            r"ufish_localizations"
+        self._spot_detector_localizations_root_path = self._datastore_path / Path(
+            r"spot_detector_localizations"
         )
         self._decoded_root_path = self._datastore_path / Path(r"decoded")
         self._fused_root_path = self._datastore_path / Path(r"fused")
@@ -1546,7 +1546,7 @@ class qi2labDataStore:
                     self._readouts_root_path
                     / Path(tile_id)
                     / Path(bit_id + ".zarr")
-                    / Path("registered_ufish_data")
+                    / Path("registered_spot_detector_data")
                 )
 
                 try:
@@ -1556,17 +1556,17 @@ class qi2labDataStore:
                     )
                 except (OSError, ZarrError):
                     print(tile_id, round_id)
-                    print("Registered ufish prediction missing.")
+                    print("Registered spot_detector prediction missing.")
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
-                current_ufish_path = (
-                    self._ufish_localizations_root_path
+                current_spot_detector_path = (
+                    self._spot_detector_localizations_root_path
                     / Path(tile_id)
                     / Path(bit_id + ".parquet")
                 )
-                if not (current_ufish_path.exists()):
+                if not (current_spot_detector_path.exists()):
                     raise FileNotFoundError(
-                        tile_id + " " + bit_id + " ufish localization missing"
+                        tile_id + " " + bit_id + " spot_detector localization missing"
                     )
 
         # check and validate global registered data
@@ -3223,13 +3223,13 @@ class qi2labDataStore:
             print("Error saving corrected image.")
             return None
 
-    def load_local_ufish_image(
+    def load_local_spot_detector_image(
         self,
         tile: int | str,
         bit: int | str,
         return_future: bool | None = True,
     ) -> ArrayLike | None:
-        """Load readout bit U-FISH prediction image for one tile.
+        """Load readout bit spot_detector prediction image for one tile.
 
         Parameters
         ----------
@@ -3242,8 +3242,8 @@ class qi2labDataStore:
 
         Returns
         -------
-        registered_ufish_image : Optional[ArrayLike]
-            U-FISH prediction image for one tile.
+        registered_spot_detector_image : Optional[ArrayLike]
+            spot_detector prediction image for one tile.
         """
 
         if isinstance(tile, int):
@@ -3282,40 +3282,40 @@ class qi2labDataStore:
             self._readouts_root_path
             / Path(tile_id)
             / Path(bit_id + ".zarr")
-            / Path("registered_ufish_data")
+            / Path("registered_spot_detector_data")
         )
 
         if not Path(current_local_zarr_path).exists():
-            print("U-FISH prediction image not found.")
+            print("spot_detector prediction image not found.")
             return None
 
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<f4"
-            registered_ufish_image = self._load_from_zarr_array(
+            registered_spot_detector_image = self._load_from_zarr_array(
                 self._get_kvstore_key(current_local_zarr_path),
                 spec,
                 return_future,
             )
-            return registered_ufish_image
+            return registered_spot_detector_image
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error loading U-FISH image.")
+            print("Error loading spot_detector image.")
             return None
 
-    def save_local_ufish_image(
+    def save_local_spot_detector_image(
         self,
-        ufish_image: ArrayLike,
+        spot_detector_image: ArrayLike,
         tile: int | str,
         bit: int | str,
         return_future: bool | None = False,
     ) -> None:
-        """Save U-FISH prediction image.
+        """Save spot_detector prediction image.
 
         Parameters
         ----------
-        ufish_image : ArrayLike
-            U-FISH prediction image.
+        spot_detector_image : ArrayLike
+            spot_detector prediction image.
         tile : Union[int, str]
             Tile index or tile id.
         bit : Union[int, str]
@@ -3360,27 +3360,27 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
-                / Path("registered_ufish_data")
+                / Path("registered_spot_detector_data")
             )
 
         try:
             self._save_to_zarr_array(
-                ufish_image,
+                spot_detector_image,
                 self._get_kvstore_key(current_local_zarr_path),
                 self._zarrv2_spec.copy(),
                 return_future,
             )
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error saving U-Fish image.")
+            print("Error saving spot_detector image.")
             return None
 
-    def load_local_ufish_spots(
+    def load_local_spot_detector_spots(
         self,
         tile: int | str,
         bit: int | str,
     ) -> pd.DataFrame | None:
-        """Load U-FISH spot localizations and features for one tile.
+        """Load spot_detector spot localizations and features for one tile.
 
         Parameters
         ----------
@@ -3391,8 +3391,8 @@ class qi2labDataStore:
 
         Returns
         -------
-        ufish_localizations : Optional[pd.DataFrame]
-            U-FISH localizations and features for one tile.
+        spot_detector_localizations : Optional[pd.DataFrame]
+            spot_detector localizations and features for one tile.
         """
 
         if isinstance(tile, int):
@@ -3427,33 +3427,33 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        current_ufish_localizations_path = (
-            self._ufish_localizations_root_path
+        current_spot_detector_localizations_path = (
+            self._spot_detector_localizations_root_path
             / Path(tile_id)
             / Path(bit_id + ".parquet")
         )
 
-        if not current_ufish_localizations_path.exists():
-            print("U-FISH localizations not found.")
+        if not current_spot_detector_localizations_path.exists():
+            print("spot_detector localizations not found.")
             return None
         else:
-            ufish_localizations = self._load_from_parquet(
-                current_ufish_localizations_path
+            spot_detector_localizations = self._load_from_parquet(
+                current_spot_detector_localizations_path
             )
-            return ufish_localizations
+            return spot_detector_localizations
 
-    def save_local_ufish_spots(
+    def save_local_spot_detector_spots(
         self,
         spot_df: pd.DataFrame,
         tile: int | str,
         bit: int | str,
     ) -> None:
-        """Save U-FISH localizations and features.
+        """Save spot_detector localizations and features.
 
         Parameters
         ----------
         spot_df : pd.DataFrame
-            U-FISH localizations and features.
+            spot_detector localizations and features.
         tile : Union[int, str]
             Tile index or tile id.
         bit : Union[int, str]
@@ -3492,20 +3492,20 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        if not (self._ufish_localizations_root_path / Path(tile_id)).exists():
-            (self._ufish_localizations_root_path / Path(tile_id)).mkdir()
+        if not (self._spot_detector_localizations_root_path / Path(tile_id)).exists():
+            (self._spot_detector_localizations_root_path / Path(tile_id)).mkdir()
 
-        current_ufish_localizations_path = (
-            self._ufish_localizations_root_path
+        current_spot_detector_localizations_path = (
+            self._spot_detector_localizations_root_path
             / Path(tile_id)
             / Path(bit_id + ".parquet")
         )
 
         try:
-            self._save_to_parquet(spot_df, current_ufish_localizations_path)
+            self._save_to_parquet(spot_df, current_spot_detector_localizations_path)
         except OSError as e:
             print(e)
-            print("Error saving U-FISH localizations.")
+            print("Error saving spot_detector localizations.")
             return None
 
     def load_global_coord_xforms_um(

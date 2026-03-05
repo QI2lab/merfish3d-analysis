@@ -319,7 +319,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
 
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
-    Run the “deconvolve→rigid+optical-flow→UFish” loop for a subset of bits on a single GPU.
+    Run the “deconvolve→rigid+optical-flow→spot_detector” loop for a subset of bits on a single GPU.
 
     Parameters
     ----------
@@ -440,11 +440,11 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
             ufish.load_weights_from_internet()
-            ufish_loc, ufish_data = ufish.predict(
+            spot_detector_loc, spot_detector_data = ufish.predict(
                 data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
 
-            ufish_loc = ufish_loc.rename(
+            spot_detector_loc = spot_detector_loc.rename(
                 columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
             )
             del ufish
@@ -453,7 +453,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             torch.cuda.empty_cache()
             gc.collect()
 
-            # UFISH ROI sums
+            # spot_detector ROI sums
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
@@ -470,41 +470,41 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 ]
                 return np.sum(roi)
 
-            ufish_loc["sum_prob_pixels"] = ufish_loc.apply(
+            spot_detector_loc["sum_prob_pixels"] = spot_detector_loc.apply(
                 sum_pixels_in_roi,
                 axis=1,
-                image=ufish_data,
+                image=spot_detector_data,
                 roi_dims=(roi_z, roi_y, roi_x),
             )
-            ufish_loc["sum_decon_pixels"] = ufish_loc.apply(
+            spot_detector_loc["sum_decon_pixels"] = spot_detector_loc.apply(
                 sum_pixels_in_roi,
                 axis=1,
                 image=data_reg,
                 roi_dims=(roi_z, roi_y, roi_x),
             )
 
-            ufish_loc["tile_idx"] = dr._tile_ids.index(dr._tile_id)
-            ufish_loc["bit_idx"] = dr._bit_ids.index(bit_id) + 1
-            ufish_loc["tile_z_px"] = ufish_loc["z"]
-            ufish_loc["tile_y_px"] = ufish_loc["y"]
-            ufish_loc["tile_x_px"] = ufish_loc["x"]
+            spot_detector_loc["tile_idx"] = dr._tile_ids.index(dr._tile_id)
+            spot_detector_loc["bit_idx"] = dr._bit_ids.index(bit_id) + 1
+            spot_detector_loc["tile_z_px"] = spot_detector_loc["z"]
+            spot_detector_loc["tile_y_px"] = spot_detector_loc["y"]
+            spot_detector_loc["tile_x_px"] = spot_detector_loc["x"]
 
             # save results
             dr._datastore.save_local_registered_image(
                 data_reg, tile=dr._tile_id, deconvolution=True, bit=bit_id
             )
-            dr._datastore.save_local_ufish_image(
-                ufish_data, tile=dr._tile_id, bit=bit_id
+            dr._datastore.save_local_spot_detector_image(
+                spot_detector_data, tile=dr._tile_id, bit=bit_id
             )
-            dr._datastore.save_local_ufish_spots(
-                ufish_loc, tile=dr._tile_id, bit=bit_id
+            dr._datastore.save_local_spot_detector_spots(
+                spot_detector_loc, tile=dr._tile_id, bit=bit_id
             )
             print(
                 time_stamp(),
                 f"Finished readout tile id: {dr._tile_id}; bit id: {bit_id}.",
             )
 
-            del data_reg, ufish_data, ufish_loc
+            del data_reg, spot_detector_data, spot_detector_loc
             gc.collect()
 
     try:
@@ -798,7 +798,7 @@ class DataRegistration:
             p.join()
 
     def _apply_registration_to_bits(self) -> None:
-        """Generate ufish + deconvolved, registered readout data and save to datastore."""
+        """Generate spot_detector + deconvolved, registered readout data and save to datastore."""
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(

@@ -165,7 +165,7 @@ def fuse_all_channels(root_path: Path) -> None:
                     da.from_zarr(store, component="registered_decon_data").astype(
                         np.float32
                     )
-                    * da.from_zarr(store, component="registered_ufish_data")
+                    * da.from_zarr(store, component="registered_spot_detector_data")
                     .astype(np.float32)
                     .clip(0.25, 1)
                 ).astype(np.uint16)
