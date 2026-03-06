@@ -21,7 +21,7 @@ def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
     distance_threshold: float = 0.5176,
-    spot_detector_threshold: float = 0.2,
+    feature_predictor_threshold: float = 0.2,
     magnitude_threshold: tuple[float, float] = [0.9, 10.0],
     fdr_target: float = 0.05,
     smFISH: bool = False,
@@ -36,8 +36,8 @@ def decode_pixels(
         minimum pixels with same barcode ID required to call a spot.
     distance_threshold: float, default 0.5176
         maximum allowed Euclidean distance threshold between a pixel trace and codeword.
-    spot_detector_threshold : float, default 0.2
-        threshold to accept spot_detector prediction.
+    feature_predictor_threshold : float, default 0.2
+        threshold to accept feature_predictor prediction.
     magnitude_threshold: tuple[float,float], default (0.9,10.0)
         minimum magnitude across all normalized bits required to accept a spot.
     fdr_target : float, default .05
@@ -69,7 +69,7 @@ def decode_pixels(
         distance_threshold=distance_threshold,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        spot_detector_threshold=spot_detector_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
     )
 
     decoder.decode_all_tiles(
@@ -78,7 +78,7 @@ def decode_pixels(
         distance_threshold=distance_threshold,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        spot_detector_threshold=spot_detector_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
         fdr_target=fdr_target,
     )
 

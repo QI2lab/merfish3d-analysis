@@ -243,7 +243,7 @@ def calculate_F1(root_path: Path, gt_path: Path, search_radius: float) -> dict:
 def decode_pixels(
     root_path: Path,
     mag_threshold: Sequence[float],
-    spot_detector_threshold: float,
+    feature_predictor_threshold: float,
     minimum_pixels: float,
 ) -> None:
     """Run pixel decoding with the given parameters.
@@ -254,8 +254,8 @@ def decode_pixels(
         The root path of the experiment.
     mag_threshold : Sequence[float,float]
         The magnitude thresholds
-    spot_detector_threshold : float
-        The spot_detector threshold.
+    feature_predictor_threshold : float
+        The feature_predictor threshold.
     minimum_pixels: float
         The minimum pixel threshold.
     """
@@ -273,7 +273,7 @@ def decode_pixels(
         n_random_tiles=1,
         n_iterations=10,
         minimum_pixels=minimum_pixels,
-        spot_detector_threshold=spot_detector_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
         magnitude_threshold=mag_threshold,
     )
 
@@ -282,7 +282,7 @@ def decode_pixels(
         prep_for_baysor=False,
         minimum_pixels=minimum_pixels,
         magnitude_threshold=mag_threshold,
-        spot_detector_threshold=spot_detector_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
     )
 
 
@@ -293,8 +293,8 @@ app.pretty_exceptions_enable = False
 @app.command()
 def sweep_decode_params(
     root_path: Path,
-    spot_detector_threshold_range: tuple[float] = (0.05, 0.4),
-    spot_detector_threshold_step: float = 0.1,
+    feature_predictor_threshold_range: tuple[float] = (0.05, 0.4),
+    feature_predictor_threshold_step: float = 0.1,
     mag_threshold_range: tuple[float] = (1.0, 2.0),
     mag_threshold_step: float = 0.1,
     minimum_pixels_range: tuple[float] = (3.0, 11.0),
@@ -308,10 +308,10 @@ def sweep_decode_params(
         The root path of the experiment.
     gt_path : Path
         The path to the ground truth spots.
-    spot_detector_threshold_range : tuple, default [0.05,0.3]
-        The range of spot_detector thresholds to sweep through.
-    spot_detector_threshold_step : float, default .05
-        The step size for the spot_detector threshold sweep
+    feature_predictor_threshold_range : tuple, default [0.05,0.3]
+        The range of feature_predictor thresholds to sweep through.
+    feature_predictor_threshold_step : float, default .05
+        The step size for the feature_predictor threshold sweep
     mag_threshold_range : tuple, default [1.0,2.0]
         The range of minimum magnitude threshold to sweep through.
     mag_threshold_step : float, default 0.05
@@ -329,10 +329,10 @@ def sweep_decode_params(
         dtype=np.float32,
     ).tolist()
 
-    spot_detector_values = np.arange(
-        spot_detector_threshold_range[0],
-        spot_detector_threshold_range[1],
-        spot_detector_threshold_step,
+    feature_predictor_values = np.arange(
+        feature_predictor_threshold_range[0],
+        feature_predictor_threshold_range[1],
+        feature_predictor_threshold_step,
         dtype=np.float32,
     ).tolist()
 
@@ -347,25 +347,25 @@ def sweep_decode_params(
     save_path = root_path / "decode_params_results.json"
 
     for pixels in pixels_values:
-        for spot_detector in spot_detector_values:
+        for feature_predictor in feature_predictor_values:
             for mag in mag_values:
                 params = {
                     "fdr": 0.05,
                     "min_pixels": round(pixels, 2),
                     "mag_lower_thresh": round(mag, 2),
                     "mag_upper_thresh": 2.0,
-                    "spot_detector_threshold": round(spot_detector, 2),
+                    "feature_predictor_threshold": round(feature_predictor, 2),
                 }
 
                 try:
                     print(
                         time_stamp(),
-                        f"min pixels: {round(pixels, 2)}; spot_detector threshold: {round(spot_detector, 2)}; magnitude threshold: {round(mag, 2)}",
+                        f"min pixels: {round(pixels, 2)}; feature_predictor threshold: {round(feature_predictor, 2)}; magnitude threshold: {round(mag, 2)}",
                     )
                     decode_pixels(
                         root_path=root_path,
                         mag_threshold=(round(mag, 2), 2.0),
-                        spot_detector_threshold=round(spot_detector, 2),
+                        feature_predictor_threshold=round(feature_predictor, 2),
                         minimum_pixels=round(pixels, 2),
                     )
 

@@ -62,7 +62,7 @@ def decode_tiles_worker(
     distance_threshold: float,
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    spot_detector_threshold: float,
+    feature_predictor_threshold: float,
     smFISH: bool = False,
 ) -> None:
     """Worker that runs decode_one_tile on a subset of tiles under one GPU."""
@@ -97,7 +97,7 @@ def decode_tiles_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            spot_detector_threshold=spot_detector_threshold,
+            feature_predictor_threshold=feature_predictor_threshold,
             use_normalization=True,
             gpu_id=gpu_id,
         )
@@ -125,7 +125,7 @@ def _optimize_norm_worker(
     distance_threshold: float,
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    spot_detector_threshold: float,
+    feature_predictor_threshold: float,
     smFISH: bool = False,
 ) -> None:
     """Worker that runs one iteration of normalization-by-decoding on a GPU."""
@@ -162,7 +162,7 @@ def _optimize_norm_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            spot_detector_threshold=spot_detector_threshold,
+            feature_predictor_threshold=feature_predictor_threshold,
             use_normalization=use_norm,
             gpu_id=gpu_id,
         )
@@ -401,14 +401,14 @@ class PixelDecoder:
                     decon_image = self._datastore.load_local_registered_image(
                         tile=tile_id, bit=bit_id, return_future=False
                     )
-                    spot_detector_image = (
-                        self._datastore.load_local_spot_detector_image(
+                    feature_predictor_image = (
+                        self._datastore.load_local_feature_predictor_image(
                             tile=tile_id, bit=bit_id, return_future=False
                         )
                     )
 
                     current_image = cp.where(
-                        cp.asarray(spot_detector_image, dtype=cp.float32) > 0.1,
+                        cp.asarray(feature_predictor_image, dtype=cp.float32) > 0.1,
                         cp.asarray(decon_image, dtype=cp.float32),
                         0.0,
                     )
@@ -690,13 +690,13 @@ class PixelDecoder:
             cp.get_default_memory_pool().free_all_blocks()
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    def _load_bit_data(self, spot_detector_threshold: float | None = 0.1) -> None:
+    def _load_bit_data(self, feature_predictor_threshold: float | None = 0.1) -> None:
         """Load raw data for all bits in the tile.
 
         Parameters
         ----------
-        spot_detector_threshold : float, default 0.1
-            Threshold for spot_detector image.
+        feature_predictor_threshold : float, default 0.1
+            Threshold for feature_predictor image.
         """
 
         if self._verbose > 1:
@@ -722,21 +722,21 @@ class PixelDecoder:
                 tile=self._tile_idx,
                 bit=bit_id,
             )
-            spot_detector_image = self._datastore.load_local_spot_detector_image(
+            feature_predictor_image = self._datastore.load_local_feature_predictor_image(
                 tile=self._tile_idx,
                 bit=bit_id,
             )
 
             if self._z_crop:
                 current_mask = np.asarray(
-                    spot_detector_image[
+                    feature_predictor_image[
                         self._z_range[0] : self._z_range[1], :
                     ].result(),
                     dtype=np.float32,
                 )
                 images.append(
                     np.where(
-                        current_mask > spot_detector_threshold,
+                        current_mask > feature_predictor_threshold,
                         np.asarray(
                             decon_image[
                                 self._z_range[0] : self._z_range[1], :
@@ -748,11 +748,11 @@ class PixelDecoder:
                 )
             else:
                 current_mask = np.asarray(
-                    spot_detector_image.result(), dtype=np.float32
+                    feature_predictor_image.result(), dtype=np.float32
                 )
                 images.append(
                     np.where(
-                        current_mask > spot_detector_threshold,
+                        current_mask > feature_predictor_threshold,
                         np.asarray(decon_image.result(), dtype=np.float32),
                         0,
                     )
@@ -2376,7 +2376,7 @@ class PixelDecoder:
         magnitude_threshold: list[float, float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
         use_normalization: bool | None = True,
-        spot_detector_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
     ) -> tuple[np.ndarray, ...] | None:
         """Decode one tile.
 
@@ -2400,8 +2400,8 @@ class PixelDecoder:
             Minimum number of pixels for a barcode.
         use_normalization : bool, default True
             Use normalization.
-        spot_detector_threshold : float, default 0.1
-            spot_detector threshold.
+        feature_predictor_threshold : float, default 0.1
+            feature_predictor threshold.
 
         Returns
         -------
@@ -2419,7 +2419,7 @@ class PixelDecoder:
                 self._load_iterative_normalization_vectors(gpu_id=gpu_id)
 
             self._tile_idx = tile_idx
-            self._load_bit_data(spot_detector_threshold=spot_detector_threshold)
+            self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
             if not (np.any(lowpass_sigma == 0)):
                 self._lp_filter(sigma=lowpass_sigma, gpu_id=gpu_id)
             self._decode_pixels(
@@ -2459,7 +2459,7 @@ class PixelDecoder:
         n_iterations: int = 10,
         distance_threshold: float | None = 0.5176,
         minimum_pixels: float | None = 2.0,
-        spot_detector_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
     ) -> None:
@@ -2477,8 +2477,8 @@ class PixelDecoder:
             Threshold to consider a pixel-trace barcode near a known codeword.
         minimum_pixels : float, default = 2.0
             Minimum number of pixels for a barcode.
-        spot_detector_threshold : float, default = 0.1
-            spot_detector threshold.
+        feature_predictor_threshold : float, default = 0.1
+            feature_predictor threshold.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Sequence[float], default = (0.9,10.0)
@@ -2532,7 +2532,7 @@ class PixelDecoder:
                         distance_threshold,
                         magnitude_threshold,
                         minimum_pixels,
-                        spot_detector_threshold,
+                        feature_predictor_threshold,
                         self._smFISH,
                     ),
                 )
@@ -2573,7 +2573,7 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
-        spot_detector_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
         fdr_target: float | None = 0.05,
     ) -> None:
         """Optimize normalization by decoding.
@@ -2594,8 +2594,8 @@ class PixelDecoder:
             Accept pixels with magnitudes between low and high values
         minimum_pixels : float, default 2.0
             Minimum number of pixels for a barcode.
-        spot_detector_threshold : float, default 0.1
-            spot_detector threshold.
+        feature_predictor_threshold : float, default 0.1
+            feature_predictor threshold.
         fdr_target: float, default = 0.05
             FDR target for filtering
         """
@@ -2625,7 +2625,7 @@ class PixelDecoder:
                     distance_threshold,
                     magnitude_threshold,
                     minimum_pixels,
-                    spot_detector_threshold,
+                    feature_predictor_threshold,
                     self._smFISH,
                 ),
             )

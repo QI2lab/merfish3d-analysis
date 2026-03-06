@@ -232,7 +232,7 @@ datastore.datastore_state = datastore_state
         ├── camera_data/
         ├── corrected_data/
         ├── registered_decon_data/
-        └── registered_spot_detector_data/
+        └── registered_feature_predictor_data/
       ├── bit001.zarr/
       ├── ...
       └── bitNNN.zarr/

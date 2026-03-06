@@ -321,7 +321,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
 
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
-    Run the “deconvolve→rigid+optical-flow→spot_detector” loop for a subset of bits on a single GPU.
+    Run the “deconvolve→rigid+optical-flow→feature_predictor” loop for a subset of bits on a single GPU.
 
     Parameters
     ----------
@@ -442,11 +442,11 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
             ufish.load_weights_from_internet()
-            spot_detector_loc, spot_detector_data = ufish.predict(
+            feature_predictor_loc, feature_predictor_data = ufish.predict(
                 data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
 
-            spot_detector_loc = spot_detector_loc.rename(
+            feature_predictor_loc = feature_predictor_loc.rename(
                 columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
             )
             del ufish
@@ -455,7 +455,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             torch.cuda.empty_cache()
             gc.collect()
 
-            # spot_detector ROI sums
+            # feature_predictor ROI sums
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
@@ -472,41 +472,41 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 ]
                 return np.sum(roi)
 
-            spot_detector_loc["sum_prob_pixels"] = spot_detector_loc.apply(
+            feature_predictor_loc["sum_prob_pixels"] = feature_predictor_loc.apply(
                 sum_pixels_in_roi,
                 axis=1,
-                image=spot_detector_data,
+                image=feature_predictor_data,
                 roi_dims=(roi_z, roi_y, roi_x),
             )
-            spot_detector_loc["sum_decon_pixels"] = spot_detector_loc.apply(
+            feature_predictor_loc["sum_decon_pixels"] = feature_predictor_loc.apply(
                 sum_pixels_in_roi,
                 axis=1,
                 image=data_reg,
                 roi_dims=(roi_z, roi_y, roi_x),
             )
 
-            spot_detector_loc["tile_idx"] = dr._tile_ids.index(dr._tile_id)
-            spot_detector_loc["bit_idx"] = dr._bit_ids.index(bit_id) + 1
-            spot_detector_loc["tile_z_px"] = spot_detector_loc["z"]
-            spot_detector_loc["tile_y_px"] = spot_detector_loc["y"]
-            spot_detector_loc["tile_x_px"] = spot_detector_loc["x"]
+            feature_predictor_loc["tile_idx"] = dr._tile_ids.index(dr._tile_id)
+            feature_predictor_loc["bit_idx"] = dr._bit_ids.index(bit_id) + 1
+            feature_predictor_loc["tile_z_px"] = feature_predictor_loc["z"]
+            feature_predictor_loc["tile_y_px"] = feature_predictor_loc["y"]
+            feature_predictor_loc["tile_x_px"] = feature_predictor_loc["x"]
 
             # save results
             dr._datastore.save_local_registered_image(
                 data_reg, tile=dr._tile_id, deconvolution=True, bit=bit_id
             )
-            dr._datastore.save_local_spot_detector_image(
-                spot_detector_data, tile=dr._tile_id, bit=bit_id
+            dr._datastore.save_local_feature_predictor_image(
+                feature_predictor_data, tile=dr._tile_id, bit=bit_id
             )
-            dr._datastore.save_local_spot_detector_spots(
-                spot_detector_loc, tile=dr._tile_id, bit=bit_id
+            dr._datastore.save_local_feature_predictor_spots(
+                feature_predictor_loc, tile=dr._tile_id, bit=bit_id
             )
             print(
                 time_stamp(),
                 f"Finished readout tile id: {dr._tile_id}; bit id: {bit_id}.",
             )
 
-            del data_reg, spot_detector_data, spot_detector_loc
+            del data_reg, feature_predictor_data, feature_predictor_loc
             gc.collect()
 
     try:
@@ -800,7 +800,7 @@ class DataRegistration:
             p.join()
 
     def _apply_registration_to_bits(self) -> None:
-        """Generate spot_detector + deconvolved, registered readout data and save to datastore."""
+        """Generate feature_predictor + deconvolved, registered readout data and save to datastore."""
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(
