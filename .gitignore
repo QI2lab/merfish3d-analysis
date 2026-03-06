@@ -104,6 +104,7 @@ ENV/
 
 # IDE settings
 .vscode/
+.codex/
 *.pyc
 jobs/
 BioProtean PL024 files/
@@ -129,3 +130,8 @@ test_round_alignment.py
 output.mp4
 3.0.8
 src/merfish3danalysis/utils/rlgc_diag.py
+
+# Simulation test data and generated benchmarking artifacts
+tests/data/simulation_dataset/
+tests/data/simulation_performance.json
+tests/data/pyinstrument_preprocess/
