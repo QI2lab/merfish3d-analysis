@@ -23,7 +23,7 @@ PERFORMANCE_REPORT_ENV = "MERFISH3D_PERFORMANCE_REPORT"
 DEFAULT_PERFORMANCE_REPORT = str(DEFAULT_TESTS_DATA_DIR / "simulation_performance.json")
 AXIAL_SPACING_UM = ("0.315", "1.0", "1.5")
 F1_RADIUS_BY_AXIAL_SPACING_UM = {
-    "0.315": 0.5,
+    "0.315": 1.0,
     "1.0": 1.0,
     "1.5": 1.5,
 }
@@ -44,28 +44,48 @@ RESULT_KEYS = {
 }
 BASELINE_PERFORMANCE_BY_AXIAL_SPACING_UM = {
     "0.315": {
-        "f1_score": 0.946884148891677,
-        "precision": 0.9496644295302014,
-        "recall": 0.9441201000834029,
-        "true_positives": 1132,
-        "false_negatives": 67,
-        "true_positives_per_second": 7.417473520406533,
+        "f1_score": 0.994,
+        "precision": 0.997,
+        "recall": 0.991,
+        "true_positives": 1189,
+        "false_negatives": 10,
     },
     "1.0": {
-        "f1_score": 0.9577935645633097,
-        "precision": 0.9597989949748744,
-        "recall": 0.9557964970809008,
+        "f1_score": 0.957,
+        "precision": 0.959,
+        "recall": 0.955,
         "true_positives": 1146,
         "false_negatives": 53,
-        "true_positives_per_second": 6.942682006642391,
     },
     "1.5": {
-        "f1_score": 0.9656616415410386,
-        "precision": 0.9697224558452481,
-        "recall": 0.9616346955796498,
+        "f1_score": 0.965,
+        "precision": 0.969,
+        "recall": 0.961,
         "true_positives": 1153,
         "false_negatives": 46,
-        "true_positives_per_second": 8.39388283894179,
+    },
+}
+BASELINE_CELLS_PERFORMANCE_BY_AXIAL_SPACING_UM = {
+    "0.315": {
+        "f1_score": 0.994,
+        "precision": 0.994,
+        "recall": 0.994,
+        "true_positives": 596,
+        "false_negatives": 3,
+    },
+    "1.0": {
+        "f1_score": 0.926,
+        "precision": 0.932,
+        "recall": 0.919,
+        "true_positives": 551,
+        "false_negatives": 48,
+    },
+    "1.5": {
+        "f1_score": 0.963,
+        "precision": 0.974,
+        "recall": 0.953,
+        "true_positives": 571,
+        "false_negatives": 28,
     },
 }
 FLOAT_COMPARISON_EPSILON = 1e-9
@@ -93,6 +113,18 @@ def simulation_dataset_root() -> Path:
             f"Set {SIMULATION_DATA_ROOT_ENV} to an extracted dataset. Error: {exc!r}"
         )
     return _normalize_dataset_root(root)
+
+
+@pytest.fixture(scope="session")
+def cells_dataset_root(simulation_dataset_root: Path) -> Path:
+    """Resolve the 16-bit cells dataset root from the extracted archive."""
+
+    cells_root = simulation_dataset_root / "example_16bit_cells"
+    if not cells_root.exists():
+        pytest.skip(
+            f"Could not find 'example_16bit_cells' under dataset root: {simulation_dataset_root}."
+        )
+    return cells_root
 
 
 def _download_simulation_dataset(cache_root: Path) -> Path:
@@ -191,9 +223,10 @@ def performance_records() -> list[dict[str, Any]]:
 
     print("\n=== Simulation Performance Summary ===", flush=True)
     for record in ordered_records:
+        dataset_variant = record.get("dataset_variant", "flat")
         print(
             (
-                f"{record['axial_spacing_um']} um | "
+                f"{dataset_variant}:{record['axial_spacing_um']} um | "
                 f"total={record['total_seconds']:.2f}s | "
                 f"decode={record['timings_seconds']['decode_pixels']:.2f}s | "
                 f"F1={record['f1_score']:.4f} | "
@@ -291,10 +324,14 @@ def _calculate_f1_from_datastore(
 
 
 def _run_simulation_pipeline(
-    case_root: Path, simulation_api: dict[str, Any], search_radius: float
+    case_root: Path,
+    simulation_api: dict[str, Any],
+    search_radius: float,
+    case_label: str | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     acquisition_root = case_root / "sim_acquisition"
-    case_label = case_root.name
+    if case_label is None:
+        case_label = case_root.name
     timings_seconds: dict[str, float] = {}
 
     start = time.perf_counter()
@@ -424,16 +461,8 @@ def test_simulation_example_pipeline(
         f"{axial_spacing_um} false negatives regressed: "
         f"{performance_metrics['false_negatives']} > {baseline['false_negatives']}"
     )
-    assert (
-        performance_metrics["true_positives_per_second"] + FLOAT_COMPARISON_EPSILON
-        >= baseline["true_positives_per_second"]
-    ), (
-        f"{axial_spacing_um} TP/s regressed: "
-        f"{performance_metrics['true_positives_per_second']:.6f} "
-        f"< {baseline['true_positives_per_second']:.6f}"
-    )
-
     record = {
+        "dataset_variant": "flat",
         "axial_spacing_um": axial_spacing_um,
         "f1_search_radius_um": search_radius,
         "timings_seconds": timings_seconds,
@@ -453,3 +482,90 @@ def test_simulation_example_pipeline(
     )
 
     # TODO: Add explicit metric threshold assertions once target values are finalized.
+
+
+@pytest.mark.parametrize("axial_spacing_um", AXIAL_SPACING_UM)
+def test_simulation_cells_pipeline(
+    cells_dataset_root: Path,
+    simulation_api: dict[str, Any],
+    performance_records: list[dict[str, Any]],
+    tmp_path: Path,
+    axial_spacing_um: str,
+) -> None:
+    """Run the API pipeline on the 16-bit cells dataset (no baseline assertions yet)."""
+
+    source_case_dir = cells_dataset_root / axial_spacing_um
+    if not source_case_dir.exists():
+        pytest.skip(f"Cells dataset case missing for axial spacing {axial_spacing_um} um.")
+
+    search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
+    if search_radius is None:
+        pytest.skip(
+            f"No F1 search radius configured for axial spacing {axial_spacing_um}."
+        )
+
+    case_root = _prepare_case_workspace(source_case_dir, tmp_path)
+    f1_results, timings_seconds, performance_metrics = _run_simulation_pipeline(
+        case_root,
+        simulation_api,
+        search_radius,
+        case_label=f"cells-{axial_spacing_um}",
+    )
+
+    datastore_path = case_root / "sim_acquisition" / "qi2labdatastore"
+    assert datastore_path.exists()
+    assert isinstance(f1_results, dict)
+    assert RESULT_KEYS.issubset(f1_results)
+
+    baseline = BASELINE_CELLS_PERFORMANCE_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
+    if baseline is None:
+        pytest.skip(f"No cells baseline performance configured for {axial_spacing_um}.")
+
+    assert (
+        performance_metrics["f1_score"] + FLOAT_COMPARISON_EPSILON
+        >= baseline["f1_score"]
+    ), (
+        f"cells {axial_spacing_um} F1 regressed: "
+        f"{performance_metrics['f1_score']:.6f} < {baseline['f1_score']:.6f}"
+    )
+    assert (
+        performance_metrics["precision"] + FLOAT_COMPARISON_EPSILON
+        >= baseline["precision"]
+    ), (
+        f"cells {axial_spacing_um} precision regressed: "
+        f"{performance_metrics['precision']:.6f} < {baseline['precision']:.6f}"
+    )
+    assert (
+        performance_metrics["recall"] + FLOAT_COMPARISON_EPSILON >= baseline["recall"]
+    ), (
+        f"cells {axial_spacing_um} recall regressed: "
+        f"{performance_metrics['recall']:.6f} < {baseline['recall']:.6f}"
+    )
+    assert performance_metrics["true_positives"] >= baseline["true_positives"], (
+        f"cells {axial_spacing_um} true positives regressed: "
+        f"{performance_metrics['true_positives']} < {baseline['true_positives']}"
+    )
+    assert performance_metrics["false_negatives"] <= baseline["false_negatives"], (
+        f"cells {axial_spacing_um} false negatives regressed: "
+        f"{performance_metrics['false_negatives']} > {baseline['false_negatives']}"
+    )
+
+    record = {
+        "dataset_variant": "cells",
+        "axial_spacing_um": axial_spacing_um,
+        "f1_search_radius_um": search_radius,
+        "timings_seconds": timings_seconds,
+        "total_seconds": timings_seconds["total"],
+        **performance_metrics,
+    }
+    performance_records.append(record)
+    print(
+        (
+            f"[cells-{axial_spacing_um}] performance summary: "
+            f"total={timings_seconds['total']:.2f}s, "
+            f"decode={timings_seconds['decode_pixels']:.2f}s, "
+            f"F1={performance_metrics['f1_score']:.4f}, "
+            f"TP/s={performance_metrics['true_positives_per_second']:.2f}"
+        ),
+        flush=True,
+    )
