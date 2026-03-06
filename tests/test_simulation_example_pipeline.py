@@ -14,9 +14,7 @@ import pytest
 
 SIMULATION_DATA_ROOT_ENV = "MERFISH3D_SIMULATION_ROOT"
 SIMULATION_CACHE_ENV = "MERFISH3D_SIMULATION_CACHE"
-SIMULATION_DATA_ZENODO_URL = (
-    "https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1"
-)
+SIMULATION_DATA_ZENODO_URL = "https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1"
 SIMULATION_DATA_ARCHIVE = "merfish3d_analysis-simulation.zip"
 SIMULATION_DATA_EXTRACTED_DIR = "merfish3d_analysis-simulation"
 DEFAULT_TESTS_DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -380,7 +378,9 @@ def test_simulation_example_pipeline(
 
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:
-        pytest.skip(f"No F1 search radius configured for axial spacing {axial_spacing_um}.")
+        pytest.skip(
+            f"No F1 search radius configured for axial spacing {axial_spacing_um}."
+        )
 
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     f1_results, timings_seconds, performance_metrics = _run_simulation_pipeline(
@@ -397,7 +397,8 @@ def test_simulation_example_pipeline(
         pytest.skip(f"No baseline performance configured for {axial_spacing_um}.")
 
     assert (
-        performance_metrics["f1_score"] + FLOAT_COMPARISON_EPSILON >= baseline["f1_score"]
+        performance_metrics["f1_score"] + FLOAT_COMPARISON_EPSILON
+        >= baseline["f1_score"]
     ), (
         f"{axial_spacing_um} F1 regressed: "
         f"{performance_metrics['f1_score']:.6f} < {baseline['f1_score']:.6f}"

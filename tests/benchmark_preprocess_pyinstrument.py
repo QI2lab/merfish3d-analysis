@@ -17,9 +17,7 @@ from pyinstrument import Profiler
 
 SIMULATION_DATA_ROOT_ENV = "MERFISH3D_SIMULATION_ROOT"
 SIMULATION_CACHE_ENV = "MERFISH3D_SIMULATION_CACHE"
-SIMULATION_DATA_ZENODO_URL = (
-    "https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1"
-)
+SIMULATION_DATA_ZENODO_URL = "https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1"
 SIMULATION_DATA_ARCHIVE = "merfish3d_analysis-simulation.zip"
 SIMULATION_DATA_EXTRACTED_DIR = "merfish3d_analysis-simulation"
 AXIAL_SPACING_UM = ("0.315", "1.0", "1.5")
@@ -240,7 +238,9 @@ def _collect_function_timings(
         resolved_file = Path(file_path).resolve()
         if resolved_file.is_relative_to(repo_root):
             key = _frame_key(
-                str(resolved_file), frame.function or "<unknown>", int(frame.line_no or 0)
+                str(resolved_file),
+                frame.function or "<unknown>",
+                int(frame.line_no or 0),
             )
             if key not in stats_by_key:
                 stats_by_key[key] = FunctionTiming(
@@ -264,7 +264,9 @@ def _collect_function_timings(
         )
 
 
-def _timings_to_serializable(stats_by_key: dict[str, FunctionTiming]) -> dict[str, dict]:
+def _timings_to_serializable(
+    stats_by_key: dict[str, FunctionTiming],
+) -> dict[str, dict]:
     return {key: asdict(value) for key, value in stats_by_key.items()}
 
 
@@ -339,7 +341,9 @@ def _write_markdown_report(
     for spacing in AXIAL_SPACING_UM:
         if spacing == BASELINE_SPACING_UM:
             continue
-        lines.append(f"## Functions Slower Than `{BASELINE_SPACING_UM}` for `{spacing}`")
+        lines.append(
+            f"## Functions Slower Than `{BASELINE_SPACING_UM}` for `{spacing}`"
+        )
         lines.append("")
         rows = comparisons[spacing][:top_n]
         if not rows:
