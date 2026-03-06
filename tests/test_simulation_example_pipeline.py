@@ -492,11 +492,13 @@ def test_simulation_cells_pipeline(
     tmp_path: Path,
     axial_spacing_um: str,
 ) -> None:
-    """Run the API pipeline on the 16-bit cells dataset (no baseline assertions yet)."""
+    """Run the API pipeline on the 16-bit cells dataset with baseline assertions."""
 
     source_case_dir = cells_dataset_root / axial_spacing_um
     if not source_case_dir.exists():
-        pytest.skip(f"Cells dataset case missing for axial spacing {axial_spacing_um} um.")
+        pytest.skip(
+            f"Cells dataset case missing for axial spacing {axial_spacing_um} um."
+        )
 
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:

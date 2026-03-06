@@ -283,7 +283,9 @@ def _pad_psf_2d(psf_2d: cp.ndarray, image_shape: tuple[int, int]) -> cp.ndarray:
     return padded.astype(cp.float32)
 
 
-def _psf_cache_key(psf_2d: np.ndarray, image_shape: tuple[int, int]) -> tuple[int, int, str]:
+def _psf_cache_key(
+    psf_2d: np.ndarray, image_shape: tuple[int, int]
+) -> tuple[int, int, str]:
     """Build a stable cache key for padded 2D PSF OTFs."""
 
     y, x = image_shape
