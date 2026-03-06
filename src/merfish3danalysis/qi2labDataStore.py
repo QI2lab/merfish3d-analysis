@@ -945,7 +945,9 @@ class qi2labDataStore:
         empty_zattrs = {}
         self._save_to_json(empty_zattrs, calibrations_zattrs_path)
         self.fiducial_folder_name = r"fiducial"
-        self._fiducial_root_path = self._datastore_path / Path(self.fiducial_folder_name)
+        self._fiducial_root_path = self._datastore_path / Path(
+            self.fiducial_folder_name
+        )
         self._fiducial_root_path.mkdir()
         self._readouts_root_path = self._datastore_path / Path(r"readouts")
         self._readouts_root_path.mkdir()
@@ -1268,7 +1270,9 @@ class qi2labDataStore:
         else:
             self.fiducial_folder_name = "fiducial"
             self.feature_predictor_folder_name = "feature_predictor"
-        self._fiducial_root_path = self._datastore_path / Path(self.fiducial_folder_name)
+        self._fiducial_root_path = self._datastore_path / Path(
+            self.fiducial_folder_name
+        )
         self._feature_predictor_localizations_root_path = self._datastore_path / Path(
             f"{self.feature_predictor_folder_name}_localizations"
         )
@@ -1278,7 +1282,6 @@ class qi2labDataStore:
         self._fused_root_path = self._datastore_path / Path(r"fused")
         self._segmentation_root_path = self._datastore_path / Path(r"segmentation")
         self._mtx_output_root_path = self._datastore_path / Path(r"mtx_output")
-
 
         # validate calibrations.zarr
         if self._datastore_state["Calibrations"]:
@@ -1574,7 +1577,10 @@ class qi2labDataStore:
                 )
                 if not (current_feature_predictor_path.exists()):
                     raise FileNotFoundError(
-                        tile_id + " " + bit_id + " feature_predictor localization missing"
+                        tile_id
+                        + " "
+                        + bit_id
+                        + " feature_predictor localization missing"
                     )
 
         # check and validate global registered data
@@ -3500,7 +3506,9 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        if not (self._feature_predictor_localizations_root_path / Path(tile_id)).exists():
+        if not (
+            self._feature_predictor_localizations_root_path / Path(tile_id)
+        ).exists():
             (self._feature_predictor_localizations_root_path / Path(tile_id)).mkdir()
 
         current_feature_predictor_localizations_path = (
@@ -3646,7 +3654,9 @@ class qi2labDataStore:
         """
 
         current_local_zarr_path = str(
-            self._fused_root_path / Path("fused.zarr") / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
+            self._fused_root_path
+            / Path("fused.zarr")
+            / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
         )
 
         if not Path(current_local_zarr_path).exists():
@@ -3698,7 +3708,7 @@ class qi2labDataStore:
         """
 
         if fusion_type == "fiducial":
-                filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
+            filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
         else:
             filename = "fused_all_channels_zyx"
         current_local_zarr_path = str(

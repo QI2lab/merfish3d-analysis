@@ -722,9 +722,11 @@ class PixelDecoder:
                 tile=self._tile_idx,
                 bit=bit_id,
             )
-            feature_predictor_image = self._datastore.load_local_feature_predictor_image(
-                tile=self._tile_idx,
-                bit=bit_id,
+            feature_predictor_image = (
+                self._datastore.load_local_feature_predictor_image(
+                    tile=self._tile_idx,
+                    bit=bit_id,
+                )
             )
 
             if self._z_crop:
