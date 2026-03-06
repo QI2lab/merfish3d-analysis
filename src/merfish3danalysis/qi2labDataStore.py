@@ -944,12 +944,14 @@ class qi2labDataStore:
         calibrations_zattrs_path = self._calibrations_zarr_path / Path(r".zattrs")
         empty_zattrs = {}
         self._save_to_json(empty_zattrs, calibrations_zattrs_path)
-        self._fiducial_root_path = self._datastore_path / Path(r"fiducial")
+        self.fiducial_folder_name = r"fiducial"
+        self._fiducial_root_path = self._datastore_path / Path(self.fiducial_folder_name)
         self._fiducial_root_path.mkdir()
         self._readouts_root_path = self._datastore_path / Path(r"readouts")
         self._readouts_root_path.mkdir()
+        self.feature_predictor_folder_name = r"feature_predictor"
         self._feature_predictor_localizations_root_path = self._datastore_path / Path(
-            r"feature_predictor_localizations"
+            f"{self.feature_predictor_folder_name}_localizations"
         )
         self._feature_predictor_localizations_root_path.mkdir()
         self._decoded_root_path = self._datastore_path / Path(r"decoded")
@@ -969,7 +971,7 @@ class qi2labDataStore:
             r"datastore_state.json"
         )
         self._datastore_state = {
-            "Version": 0.3,
+            "Version": 0.4,
             "Initialized": True,
             "Calibrations": False,
             "Corrected": False,
@@ -1254,23 +1256,29 @@ class qi2labDataStore:
         """Parse datastore to discover available components."""
 
         # directory structure as defined by qi2lab spec
-        self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations.zarr")
-        self._fiducial_root_path = self._datastore_path / Path(r"fiducial")
-        self._readouts_root_path = self._datastore_path / Path(r"readouts")
-        self._feature_predictor_localizations_root_path = self._datastore_path / Path(
-            r"feature_predictor_localizations"
+        self._datastore_state_json_path = self._datastore_path / Path(
+            r"datastore_state.json"
         )
+        # read in .json in root directory that indicates what steps have been run
+        with open(self._datastore_state_json_path) as json_file:
+            self._datastore_state = json.load(json_file)
+        if self._datastore_state["Version"] <= 0.3:
+            self.fiducial_folder_name = "polyDT"
+            self.feature_predictor_folder_name = "ufish"
+        else:
+            self.fiducial_folder_name = "fiducial"
+            self.feature_predictor_folder_name = "feature_predictor"
+        self._fiducial_root_path = self._datastore_path / Path(self.fiducial_folder_name)
+        self._feature_predictor_localizations_root_path = self._datastore_path / Path(
+            f"{self.feature_predictor_folder_name}_localizations"
+        )
+        self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations.zarr")
+        self._readouts_root_path = self._datastore_path / Path(r"readouts")
         self._decoded_root_path = self._datastore_path / Path(r"decoded")
         self._fused_root_path = self._datastore_path / Path(r"fused")
         self._segmentation_root_path = self._datastore_path / Path(r"segmentation")
         self._mtx_output_root_path = self._datastore_path / Path(r"mtx_output")
-        self._datastore_state_json_path = self._datastore_path / Path(
-            r"datastore_state.json"
-        )
 
-        # read in .json in root directory that indicates what steps have been run
-        with open(self._datastore_state_json_path) as json_file:
-            self._datastore_state = json.load(json_file)
 
         # validate calibrations.zarr
         if self._datastore_state["Calibrations"]:
@@ -1295,7 +1303,7 @@ class qi2labDataStore:
                 "codebook",
                 "num_bits",
             ]
-            if self._datastore_state["Version"] == 0.3:
+            if self._datastore_state["Version"] == 0.4:
                 keys_to_check.append("microscope_type")
                 keys_to_check.append("camera_model")
                 keys_to_check.append("voxel_size_zyx_um")
@@ -1546,7 +1554,7 @@ class qi2labDataStore:
                     self._readouts_root_path
                     / Path(tile_id)
                     / Path(bit_id + ".zarr")
-                    / Path("registered_feature_predictor_data")
+                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
                 )
 
                 try:
@@ -1596,7 +1604,7 @@ class qi2labDataStore:
                 zattrs_path = str(
                     self._fused_root_path
                     / Path("fused.zarr")
-                    / Path("fused_fiducial_iso_zyx")
+                    / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
                     / Path(".zattrs")
                 )
                 with open(zattrs_path) as f:
@@ -1613,7 +1621,7 @@ class qi2labDataStore:
             current_local_zarr_path = str(
                 self._fused_root_path
                 / Path("fused.zarr")
-                / Path("fused_fiducial_iso_zyx")
+                / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
             )
 
             try:
@@ -1630,7 +1638,7 @@ class qi2labDataStore:
                 self._segmentation_root_path
                 / Path("cellpose")
                 / Path("cellpose.zarr")
-                / Path("masks_fiducial_iso_zyx")
+                / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
             )
 
             try:
@@ -3282,7 +3290,7 @@ class qi2labDataStore:
             self._readouts_root_path
             / Path(tile_id)
             / Path(bit_id + ".zarr")
-            / Path("registered_feature_predictor_data")
+            / Path(f"registered_{self.feature_predictor_folder_name}_data")
         )
 
         if not Path(current_local_zarr_path).exists():
@@ -3360,7 +3368,7 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id + ".zarr")
-                / Path("registered_feature_predictor_data")
+                / Path(f"registered_{self.feature_predictor_folder_name}_data")
             )
 
         try:
@@ -3638,7 +3646,7 @@ class qi2labDataStore:
         """
 
         current_local_zarr_path = str(
-            self._fused_root_path / Path("fused.zarr") / Path("fused_fiducial_iso_zyx")
+            self._fused_root_path / Path("fused.zarr") / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
         )
 
         if not Path(current_local_zarr_path).exists():
@@ -3690,7 +3698,7 @@ class qi2labDataStore:
         """
 
         if fusion_type == "fiducial":
-            filename = "fused_fiducial_iso_zyx"
+                filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
         else:
             filename = "fused_all_channels_zyx"
         current_local_zarr_path = str(
@@ -3898,7 +3906,7 @@ class qi2labDataStore:
             self._segmentation_root_path
             / Path("cellpose")
             / Path("cellpose.zarr")
-            / Path("masks_fiducial_iso_zyx")
+            / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
         )
 
         if not current_local_zarr_path.exists():
@@ -3938,13 +3946,13 @@ class qi2labDataStore:
             self._segmentation_root_path
             / Path("cellpose")
             / Path("cellpose.zarr")
-            / Path("masks_fiducial_iso_zyx")
+            / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
         )
         current_local_zattrs_path = str(
             self._segmentation_root_path
             / Path("cellpose")
             / Path("cellpose.zarr")
-            / Path("masks_fiducial_iso_zyx")
+            / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
             / Path(".zattrs")
         )
 
