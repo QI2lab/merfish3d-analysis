@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+.ruff_cache/
+.pytest_cache/
+
 
 # C extensions
 *.so
@@ -132,6 +135,8 @@ output.mp4
 src/merfish3danalysis/utils/rlgc_diag.py
 
 # Simulation test data and generated benchmarking artifacts
-tests/data/simulation_dataset/
-tests/data/simulation_performance.json
-tests/data/pyinstrument_preprocess/
+tests/pyinstrumtent_preprocess/
+tests/data/
+tests/simulation_performance.json
+tests/merfish3d_analysis-simulation.zip
+.codex/
