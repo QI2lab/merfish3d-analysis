@@ -12,6 +12,7 @@ Biggs & Andrews, 1997, https://doi.org/10.1364/AO.36.001766
 """
 
 import gc
+import hashlib
 import timeit
 
 import cupy as cp
@@ -36,9 +37,24 @@ filter_update_ba = ElementwiseKernel(
 )
 
 # -----------------------------------------------------------------------------
-# FFT work-buffer cache (performance)
+# FFT / OTF caches (performance)
 # -----------------------------------------------------------------------------
-_fft_cache: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+_fft_cache_3d: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+_fft_cache_2d_batched: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+_otf_cache_2d: dict[tuple[int, int, str], tuple[cp.ndarray, cp.ndarray]] = {}
+
+
+def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
+    """Clear cached FFT/OTF buffers used by RLGC helper functions."""
+
+    _fft_cache_3d.clear()
+    _fft_cache_2d_batched.clear()
+    _otf_cache_2d.clear()
+    if clear_memory_pool:
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        gc.collect()
 
 
 def make_feather_weight(
@@ -105,17 +121,20 @@ def next_gpu_fft_size(x: int) -> int:
         n += 1
 
 
-def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
+def pad_z(image: np.ndarray, psf_z: int = 1) -> tuple[np.ndarray, int, int]:
     """
-    Pad the Z axis of a 3D array to the next 2-3-smooth length (ZYX order).
+    Pad the Z axis of a 3D array using PSF-aware halo plus FFT-friendly padding.
 
-    A constant background is subtracted before padding and values are
-    clamped into [0, 65535] for numerical stability with uint16 inputs.
+    The halo radius is ``psf_z // 2`` on each side so circular FFT convolution
+    does not wrap into the interior volume. Additional symmetric padding is then
+    applied to reach the next 2-3-smooth FFT length.
 
     Parameters
     ----------
     image : numpy.ndarray
         3D image to pad, shaped (z, y, x).
+    psf_z : int, default=1
+        PSF support size along Z.
 
     Returns
     -------
@@ -127,10 +146,14 @@ def pad_z(image: np.ndarray) -> tuple[np.ndarray, int, int]:
         Z padding at the end.
     """
     z, _, _ = image.shape
-    new_z = next_gpu_fft_size(z)
-    pad_amt = new_z - z
-    pad_z_before = pad_amt // 2
-    pad_z_after = pad_amt - pad_z_before
+    z_halo = max(int(psf_z) // 2, 0)
+
+    z_with_halo = z + 2 * z_halo
+    new_z = next_gpu_fft_size(z_with_halo)
+    fft_extra = new_z - z_with_halo
+
+    pad_z_before = z_halo + fft_extra // 2
+    pad_z_after = z_halo + fft_extra - fft_extra // 2
     pad_width = ((pad_z_before, pad_z_after), (0, 0), (0, 0))
     padded_image = np.pad(image, pad_width, mode="reflect").astype(np.uint16)
     return padded_image, pad_z_before, pad_z_after
@@ -216,17 +239,98 @@ def fft_conv(
     cupy.ndarray
         Convolved array in object space (float32).
     """
-    if shape not in _fft_cache:
+    if shape not in _fft_cache_3d:
         z, y, x = shape
         freq_shape = (z, y, x // 2 + 1)
         fft_buf = cp.empty(freq_shape, dtype=cp.complex64)
         ifft_buf = cp.empty(shape, dtype=cp.float32)
-        _fft_cache[shape] = (fft_buf, ifft_buf)
+        _fft_cache_3d[shape] = (fft_buf, ifft_buf)
 
-    fft_buf, ifft_buf = _fft_cache[shape]
+    fft_buf, ifft_buf = _fft_cache_3d[shape]
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= H
     ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
+    return ifft_buf
+
+
+def _normalize_psf_to_2d(psf: np.ndarray) -> np.ndarray:
+    """Convert a PSF to a normalized 2D kernel for 2D batched RLGC."""
+
+    psf_arr = np.asarray(psf, dtype=np.float32)
+    if psf_arr.ndim == 3:
+        # 2D acquisition stores one effective PSF per z-plane. Use center plane.
+        psf_arr = psf_arr[psf_arr.shape[0] // 2]
+    if psf_arr.ndim != 2:
+        raise ValueError(f"Expected a 2D or 3D PSF, got shape {psf_arr.shape}")
+    return psf_arr
+
+
+def _pad_psf_2d(psf_2d: cp.ndarray, image_shape: tuple[int, int]) -> cp.ndarray:
+    """Pad and center a 2D PSF to target YX shape; normalize to unit sum."""
+
+    y, x = image_shape
+    padded = cp.zeros((y, x), dtype=cp.float32)
+    padded[: psf_2d.shape[0], : psf_2d.shape[1]] = psf_2d
+
+    for axis, axis_size in enumerate(padded.shape):
+        padded = cp.roll(padded, int(axis_size / 2), axis=axis)
+    for axis, axis_size in enumerate(psf_2d.shape):
+        padded = cp.roll(padded, -int(axis_size / 2), axis=axis)
+
+    padded = cp.fft.ifftshift(padded)
+    s = cp.sum(padded)
+    padded = padded / (s if s != 0 else 1.0)
+    return padded.astype(cp.float32)
+
+
+def _psf_cache_key(psf_2d: np.ndarray, image_shape: tuple[int, int]) -> tuple[int, int, str]:
+    """Build a stable cache key for padded 2D PSF OTFs."""
+
+    y, x = image_shape
+    digest = hashlib.sha1(psf_2d.tobytes()).hexdigest()
+    return y, x, digest
+
+
+def _get_otf_pair_2d(
+    psf: np.ndarray,
+    image_shape: tuple[int, int],
+    use_cache: bool = True,
+) -> tuple[cp.ndarray, cp.ndarray]:
+    """Return (OTF, conj(OTF)) for a 2D PSF and target image shape."""
+
+    psf_2d = _normalize_psf_to_2d(psf)
+    key = _psf_cache_key(psf_2d, image_shape)
+    if use_cache and key in _otf_cache_2d:
+        return _otf_cache_2d[key]
+
+    psf_gpu = _pad_psf_2d(cp.asarray(psf_2d, dtype=cp.float32), image_shape)
+    otf = cp.fft.rfftn(psf_gpu)
+    otfT = cp.conjugate(otf)
+    del psf_gpu
+    pair = (otf, otfT)
+    if use_cache:
+        _otf_cache_2d[key] = pair
+    return pair
+
+
+def fft_conv_batched_2d(
+    image: cp.ndarray,
+    H: cp.ndarray,
+    shape: tuple[int, int, int],
+) -> cp.ndarray:
+    """Apply FFT convolution independently to each z-plane in a batch."""
+
+    if shape not in _fft_cache_2d_batched:
+        z, y, x = shape
+        freq_shape = (z, y, x // 2 + 1)
+        fft_buf = cp.empty(freq_shape, dtype=cp.complex64)
+        ifft_buf = cp.empty(shape, dtype=cp.float32)
+        _fft_cache_2d_batched[shape] = (fft_buf, ifft_buf)
+
+    fft_buf, ifft_buf = _fft_cache_2d_batched[shape]
+    fft_buf[...] = cp.fft.rfftn(image, axes=(-2, -1))
+    fft_buf[...] *= H
+    ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape[-2:], axes=(-2, -1))
     return ifft_buf
 
 
@@ -264,8 +368,9 @@ def rlgc_biggs_ba(
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
     init_value: float = 1,
-    limit: float = 0.2,
-    max_delta: float = 0.02,
+    limit: float = 0.01,
+    max_delta: float = 0.01,
+    release_memory: bool = True,
 ) -> np.ndarray:
     """
     Biggs-Andrews accelerated Richardson-Lucy Gradient Consensus.
@@ -292,6 +397,9 @@ def rlgc_biggs_ba(
     max_delta : float, default=0.01
         Maximum allowed relative update magnitude before early stopping is
         triggered.
+    release_memory : bool, default=True
+        If True, release GPU memory pools after each call. Set False when
+        calling in tight loops to avoid allocator thrashing.
 
     Returns
     -------
@@ -324,9 +432,11 @@ def rlgc_biggs_ba(
         mode="reflect",
     ).astype(np.uint16)
 
+    psf_z = int(psf.shape[0])
+
     # Z padding
     if image.ndim == 3:
-        image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded)
+        image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded, psf_z=psf_z)
         image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
 
         del image_gpu_np
@@ -505,10 +615,66 @@ def rlgc_biggs_ba(
     # Cleanup
     del g1, g2, recon, previous_recon, Hu, otf, otfT, otfotfT, image_gpu
     gc.collect()
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    cp.get_default_pinned_memory_pool().free_all_blocks()
+    if release_memory:
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
     return recon_cpu
+
+
+def rlgc_biggs_ba_2d_batched(
+    image: np.ndarray,
+    psf: np.ndarray,
+    gpu_id: int = 0,
+    otf: cp.ndarray | None = None,
+    otfT: cp.ndarray | None = None,
+    safe_mode: bool = True,
+    init_value: float = 1,
+    limit: float = 0.01,
+    max_delta: float = 0.01,
+    cache_otf: bool = True,
+    release_memory: bool = True,
+) -> np.ndarray:
+    """Quality-preserving 2D fast path over z-planes.
+
+    This keeps the original per-plane RLGC behavior while reducing overhead by:
+    1) routing through one function call for a full z-stack,
+    2) keeping FFT/OTF caches warm across z-planes and calls, and
+    3) deferring GPU memory-pool release to outer scopes.
+    """
+
+    image_arr = np.asarray(image)
+    if image_arr.ndim == 2:
+        return rlgc_biggs_ba(
+            image=image_arr,
+            psf=_normalize_psf_to_2d(psf),
+            gpu_id=gpu_id,
+            safe_mode=safe_mode,
+            init_value=init_value,
+            limit=limit,
+            max_delta=max_delta,
+            release_memory=release_memory,
+        )
+    if image_arr.ndim != 3:
+        raise ValueError(f"Expected a 2D or 3D image, got shape {image_arr.shape}")
+
+    psf_2d = _normalize_psf_to_2d(psf)
+    output = np.zeros_like(image_arr, dtype=np.float32)
+    for z_idx in range(image_arr.shape[0]):
+        output[z_idx] = rlgc_biggs_ba(
+            image=image_arr[z_idx],
+            psf=psf_2d,
+            gpu_id=gpu_id,
+            safe_mode=safe_mode,
+            init_value=init_value,
+            limit=limit,
+            max_delta=max_delta,
+            release_memory=False,
+        )
+
+    if release_memory:
+        clear_rlgc_caches(clear_memory_pool=True)
+    return output
 
 
 def chunked_rlgc(
@@ -519,6 +685,9 @@ def chunked_rlgc(
     overlap_yx: int = 128,
     safe_mode: bool = True,
     verbose: int = 0,
+    use_batched_2d: bool | None = None,
+    cache_otf: bool = True,
+    release_memory: bool = True,
 ) -> np.ndarray:
     """
     Chunked RLGC deconvolution with feathered blending.
@@ -539,6 +708,13 @@ def chunked_rlgc(
         RLGC stopping: play-it-safe if True.
     verbose : int, default=0
         If ≥ 1, show a progress bar over subtiles.
+    use_batched_2d : bool | None, default=None
+        If True, run batched 2D RLGC over z-planes. If None, auto-detect 2D
+        input based on image and PSF dimensionality.
+    cache_otf : bool, default=True
+        Reuse cached 2D OTF pairs across calls.
+    release_memory : bool, default=True
+        If True, clear RLGC caches and release memory pools on exit.
 
     Returns
     -------
@@ -546,14 +722,34 @@ def chunked_rlgc(
         Deconvolved image (float32).
     """
     cp.cuda.Device(gpu_id).use()
-    # Avoid cuFFT plan accumulation across tiles
-    cp.fft._cache.PlanCache(memsize=0)
+
+    if use_batched_2d is None:
+        psf_arr = np.asarray(psf)
+        use_batched_2d = image.ndim == 3 and (
+            psf_arr.ndim == 2 or (psf_arr.ndim == 3 and psf_arr.shape[0] == 1)
+        )
 
     # Full-frame path if tiling not needed
     if crop_yx >= image.shape[-2] and crop_yx >= image.shape[-1]:
-        output = rlgc_biggs_ba(
-            image, psf, gpu_id, safe_mode=safe_mode, init_value=float(np.median(image))
-        )
+        if use_batched_2d:
+            output = rlgc_biggs_ba_2d_batched(
+                image,
+                psf,
+                gpu_id,
+                safe_mode=safe_mode,
+                init_value=float(np.median(image)),
+                cache_otf=cache_otf,
+                release_memory=False,
+            )
+        else:
+            output = rlgc_biggs_ba(
+                image,
+                psf,
+                gpu_id,
+                safe_mode=safe_mode,
+                init_value=float(np.median(image)),
+                release_memory=False,
+            )
 
     # Tiled deconvolution with feathered blending
     else:
@@ -578,9 +774,25 @@ def chunked_rlgc(
             iterator = enumerate(slices)
 
         for _, (crop, source, destination) in iterator:
-            crop_array = rlgc_biggs_ba(
-                crop, psf, gpu_id, safe_mode=safe_mode, init_value=init_value
-            )
+            if use_batched_2d:
+                crop_array = rlgc_biggs_ba_2d_batched(
+                    crop,
+                    psf,
+                    gpu_id,
+                    safe_mode=safe_mode,
+                    init_value=init_value,
+                    cache_otf=cache_otf,
+                    release_memory=False,
+                )
+            else:
+                crop_array = rlgc_biggs_ba(
+                    crop,
+                    psf,
+                    gpu_id,
+                    safe_mode=safe_mode,
+                    init_value=init_value,
+                    release_memory=False,
+                )
 
             # Resolve subtile edge status to decide feathering
             _, y_slice, x_slice = source[1:]
@@ -619,11 +831,7 @@ def chunked_rlgc(
         del output_sum, output_weight, nonzero
         gc.collect()
 
-    # Clear caches and pools
-    _fft_cache.clear()
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    cp.get_default_pinned_memory_pool().free_all_blocks()
-    gc.collect()
+    if release_memory:
+        clear_rlgc_caches(clear_memory_pool=True)
 
     return output

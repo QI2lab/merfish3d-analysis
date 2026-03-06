@@ -54,7 +54,7 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     import cupy as cp
 
     cp.cuda.Device(gpu_id).use()
-    from merfish3danalysis.utils.rlgc import chunked_rlgc
+    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
     raw0 = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=0, return_future=False
@@ -72,6 +72,8 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         psf=dr._psfs[0, :],
         gpu_id=0,
         crop_yx=dr._crop_yx_decon,
+        use_batched_2d=dr._use_batched_2d_decon,
+        release_memory=False,
     )
 
     dr._datastore.save_local_registered_image(
@@ -84,6 +86,8 @@ def _apply_first_polyDT_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
 
     del raw0, ref_image_decon
     gc.collect()
+    clear_rlgc_caches(clear_memory_pool=False)
+    cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     return True
 
@@ -114,6 +118,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
         compute_rigid_transform,
         compute_warpfield,
     )
+    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
     for _r_idx, round_id in enumerate(round_list):
         test = dr._datastore.load_local_registered_image(
@@ -148,8 +153,6 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
             )
 
             if dr._decon_polyDT:
-                from merfish3danalysis.utils.rlgc import chunked_rlgc
-
                 if dr._bkd_subtract_polyDT:
                     from merfish3danalysis.utils.imageprocessing import (
                         subtract_background_imagej,
@@ -161,14 +164,14 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                 del raw
 
                 if dr._datastore.microscope_type == "2D":
-                    mov_image_decon = np.zeros_like(bkd_image, dtype=np.float32)
-                    for z_idx in range(raw.shape[0]):
-                        mov_image_decon[z_idx, :] = chunked_rlgc(
-                            image=bkd_image[z_idx, :],
-                            psf=dr._psfs[0, :],
-                            gpu_id=gpu_id,
-                            crop_yx=raw.shape[-1],
-                        )
+                    mov_image_decon = chunked_rlgc(
+                        image=bkd_image,
+                        psf=dr._psfs[0, :],
+                        gpu_id=gpu_id,
+                        crop_yx=bkd_image.shape[-1],
+                        use_batched_2d=dr._use_batched_2d_decon,
+                        release_memory=False,
+                    )
                     mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
                         np.uint16
                     )
@@ -179,6 +182,7 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
                         psf=dr._psfs[0, :],
                         gpu_id=gpu_id,
                         crop_yx=dr._crop_yx_decon,
+                        release_memory=False,
                     )
                     mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
                         np.uint16
@@ -292,23 +296,23 @@ def _apply_polyDT_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa
 
             del data_registered
             gc.collect()
+    try:
+        clear_rlgc_caches(clear_memory_pool=False)
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+        try:
+            import cupyx
 
-            try:
-                cp.cuda.Stream.null.synchronize()
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
-                try:
-                    import cupyx
-
-                    cupyx.scipy.fft.clear_plan_cache()
-                except Exception:
-                    pass
-                try:
-                    cp.fft.config.get_plan_cache().clear()
-                except Exception:
-                    pass
-            except Exception:
-                pass
+            cupyx.scipy.fft.clear_plan_cache()
+        except Exception:
+            pass
+        try:
+            cp.fft.config.get_plan_cache().clear()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
     return True
 
@@ -344,7 +348,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     from ufish.api import UFish
 
     from merfish3danalysis.utils.registration import apply_transform
-    from merfish3danalysis.utils.rlgc import chunked_rlgc
+    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
     for bit_id in bit_list:
         r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
@@ -365,14 +369,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # deconvolution
             if dr._decon:
                 if dr._datastore.microscope_type == "2D":
-                    decon_image = np.zeros_like(corrected_image, dtype=np.float32)
-                    for z_idx in range(corrected_image.shape[0]):
-                        decon_image[z_idx, :] = chunked_rlgc(
-                            image=corrected_image[z_idx, :],
-                            psf=dr._psfs[psf_idx, :],
-                            gpu_id=gpu_id,
-                            crop_yx=corrected_image.shape[-1],
-                        )
+                    decon_image = chunked_rlgc(
+                        image=corrected_image,
+                        psf=dr._psfs[psf_idx, :],
+                        gpu_id=gpu_id,
+                        crop_yx=corrected_image.shape[-1],
+                        use_batched_2d=dr._use_batched_2d_decon,
+                        release_memory=False,
+                    )
                     decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
                 else:
                     decon_image = chunked_rlgc(
@@ -380,6 +384,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                         psf=dr._psfs[psf_idx, :],
                         gpu_id=gpu_id,
                         crop_yx=dr._crop_yx_decon,
+                        release_memory=False,
                     )
                     decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
             else:
@@ -446,7 +451,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             gc.collect()
 
             torch.cuda.empty_cache()
-            cp.get_default_memory_pool().free_all_blocks()
             gc.collect()
 
             # UFISH ROI sums
@@ -503,6 +507,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             del data_reg, ufish_data, ufish_loc
             gc.collect()
 
+    try:
+        clear_rlgc_caches(clear_memory_pool=False)
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+    except Exception:
+        pass
+
     return True
 
 
@@ -527,6 +539,9 @@ class DataRegistration:
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
         Crop size for deconvolution applied to both y and x dimensions.
+    use_batched_2d_decon: bool | None, default None
+        If None, automatically enable batched 2D deconvolution when datastore
+        microscope type is "2D". If True/False, explicitly enable/disable it.
     """
 
     def __init__(
@@ -539,6 +554,7 @@ class DataRegistration:
         save_all_polyDT_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
+        use_batched_2d_decon: bool | None = None,
     ) -> None:
         self._datastore = datastore
         self._decon_polyDT = decon_polyDT
@@ -549,6 +565,10 @@ class DataRegistration:
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
         self._bkd_subtract_polyDT = bkd_subtract_polyDT
+        if use_batched_2d_decon is None:
+            self._use_batched_2d_decon = self._datastore.microscope_type == "2D"
+        else:
+            self._use_batched_2d_decon = bool(use_batched_2d_decon)
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None
