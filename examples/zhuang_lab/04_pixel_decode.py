@@ -16,7 +16,7 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
-    ufish_threshold: float = 0.01,
+    feature_predictor_threshold: float = 0.01,
     magnitude_threshold: float = (0.1, 10.0),
     fdr_target: float = 0.3,
     run_baysor: bool = False,
@@ -31,8 +31,8 @@ def decode_pixels(
         number of bits in codebook
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 9.
-    ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.1
+    feature_predictor_threshold : float
+        threshold to accept feature_predictor prediction. Default = 0.1
     magnitude_threshold: tuple[float,float], default = (1.,5.)
         lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because
         spots are normalized to median spot value, not maximum.
@@ -65,7 +65,7 @@ def decode_pixels(
         n_random_tiles=10,
         n_iterations=5,
         minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
         magnitude_threshold=magnitude_threshold,
     )
 
@@ -75,7 +75,7 @@ def decode_pixels(
         prep_for_baysor=True,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        ufish_threshold=ufish_threshold,
+        feature_predictor_threshold=feature_predictor_threshold,
         fdr_target=fdr_target,
     )
 
