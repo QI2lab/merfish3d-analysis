@@ -302,7 +302,7 @@ def convert_data_skip_z(
 
     # initialize datastore
     if output_path is None:
-        datastore_path = root_path / Path(r"qi2labdatastore")
+        datastore_path = root_path / Path(r"qi2labdatastore_skipz_str(z_step).zfill(2)")
         datastore = qi2labDataStore(datastore_path)
     else:
         datastore = qi2labDataStore(output_path)
