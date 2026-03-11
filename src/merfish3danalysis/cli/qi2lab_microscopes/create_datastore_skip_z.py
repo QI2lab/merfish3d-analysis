@@ -635,8 +635,13 @@ def convert_data_skip_z(
         gc.collect()
 
         if save_illuminations:
-            illuminations = np.zeros((3, fidicual_illumination.shape[0], fidicual_illumination.shape[1]), dtype=np.float32)
-            illuminations[0,:]  = fidicual_illumination
+            illuminations = np.zeros(
+                (3, fidicual_illumination.shape[0], fidicual_illumination.shape[1]),
+                dtype=np.float32,
+            )
+            illuminations[0, :] = fidicual_illumination
+            readout_illumination_psf1 = []
+            readout_illumination_psf2 = []
 
         for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):
             for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
@@ -703,17 +708,27 @@ def convert_data_skip_z(
                 )
 
                 if save_illuminations:
-                    if bit_id < 2:
-                        illuminations[psf_idx, :, :] = readout_illumimation
-                    else:
-                        illuminations[psf_idx, :, :] = (illuminations[psf_idx, :, :]+readout_illumimation)/2
+                    # One profile per bit; accumulate once using the first tile's channel.
+                    if tile_idx == 0:
+                        if psf_idx == 1:
+                            readout_illumination_psf1.append(readout_illumimation.copy())
+                        else:
+                            readout_illumination_psf2.append(readout_illumimation.copy())
 
         if save_illuminations:
             from tifffile import TiffWriter
-            filename = "illuminations.ome.tiff"
-            illuminations_path = (
-                root_path / Path("segmentation") / Path("cellpose")
-            )
+
+            if readout_illumination_psf1:
+                illuminations[1, :, :] = np.median(
+                    np.stack(readout_illumination_psf1, axis=0), axis=0
+                ).astype(np.float32)
+            if readout_illumination_psf2:
+                illuminations[2, :, :] = np.median(
+                    np.stack(readout_illumination_psf2, axis=0), axis=0
+                ).astype(np.float32)
+
+            filename = "illuminations.ome.tif"
+            illuminations_path = root_path / Path(filename)
 
             with TiffWriter(illuminations_path, bigtiff=True) as tif:
                 metadata = {
