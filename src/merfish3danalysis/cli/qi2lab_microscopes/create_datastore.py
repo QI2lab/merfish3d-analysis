@@ -493,7 +493,10 @@ def convert_data(
             # write fidicual data (ch_idx = 0) and metadata
             if use_illuminations:
                 data_camera_corrected = (
-                    (np.squeeze(raw_image[0, :]).astype(np.float32) / illuminations[0,:])
+                    (
+                        np.squeeze(raw_image[0, :]).astype(np.float32)
+                        / illuminations[0, :]
+                    )
                     .clip(0, 2**16 - 1)
                     .astype(np.uint16)
                 )
@@ -522,7 +525,10 @@ def convert_data(
 
             if use_illuminations:
                 data_camera_corrected = (
-                    (np.squeeze(raw_image[1, :]).astype(np.float32) / illuminations[1,:])
+                    (
+                        np.squeeze(raw_image[1, :]).astype(np.float32)
+                        / illuminations[1, :]
+                    )
                     .clip(0, 2**16 - 1)
                     .astype(np.uint16)
                 )
@@ -547,7 +553,10 @@ def convert_data(
 
             if use_illuminations:
                 data_camera_corrected = (
-                    (np.squeeze(raw_image[2, :]).astype(np.float32) / illuminations[2,:])
+                    (
+                        np.squeeze(raw_image[2, :]).astype(np.float32)
+                        / illuminations[2, :]
+                    )
                     .clip(0, 2**16 - 1)
                     .astype(np.uint16)
                 )
@@ -571,7 +580,7 @@ def convert_data(
             )
 
     # Calculate and apply flatfield corrections
-    if not(use_illuminations):
+    if not (use_illuminations):
         datastore_path = root_path / Path(r"qi2labdatastore")
         datastore = qi2labDataStore(datastore_path)
         if datastore.num_tiles > 100:
@@ -579,7 +588,9 @@ def convert_data(
         else:
             n_flatfield_images = datastore.num_tiles
         sample_indices = np.asarray(
-            np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False)
+            np.random.choice(
+                datastore.num_tiles, size=n_flatfield_images, replace=False
+            )
         )
         data_camera_corrected = []
 
@@ -628,7 +639,9 @@ def convert_data(
             data_camera_corrected = []
 
             # calculate fiducial correction
-            for rand_tile_idx in tqdm(sample_indices, desc="flatfield data", leave=False):
+            for rand_tile_idx in tqdm(
+                sample_indices, desc="flatfield data", leave=False
+            ):
                 data_camera_corrected.append(
                     datastore.load_local_corrected_image(
                         tile=int(rand_tile_idx),
@@ -648,8 +661,8 @@ def convert_data(
                     .astype(np.uint16)
                 )
 
-                ex_wavelength_um, _em_wavelength_um = datastore.load_local_wavelengths_um(
-                    tile=tile_idx, bit=bit_id
+                ex_wavelength_um, _em_wavelength_um = (
+                    datastore.load_local_wavelengths_um(tile=tile_idx, bit=bit_id)
                 )
 
                 # TO DO: hacky fix. Need to come up with a better way.
@@ -672,9 +685,13 @@ def convert_data(
                     # One profile per bit; accumulate once using the first tile's channel.
                     if tile_idx == 0:
                         if psf_idx == 1:
-                            readout_illumination_psf1.append(readout_illumimation.copy())
+                            readout_illumination_psf1.append(
+                                readout_illumimation.copy()
+                            )
                         else:
-                            readout_illumination_psf2.append(readout_illumimation.copy())
+                            readout_illumination_psf2.append(
+                                readout_illumimation.copy()
+                            )
 
         if save_illuminations:
             from tifffile import TiffWriter
