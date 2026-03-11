@@ -57,6 +57,8 @@ app.pretty_exceptions_enable = False
 @app.command()
 def convert_data(
     root_path: Path,
+    use_illuminations: bool = False,
+    save_illuminations: bool = True,
     baysor_binary_path: Path | None = None,
     baysor_options_path: Path | None = None,
     julia_threads: int = 1,
@@ -72,6 +74,10 @@ def convert_data(
     ----------
     root_path: Path
         path to dataset
+    use_illuminations: bool, default False
+        whether to apply illumination correction. This requires that there is a "illuminations.ome.tif" file in the root_path.
+    save_illuminations: bool, default True
+        if illuminations are calculated, save them to disk in "illuminations.ome.tif" in the root_path for future use.
     baysor_binary_path: Path
         path to baysor binary
     baysor_options_path: Path
@@ -93,6 +99,16 @@ def convert_data(
         imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
     """
+
+    # load illuminations if requested
+    # -----------------------------------
+    if use_illuminations:
+        illuminations_path = root_path / Path("illuminations.ome.tif")
+        if illuminations_path.exists():
+            illuminations = imread(illuminations_path)
+            save_illuminations = False
+        else:
+            use_illuminations = False
 
     # load codebook
     # --------------
@@ -474,8 +490,20 @@ def convert_data(
             )
 
             # write fidicual data (ch_idx = 0) and metadata
+            if use_illuminations:
+                data_camera_corrected = (
+                    (
+                        np.squeeze(raw_image[0, :]).astype(np.float32)
+                        / illuminations[0, :]
+                    )
+                    .clip(0, 2**16 - 1)
+                    .astype(np.uint16)
+                )
+            else:
+                data_camera_corrected = np.squeeze(raw_image[0, :]).astype(np.uint16)
+
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[0, :]).astype(np.uint16),
+                data_camera_corrected,
                 tile=tile_idx,
                 psf_idx=0,
                 gain_correction=gain_corrected,
@@ -494,9 +522,21 @@ def convert_data(
                 round=round_idx,
             )
 
+            if use_illuminations:
+                data_camera_corrected = (
+                    (
+                        np.squeeze(raw_image[1, :]).astype(np.float32)
+                        / illuminations[1, :]
+                    )
+                    .clip(0, 2**16 - 1)
+                    .astype(np.uint16)
+                )
+            else:
+                data_camera_corrected = np.squeeze(raw_image[1, :]).astype(np.uint16)
+
             # write first readout channel (ch_idx = 1) and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[1, :]).astype(np.uint16),
+                data_camera_corrected,
                 tile=tile_idx,
                 psf_idx=1,
                 gain_correction=gain_corrected,
@@ -510,9 +550,21 @@ def convert_data(
                 bit=int(experiment_order[round_idx, 1]) - 1,
             )
 
+            if use_illuminations:
+                data_camera_corrected = (
+                    (
+                        np.squeeze(raw_image[2, :]).astype(np.float32)
+                        / illuminations[2, :]
+                    )
+                    .clip(0, 2**16 - 1)
+                    .astype(np.uint16)
+                )
+            else:
+                data_camera_corrected = np.squeeze(raw_image[2, :]).astype(np.uint16)
+
             # write second readout channel (ch_idx = 2) and metadata
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[2, :]).astype(np.uint16),
+                data_camera_corrected,
                 tile=tile_idx,
                 psf_idx=2,
                 gain_correction=gain_corrected,
@@ -526,57 +578,19 @@ def convert_data(
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
 
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"Corrected": True})
-    datastore.datastore_state = datastore_state
-    del datastore
-    gc.collect()
-
     # Calculate and apply flatfield corrections
-    datastore_path = root_path / Path(r"qi2labdatastore")
-    datastore = qi2labDataStore(datastore_path)
-    if datastore.num_tiles > 100:
-        n_flatfield_images = 100
-    else:
-        n_flatfield_images = datastore.num_tiles
-    sample_indices = np.asarray(
-        np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False)
-    )
-    data_camera_corrected = []
-
-    # calculate fiducial correction
-    for rand_tile_idx in tqdm(sample_indices, desc="flatfield data", leave=False):
-        data_camera_corrected.append(
-            datastore.load_local_corrected_image(
-                tile=int(rand_tile_idx),
-                round=0,
+    if not (use_illuminations):
+        datastore_path = root_path / Path(r"qi2labdatastore")
+        datastore = qi2labDataStore(datastore_path)
+        if datastore.num_tiles > 100:
+            n_flatfield_images = 100
+        else:
+            n_flatfield_images = datastore.num_tiles
+        sample_indices = np.asarray(
+            np.random.choice(
+                datastore.num_tiles, size=n_flatfield_images, replace=False
             )
         )
-    fidicual_illumination = estimate_shading(data_camera_corrected)
-    del data_camera_corrected
-    gc.collect()
-
-    for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):
-        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
-            data_camera_corrected = datastore.load_local_corrected_image(
-                tile=tile_idx, round=round_idx, return_future=False
-            )
-            data_camera_corrected = (
-                (data_camera_corrected.astype(np.float32) / fidicual_illumination)
-                .clip(0, 2**16 - 1)
-                .astype(np.uint16)
-            )
-            datastore.save_local_corrected_image(
-                data_camera_corrected,
-                tile=tile_idx,
-                psf_idx=0,
-                gain_correction=True,
-                hotpixel_correction=False,
-                shading_correction=True,
-                round=round_idx,
-            )
-
-    for bit_id in tqdm(datastore.bit_ids, desc="bit", leave=True):
         data_camera_corrected = []
 
         # calculate fiducial correction
@@ -584,41 +598,140 @@ def convert_data(
             data_camera_corrected.append(
                 datastore.load_local_corrected_image(
                     tile=int(rand_tile_idx),
-                    bit=bit_id,
+                    round=0,
                 )
             )
-        readout_illumimation = estimate_shading(data_camera_corrected)
+        fidicual_illumination = estimate_shading(data_camera_corrected)
         del data_camera_corrected
         gc.collect()
-        for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
-            data_camera_corrected = datastore.load_local_corrected_image(
-                tile=tile_idx, bit=bit_id, return_future=False
-            )
-            data_camera_corrected = (
-                (data_camera_corrected.astype(np.float32) / readout_illumimation)
-                .clip(0, 2**16 - 1)
-                .astype(np.uint16)
-            )
 
-            ex_wavelength_um, _em_wavelength_um = datastore.load_local_wavelengths_um(
-                tile=tile_idx, bit=bit_id
+        if save_illuminations:
+            illuminations = np.zeros(
+                (3, fidicual_illumination.shape[0], fidicual_illumination.shape[1]),
+                dtype=np.float32,
             )
+            illuminations[0, :] = fidicual_illumination
+            readout_illumination_psf1 = []
+            readout_illumination_psf2 = []
 
-            # TO DO: hacky fix. Need to come up with a better way.
-            if ex_wavelength_um < 600:
-                psf_idx = 1
-            else:
-                psf_idx = 2
+        for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):
+            for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+                data_camera_corrected = datastore.load_local_corrected_image(
+                    tile=tile_idx, round=round_idx, return_future=False
+                )
+                data_camera_corrected = (
+                    (data_camera_corrected.astype(np.float32) / fidicual_illumination)
+                    .clip(0, 2**16 - 1)
+                    .astype(np.uint16)
+                )
+                datastore.save_local_corrected_image(
+                    data_camera_corrected,
+                    tile=tile_idx,
+                    psf_idx=0,
+                    gain_correction=True,
+                    hotpixel_correction=False,
+                    shading_correction=True,
+                    round=round_idx,
+                )
 
-            datastore.save_local_corrected_image(
-                data_camera_corrected.astype(np.uint16),
-                tile=tile_idx,
-                psf_idx=psf_idx,
-                gain_correction=True,
-                hotpixel_correction=False,
-                shading_correction=True,
-                bit=bit_id,
-            )
+        for bit_id in tqdm(datastore.bit_ids, desc="bit", leave=True):
+            data_camera_corrected = []
+
+            # calculate fiducial correction
+            for rand_tile_idx in tqdm(
+                sample_indices, desc="flatfield data", leave=False
+            ):
+                data_camera_corrected.append(
+                    datastore.load_local_corrected_image(
+                        tile=int(rand_tile_idx),
+                        bit=bit_id,
+                    )
+                )
+            readout_illumimation = estimate_shading(data_camera_corrected)
+            del data_camera_corrected
+            gc.collect()
+            for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+                data_camera_corrected = datastore.load_local_corrected_image(
+                    tile=tile_idx, bit=bit_id, return_future=False
+                )
+                data_camera_corrected = (
+                    (data_camera_corrected.astype(np.float32) / readout_illumimation)
+                    .clip(0, 2**16 - 1)
+                    .astype(np.uint16)
+                )
+
+                ex_wavelength_um, _em_wavelength_um = (
+                    datastore.load_local_wavelengths_um(tile=tile_idx, bit=bit_id)
+                )
+
+                # TO DO: hacky fix. Need to come up with a better way.
+                if ex_wavelength_um < 600:
+                    psf_idx = 1
+                else:
+                    psf_idx = 2
+
+                datastore.save_local_corrected_image(
+                    data_camera_corrected.astype(np.uint16),
+                    tile=tile_idx,
+                    psf_idx=psf_idx,
+                    gain_correction=True,
+                    hotpixel_correction=False,
+                    shading_correction=True,
+                    bit=bit_id,
+                )
+
+                if save_illuminations:
+                    # One profile per bit; accumulate once using the first tile's channel.
+                    if tile_idx == 0:
+                        if psf_idx == 1:
+                            readout_illumination_psf1.append(
+                                readout_illumimation.copy()
+                            )
+                        else:
+                            readout_illumination_psf2.append(
+                                readout_illumimation.copy()
+                            )
+
+        if save_illuminations:
+            from tifffile import TiffWriter
+
+            if readout_illumination_psf1:
+                illuminations[1, :, :] = np.median(
+                    np.stack(readout_illumination_psf1, axis=0), axis=0
+                ).astype(np.float32)
+            if readout_illumination_psf2:
+                illuminations[2, :, :] = np.median(
+                    np.stack(readout_illumination_psf2, axis=0), axis=0
+                ).astype(np.float32)
+
+            filename = "illuminations.ome.tif"
+            illuminations_path = root_path / Path(filename)
+
+            with TiffWriter(illuminations_path, bigtiff=True) as tif:
+                metadata = {
+                    "axes": "CYX",
+                    "SignificantBits": 32,
+                    "PhysicalSizeX": float(datastore.voxel_size_zyx_um[2]),
+                    "PhysicalSizeXUnit": "µm",
+                    "PhysicalSizeY": float(datastore.voxel_size_zyx_um[1]),
+                    "PhysicalSizeYUnit": "µm",
+                }
+                options = {
+                    "compression": "zlib",
+                    "compressionargs": {"level": 8},
+                    "predictor": True,
+                    "photometric": "minisblack",
+                    "resolutionunit": "CENTIMETER",
+                }
+                tif.write(
+                    illuminations,
+                    resolution=(
+                        1e4 / float(datastore.voxel_size_zyx_um[2]),
+                        1e4 / float(datastore.voxel_size_zyx_um[1]),
+                    ),
+                    **options,
+                    metadata=metadata,
+                )
 
     datastore_state = datastore.datastore_state
     datastore_state.update({"Corrected": True})
