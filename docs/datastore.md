@@ -2,7 +2,9 @@
 
 ## Philosophy
 
-To help efficiently handle the data complexity of 3D MERFISH experiments, we have created a dedicated [Zarr](https://zarr.dev/) based datastore, using [TensorStore](https://google.github.io/tensorstore/) for efficient reading and writing of image data and [Parquet](https://parquet.apache.org/docs/) for tabular data. 
+To efficiently handle 3D MERFISH experiments, `qi2labDataStore` stores image arrays as independent [OME-NGFF v0.5](https://ngff.openmicroscopy.org/latest/) images, read and written through [yaozarrs](https://imaging-formats.github.io/yaozarrs/) using the TensorStore interface. Tabular outputs are stored as [Parquet](https://parquet.apache.org/docs/).
+
+For backward compatibility, the reader can still open legacy direct Zarr arrays and legacy `.zattrs` metadata from older datastore versions.
 
 ## Important considerations
 
@@ -20,7 +22,7 @@ To create a `qi2labDataStore`, we need to know the following metadata:
 
 Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in [napari](https://github.com/napari) and explore different orientations of the images and stage direction.
 
-Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientaton such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the [Zhuang lab examples](examples/zhuang_lab_mouse_brain.md), we show how to determine the camera and stage orientations when the metadata is not available.
+Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientation such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the [Zhuang lab examples](examples/zhuang_lab_mouse_brain.md), we show how to determine the camera and stage orientations when the metadata is not available.
 
 ## Codebook and Experiment Order files
 
@@ -58,7 +60,7 @@ For a 16-bit codebook, where we acquire the bits in sequential order within roun
 
 Here, we use a hypothetical dataset that only has one round with two bits. We assume the data is already gain, offset, and hot pixel corrected.
 
-Tiles and rounds are indexed from 0, keeping with python conventions. However, we always index rounds and codebook bits from 1, to avoid confusion.
+Tiles, rounds, and bits are indexed from `0` in the Python API, but datastore IDs are stored as 1-based, zero-padded strings (`round001`, `bit001`, `tile0000`).
 
 ```python
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -93,6 +95,7 @@ datastore_state.update({"Calibrations": True})
 datastore.datastore_state = datastore_state
 
 # initialize the tile
+tile_idx = 0
 datastore.initialize_tile(tile_idx)
 
 # code to read image tile here
@@ -127,7 +130,7 @@ datastore.save_local_wavelengths_um(
 # Assume the images are of shape [n_channels,nz,nx,ny]
 bit001_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[1,:]
 
-# save first readout channel for tile = 0, bit_idx = 1
+# save first readout channel for tile = 0, bit = 0 (bit001)
 datastore.save_local_corrected_image(
     bit001_data,
     tile=0,
@@ -135,21 +138,21 @@ datastore.save_local_corrected_image(
     gain_correction=True,
     hotpixel_correction=True,
     shading_correction=False,
-    bit=1,
+    bit=0,
 )
 
-# save excitation and emission wavelengths for tile = 0, bit_idx = 1
+# save excitation and emission wavelengths for tile = 0, bit = 0
 datastore.save_local_wavelengths_um(
     (.561, .590),
     tile=0,
-    bit=1,
+    bit=0,
 )
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
 bit002_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[2,:]
 
-# save second readout channel for tile = 0, bit_idx = 2
+# save second readout channel for tile = 0, bit = 1 (bit002)
 datastore.save_local_corrected_image(
     bit002_data,
     tile=0,
@@ -157,14 +160,14 @@ datastore.save_local_corrected_image(
     gain_correction=True,
     hotpixel_correction=True,
     shading_correction=False,
-    bit=2,
+    bit=1,
 )
 
-# save excitation and emission wavelengths for tile = 0, bit_idx = 2
+# save excitation and emission wavelengths for tile = 0, bit = 1
 datastore.save_local_wavelengths_um(
     (.635, .670),
     tile=0,
-    bit=2,
+    bit=1,
 )
 
 # update datastore state that corrected data is saved 
@@ -176,68 +179,88 @@ datastore.datastore_state = datastore_state
 ## DataStore structure
 
 ```bash
-/experiment 
-├── raw_data/ 
-  └── <data> (raw experimental data and metadata)
-├── qi2labdatastore/ 
-    ├── datastore.json (information on the state of the datastore)
-    ├── calibrations.zarr/ (calibration information)
-    ├── .zattrs
-      ├── <exp_codebook>
-      ├── <exp_order>
-      └── <exp_codebook>
-    ├── camera_noise_map/ (camera noise map array)
-    └── psf_data/ (psf arrays)
-  ├── fiducial/ (raw and processed data for fiducial label)
-    ├── tile0000/
-      ├── round0000.zarr/
-        ├── .zattrs
-          ├── <stage_zyx_um> (global stage position in zyx order; unit: microns)
-          ├── <wavelengths_um> (wavelength in (excitation,emission) order; unit: microns)
-          ├── <voxel_size_zyx_um> (voxel size in zyx order; unit: microns)
-          ├── <bit_linker> (what codebook bits are linked to this fidicual image)
-          ├── <affine_zyx_um> (4x4 affine matrix generated during global registration; unit: microns)
-          ├── <origin_zyx_um> (tile origin generated during global registration; unit: microns)
-          └── <spacing_zyx_um> (voxel size used during global registration, this must match <voxel_size_zyx_um>; unit: microns)
-        ├── camera_data/ (gain and offset corrected data in zyx order)
-        ├── corrected_data/ (gain and offset corrected data in zyx order)
-        └── registered_decon_data/ (deconvolved data in zyx order)
-      ├── round0001.zarr
-        ├── .zattrs
-          ├── <stage_zyx_um> (global stage position in zyx order; unit: microns)
-          ├── <wavelengths_um> (wavelength in (excitation,emission) order; unit: microns)
-          ├── <voxel_size_zyx_um> (voxel size in zyx order; unit: microns)
-          ├── <bit_linker> (what codebook bits are linked to this fidicual image)
-          ├── <affine_zyx_um> (4x4 affine matrix generated during global registration; unit: microns)
-          ├── <origin_zyx_um> (tile origin generated during global registration; unit: microns)
-          └── <spacing_zyx_um> (voxel size used during global registration, this must match <voxel_size_zyx_um>; unit: microns)
-        ├── camera_data/ (gain and offset corrected data in zyx order)
-        ├── corrected_data/ (gain and offset corrected data in zyx order)
-        ├── of_xyz_3x_downsample/ (3x downsampled optical flow field for round 0 alignment in pixels)
-        ├── registered_decon_data/ (deconvolved, registered back to round 0 image data in zyx order)
-        ├── ... 
-        └── roundNNNN.zarr/
-    ├── tile0001/
-    ├── tile0002/
-    ├── ...
-    └── tileNNNN/
-  ├── readouts/ (raw and processed data for MERFISH bits)
-    ├── tile0001/
-      ├── bit000.zarr/
-        ├── .zattrs
-          ├── <stage_zyx_um> (global stage position in zyx order; unit: microns)
-          ├── <wavelengths_um> (wavelength in (excitation,emission) order; unit: microns)
-          ├── <voxel_size_zyx_um> (voxel size in zyx order; unit: microns)
-          └── <round_linker> (what fidicual round is linked to this bit image) 
-        ├── camera_data/
-        ├── corrected_data/
-        ├── registered_decon_data/
-        └── registered_feature_predictor_data/
-      ├── bit001.zarr/
-      ├── ...
-      └── bitNNN.zarr/
-    
+/experiment
+├── raw_data/
+│   └── <raw experimental data and metadata>
+└── qi2labdatastore/
+    ├── datastore_state.json
+    ├── calibrations.zarr/
+    │   ├── .zattrs
+    │   │   ├── <experiment metadata: codebook, exp_order, channels, ...>
+    │   │   ├── <voxel_size_zyx_um>
+    │   │   └── <psf_manifest>
+    │   ├── noise_map/                # OME-NGFF v0.5 image
+    │   │   ├── zarr.json
+    │   │   └── 0/
+    │   ├── shading_maps/             # OME-NGFF v0.5 image
+    │   │   ├── zarr.json
+    │   │   └── 0/
+    │   └── psf_data/
+    │       ├── psf_000/              # OME-NGFF v0.5 image
+    │       │   ├── zarr.json
+    │       │   └── 0/
+    │       ├── psf_001/
+    │       └── ...
+    ├── fiducial/
+    │   └── tile0000/
+    │       ├── round001.zarr/
+    │       │   ├── .zattrs           # legacy compatibility mirror
+    │       │   ├── corrected_data/   # OME-NGFF v0.5 image
+    │       │   │   ├── zarr.json
+    │       │   │   └── 0/
+    │       │   ├── registered_decon_data/
+    │       │   │   ├── zarr.json
+    │       │   │   └── 0/
+    │       │   └── opticalflow_xform_px/
+    │       │       ├── zarr.json
+    │       │       └── 0/
+    │       ├── round002.zarr/
+    │       └── ...
+    ├── readouts/
+    │   └── tile0000/
+    │       ├── bit001.zarr/
+    │       │   ├── .zattrs           # legacy compatibility mirror
+    │       │   ├── corrected_data/
+    │       │   │   ├── zarr.json
+    │       │   │   └── 0/
+    │       │   ├── registered_decon_data/
+    │       │   │   ├── zarr.json
+    │       │   │   └── 0/
+    │       │   └── registered_feature_predictor_data/
+    │       │       ├── zarr.json
+    │       │       └── 0/
+    │       ├── bit002.zarr/
+    │       └── ...
+    ├── feature_predictor_localizations/
+    │   └── tile0000/
+    │       ├── bit001.parquet
+    │       └── ...
+    ├── fused/
+    │   └── fused.zarr/
+    │       ├── fused_fiducial_iso_zyx/
+    │       │   ├── zarr.json
+    │       │   └── 0/
+    │       └── fused_all_channels_zyx/   # optional
+    ├── segmentation/
+    │   └── cellpose/
+    │       ├── cellpose.zarr/
+    │       │   └── masks_fiducial_iso_zyx/
+    │       │       ├── zarr.json
+    │       │       └── 0/
+    │       └── imagej_rois/global_coords_rois.zip
+    ├── decoded/
+    │   ├── tile0000_decoded_features.parquet
+    │   └── all_tiles_filtered_decoded_features.parquet
+    └── mtx_output/
 ```
+
+## Metadata conventions
+
+- Each image directory (for example `corrected_data/`, `registered_decon_data/`, `masks_fiducial_iso_zyx/`) is a standalone OME-NGFF v0.5 image.
+- In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
+- All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).
+- Legacy `.zattrs` files are still mirrored for compatibility with older readers, but new metadata should be considered authoritative in `extra_attributes`.
+- PSFs are stored as one image per channel under `calibrations.zarr/psf_data/psf_XXX/`, which allows different PSF array sizes across channels.
 
 ## DataStore API
 
