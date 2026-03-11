@@ -15,7 +15,6 @@ app.pretty_exceptions_enable = False
 BASE_PIP_DEPS = [
     "tqdm",
     "ryomen",
-    "tensorstore",
     "nvidia-cuda-runtime-cu12==12.8.*",
     "cuda-bindings==12.8.*",
     "onnx",
@@ -35,6 +34,8 @@ BASE_PIP_DEPS = [
     "imbalanced-learn",
     "scikit-learn",
     "anndata",
+    "yaozarrs[tensorstore,io]>=0.3",
+    "matplotlib"
 ]
 
 # CUDA conda pkgs (Linux)
@@ -81,6 +82,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "shapely",
     "fastparquet",
     "joblib",
+    "yaozarrs[tensorstore,io]>=0.3"
 ]
 
 
