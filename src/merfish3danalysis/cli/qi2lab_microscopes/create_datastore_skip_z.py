@@ -298,7 +298,6 @@ def convert_data_skip_z(
         ).astype(np.float32)
         # psf = psf / np.sum(psf, axis=(0, 1, 2))
         channel_psfs.append(psf)
-    channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
 
     # initialize datastore
     if output_path is None:

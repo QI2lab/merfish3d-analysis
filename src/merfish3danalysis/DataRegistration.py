@@ -50,6 +50,24 @@ import SimpleITK as sitk
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
+def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
+    """Fetch PSF by index from uniform or ragged channel PSF storage."""
+
+    if isinstance(psfs, list):
+        if psf_idx < 0 or psf_idx >= len(psfs):
+            raise IndexError(f"PSF index {psf_idx} out of range for {len(psfs)} PSFs.")
+        return np.asarray(psfs[psf_idx], dtype=np.float32)
+
+    psf_array = np.asarray(psfs)
+    if psf_array.ndim < 3:
+        raise ValueError(f"Invalid PSF array shape: {psf_array.shape}")
+    if psf_idx < 0 or psf_idx >= psf_array.shape[0]:
+        raise IndexError(
+            f"PSF index {psf_idx} out of range for shape {psf_array.shape}."
+        )
+    return np.asarray(psf_array[psf_idx], dtype=np.float32)
+
+
 def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     import cupy as cp
 
@@ -69,7 +87,7 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
 
     ref_image_decon = chunked_rlgc(
         image=bkd_image,
-        psf=dr._psfs[0, :],
+        psf=_resolve_psf(dr._psfs, 0),
         gpu_id=0,
         crop_yx=dr._crop_yx_decon,
         use_batched_2d=dr._use_batched_2d_decon,
@@ -168,7 +186,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 if dr._datastore.microscope_type == "2D":
                     mov_image_decon = chunked_rlgc(
                         image=bkd_image,
-                        psf=dr._psfs[0, :],
+                        psf=_resolve_psf(dr._psfs, 0),
                         gpu_id=gpu_id,
                         crop_yx=bkd_image.shape[-1],
                         use_batched_2d=dr._use_batched_2d_decon,
@@ -181,7 +199,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 else:
                     mov_image_decon = chunked_rlgc(
                         image=bkd_image,
-                        psf=dr._psfs[0, :],
+                        psf=_resolve_psf(dr._psfs, 0),
                         gpu_id=gpu_id,
                         crop_yx=dr._crop_yx_decon,
                         release_memory=False,
@@ -373,7 +391,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 if dr._datastore.microscope_type == "2D":
                     decon_image = chunked_rlgc(
                         image=corrected_image,
-                        psf=dr._psfs[psf_idx, :],
+                        psf=_resolve_psf(dr._psfs, psf_idx),
                         gpu_id=gpu_id,
                         crop_yx=corrected_image.shape[-1],
                         use_batched_2d=dr._use_batched_2d_decon,
@@ -383,7 +401,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 else:
                     decon_image = chunked_rlgc(
                         image=corrected_image,
-                        psf=dr._psfs[psf_idx, :],
+                        psf=_resolve_psf(dr._psfs, psf_idx),
                         gpu_id=gpu_id,
                         crop_yx=dr._crop_yx_decon,
                         release_memory=False,
