@@ -34,7 +34,7 @@ BASE_PIP_DEPS = [
     "imbalanced-learn",
     "scikit-learn",
     "anndata",
-    "yaozarrs[tensorstore,io]>=0.3",
+    "yaozarrs[write-tensorstore,io]>=0.3",
     "matplotlib",
 ]
 
@@ -82,7 +82,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "shapely",
     "fastparquet",
     "joblib",
-    "yaozarrs[tensorstore,io]>=0.3",
+    "yaozarrs[write-tensorstore,io]>=0.3",
 ]
 
 
