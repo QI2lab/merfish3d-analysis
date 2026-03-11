@@ -570,12 +570,6 @@ def convert_data(
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
 
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"Corrected": True})
-    datastore.datastore_state = datastore_state
-    del datastore
-    gc.collect()
-
     # Calculate and apply flatfield corrections
     if not(use_illuminations):
         datastore_path = root_path / Path(r"qi2labdatastore")
@@ -685,7 +679,7 @@ def convert_data(
             with TiffWriter(illuminations_path, bigtiff=True) as tif:
                 metadata = {
                     "axes": "CYX",
-                    "SignificantBits": 16,
+                    "SignificantBits": 32,
                     "PhysicalSizeX": float(datastore.voxel_size_zyx_um[2]),
                     "PhysicalSizeXUnit": "µm",
                     "PhysicalSizeY": float(datastore.voxel_size_zyx_um[1]),
