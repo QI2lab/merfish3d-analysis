@@ -35,7 +35,7 @@ BASE_PIP_DEPS = [
     "scikit-learn",
     "anndata",
     "yaozarrs[tensorstore,io]>=0.3",
-    "matplotlib"
+    "matplotlib",
 ]
 
 # CUDA conda pkgs (Linux)
@@ -82,7 +82,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "shapely",
     "fastparquet",
     "joblib",
-    "yaozarrs[tensorstore,io]>=0.3"
+    "yaozarrs[tensorstore,io]>=0.3",
 ]
 
 
