@@ -1105,7 +1105,9 @@ class qi2labDataStore:
         raise TypeError(f"Unsupported kvstore type: {type(kvstore)!r}")
 
     @staticmethod
-    def _normalize_transform(values: Sequence[float] | None, ndim: int, fill: float) -> list[float]:
+    def _normalize_transform(
+        values: Sequence[float] | None, ndim: int, fill: float
+    ) -> list[float]:
         """Normalize transform vectors to match array dimensionality."""
 
         if values is None:
@@ -1276,15 +1278,16 @@ class qi2labDataStore:
 
         entity_root = Path(entity_root_path)
         payload = {
-            str(k): self._to_json_compatible(v)
-            for k, v in dict(updates).items()
+            str(k): self._to_json_compatible(v) for k, v in dict(updates).items()
         }
 
         candidate_names: list[str] = []
         if target_image_name is not None:
             candidate_names.append(target_image_name)
         if image_names is not None:
-            candidate_names.extend([name for name in image_names if name not in candidate_names])
+            candidate_names.extend(
+                [name for name in image_names if name not in candidate_names]
+            )
         candidate_names.extend(
             [
                 "corrected_data",
@@ -1889,9 +1892,7 @@ class qi2labDataStore:
                     print(tile_id, round_id, "bit_linker")
                     raise KeyError("Corrected fiducial attributes incomplete")
 
-                current_local_zarr_path = str(
-                    entity_root / Path("corrected_data")
-                )
+                current_local_zarr_path = str(entity_root / Path("corrected_data"))
 
                 try:
                     self._check_for_zarr_array(
@@ -1920,9 +1921,7 @@ class qi2labDataStore:
                 if ("round_linker" not in attributes) and ("round" not in attributes):
                     raise KeyError("Corrected readout attributes incomplete")
 
-                current_local_zarr_path = str(
-                    entity_root / Path("corrected_data")
-                )
+                current_local_zarr_path = str(entity_root / Path("corrected_data"))
 
                 try:
                     self._check_for_zarr_array(
@@ -1964,7 +1963,9 @@ class qi2labDataStore:
                         # print("Optical flow registration data missing.")
                         pass
 
-                current_local_zarr_path = str(entity_root / Path("registered_decon_data"))
+                current_local_zarr_path = str(
+                    entity_root / Path("registered_decon_data")
+                )
                 if round_id == self._round_ids[0]:
                     try:
                         self._check_for_zarr_array(
@@ -1974,7 +1975,9 @@ class qi2labDataStore:
                     except (OSError, ZarrError):
                         print(tile_id, round_id)
                         print("Registered fiducial data missing.")
-                corrected_shape = self._image_shape(entity_root / Path("corrected_data"))
+                corrected_shape = self._image_shape(
+                    entity_root / Path("corrected_data")
+                )
                 registered_shape = self._image_shape(
                     entity_root / Path("registered_decon_data")
                 )
@@ -2006,7 +2009,8 @@ class qi2labDataStore:
                     print("Registered readout data missing.")
 
                 current_local_zarr_path = str(
-                    entity_root / Path(f"registered_{self.feature_predictor_folder_name}_data")
+                    entity_root
+                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
                 )
 
                 try:
@@ -2017,12 +2021,15 @@ class qi2labDataStore:
                 except (OSError, ZarrError):
                     print(tile_id, bit_id)
                     print("Registered feature_predictor prediction missing.")
-                corrected_shape = self._image_shape(entity_root / Path("corrected_data"))
+                corrected_shape = self._image_shape(
+                    entity_root / Path("corrected_data")
+                )
                 registered_shape = self._image_shape(
                     entity_root / Path("registered_decon_data")
                 )
                 feature_shape = self._image_shape(
-                    entity_root / Path(f"registered_{self.feature_predictor_folder_name}_data")
+                    entity_root
+                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
                 )
                 shapes = [
                     shape
@@ -2082,9 +2089,7 @@ class qi2labDataStore:
                 if key not in attributes.keys():
                     raise KeyError("Fused image metadata missing")
 
-            current_local_zarr_path = str(
-                fused_image_path
-            )
+            current_local_zarr_path = str(fused_image_path)
 
             try:
                 self._check_for_zarr_array(
@@ -2476,7 +2481,9 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(bit_id + ".zarr")
+            )
             attributes = self._load_entity_attributes(entity_root)
             round_linker = attributes.get("round_linker", attributes.get("round"))
             if round_linker is None:
@@ -2540,7 +2547,9 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(bit_id + ".zarr")
+            )
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
@@ -2688,7 +2697,9 @@ class qi2labDataStore:
                 entity_root_path=entity_root,
                 updates={
                     "stage_zyx_um": np.asarray(stage_zyx_um, dtype=np.float32).tolist(),
-                    "affine_zyx_px": np.asarray(affine_zyx_px, dtype=np.float32).tolist(),
+                    "affine_zyx_px": np.asarray(
+                        affine_zyx_px, dtype=np.float32
+                    ).tolist(),
                 },
                 target_image_name="corrected_data",
             )
@@ -2756,7 +2767,9 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -2773,7 +2786,9 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
 
         try:
             attributes = self._load_entity_attributes(entity_root)
@@ -2846,7 +2861,9 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -2863,7 +2880,9 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
 
         try:
             self._save_entity_attributes(
@@ -3058,7 +3077,9 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
             current_local_zarr_path = entity_root / Path("corrected_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, bit_id=local_id
@@ -3314,7 +3335,9 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id + ".zarr")
+        entity_root = (
+            self._fiducial_root_path / Path(tile_id) / Path(round_id + ".zarr")
+        )
         current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
 
         if not Path(current_local_zarr_path).exists():
@@ -3398,7 +3421,9 @@ class qi2labDataStore:
         else:
             print("'round' must be integer index or string identifier")
             return None
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+        entity_root = (
+            self._fiducial_root_path / Path(tile_id) / Path(local_id + ".zarr")
+        )
         current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
 
         try:
@@ -3605,7 +3630,9 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
             current_local_zarr_path = entity_root / Path("registered_decon_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, bit_id=local_id
@@ -3795,7 +3822,9 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            entity_root = (
+                self._readouts_root_path / Path(tile_id) / Path(local_id + ".zarr")
+            )
             current_local_zarr_path = entity_root / Path(
                 f"registered_{self.feature_predictor_folder_name}_data"
             )
@@ -4064,8 +4093,12 @@ class qi2labDataStore:
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
-                    "affine_zyx_um": np.asarray(affine_zyx_um, dtype=np.float32).tolist(),
-                    "origin_zyx_um": np.asarray(origin_zyx_um, dtype=np.float32).tolist(),
+                    "affine_zyx_um": np.asarray(
+                        affine_zyx_um, dtype=np.float32
+                    ).tolist(),
+                    "origin_zyx_um": np.asarray(
+                        origin_zyx_um, dtype=np.float32
+                    ).tolist(),
                     "spacing_zyx_um": np.asarray(
                         spacing_zyx_um, dtype=np.float32
                     ).tolist(),
@@ -4117,7 +4150,9 @@ class qi2labDataStore:
             )
             attributes = self._read_extra_attributes(current_local_zarr_path)
             if not attributes:
-                attributes = self._load_from_json(current_local_zarr_path / Path(".zattrs"))
+                attributes = self._load_from_json(
+                    current_local_zarr_path / Path(".zattrs")
+                )
             affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
             origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
             spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
@@ -4157,7 +4192,9 @@ class qi2labDataStore:
             filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
         else:
             filename = "fused_all_channels_zyx"
-        current_local_zarr_path = self._fused_root_path / Path("fused.zarr") / Path(filename)
+        current_local_zarr_path = (
+            self._fused_root_path / Path("fused.zarr") / Path(filename)
+        )
 
         metadata_attrs = {
             "affine_zyx_um": np.asarray(affine_zyx_um, dtype=np.float32).tolist(),
@@ -4176,7 +4213,9 @@ class qi2labDataStore:
                 return_future,
             )
             # Legacy compatibility for pre-yaozarrs consumers.
-            self._save_to_json(metadata_attrs, current_local_zarr_path / Path(".zattrs"))
+            self._save_to_json(
+                metadata_attrs, current_local_zarr_path / Path(".zattrs")
+            )
         except (OSError, TimeoutError):
             print("Error saving fused image.")
             return None
@@ -4402,7 +4441,9 @@ class qi2labDataStore:
             / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
         )
 
-        attributes = {"downsampling": np.asarray(downsampling, dtype=np.float32).tolist()}
+        attributes = {
+            "downsampling": np.asarray(downsampling, dtype=np.float32).tolist()
+        }
 
         try:
             spec = self._build_image_write_spec(extra_attributes=attributes)

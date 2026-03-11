@@ -86,9 +86,7 @@ def _populate_minimal_local_registered_store(datastore: qi2labDataStore) -> None
         tile=0,
         round=0,
     )
-    datastore.save_local_wavelengths_um(
-        wavelengths_um=(0.488, 0.520), tile=0, round=0
-    )
+    datastore.save_local_wavelengths_um(wavelengths_um=(0.488, 0.520), tile=0, round=0)
     datastore.save_local_wavelengths_um(wavelengths_um=(0.561, 0.580), tile=0, bit=0)
 
     corrected = np.arange(3 * 8 * 8, dtype=np.uint16).reshape(3, 8, 8)
@@ -109,7 +107,9 @@ def _populate_minimal_local_registered_store(datastore: qi2labDataStore) -> None
     datastore.datastore_state = state
 
 
-def _make_old_v04_dataset(datastore_root: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _make_old_v04_dataset(
+    datastore_root: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     datastore_root.mkdir(parents=True, exist_ok=True)
 
     state = {
@@ -185,9 +185,7 @@ def _make_old_v04_dataset(datastore_root: Path) -> tuple[np.ndarray, np.ndarray,
     )
 
     fiducial_corrected = np.arange(2 * 6 * 7, dtype=np.uint16).reshape(2, 6, 7)
-    readout_corrected = (
-        np.arange(2 * 6 * 7, dtype=np.uint16).reshape(2, 6, 7) + 100
-    )
+    readout_corrected = np.arange(2 * 6 * 7, dtype=np.uint16).reshape(2, 6, 7) + 100
     _write_legacy_tensorstore_array(
         fiducial_entity / Path("corrected_data"), fiducial_corrected
     )
@@ -278,7 +276,9 @@ def test_migration_legacy_zattrs_are_written_to_extra_attributes(
         psf_idx=2,
     )
 
-    zarr_json = datastore._load_from_json(round_entity / Path("corrected_data/zarr.json"))
+    zarr_json = datastore._load_from_json(
+        round_entity / Path("corrected_data/zarr.json")
+    )
     extra_attrs = zarr_json.get("extra_attributes", {})
     assert isinstance(extra_attrs, dict)
     assert extra_attrs["stage_zyx_um"] == [1.0, 2.0, 3.0]
@@ -388,7 +388,9 @@ def test_new_api_reads_old_v04_dataset(tmp_path: Path) -> None:
     stage_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
         tile=0, round=0
     )
-    np.testing.assert_allclose(stage_zyx_um, np.asarray([1.0, 2.0, 3.0], dtype=np.float32))
+    np.testing.assert_allclose(
+        stage_zyx_um, np.asarray([1.0, 2.0, 3.0], dtype=np.float32)
+    )
     np.testing.assert_allclose(affine_zyx_px, np.eye(4, dtype=np.float32))
 
     ex_round, em_round = datastore.load_local_wavelengths_um(tile=0, round=0)
