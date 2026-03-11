@@ -25,7 +25,7 @@ BASE_PIP_DEPS = [
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
-    "tifffile",
+    "tifffile==2025.9.20",  # pin to avoid numpy 2 usage when loading ndtiff
     "numcodecs",
     "cmap",
     "psfmodels",
