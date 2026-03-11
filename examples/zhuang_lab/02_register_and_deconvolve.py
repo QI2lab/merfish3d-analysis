@@ -3,8 +3,8 @@
 In this example, we  bypass the standard "DataRegistration" API because
 the Zhuang MOP data is already registered and warped.
 
-For polyDT data, only round 1 is deconvolved. A rigid xyz transform
-consisting of all zeros is added to all tiles & rounds for the polyDT data.
+For fiducial data, only round 1 is deconvolved. A rigid xyz transform
+consisting of all zeros is added to all tiles & rounds for the fiducial data.
 
 For readout data, all tiles and bits are deconvolved plus u-fish predicted.
 
@@ -38,10 +38,10 @@ def local_register_data(root_path: Path) -> None:
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        bkd_subtract_polyDT=False,
+        bkd_subtract_fiducial=False,
         perform_optical_flow=False,
         overwrite_registered=True,
-        save_all_polyDT_registered=False,
+        save_all_fiducial_registered=False,
         crop_yx_decon=2048,
     )
 
@@ -212,16 +212,16 @@ def global_register_data(
 
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
-        # load downsampled, fused polyDT image and coordinates
-        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
+        # load downsampled, fused fiducial image and coordinates
+        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
             return_future=False
         )
 
         # create max projection
-        polyDT_max_projection = np.max(np.squeeze(polyDT_fused), axis=0)
-        del polyDT_fused
+        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+        del fiducial_fused
 
-        filename = "polyDT_max_projection.ome.tiff"
+        filename = "fiducial_max_projection.ome.tiff"
         cellpose_path = (
             datastore._datastore_path / Path("segmentation") / Path("cellpose")
         )
@@ -249,7 +249,7 @@ def global_register_data(
                 "resolutionunit": "CENTIMETER",
             }
             tif.write(
-                polyDT_max_projection,
+                fiducial_max_projection,
                 resolution=(
                     1e4 / float(spacing_zyx_um[1]),
                     1e4 / float(spacing_zyx_um[2]),
