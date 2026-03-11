@@ -302,7 +302,7 @@ def convert_data_skip_z(
     # initialize datastore
     if output_path is None:
         datastore_path = root_path / Path(
-            r"qi2labdatastore_skipz_" + str(z_step).zfill(2)
+            r"qi2labdatastore_zstride" + str(z_step).zfill(2)
         )
         datastore = qi2labDataStore(datastore_path)
     else:
@@ -570,7 +570,6 @@ def convert_data_skip_z(
     gc.collect()
 
     # Calculate and apply flatfield corrections
-    datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     if datastore.num_tiles > 100:
         n_flatfield_images = 100
