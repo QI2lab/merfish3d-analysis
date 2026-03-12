@@ -164,8 +164,7 @@ def fuse_all_channels(root_path: Path) -> None:
                 )
                 im_data[0, :] = (
                     da.from_zarr(str(decon_path)).astype(np.float32)
-                    * da.from_zarr(str(predictor_path)).astype(np.float32)
-                    .clip(0.25, 1)
+                    * da.from_zarr(str(predictor_path)).astype(np.float32).clip(0.25, 1)
                 ).astype(np.uint16)
 
             # create spatial image for all channels in current tile using registration metadata instead of stage metadata

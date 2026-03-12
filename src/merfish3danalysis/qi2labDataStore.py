@@ -1433,9 +1433,7 @@ class qi2labDataStore:
         """Resolve original tile stage position used for OME translation."""
 
         if round_id is not None:
-            fiducial_entity = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            fiducial_entity = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
             if stage is not None:
@@ -1446,9 +1444,7 @@ class qi2labDataStore:
             if round_linker is not None and int(round_linker) > 0:
                 linked_round_id = self._round_ids[int(round_linker) - 1]
                 fiducial_entity = (
-                    self._fiducial_root_path
-                    / Path(tile_id)
-                    / Path(linked_round_id)
+                    self._fiducial_root_path / Path(tile_id) / Path(linked_round_id)
                 )
                 attrs = self._load_entity_attributes(fiducial_entity)
                 stage = attrs.get("stage_zyx_um")
@@ -1457,9 +1453,7 @@ class qi2labDataStore:
 
         if getattr(self, "_round_ids", None):
             fiducial_entity = (
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(self._round_ids[0])
+                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
             )
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
@@ -1666,7 +1660,9 @@ class qi2labDataStore:
         chunks = metadata.get("chunks")
         if chunks is None or len(chunks) != image_array.ndim:
             chunks = qi2labDataStore._default_chunks(image_array)
-        compressor = metadata.get("compressor", {}) if isinstance(metadata, dict) else {}
+        compressor = (
+            metadata.get("compressor", {}) if isinstance(metadata, dict) else {}
+        )
         compression = "blosc-zstd"
         if isinstance(compressor, dict):
             cname = str(compressor.get("cname", "zstd")).lower()
@@ -1774,9 +1770,7 @@ class qi2labDataStore:
         with open(self._datastore_state_json_path) as json_file:
             self._datastore_state = json.load(json_file)
         if float(self._datastore_state["Version"]) != 0.6:
-            raise ValueError(
-                "Only datastore version 0.6 is supported by this build."
-            )
+            raise ValueError("Only datastore version 0.6 is supported by this build.")
 
         self.fiducial_folder_name = "fiducial"
         self.feature_predictor_folder_name = "feature_predictor"
@@ -1900,9 +1894,7 @@ class qi2labDataStore:
             del fiducial_tile_ids, readout_tile_ids
 
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
-                entity_root = (
-                    self._fiducial_root_path / Path(tile_id) / Path(round_id)
-                )
+                entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
                 attributes = self._load_entity_attributes(entity_root)
 
                 keys_to_check = [
@@ -1933,9 +1925,7 @@ class qi2labDataStore:
                     print("Corrected fiducial data missing.")
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
-                entity_root = (
-                    self._readouts_root_path / Path(tile_id) / Path(bit_id)
-                )
+                entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
                 attributes = self._load_entity_attributes(entity_root)
 
                 keys_to_check = [
@@ -1964,9 +1954,7 @@ class qi2labDataStore:
         # check and validate local registered data
         if self._datastore_state["LocalRegistered"]:
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
-                entity_root = (
-                    self._fiducial_root_path / Path(tile_id) / Path(round_id)
-                )
+                entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
                 if round_id != self._round_ids[0]:
                     attributes = self._load_entity_attributes(entity_root)
 
@@ -2021,9 +2009,7 @@ class qi2labDataStore:
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
-                entity_root = (
-                    self._readouts_root_path / Path(tile_id) / Path(bit_id)
-                )
+                entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
                 current_local_zarr_path = str(
                     entity_root / Path("registered_decon_data")
                 )
@@ -2089,9 +2075,7 @@ class qi2labDataStore:
         if self._datastore_state["GlobalRegistered"]:
             for tile_id in self._tile_ids:
                 entity_root = (
-                    self._fiducial_root_path
-                    / Path(tile_id)
-                    / Path(self._round_ids[0])
+                    self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
                 )
                 attributes = self._load_entity_attributes(entity_root)
 
@@ -2371,9 +2355,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             attributes = self._load_entity_attributes(entity_root)
             bit_linker = attributes.get("bit_linker")
             if bit_linker is None:
@@ -2437,9 +2419,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             values = [int(v) for v in list(bit_linker)]
             self._save_entity_attributes(
                 entity_root_path=entity_root,
@@ -2504,9 +2484,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(bit_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
             attributes = self._load_entity_attributes(entity_root)
             round_linker = attributes.get("round_linker")
             if round_linker is None:
@@ -2570,9 +2548,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(bit_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={"round_linker": int(round_linker)},
@@ -2638,9 +2614,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             attributes = self._load_entity_attributes(entity_root)
             stage_zyx_um = attributes.get("stage_zyx_um")
             affine_zyx_px = attributes.get("affine_zyx_px")
@@ -2710,9 +2684,7 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
@@ -2787,9 +2759,7 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -2806,9 +2776,7 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
 
         try:
             attributes = self._load_entity_attributes(entity_root)
@@ -2881,9 +2849,7 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -2900,9 +2866,7 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
 
         try:
             self._save_entity_attributes(
@@ -3098,9 +3062,7 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("corrected_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, bit_id=local_id
@@ -3121,9 +3083,7 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("corrected_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, round_id=local_id
@@ -3215,9 +3175,7 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             attributes = self._load_entity_attributes(entity_root)
             rigid_xform_xyz_px = np.asarray(
                 attributes["rigid_xform_xyz_px"], dtype=np.float32
@@ -3283,9 +3241,7 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
         try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
@@ -3356,9 +3312,7 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        entity_root = (
-            self._fiducial_root_path / Path(tile_id) / Path(round_id)
-        )
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
         current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -3443,9 +3397,7 @@ class qi2labDataStore:
         else:
             print("'round' must be integer index or string identifier")
             return None
-        entity_root = (
-            self._fiducial_root_path / Path(tile_id) / Path(local_id)
-        )
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
         current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
 
         try:
@@ -3648,9 +3600,7 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("registered_decon_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, bit_id=local_id
@@ -3671,9 +3621,7 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("registered_decon_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, round_id=local_id
@@ -3841,9 +3789,7 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            entity_root = (
-                self._readouts_root_path / Path(tile_id) / Path(local_id)
-            )
+            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path(
                 f"registered_{self.feature_predictor_folder_name}_data"
             )
@@ -4053,9 +3999,7 @@ class qi2labDataStore:
 
         try:
             entity_root = (
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(self._round_ids[0])
+                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
             )
             attributes = self._load_entity_attributes(entity_root)
             affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
@@ -4105,9 +4049,7 @@ class qi2labDataStore:
 
         try:
             entity_root = (
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(self._round_ids[0])
+                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
             )
             self._save_entity_attributes(
                 entity_root_path=entity_root,
