@@ -3429,9 +3429,7 @@ class qi2labDataStore:
         try:
             opticalflow_attrs = {
                 "block_size": np.asarray(block_size, dtype=np.float32).tolist(),
-                "block_stride": np.asarray(
-                    block_stride, dtype=np.float32
-                ).tolist(),
+                "block_stride": np.asarray(block_stride, dtype=np.float32).tolist(),
             }
             # Optical flow is a dense pixel-space field, so we do not encode
             # physical voxel scale or stage translation transforms here.

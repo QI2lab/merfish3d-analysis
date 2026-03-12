@@ -401,11 +401,9 @@ def test_regression_optical_flow_dense_array_not_stored_in_metadata(
     assert set(extra_attrs.keys()) == {"block_size", "block_stride"}
     assert "of_xform_px" not in extra_attrs
     assert "opticalflow_xform_px" not in extra_attrs
-    dataset_xforms = (
-        zarr_json["attributes"]["ome"]["multiscales"][0]["datasets"][0][
-            "coordinateTransformations"
-        ]
-    )
+    dataset_xforms = zarr_json["attributes"]["ome"]["multiscales"][0]["datasets"][0][
+        "coordinateTransformations"
+    ]
     assert dataset_xforms[0]["type"] == "scale"
     assert dataset_xforms[0]["scale"] == [1.0, 1.0, 1.0, 1.0]
     assert dataset_xforms[1]["type"] == "translation"
@@ -415,7 +413,9 @@ def test_regression_optical_flow_dense_array_not_stored_in_metadata(
     assert loaded is not None
     loaded_of_xform_px, loaded_block_size, loaded_block_stride = loaded
     np.testing.assert_allclose(loaded_of_xform_px, of_xform_px)
-    np.testing.assert_allclose(loaded_block_size, np.asarray(block_size, dtype=np.float32))
+    np.testing.assert_allclose(
+        loaded_block_size, np.asarray(block_size, dtype=np.float32)
+    )
     np.testing.assert_allclose(
         loaded_block_stride, np.asarray(block_stride, dtype=np.float32)
     )
