@@ -4,7 +4,7 @@
 
 To efficiently handle 3D MERFISH experiments, `qi2labDataStore` stores image arrays as independent [OME-NGFF v0.5](https://ngff.openmicroscopy.org/latest/) images, read and written through [yaozarrs](https://imaging-formats.github.io/yaozarrs/) using the TensorStore interface. Tabular outputs are stored as [Parquet](https://parquet.apache.org/docs/).
 
-For backward compatibility, the reader can still open legacy direct Zarr arrays and legacy `.zattrs` metadata from older datastore versions.
+The current datastore reader/writer only supports the breaking-change `Version: 0.6` layout shown below.
 
 ## Important considerations
 
@@ -184,8 +184,8 @@ datastore.datastore_state = datastore_state
 │   └── <raw experimental data and metadata>
 └── qi2labdatastore/
     ├── datastore_state.json
-    ├── calibrations.zarr/
-    │   ├── .zattrs
+    ├── calibrations/
+    │   ├── attributes.json
     │   │   ├── <experiment metadata: codebook, exp_order, channels, ...>
     │   │   ├── <voxel_size_zyx_um>
     │   │   └── <psf_manifest>
@@ -196,40 +196,40 @@ datastore.datastore_state = datastore_state
     │   │   ├── zarr.json
     │   │   └── 0/
     │   └── psf_data/
-    │       ├── psf_000/              # OME-NGFF v0.5 image
+    │       ├── psf_000.ome.zarr/     # OME-NGFF v0.5 image
     │       │   ├── zarr.json
     │       │   └── 0/
-    │       ├── psf_001/
+    │       ├── psf_001.ome.zarr/
     │       └── ...
     ├── fiducial/
     │   └── tile0000/
-    │       ├── round001.zarr/
-    │       │   ├── .zattrs           # legacy compatibility mirror
-    │       │   ├── corrected_data/   # OME-NGFF v0.5 image
+    │       ├── round001/
+    │       │   ├── attributes.json
+    │       │   ├── corrected_data.ome.zarr/   # OME-NGFF v0.5 image
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   ├── registered_decon_data/
+    │       │   ├── registered_decon_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   └── opticalflow_xform_px/
+    │       │   └── opticalflow_xform_px.ome.zarr/
     │       │       ├── zarr.json
     │       │       └── 0/
-    │       ├── round002.zarr/
+    │       ├── round002/
     │       └── ...
     ├── readouts/
     │   └── tile0000/
-    │       ├── bit001.zarr/
-    │       │   ├── .zattrs           # legacy compatibility mirror
-    │       │   ├── corrected_data/
+    │       ├── bit001/
+    │       │   ├── attributes.json
+    │       │   ├── corrected_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   ├── registered_decon_data/
+    │       │   ├── registered_decon_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   └── registered_feature_predictor_data/
+    │       │   └── registered_feature_predictor_data.ome.zarr/
     │       │       ├── zarr.json
     │       │       └── 0/
-    │       ├── bit002.zarr/
+    │       ├── bit002/
     │       └── ...
     ├── feature_predictor_localizations/
     │   └── tile0000/
@@ -237,14 +237,14 @@ datastore.datastore_state = datastore_state
     │       └── ...
     ├── fused/
     │   └── fused.zarr/
-    │       ├── fused_fiducial_iso_zyx/
+    │       ├── fused_fiducial_iso_zyx.ome.zarr/
     │       │   ├── zarr.json
     │       │   └── 0/
-    │       └── fused_all_channels_zyx/   # optional
+    │       └── fused_all_channels_zyx.ome.zarr/   # optional
     ├── segmentation/
     │   └── cellpose/
     │       ├── cellpose.zarr/
-    │       │   └── masks_fiducial_iso_zyx/
+    │       │   └── masks_fiducial_iso_zyx.ome.zarr/
     │       │       ├── zarr.json
     │       │       └── 0/
     │       └── imagej_rois/global_coords_rois.zip
@@ -256,12 +256,12 @@ datastore.datastore_state = datastore_state
 
 ## Metadata conventions
 
-- Each image directory (for example `corrected_data/`, `registered_decon_data/`, `masks_fiducial_iso_zyx/`) is a standalone OME-NGFF v0.5 image.
+- Each image directory (for example `corrected_data.ome.zarr/`, `registered_decon_data.ome.zarr/`, `masks_fiducial_iso_zyx.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Folder-level metadata for non-image entities (for example `calibrations/`, `fiducial/*/round*/`, `readouts/*/bit*/`) is stored in `attributes.json`.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
 - All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).
 - For `opticalflow_xform_px`, the dense 4D displacement field is stored only in the OME-Zarr array (`0/`). OME transforms are identity (`scale=1`, `translation=0`) and metadata only stores lightweight fields such as `block_size` and `block_stride`.
-- Legacy `.zattrs` files are still mirrored for compatibility with older readers, but new metadata should be considered authoritative in `extra_attributes`.
-- PSFs are stored as one image per channel under `calibrations.zarr/psf_data/psf_XXX/`, which allows different PSF array sizes across channels.
+- PSFs are stored as one image per channel under `calibrations/psf_data/psf_XXX.ome.zarr/`, which allows different PSF array sizes across channels.
 
 ## DataStore API
 
