@@ -3427,21 +3427,18 @@ class qi2labDataStore:
         current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
 
         try:
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, round_id=local_id
-            )
-            attributes = self._load_entity_attributes(
-                entity_root, image_names=("opticalflow_xform_px",)
-            )
-            attributes["block_size"] = np.asarray(block_size, dtype=np.float32).tolist()
-            attributes["block_stride"] = np.asarray(
-                block_stride, dtype=np.float32
-            ).tolist()
-            spec_of = self._build_image_write_spec(
-                dtype="<f4",
-                stage_zyx_um=stage_position,
-                extra_attributes=attributes,
-            )
+            opticalflow_attrs = {
+                "block_size": np.asarray(block_size, dtype=np.float32).tolist(),
+                "block_stride": np.asarray(
+                    block_stride, dtype=np.float32
+                ).tolist(),
+            }
+            # Optical flow is a dense pixel-space field, so we do not encode
+            # physical voxel scale or stage translation transforms here.
+            spec_of = self._zarrv2_spec.copy()
+            spec_of["metadata"] = dict(self._zarrv2_spec.get("metadata", {}))
+            spec_of["metadata"]["dtype"] = "<f4"
+            spec_of["extra_attributes"] = opticalflow_attrs
             self._save_to_zarr_array(
                 of_xform_px,
                 self._get_kvstore_key(current_local_zarr_path),
@@ -3450,7 +3447,7 @@ class qi2labDataStore:
             )
             self._save_entity_attributes(
                 entity_root_path=entity_root,
-                updates=attributes,
+                updates=opticalflow_attrs,
                 target_image_name="opticalflow_xform_px",
                 image_names=("opticalflow_xform_px",),
             )

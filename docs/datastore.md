@@ -259,6 +259,7 @@ datastore.datastore_state = datastore_state
 - Each image directory (for example `corrected_data/`, `registered_decon_data/`, `masks_fiducial_iso_zyx/`) is a standalone OME-NGFF v0.5 image.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
 - All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).
+- For `opticalflow_xform_px`, the dense 4D displacement field is stored only in the OME-Zarr array (`0/`). OME transforms are identity (`scale=1`, `translation=0`) and metadata only stores lightweight fields such as `block_size` and `block_stride`.
 - Legacy `.zattrs` files are still mirrored for compatibility with older readers, but new metadata should be considered authoritative in `extra_attributes`.
 - PSFs are stored as one image per channel under `calibrations.zarr/psf_data/psf_XXX/`, which allows different PSF array sizes across channels.
 

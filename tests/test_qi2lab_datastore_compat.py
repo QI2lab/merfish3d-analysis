@@ -359,6 +359,68 @@ def test_regression_fused_metadata_loads_from_extra_attributes(tmp_path: Path) -
     np.testing.assert_allclose(loaded_spacing, spacing_zyx_um)
 
 
+def test_regression_optical_flow_dense_array_not_stored_in_metadata(
+    tmp_path: Path,
+) -> None:
+    datastore = _make_calibrated_store(tmp_path / "store")
+    datastore.initialize_tile(0)
+
+    datastore.save_local_stage_position_zyx_um(
+        stage_zyx_um=np.asarray([5.0, 6.0, 7.0], dtype=np.float32),
+        affine_zyx_px=np.eye(4, dtype=np.float32),
+        tile=0,
+        round=0,
+    )
+    datastore.save_local_corrected_image(
+        np.arange(3 * 6 * 6, dtype=np.uint16).reshape(3, 6, 6),
+        tile=0,
+        round=0,
+        psf_idx=0,
+    )
+
+    of_xform_px = np.arange(3 * 2 * 4 * 4, dtype=np.float32).reshape(3, 2, 4, 4)
+    block_size = (32.0, 32.0, 32.0)
+    block_stride = (16.0, 16.0, 16.0)
+    datastore.save_coord_of_xform_px(
+        of_xform_px=of_xform_px,
+        tile=0,
+        block_size=block_size,
+        block_stride=block_stride,
+        round=0,
+    )
+
+    opticalflow_path = (
+        datastore._fiducial_root_path
+        / Path("tile0000")
+        / Path("round001.zarr")
+        / Path("opticalflow_xform_px")
+    )
+    zarr_json = datastore._load_from_json(opticalflow_path / Path("zarr.json"))
+    extra_attrs = zarr_json.get("extra_attributes", {})
+    assert isinstance(extra_attrs, dict)
+    assert set(extra_attrs.keys()) == {"block_size", "block_stride"}
+    assert "of_xform_px" not in extra_attrs
+    assert "opticalflow_xform_px" not in extra_attrs
+    dataset_xforms = (
+        zarr_json["attributes"]["ome"]["multiscales"][0]["datasets"][0][
+            "coordinateTransformations"
+        ]
+    )
+    assert dataset_xforms[0]["type"] == "scale"
+    assert dataset_xforms[0]["scale"] == [1.0, 1.0, 1.0, 1.0]
+    assert dataset_xforms[1]["type"] == "translation"
+    assert dataset_xforms[1]["translation"] == [0.0, 0.0, 0.0, 0.0]
+
+    loaded = datastore.load_coord_of_xform_px(tile=0, round=0, return_future=False)
+    assert loaded is not None
+    loaded_of_xform_px, loaded_block_size, loaded_block_stride = loaded
+    np.testing.assert_allclose(loaded_of_xform_px, of_xform_px)
+    np.testing.assert_allclose(loaded_block_size, np.asarray(block_size, dtype=np.float32))
+    np.testing.assert_allclose(
+        loaded_block_stride, np.asarray(block_stride, dtype=np.float32)
+    )
+
+
 def test_new_api_reads_old_v04_dataset(tmp_path: Path) -> None:
     datastore_root = tmp_path / Path("old_v04_store")
     fiducial_corrected, readout_corrected, psf_stack = _make_old_v04_dataset(
