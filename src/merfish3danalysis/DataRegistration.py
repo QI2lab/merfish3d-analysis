@@ -375,7 +375,10 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         ex_wl, _em_wl = dr._datastore.load_local_wavelengths_um(
             tile=dr._tile_id, bit=bit_id
         )
-        psf_idx = 1 if ex_wl < 600 else 2
+        if ex_wl < 0.600:
+            psf_idx = 1
+        else:
+            psf_idx = 2
 
         test = dr._datastore.load_local_registered_image(tile=dr._tile_id, bit=bit_id)
         reg_on_disk = test is not None

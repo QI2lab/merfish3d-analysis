@@ -664,8 +664,8 @@ def convert_data(
                     datastore.load_local_wavelengths_um(tile=tile_idx, bit=bit_id)
                 )
 
-                # TO DO: hacky fix. Need to come up with a better way.
-                if ex_wavelength_um < 600:
+                # Readout wavelengths are stored in micrometers.
+                if ex_wavelength_um < 0.600:
                     psf_idx = 1
                 else:
                     psf_idx = 2
@@ -696,11 +696,11 @@ def convert_data(
             from tifffile import TiffWriter
 
             if readout_illumination_psf1:
-                illuminations[1, :, :] = np.median(
+                illuminations[1, :] = np.median(
                     np.stack(readout_illumination_psf1, axis=0), axis=0
                 ).astype(np.float32)
             if readout_illumination_psf2:
-                illuminations[2, :, :] = np.median(
+                illuminations[2, :] = np.median(
                     np.stack(readout_illumination_psf2, axis=0), axis=0
                 ).astype(np.float32)
 

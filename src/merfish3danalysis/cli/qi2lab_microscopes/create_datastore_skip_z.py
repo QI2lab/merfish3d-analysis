@@ -720,8 +720,8 @@ def convert_data_skip_z(
                     datastore.load_local_wavelengths_um(tile=tile_idx, bit=bit_id)
                 )
 
-                # TO DO: hacky fix. Need to come up with a better way.
-                if ex_wavelength_um < 600:
+                # Readout wavelengths are stored in micrometers.
+                if ex_wavelength_um < 0.600:
                     psf_idx = 1
                 else:
                     psf_idx = 2
