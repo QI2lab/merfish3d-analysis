@@ -580,8 +580,6 @@ def convert_data(
 
     # Calculate and apply flatfield corrections
     if not (use_illuminations):
-        datastore_path = root_path / Path(r"qi2labdatastore")
-        datastore = qi2labDataStore(datastore_path)
         if datastore.num_tiles > 100:
             n_flatfield_images = 100
         else:
