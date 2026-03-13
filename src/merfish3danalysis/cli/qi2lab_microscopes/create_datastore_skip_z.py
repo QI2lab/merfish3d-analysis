@@ -635,7 +635,9 @@ def convert_data_skip_z(
         else:
             n_flatfield_images = datastore.num_tiles
         sample_indices = np.asarray(
-            np.random.choice(datastore.num_tiles, size=n_flatfield_images, replace=False)
+            np.random.choice(
+                datastore.num_tiles, size=n_flatfield_images, replace=False
+            )
         )
         data_camera_corrected = []
 
@@ -650,7 +652,9 @@ def convert_data_skip_z(
             data_camera_corrected = []
 
             # calculate fiducial correction
-            for rand_tile_idx in tqdm(sample_indices, desc="flatfield data", leave=False):
+            for rand_tile_idx in tqdm(
+                sample_indices, desc="flatfield data", leave=False
+            ):
                 data_camera_corrected.append(
                     datastore.load_local_corrected_image(
                         tile=int(rand_tile_idx),
@@ -671,12 +675,17 @@ def convert_data_skip_z(
                 readout_illumination_psf2 = []
 
             for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):
-                for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+                for tile_idx in tqdm(
+                    range(datastore.num_tiles), desc="tile", leave=False
+                ):
                     data_camera_corrected = datastore.load_local_corrected_image(
                         tile=tile_idx, round=round_idx, return_future=False
                     )
                     data_camera_corrected = (
-                        (data_camera_corrected.astype(np.float32) / fidicual_illumination)
+                        (
+                            data_camera_corrected.astype(np.float32)
+                            / fidicual_illumination
+                        )
                         .clip(0, 2**16 - 1)
                         .astype(np.uint16)
                     )
@@ -706,12 +715,17 @@ def convert_data_skip_z(
                 readout_illumimation = estimate_shading(data_camera_corrected)
                 del data_camera_corrected
                 gc.collect()
-                for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
+                for tile_idx in tqdm(
+                    range(datastore.num_tiles), desc="tile", leave=False
+                ):
                     data_camera_corrected = datastore.load_local_corrected_image(
                         tile=tile_idx, bit=bit_id, return_future=False
                     )
                     data_camera_corrected = (
-                        (data_camera_corrected.astype(np.float32) / readout_illumimation)
+                        (
+                            data_camera_corrected.astype(np.float32)
+                            / readout_illumimation
+                        )
                         .clip(0, 2**16 - 1)
                         .astype(np.uint16)
                     )
