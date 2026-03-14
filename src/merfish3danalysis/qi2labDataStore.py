@@ -1812,8 +1812,27 @@ class qi2labDataStore:
             for key in keys_to_check:
                 if key not in attributes.keys():
                     raise KeyError("Calibration attributes incomplete")
+                elif key == "exp_order":
+                    channel_list = [str(channel) for channel in attributes["channels_in_data"]]
+                    self._experiment_order = pd.DataFrame(
+                        attributes[key],
+                        columns=channel_list,
+                        dtype="int64",
+                    )
                 else:
                     setattr(self, "_" + key, attributes[key])
+
+            self._tile_ids = [
+                "tile" + str(tile_idx).zfill(4) for tile_idx in range(int(self._num_tiles))
+            ]
+            self._round_ids = [
+                "round" + str(round_idx + 1).zfill(3)
+                for round_idx in range(int(self._num_rounds))
+            ]
+            self._bit_ids = [
+                "bit" + str(bit_idx + 1).zfill(3)
+                for bit_idx in range(int(self._num_bits))
+            ]
 
             psf_root_path = self._calibrations_zarr_path / Path("psf_data")
             try:

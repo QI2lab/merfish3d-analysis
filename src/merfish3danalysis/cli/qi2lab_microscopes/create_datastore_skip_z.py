@@ -628,8 +628,12 @@ def convert_data_skip_z(
                 bit=int(experiment_order[round_idx, 2]) - 1,
             )
 
+    # Calculate and apply flatfield corrections
     if not (use_illuminations):
-        # Calculate and apply flatfield corrections
+        # reload datstore
+        del datastore
+        datastore = qi2labDataStore(datastore_path)
+        
         if datastore.num_tiles > 100:
             n_flatfield_images = 100
         else:
