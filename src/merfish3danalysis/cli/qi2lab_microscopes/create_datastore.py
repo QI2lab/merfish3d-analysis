@@ -328,10 +328,6 @@ def convert_data(
             existing_store = False
         datastore = qi2labDataStore(output_path)
 
-    print(r"------")
-    print(existing_store)
-    print(r"------")
-
     if not (existing_store):
         # required user parameters
         datastore.channels_in_data = channel_names
@@ -619,6 +615,7 @@ def convert_data(
         # reload datastore
         del datastore
         datastore = qi2labDataStore(datastore_path)
+        
         if datastore.num_tiles > 100:
             n_flatfield_images = 100
         else:
