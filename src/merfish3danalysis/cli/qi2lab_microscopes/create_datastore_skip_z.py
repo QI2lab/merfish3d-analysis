@@ -633,7 +633,7 @@ def convert_data_skip_z(
         # reload datstore
         del datastore
         datastore = qi2labDataStore(datastore_path)
-        
+
         if datastore.num_tiles > 100:
             n_flatfield_images = 100
         else:
