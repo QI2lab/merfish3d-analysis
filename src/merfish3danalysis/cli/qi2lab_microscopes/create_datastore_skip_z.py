@@ -333,7 +333,7 @@ def convert_data_skip_z(
             existing_store = False
         datastore = qi2labDataStore(output_path)
 
-    if not(existing_store):
+    if not (existing_store):
         # required user parameters
         datastore.channels_in_data = channel_names
         datastore.baysor_path = baysor_binary_path
@@ -360,7 +360,9 @@ def convert_data_skip_z(
         datastore.ri = ri
         datastore.binning = binning
         datastore.noise_map = noise_map
-        datastore._shading_maps = np.ones((3, 2048, 2048), dtype=np.float32)  # not used yet
+        datastore._shading_maps = np.ones(
+            (3, 2048, 2048), dtype=np.float32
+        )  # not used yet
         datastore.channel_psfs = channel_psfs
         datastore.voxel_size_zyx_um = voxel_size_zyx_um
 
@@ -482,7 +484,10 @@ def convert_data_skip_z(
                 if raw_image is None or raw_image.shape != correct_shape:
                     if raw_image.shape[0] < correct_shape[0]:
                         print(
-                            "\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1)
+                            "\nround="
+                            + str(round_idx + 1)
+                            + "; tile="
+                            + str(tile_idx + 1)
                         )
                         print("Found shape: " + str(raw_image.shape))
                         print("Correct shape: " + str(correct_shape))
@@ -519,11 +524,19 @@ def convert_data_skip_z(
 
                 # load stage position
                 if int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1:
-                    corrected_y = np.max(position_list[:, 2]) - position_list[tile_idx, 2]
-                    corrected_x = np.max(position_list[:, 1]) - position_list[tile_idx, 1]
+                    corrected_y = (
+                        np.max(position_list[:, 2]) - position_list[tile_idx, 2]
+                    )
+                    corrected_x = (
+                        np.max(position_list[:, 1]) - position_list[tile_idx, 1]
+                    )
                 elif int(ndtiff_metadata["XYStage-TransposeMirrorY"]) == 1:
-                    corrected_y = np.max(position_list[:, 2]) - position_list[tile_idx, 2]
-                    corrected_x = np.max(position_list[:, 1]) - position_list[tile_idx, 1]
+                    corrected_y = (
+                        np.max(position_list[:, 2]) - position_list[tile_idx, 2]
+                    )
+                    corrected_x = (
+                        np.max(position_list[:, 1]) - position_list[tile_idx, 1]
+                    )
                 else:
                     corrected_y = position_list[tile_idx, 1]
                     corrected_x = position_list[tile_idx, 2]
