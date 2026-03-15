@@ -683,24 +683,18 @@ def convert_data(
                 )
             readout_illumimation = estimate_shading(data_camera_corrected)
             del data_camera_corrected
-            
 
-            ex_wavelength_um, _em_wavelength_um = (
-                datastore.load_local_wavelengths_um(tile=0, bit=bit_id)
+            ex_wavelength_um, _em_wavelength_um = datastore.load_local_wavelengths_um(
+                tile=0, bit=bit_id
             )
 
             # Readout wavelengths are stored in micrometers.
             if ex_wavelength_um < 0.600:
-                readout_illumination_psf1.append(
-                    readout_illumimation.copy()
-                )
+                readout_illumination_psf1.append(readout_illumimation.copy())
             else:
-                readout_illumination_psf2.append(
-                    readout_illumimation.copy()
-                )
+                readout_illumination_psf2.append(readout_illumimation.copy())
             del readout_illumination
             gc.collect()
-
 
         illuminations[1, :] = np.median(
             np.stack(readout_illumination_psf1, axis=0), axis=0
@@ -717,8 +711,8 @@ def convert_data(
                 tile=tile_idx, bit=bit_id, return_future=False
             )
 
-            ex_wavelength_um, _em_wavelength_um = (
-                datastore.load_local_wavelengths_um(tile=tile_idx, bit=bit_id)
+            ex_wavelength_um, _em_wavelength_um = datastore.load_local_wavelengths_um(
+                tile=tile_idx, bit=bit_id
             )
 
             # Readout wavelengths are stored in micrometers.
@@ -728,7 +722,7 @@ def convert_data(
                 psf_idx = 2
 
             data_camera_corrected = (
-                (data_camera_corrected.astype(np.float32) / illuminations[psf_idx,:])
+                (data_camera_corrected.astype(np.float32) / illuminations[psf_idx, :])
                 .clip(0, 2**16 - 1)
                 .astype(np.uint16)
             )
@@ -745,7 +739,6 @@ def convert_data(
 
             del data_camera_corrected
             gc.collect()
-
 
         if save_illuminations:
             from tifffile import TiffWriter
