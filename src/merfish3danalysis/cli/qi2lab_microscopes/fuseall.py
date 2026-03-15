@@ -1,5 +1,5 @@
 """
-Fuse all channels into individual ome-ngff v0.4 for viewing.
+Fuse all channels into individual OME-NGFF v0.5 stores for viewing.
 
 Shepherd 2025/03 - created script.
 """
@@ -16,7 +16,6 @@ import dask
 import dask.array as da
 import dask.diagnostics
 import numpy as np
-import zarr
 from multiview_stitcher import fusion, msi_utils, ngff_utils, registration
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
@@ -29,7 +28,7 @@ mp.set_start_method("spawn", force=True)
 def fuse_all_channels(root_path: Path) -> None:
     """Register all channels across all tiles.
 
-    Registration is performed using the polyDT channel.
+    Registration is performed using the fiducial channel.
 
     Parameters
     ----------
@@ -42,7 +41,7 @@ def fuse_all_channels(root_path: Path) -> None:
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     gene_ids = list(datastore.codebook["gene_id"])
-    channel_ids = ["polyDT", *gene_ids]
+    channel_ids = ["fiducial", *gene_ids]
 
     im_data = datastore.load_local_registered_image(
         tile=0, round=0, return_future=False
@@ -78,12 +77,13 @@ def fuse_all_channels(root_path: Path) -> None:
         im_data = da.zeros((1, im_shape[0], im_shape[1], im_shape[2]), dtype=np.uint16)
 
         input_path = (
-            datastore_path / Path("polyDT") / Path(tile_id) / Path("round001.zarr")
+            datastore_path
+            / Path("fiducial")
+            / Path(tile_id)
+            / Path("round001")
+            / Path("registered_decon_data.ome.zarr")
         )
-        store = zarr.DirectoryStore(str(input_path))
-        im_data[0, :] = da.from_zarr(store, component="registered_decon_data").astype(
-            "uint16"
-        )
+        im_data[0, :] = da.from_zarr(str(input_path)).astype("uint16")
 
         # create spatial image for all channels in current tile
         sim = si_utils.get_sim_from_array(
@@ -114,7 +114,7 @@ def fuse_all_channels(root_path: Path) -> None:
             post_registration_do_quality_filter=True,
         )
 
-    print("\nLazy loading and fusing full-resolution polyDT and readouts...")
+    print("\nLazy loading and fusing full-resolution fiducial and readouts...")
     tile_ids = datastore.tile_ids
 
     for ch_idx in tqdm(range(len(channel_ids)), desc="channel"):
@@ -140,34 +140,31 @@ def fuse_all_channels(root_path: Path) -> None:
             # lazy load tile data
             tile_id = tile_ids[tile_idx]
 
-            # lazy load deconvolved polyDT
+            # lazy load deconvolved fiducial
             if ch_idx == 0:
                 input_path = (
                     datastore_path
-                    / Path("polyDT")
+                    / Path("fiducial")
                     / Path(tile_id)
-                    / Path("round001.zarr")
+                    / Path("round001")
+                    / Path("registered_decon_data.ome.zarr")
                 )
-                store = zarr.DirectoryStore(str(input_path))
-                im_data[0, :] = da.from_zarr(
-                    store, component="registered_decon_data"
-                ).astype(np.uint16)
+                im_data[0, :] = da.from_zarr(str(input_path)).astype(np.uint16)
             # lazy load deconvolved * (u-fish prediction>0.25) readout bits
             else:
                 input_path = (
                     datastore_path
                     / Path("readouts")
                     / Path(tile_id)
-                    / Path("bit" + str(ch_idx).zfill(3) + ".zarr")
+                    / Path("bit" + str(ch_idx).zfill(3))
                 )
-                store = zarr.DirectoryStore(str(input_path))
+                decon_path = input_path / Path("registered_decon_data.ome.zarr")
+                predictor_path = input_path / Path(
+                    "registered_feature_predictor_data.ome.zarr"
+                )
                 im_data[0, :] = (
-                    da.from_zarr(store, component="registered_decon_data").astype(
-                        np.float32
-                    )
-                    * da.from_zarr(store, component="registered_ufish_data")
-                    .astype(np.float32)
-                    .clip(0.25, 1)
+                    da.from_zarr(str(decon_path)).astype(np.float32)
+                    * da.from_zarr(str(predictor_path)).astype(np.float32).clip(0.25, 1)
                 ).astype(np.uint16)
 
             # create spatial image for all channels in current tile using registration metadata instead of stage metadata

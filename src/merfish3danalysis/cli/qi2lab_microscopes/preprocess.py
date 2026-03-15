@@ -1,6 +1,6 @@
 """
 Perform registration on qi2labdatastore. By default creates a max
-projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
+projection downsampled fiducial OME-TIFF for cellpose parameter optimization.
 
 Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - rework for multiple GPU support.
@@ -24,9 +24,9 @@ def local_register_data(
     num_gpus: int = 1,
     decon: bool = True,
     opticalflow: bool = True,
-    decon_allpolydT: bool = False,
-    bkdsubtract_all_polydT: bool = True,
-    save_all_polyDT: bool = False,
+    decon_allfiducial: bool = False,
+    bkdsubtract_all_fiducial: bool = True,
+    save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
 ) -> None:
@@ -39,15 +39,15 @@ def local_register_data(
     num_gpus: int, Default = 1
         number of gpus available.
     decon: bool, Default = True
-        perform deconvolution on 1st round polydT and FISH readout images.
+        perform deconvolution on 1st round fiducial and FISH readout images.
     opticalflow: bool, Default = True
         perform optical flow based registration.
-    decon_allpolydT: bool, Default = False
+    decon_allfiducial: bool, Default = False
         perform deconvolution prior to registration.
-    bkdsubtract_all_polydT: bool, Default = True
+    bkdsubtract_all_fiducial: bool, Default = True
         perform background subtraction prior to registration.
-    save_all_polyDT: bool, Default = False
-        save all registered polyDT images.
+    save_all_fiducial: bool, Default = False
+        save all registered fiducial images.
     overwrite: bool, Default = True
         overwrite existing registered data.
     crop_yx_decon: int, default = 1024
@@ -63,11 +63,11 @@ def local_register_data(
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        decon_polyDT=decon_allpolydT,
-        bkd_subtract_polyDT=bkdsubtract_all_polydT,
+        decon_fiducial=decon_allfiducial,
+        bkd_subtract_fiducial=bkdsubtract_all_fiducial,
         perform_optical_flow=opticalflow,
         overwrite_registered=overwrite,
-        save_all_polyDT_registered=save_all_polyDT,
+        save_all_fiducial_registered=save_all_fiducial,
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
     )
@@ -243,14 +243,14 @@ def local_register_data(
 
 #     # write max projection OME-TIFF for cellpose GUI
 #     if create_max_proj_tiff:
-#         # load downsampled, fused polyDT image and coordinates
-#         polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
+#         # load downsampled, fused fiducial image and coordinates
+#         fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(return_future=False)
 
 #         # create max projection
-#         polyDT_max_projection = np.max(np.squeeze(polyDT_fused),axis=0)
-#         del polyDT_fused
+#         fiducial_max_projection = np.max(np.squeeze(fiducial_fused),axis=0)
+#         del fiducial_fused
 
-#         filename = 'polyDT_max_projection.ome.tiff'
+#         filename = 'fiducial_max_projection.ome.tiff'
 #         cellpose_path = datastore._datastore_path / Path("segmentation") / Path("cellpose")
 #         cellpose_path.mkdir(exist_ok=True)
 #         filename_path = datastore._datastore_path / Path("segmentation") / Path("cellpose") / Path(filename)
@@ -271,7 +271,7 @@ def local_register_data(
 #                 resolutionunit='CENTIMETER',
 #             )
 #             tif.write(
-#                 polyDT_max_projection,
+#                 fiducial_max_projection,
 #                 resolution=(
 #                     1e4 / spacing_zyx_um[1],
 #                     1e4 / spacing_zyx_um[2]

@@ -216,7 +216,6 @@ def convert_data(
             ).astype(np.float32)
             # psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
-    channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
     datastore.channel_psfs = channel_psfs
 
     # Update datastore state to note that calibrations are done
