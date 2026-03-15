@@ -223,9 +223,65 @@ def downsample_axis(image: ArrayLike, level: int = 2, axis: int = 0) -> ArrayLik
     return downsampled_image
 
 
+def initialize_imagej(
+    max_attempts: int = 20,
+    retry_delay_s: float = 0.5,
+) -> Any:
+    """Initialize an ImageJ instance with retries.
+
+    Parameters
+    ----------
+    max_attempts : int, optional
+        Maximum number of initialization attempts. Default is 20.
+    retry_delay_s : float, optional
+        Delay between retries in seconds. Default is 0.5.
+
+    Returns
+    -------
+    Any
+        Initialized ImageJ instance.
+    """
+
+    import contextlib
+    import io
+    import logging
+    import os
+    import time
+
+    import imagej
+
+    imagej_logger = logging.getLogger("imagej")
+    if not any(
+        getattr(current_filter, "_merfish3d_suppress_headless", False)
+        for current_filter in imagej_logger.filters
+    ):
+        class _SuppressHeadlessWarnings(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                return "Operating in headless mode -" not in record.getMessage()
+
+        warning_filter = _SuppressHeadlessWarnings()
+        warning_filter._merfish3d_suppress_headless = True
+        imagej_logger.addFilter(warning_filter)
+
+    stderr_buffer = io.StringIO()
+    with contextlib.redirect_stderr(stderr_buffer):
+        for _attempt in range(max_attempts):
+            try:
+                os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
+                return imagej.init()
+            except (RuntimeError, OSError):
+                time.sleep(retry_delay_s)
+
+    raise RuntimeError(
+        "ImageJ initialization failed after retries. "
+        f"Last stderr:\n{stderr_buffer.getvalue()}"
+    )
+
+
 def subtract_background_imagej(
     image: np.ndarray,
     bkd_sub_radius: int = 50,
+    ij: Any | None = None,
 ) -> np.ndarray:
     """Subtract background from a 3D image using ImageJ's rolling ball algorithm.
 
@@ -235,36 +291,17 @@ def subtract_background_imagej(
         3D numpy array representing the image (Z, Y, X).
     bkd_sub_radius : float, optional
         Radius for background subtraction. Default is 50.
-    ij : imagej.ImageJ, optional
-        An existing ImageJ instance. If None, a new instance will be created.
+    ij : Any, optional
+        Existing ImageJ instance to reuse. If None, a new instance is created
+        for this call and disposed before returning.
     Returns
     -------
     bkd_image : np.ndarray
         Background subtracted 3D image as a numpy array (Z, Y, X).
     """
-
-    import contextlib
-    import io
-    import os
-    import time
-
-    import imagej
-
-    stderr_buffer = io.StringIO()
-    with contextlib.redirect_stderr(stderr_buffer):
-        for _attempt in range(20):  # ~10s if sleep=0.5
-            try:
-                os.environ.setdefault("CLIJ_OPENCL_ALLOWED_DEVICE_TYPE", "CPU")
-                ij = imagej.init()
-                break
-            except (RuntimeError, OSError):
-                time.sleep(0.5)
-        else:
-            # exhausted retries
-            raise RuntimeError(
-                "ImageJ initialization failed after retries. "
-                f"Last stderr:\n{stderr_buffer.getvalue()}"
-            )
+    owns_ij = ij is None
+    if owns_ij:
+        ij = initialize_imagej()
 
     imp_array = ij.py.to_imageplus(image)
     imp_array.setStack(imp_array.getStack().duplicate())
@@ -287,9 +324,10 @@ def subtract_background_imagej(
     del image, imp_array, bkd_output
     gc.collect()
 
-    ij.dispose()
-    del ij
-    gc.collect()
+    if owns_ij:
+        ij.dispose()
+        del ij
+        gc.collect()
 
     return bkd_image
 

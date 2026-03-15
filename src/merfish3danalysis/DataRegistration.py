@@ -77,11 +77,16 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     raw0 = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=0, return_future=False
     )
+    ij = None
 
     if dr._bkd_subtract_fiducial:
-        from merfish3danalysis.utils.imageprocessing import subtract_background_imagej
+        from merfish3danalysis.utils.imageprocessing import (
+            initialize_imagej,
+            subtract_background_imagej,
+        )
 
-        bkd_image = subtract_background_imagej(raw0, 200)
+        ij = initialize_imagej()
+        bkd_image = subtract_background_imagej(raw0, 200, ij=ij)
     else:
         bkd_image = raw0.copy()
 
@@ -106,6 +111,10 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
 
     del raw0, ref_image_decon
     gc.collect()
+    if ij is not None:
+        ij.dispose()
+        del ij
+        gc.collect()
     clear_rlgc_caches(clear_memory_pool=False)
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
@@ -139,6 +148,11 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
         compute_warpfield,
     )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+    ij = None
+    if dr._bkd_subtract_fiducial:
+        from merfish3danalysis.utils.imageprocessing import initialize_imagej
+
+        ij = initialize_imagej()
 
     for _r_idx, round_id in enumerate(round_list):
         test = dr._datastore.load_local_registered_image(
@@ -163,7 +177,9 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                         subtract_background_imagej,
                     )
 
-                    ref_image_decon_float = subtract_background_imagej(ref_image, 200)
+                    ref_image_decon_float = subtract_background_imagej(
+                        ref_image, 200, ij=ij
+                    )
                 else:
                     ref_image_decon_float = ref_image.copy().astype(np.float32)
                     del ref_image
@@ -178,7 +194,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                         subtract_background_imagej,
                     )
 
-                    bkd_image = subtract_background_imagej(raw, 200)
+                    bkd_image = subtract_background_imagej(raw, 200, ij=ij)
                 else:
                     bkd_image = raw.copy()
                 del raw
@@ -214,7 +230,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                         subtract_background_imagej,
                     )
 
-                    bkd_image = subtract_background_imagej(raw, 200)
+                    bkd_image = subtract_background_imagej(raw, 200, ij=ij)
                 else:
                     bkd_image = raw.copy()
 
@@ -317,6 +333,10 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
             del data_registered
             gc.collect()
     try:
+        if ij is not None:
+            ij.dispose()
+            del ij
+            gc.collect()
         clear_rlgc_caches(clear_memory_pool=False)
         cp.cuda.Stream.null.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
