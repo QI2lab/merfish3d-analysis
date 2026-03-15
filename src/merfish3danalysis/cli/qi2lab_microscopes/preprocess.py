@@ -84,7 +84,6 @@ def local_register_data(
     datastore.datastore_state = datastore_state
 
 
-
 def main() -> None:
     app()
 

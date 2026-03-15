@@ -255,6 +255,7 @@ def initialize_imagej(
         getattr(current_filter, "_merfish3d_suppress_headless", False)
         for current_filter in imagej_logger.filters
     ):
+
         class _SuppressHeadlessWarnings(logging.Filter):
             def filter(self, record: logging.LogRecord) -> bool:
                 return "Operating in headless mode -" not in record.getMessage()

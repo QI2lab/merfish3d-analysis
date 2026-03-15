@@ -148,6 +148,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
         compute_warpfield,
     )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+
     ij = None
     if dr._bkd_subtract_fiducial:
         from merfish3danalysis.utils.imageprocessing import initialize_imagej
