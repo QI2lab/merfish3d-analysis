@@ -693,7 +693,7 @@ def convert_data(
                 readout_illumination_psf1.append(readout_illumimation.copy())
             else:
                 readout_illumination_psf2.append(readout_illumimation.copy())
-            del readout_illumination
+            del readout_illumimation
             gc.collect()
 
         illuminations[1, :] = np.median(
