@@ -401,7 +401,11 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             bit_id=bit_id
         )
 
-        if (not reg_on_disk) or (not feature_predictor_on_disk) or dr._overwrite_registered:
+        if (
+            (not reg_on_disk)
+            or (not feature_predictor_on_disk)
+            or dr._overwrite_registered
+        ):
             # load data
             corrected_image = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id, bit=bit_id, return_future=False
@@ -761,8 +765,12 @@ class DataRegistration:
         bit_id: str | None = None,
     ) -> bool:
         tile_id = self._tile_id if tile_id is None else tile_id
-        entity_root = self._entity_root(tile_id=tile_id, round_id=round_id, bit_id=bit_id)
-        corrected_shape = self._datastore._image_shape(entity_root / Path("corrected_data"))
+        entity_root = self._entity_root(
+            tile_id=tile_id, round_id=round_id, bit_id=bit_id
+        )
+        corrected_shape = self._datastore._image_shape(
+            entity_root / Path("corrected_data")
+        )
         registered_shape = self._datastore._image_shape(
             entity_root / Path("registered_decon_data")
         )
@@ -778,7 +786,9 @@ class DataRegistration:
             raise ValueError("bit_id is required for feature predictor outputs.")
 
         entity_root = self._entity_root(tile_id=tile_id, bit_id=bit_id)
-        corrected_shape = self._datastore._image_shape(entity_root / Path("corrected_data"))
+        corrected_shape = self._datastore._image_shape(
+            entity_root / Path("corrected_data")
+        )
         registered_shape = self._datastore._image_shape(
             entity_root / Path("registered_decon_data")
         )
@@ -799,7 +809,9 @@ class DataRegistration:
         )
 
     def _is_tile_complete(self, tile_id: str) -> bool:
-        if not self._has_valid_registered_image(tile_id=tile_id, round_id=self._round_ids[0]):
+        if not self._has_valid_registered_image(
+            tile_id=tile_id, round_id=self._round_ids[0]
+        ):
             return False
 
         if self.save_all_fiducial_registered:
@@ -832,7 +844,9 @@ class DataRegistration:
                 start_idx = len(tile_ids)
 
             if start_idx >= len(tile_ids):
-                print(time_stamp(), "All tiles already have complete registered outputs.")
+                print(
+                    time_stamp(), "All tiles already have complete registered outputs."
+                )
                 return
 
             if start_idx > 0:
@@ -885,7 +899,9 @@ class DataRegistration:
 
     def _generate_registrations(self) -> None:
         """Generate registered, deconvolved fiducial data and save to datastore."""
-        has_reg_decon_data = self._has_valid_registered_image(round_id=self._round_ids[0])
+        has_reg_decon_data = self._has_valid_registered_image(
+            round_id=self._round_ids[0]
+        )
 
         if not (has_reg_decon_data) or self._overwrite_registered:
             p_first = mp.Process(target=_apply_first_fiducial_on_gpu, args=(self, 0))
