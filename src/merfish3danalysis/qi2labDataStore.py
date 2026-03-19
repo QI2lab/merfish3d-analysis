@@ -2087,9 +2087,8 @@ class qi2labDataStore:
 
         # check and validate fused
         if self._datastore_state["Fused"]:
-            fused_image_path = (
-                self._fused_root_path
-                / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
+            fused_image_path = self._fused_root_path / Path(
+                f"fused_{self.fiducial_folder_name}_iso_zyx"
             )
             attributes = self._read_extra_attributes(fused_image_path)
 
@@ -4091,9 +4090,8 @@ class qi2labDataStore:
             Global spacing registration transform for fused image.
         """
 
-        current_local_zarr_path = (
-            self._fused_root_path
-            / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
+        current_local_zarr_path = self._fused_root_path / Path(
+            f"fused_{self.fiducial_folder_name}_iso_zyx"
         )
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -4147,9 +4145,7 @@ class qi2labDataStore:
             filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
         else:
             filename = "fused_all_channels_zyx"
-        current_local_zarr_path = (
-            self._fused_root_path / Path(filename)
-        )
+        current_local_zarr_path = self._fused_root_path / Path(filename)
 
         metadata_attrs = {
             "affine_zyx_um": np.asarray(affine_zyx_um, dtype=np.float32).tolist(),
