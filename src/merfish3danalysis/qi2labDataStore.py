@@ -2089,7 +2089,6 @@ class qi2labDataStore:
         if self._datastore_state["Fused"]:
             fused_image_path = (
                 self._fused_root_path
-                / Path("fused.zarr")
                 / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
             )
             attributes = self._read_extra_attributes(fused_image_path)
@@ -2115,7 +2114,6 @@ class qi2labDataStore:
             current_local_zarr_path = str(
                 self._segmentation_root_path
                 / Path("cellpose")
-                / Path("cellpose.zarr")
                 / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
             )
 
@@ -4095,7 +4093,6 @@ class qi2labDataStore:
 
         current_local_zarr_path = (
             self._fused_root_path
-            / Path("fused.zarr")
             / Path(f"fused_{self.fiducial_folder_name}_iso_zyx")
         )
 
@@ -4151,7 +4148,7 @@ class qi2labDataStore:
         else:
             filename = "fused_all_channels_zyx"
         current_local_zarr_path = (
-            self._fused_root_path / Path("fused.zarr") / Path(filename)
+            self._fused_root_path / Path(filename)
         )
 
         metadata_attrs = {
@@ -4351,7 +4348,6 @@ class qi2labDataStore:
         current_local_zarr_path = (
             self._segmentation_root_path
             / Path("cellpose")
-            / Path("cellpose.zarr")
             / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
         )
 
@@ -4392,7 +4388,6 @@ class qi2labDataStore:
         current_local_zarr_path = (
             self._segmentation_root_path
             / Path("cellpose")
-            / Path("cellpose.zarr")
             / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
         )
 
