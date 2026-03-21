@@ -2368,7 +2368,9 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_xy = self._datastore.voxel_size_zyx_um[-1] * 2 #approx PSF radius
+                    radius_xy = (
+                        self._datastore.voxel_size_zyx_um[-1] * 2
+                    )  # approx PSF radius
                     radius_z = self._datastore.voxel_size_zyx_um[0]
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
