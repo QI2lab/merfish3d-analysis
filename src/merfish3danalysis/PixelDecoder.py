@@ -1731,6 +1731,8 @@ class PixelDecoder:
             ]
         df_true = df_barcodes_to_filter[df_barcodes_to_filter["X"]][columns]
         df_false = df_barcodes_to_filter[~df_barcodes_to_filter["X"]][columns]
+        if self._verbose > 1:
+            print(f"Number of blanks: {len(df_false)}")
         if len(df_false) > 1:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
@@ -1742,8 +1744,8 @@ class PixelDecoder:
 
             if self._verbose > 1:
                 print("generating synthetic samples for class balance")
-            SMOTE(random_state=42)
-            # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+            #SMOTE(random_state=42)
+            #X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
             X_train_resampled = X_train.copy()
             y_train_resampled = y_train.copy()
 
@@ -1951,7 +1953,7 @@ class PixelDecoder:
 
     def _remove_duplicates_within_tile(
         self,
-        radius_xy: float = 0.75,
+        radius_xy: float = 0.2,
         radius_z: float = 0.50,
     ) -> None:
         """Collapse near-duplicate detections within each tile *and same gene_id*.
@@ -2367,14 +2369,11 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_z = self._datastore.voxel_size_zyx_um[0] * 2
-                    self._remove_duplicates_within_tile(radius_z=radius_z)
+                    radius_xy = self._datastore.voxel_size_zyx_um[-1]*2
+                    radius_z = self._datastore.voxel_size_zyx_um[0]
+                    self._remove_duplicates_within_tile(radius_xy=radius_xy,radius_z=radius_z)
                 self._load_global_normalization_vectors(gpu_id=0)
-                if not (self._verbose == 0):
-                    self._verbose = 2
                 self._iterative_normalization_vectors(gpu_id=0)
-                if not (self._verbose == 0):
-                    self._verbose = 1
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
                 cp.cuda.Stream.null.synchronize()
@@ -2461,8 +2460,10 @@ class PixelDecoder:
         self._load_all_barcodes()
         if self._verbose >= 1:
             print(f"Number of loaded barcodes: {len(self._df_barcodes_loaded)}")
+            print(f"Verbosity:  {self._verbose}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
+            radius_xy = self._datastore.voxel_size_zyx_um[-1]*2 #approx PSF radius
             radius_z = self._datastore.voxel_size_zyx_um[0]
             self._remove_duplicates_within_tile(radius_z=radius_z)
 
