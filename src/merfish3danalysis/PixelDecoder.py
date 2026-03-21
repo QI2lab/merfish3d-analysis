@@ -1671,7 +1671,6 @@ class PixelDecoder:
             False discovery rate target.
         """
 
-        from imblearn.over_sampling import SMOTE
         from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import classification_report
         from sklearn.model_selection import train_test_split
@@ -1744,8 +1743,8 @@ class PixelDecoder:
 
             if self._verbose > 1:
                 print("generating synthetic samples for class balance")
-            #SMOTE(random_state=42)
-            #X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+            # SMOTE(random_state=42)
+            # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
             X_train_resampled = X_train.copy()
             y_train_resampled = y_train.copy()
 
@@ -2369,9 +2368,11 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_xy = self._datastore.voxel_size_zyx_um[-1]*2
+                    radius_xy = self._datastore.voxel_size_zyx_um[-1] * 2
                     radius_z = self._datastore.voxel_size_zyx_um[0]
-                    self._remove_duplicates_within_tile(radius_xy=radius_xy,radius_z=radius_z)
+                    self._remove_duplicates_within_tile(
+                        radius_xy=radius_xy, radius_z=radius_z
+                    )
                 self._load_global_normalization_vectors(gpu_id=0)
                 self._iterative_normalization_vectors(gpu_id=0)
                 del self._global_background_vector, self._global_normalization_vector
@@ -2463,7 +2464,7 @@ class PixelDecoder:
             print(f"Verbosity:  {self._verbose}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
-            radius_xy = self._datastore.voxel_size_zyx_um[-1]*2 #approx PSF radius
+            self._datastore.voxel_size_zyx_um[-1] * 2  # approx PSF radius
             radius_z = self._datastore.voxel_size_zyx_um[0]
             self._remove_duplicates_within_tile(radius_z=radius_z)
 
