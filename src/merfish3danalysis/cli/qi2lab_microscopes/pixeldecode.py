@@ -23,7 +23,7 @@ def decode_pixels(
     root_path: Path,
     num_gpus: int = 1,
     minimum_pixels_per_RNA: int = 3,
-    ufish_threshold: float = 0.25,
+    feature_predictor_threshold: float = 0.25,
     magnitude_threshold: tuple[float, float] = [0.9, 10.0],
     fdr_target: float = 0.05,
     run_baysor: bool = False,
@@ -42,8 +42,8 @@ def decode_pixels(
         number of gpus to use. Default = 1.
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 3.
-    ufish_threshold : float
-        threshold to accept ufish prediction. Default = 0.25
+    feature_predictor_threshold : float
+        threshold to accept feature_predictor prediction. Default = 0.25
     magnitude_threshold : tuple[float,float]. Default = [0.9,10.0]
         list of two floats [min, max] magnitude thresholds to accept a decoded pixel.
     fdr_target : float
@@ -86,7 +86,7 @@ def decode_pixels(
                 n_random_tiles=20,
                 n_iterations=5,
                 minimum_pixels=minimum_pixels_per_RNA,
-                ufish_threshold=ufish_threshold,
+                feature_predictor_threshold=feature_predictor_threshold,
                 magnitude_threshold=magnitude_threshold,
             )
 
@@ -96,7 +96,7 @@ def decode_pixels(
             prep_for_baysor=True,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
-            ufish_threshold=ufish_threshold,
+            feature_predictor_threshold=feature_predictor_threshold,
             fdr_target=fdr_target,
         )
     else:

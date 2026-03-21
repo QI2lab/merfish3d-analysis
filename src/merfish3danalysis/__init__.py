@@ -13,7 +13,7 @@ __author__ = "Douglas Shepherd"
 __email__ = "douglas.shepherd@asu.edu"
 
 # Default/fallback version; may be overwritten below by package metadata.
-__version__ = "0.8.2"
+__version__ = "0.9.0"
 
 import importlib
 import importlib.util as _ilus

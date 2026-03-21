@@ -62,7 +62,7 @@ def decode_tiles_worker(
     distance_threshold: float,
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    ufish_threshold: float,
+    feature_predictor_threshold: float,
     smFISH: bool = False,
 ) -> None:
     """Worker that runs decode_one_tile on a subset of tiles under one GPU."""
@@ -97,7 +97,7 @@ def decode_tiles_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            ufish_threshold=ufish_threshold,
+            feature_predictor_threshold=feature_predictor_threshold,
             use_normalization=True,
             gpu_id=gpu_id,
         )
@@ -125,7 +125,7 @@ def _optimize_norm_worker(
     distance_threshold: float,
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    ufish_threshold: float,
+    feature_predictor_threshold: float,
     smFISH: bool = False,
 ) -> None:
     """Worker that runs one iteration of normalization-by-decoding on a GPU."""
@@ -162,7 +162,7 @@ def _optimize_norm_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            ufish_threshold=ufish_threshold,
+            feature_predictor_threshold=feature_predictor_threshold,
             use_normalization=use_norm,
             gpu_id=gpu_id,
         )
@@ -192,7 +192,7 @@ class PixelDecoder:
     verbose: int, default 1
         control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
     use_mask: bool, default False
-        use mask stored in polyDT directory
+        use mask stored in fiducial directory
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.
@@ -401,12 +401,14 @@ class PixelDecoder:
                     decon_image = self._datastore.load_local_registered_image(
                         tile=tile_id, bit=bit_id, return_future=False
                     )
-                    ufish_image = self._datastore.load_local_ufish_image(
-                        tile=tile_id, bit=bit_id, return_future=False
+                    feature_predictor_image = (
+                        self._datastore.load_local_feature_predictor_image(
+                            tile=tile_id, bit=bit_id, return_future=False
+                        )
                     )
 
                     current_image = cp.where(
-                        cp.asarray(ufish_image, dtype=cp.float32) > 0.1,
+                        cp.asarray(feature_predictor_image, dtype=cp.float32) > 0.1,
                         cp.asarray(decon_image, dtype=cp.float32),
                         0.0,
                     )
@@ -688,13 +690,13 @@ class PixelDecoder:
             cp.get_default_memory_pool().free_all_blocks()
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    def _load_bit_data(self, ufish_threshold: float | None = 0.1) -> None:
+    def _load_bit_data(self, feature_predictor_threshold: float | None = 0.1) -> None:
         """Load raw data for all bits in the tile.
 
         Parameters
         ----------
-        ufish_threshold : float, default 0.1
-            Threshold for ufish image.
+        feature_predictor_threshold : float, default 0.1
+            Threshold for feature_predictor image.
         """
 
         if self._verbose > 1:
@@ -720,19 +722,23 @@ class PixelDecoder:
                 tile=self._tile_idx,
                 bit=bit_id,
             )
-            ufish_image = self._datastore.load_local_ufish_image(
-                tile=self._tile_idx,
-                bit=bit_id,
+            feature_predictor_image = (
+                self._datastore.load_local_feature_predictor_image(
+                    tile=self._tile_idx,
+                    bit=bit_id,
+                )
             )
 
             if self._z_crop:
                 current_mask = np.asarray(
-                    ufish_image[self._z_range[0] : self._z_range[1], :].result(),
+                    feature_predictor_image[
+                        self._z_range[0] : self._z_range[1], :
+                    ].result(),
                     dtype=np.float32,
                 )
                 images.append(
                     np.where(
-                        current_mask > ufish_threshold,
+                        current_mask > feature_predictor_threshold,
                         np.asarray(
                             decon_image[
                                 self._z_range[0] : self._z_range[1], :
@@ -743,10 +749,12 @@ class PixelDecoder:
                     )
                 )
             else:
-                current_mask = np.asarray(ufish_image.result(), dtype=np.float32)
+                current_mask = np.asarray(
+                    feature_predictor_image.result(), dtype=np.float32
+                )
                 images.append(
                     np.where(
-                        current_mask > ufish_threshold,
+                        current_mask > feature_predictor_threshold,
                         np.asarray(decon_image.result(), dtype=np.float32),
                         0,
                     )
@@ -1652,188 +1660,6 @@ class PixelDecoder:
 
         return fdr
 
-    def _filter_all_barcodes(self, fdr_target: float = 0.05) -> None:
-        """Filter barcodes using a classifier and FDR target.
-
-        Uses a MLP classifier to predict whether a barcode is a blank or not.
-
-        TO DO: evaluate other classifiers.
-
-        Parameters
-        ----------
-        fdr_target : float, default 0.05
-            False discovery rate target.
-        """
-
-        from imblearn.over_sampling import SMOTE
-        from sklearn.metrics import classification_report
-        from sklearn.model_selection import train_test_split
-        from sklearn.neural_network import MLPClassifier
-        from sklearn.preprocessing import StandardScaler
-
-        # Discard smFISH barcodes
-        smFISH_barcode_count = np.sum(
-            [
-                len(np.where(self._codebook_matrix[x])[0]) == 1
-                for x in range(self._codebook_matrix.shape[0])
-            ]
-        )
-        print(f"smFISH_barcode_count {smFISH_barcode_count}")
-        mask_smFISH_barcodes = np.array(
-            [
-                len(np.where(self._codebook_matrix[x])[0]) == 1
-                for x in range(self._codebook_matrix.shape[0])
-            ]
-        )
-        smFISH_barcodes = np.array(self._gene_ids)[mask_smFISH_barcodes]
-        self._df_barcodes_loaded["is_smFISH"] = self._df_barcodes_loaded[
-            "gene_id"
-        ].isin(smFISH_barcodes)
-        df_barcodes_to_filter = self._df_barcodes_loaded[
-            ~self._df_barcodes_loaded["is_smFISH"]
-        ].copy()
-        df_smFISH_barcodes = self._df_barcodes_loaded[
-            self._df_barcodes_loaded["is_smFISH"]
-        ].copy()
-        df_barcodes_to_filter["X"] = ~df_barcodes_to_filter["gene_id"].str.startswith(
-            "Blank"
-        )
-        if self._is_3D:
-            columns = [
-                "X",
-                "signal_mean",
-                "s-b_mean",
-                "distance_mean",
-                "magnitude_mean",
-                "inertia_tensor_eigvals-0",
-                "inertia_tensor_eigvals-1",
-                "inertia_tensor_eigvals-2",
-            ]
-        else:
-            columns = [
-                "X",
-                "signal_mean",
-                "s-b_mean",
-                "distance_mean",
-                "magnitude_mean",
-                "inertia_tensor_eigvals-0",
-                "inertia_tensor_eigvals-1",
-            ]
-        df_true = df_barcodes_to_filter[df_barcodes_to_filter["X"]][columns]
-        df_false = df_barcodes_to_filter[(~df_barcodes_to_filter["X"])][columns]
-
-        if len(df_false) > 0:
-            df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
-            df_combined = pd.concat([df_true_sampled, df_false])
-            x = df_combined.drop("X", axis=1)
-            y = df_combined["X"]
-            X_train, X_test, y_train, y_test = train_test_split(
-                x, y, test_size=0.1, random_state=42
-            )
-
-            if self._verbose > 1:
-                print("generating synthetic samples for class balance")
-            smote = SMOTE(random_state=42)
-            X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-
-            if self._verbose > 1:
-                print("scaling features")
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train_resampled)
-            X_test_scaled = scaler.transform(X_test)
-
-            if self._verbose > 1:
-                print("training classifier")
-            # logistic = LogisticRegression(solver='liblinear', random_state=42)
-            mlp = MLPClassifier(solver="adam", max_iter=10000, random_state=42)
-            mlp.fit(X_train_scaled, y_train_resampled)
-            predictions = mlp.predict(X_test_scaled)
-
-            if self._verbose > 1:
-                print(classification_report(y_test, predictions))
-
-            if self._verbose > 1:
-                print("predicting on full data")
-
-            full_data_scaled = scaler.transform(df_barcodes_to_filter[columns[1:]])
-            df_barcodes_to_filter["predicted_probability"] = mlp.predict_proba(
-                full_data_scaled
-            )[:, 1]
-
-            if self._verbose > 1:
-                print("filtering blanks")
-
-            coarse_threshold = 0
-            for threshold in np.arange(0, 1, 0.1):  # Coarse step: 0.1
-                fdr = self.calculate_fdr(
-                    df_barcodes_to_filter,
-                    threshold,
-                    self._blank_count,
-                    self._barcode_count - smFISH_barcode_count,
-                    self._verbose,
-                )
-                if fdr <= fdr_target:
-                    coarse_threshold = threshold
-                    break
-
-            fine_threshold = coarse_threshold
-            for threshold in np.arange(
-                coarse_threshold - 0.1, coarse_threshold + 0.1, 0.01
-            ):
-                fdr = self.calculate_fdr(
-                    df_barcodes_to_filter,
-                    threshold,
-                    self._blank_count,
-                    self._barcode_count - smFISH_barcode_count,
-                    self._verbose,
-                )
-                if fdr <= fdr_target:
-                    fine_threshold = threshold
-                    break
-
-            df_above_threshold = df_barcodes_to_filter[
-                df_barcodes_to_filter["predicted_probability"] > fine_threshold
-            ]
-            columns_filtered = [
-                "tile_idx",
-                "gene_id",
-                "global_z",
-                "global_y",
-                "global_x",
-                "distance_mean",
-            ]
-            self._df_filtered_barcodes = pd.concat(
-                [
-                    df_above_threshold[columns_filtered],
-                    df_smFISH_barcodes[columns_filtered],
-                ],
-                ignore_index=True,
-            )
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-
-            if self._verbose > 1:
-                print(f"fdr : {fdr}")
-                print(f"retained barcodes: {len(self._df_filtered_barcodes)}")
-
-            del df_above_threshold, full_data_scaled
-            del (
-                mlp,
-                predictions,
-                X_train,
-                X_test,
-                y_test,
-                y_train,
-                X_train_scaled,
-                X_test_scaled,
-            )
-            del df_true, df_false, df_true_sampled, df_combined
-            gc.collect()
-        else:
-            self._df_filtered_barcodes = self._df_barcodes_loaded.copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-
     def _filter_all_barcodes_LR(self, fdr_target: float = 0.05) -> None:
         """Filter barcodes using a classifier and FDR target.
 
@@ -1845,7 +1671,6 @@ class PixelDecoder:
             False discovery rate target.
         """
 
-        from imblearn.over_sampling import SMOTE
         from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import classification_report
         from sklearn.model_selection import train_test_split
@@ -1858,7 +1683,8 @@ class PixelDecoder:
                 for x in range(self._codebook_matrix.shape[0])
             ]
         )
-        print(f"smFISH_barcode_count {smFISH_barcode_count}")
+        if self._verbose > 1:
+            print(f"smFISH_barcode_count {smFISH_barcode_count}")
         mask_smFISH_barcodes = np.array(
             [
                 len(np.where(self._codebook_matrix[x])[0]) == 1
@@ -1904,6 +1730,8 @@ class PixelDecoder:
             ]
         df_true = df_barcodes_to_filter[df_barcodes_to_filter["X"]][columns]
         df_false = df_barcodes_to_filter[~df_barcodes_to_filter["X"]][columns]
+        if self._verbose > 1:
+            print(f"Number of blanks: {len(df_false)}")
         if len(df_false) > 1:
             df_true_sampled = df_true.sample(n=len(df_false), random_state=42)
             df_combined = pd.concat([df_true_sampled, df_false])
@@ -1915,7 +1743,7 @@ class PixelDecoder:
 
             if self._verbose > 1:
                 print("generating synthetic samples for class balance")
-            SMOTE(random_state=42)
+            # SMOTE(random_state=42)
             # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
             X_train_resampled = X_train.copy()
             y_train_resampled = y_train.copy()
@@ -2124,7 +1952,7 @@ class PixelDecoder:
 
     def _remove_duplicates_within_tile(
         self,
-        radius_xy: float = 0.75,
+        radius_xy: float = 0.2,
         radius_z: float = 0.50,
     ) -> None:
         """Collapse near-duplicate detections within each tile *and same gene_id*.
@@ -2370,7 +2198,7 @@ class PixelDecoder:
         magnitude_threshold: list[float, float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
         use_normalization: bool | None = True,
-        ufish_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
     ) -> tuple[np.ndarray, ...] | None:
         """Decode one tile.
 
@@ -2394,8 +2222,8 @@ class PixelDecoder:
             Minimum number of pixels for a barcode.
         use_normalization : bool, default True
             Use normalization.
-        ufish_threshold : float, default 0.1
-            Ufish threshold.
+        feature_predictor_threshold : float, default 0.1
+            feature_predictor threshold.
 
         Returns
         -------
@@ -2413,7 +2241,7 @@ class PixelDecoder:
                 self._load_iterative_normalization_vectors(gpu_id=gpu_id)
 
             self._tile_idx = tile_idx
-            self._load_bit_data(ufish_threshold=ufish_threshold)
+            self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
             if not (np.any(lowpass_sigma == 0)):
                 self._lp_filter(sigma=lowpass_sigma, gpu_id=gpu_id)
             self._decode_pixels(
@@ -2453,7 +2281,7 @@ class PixelDecoder:
         n_iterations: int = 10,
         distance_threshold: float | None = 0.5176,
         minimum_pixels: float | None = 2.0,
-        ufish_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
     ) -> None:
@@ -2471,8 +2299,8 @@ class PixelDecoder:
             Threshold to consider a pixel-trace barcode near a known codeword.
         minimum_pixels : float, default = 2.0
             Minimum number of pixels for a barcode.
-        ufish_threshold : float, default = 0.1
-            Ufish threshold.
+        feature_predictor_threshold : float, default = 0.1
+            feature_predictor threshold.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Sequence[float], default = (0.9,10.0)
@@ -2526,7 +2354,7 @@ class PixelDecoder:
                         distance_threshold,
                         magnitude_threshold,
                         minimum_pixels,
-                        ufish_threshold,
+                        feature_predictor_threshold,
                         self._smFISH,
                     ),
                 )
@@ -2540,14 +2368,15 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_z = self._datastore.voxel_size_zyx_um[0] * 2
-                    self._remove_duplicates_within_tile(radius_z=radius_z)
+                    radius_xy = (
+                        self._datastore.voxel_size_zyx_um[-1] * 2
+                    )  # approx PSF radius
+                    radius_z = self._datastore.voxel_size_zyx_um[0]
+                    self._remove_duplicates_within_tile(
+                        radius_xy=radius_xy, radius_z=radius_z
+                    )
                 self._load_global_normalization_vectors(gpu_id=0)
-                if not (self._verbose == 0):
-                    self._verbose = 2
                 self._iterative_normalization_vectors(gpu_id=0)
-                if not (self._verbose == 0):
-                    self._verbose = 1
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
                 cp.cuda.Stream.null.synchronize()
@@ -2567,7 +2396,7 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
-        ufish_threshold: float | None = 0.1,
+        feature_predictor_threshold: float | None = 0.1,
         fdr_target: float | None = 0.05,
     ) -> None:
         """Optimize normalization by decoding.
@@ -2588,8 +2417,8 @@ class PixelDecoder:
             Accept pixels with magnitudes between low and high values
         minimum_pixels : float, default 2.0
             Minimum number of pixels for a barcode.
-        ufish_threshold : float, default 0.1
-            Ufish threshold.
+        feature_predictor_threshold : float, default 0.1
+            feature_predictor threshold.
         fdr_target: float, default = 0.05
             FDR target for filtering
         """
@@ -2619,7 +2448,7 @@ class PixelDecoder:
                     distance_threshold,
                     magnitude_threshold,
                     minimum_pixels,
-                    ufish_threshold,
+                    feature_predictor_threshold,
                     self._smFISH,
                 ),
             )
@@ -2634,8 +2463,10 @@ class PixelDecoder:
         self._load_all_barcodes()
         if self._verbose >= 1:
             print(f"Number of loaded barcodes: {len(self._df_barcodes_loaded)}")
+            print(f"Verbosity:  {self._verbose}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
+            self._datastore.voxel_size_zyx_um[-1] * 2  # approx PSF radius
             radius_z = self._datastore.voxel_size_zyx_um[0]
             self._remove_duplicates_within_tile(radius_z=radius_z)
 
