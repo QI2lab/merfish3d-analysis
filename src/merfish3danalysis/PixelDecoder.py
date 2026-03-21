@@ -1866,7 +1866,8 @@ class PixelDecoder:
                 for x in range(self._codebook_matrix.shape[0])
             ]
         )
-        print(f"smFISH_barcode_count {smFISH_barcode_count}")
+        if self._verbose > 1:
+            print(f"smFISH_barcode_count {smFISH_barcode_count}")
         mask_smFISH_barcodes = np.array(
             [
                 len(np.where(self._codebook_matrix[x])[0]) == 1
