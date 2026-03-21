@@ -650,9 +650,9 @@ def convert_data_skip_z(
                     bit=int(experiment_order[round_idx, 2]) - 1,
                 )
 
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"Corrected": True})
-    datastore.datastore_state = datastore_state
+        datastore_state = datastore.datastore_state
+        datastore_state.update({"Corrected": True})
+        datastore.datastore_state = datastore_state
 
     # Calculate and apply flatfield corrections
     if not (use_illuminations):
