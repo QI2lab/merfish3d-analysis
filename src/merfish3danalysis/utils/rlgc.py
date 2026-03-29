@@ -582,7 +582,11 @@ def rlgc_biggs_ba(
         pad_x_after = (new_x - x0) - pad_x_before
         image_padded = np.pad(
             image,
-            pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
+            pad_width=(
+                (0, 0),
+                (pad_y_before, pad_y_after),
+                (pad_x_before, pad_x_after),
+            ),
             mode="reflect",
         ).astype(np.uint16)
     else:
@@ -803,7 +807,9 @@ def rlgc_biggs_ba_2d_batched(
     init_arr = np.asarray(init_value)
 
     if image_arr.ndim == 2:
-        plane_init_value = float(init_arr.ravel()[0]) if init_arr.ndim > 0 else float(init_arr)
+        plane_init_value = (
+            float(init_arr.ravel()[0]) if init_arr.ndim > 0 else float(init_arr)
+        )
         return rlgc_biggs_ba(
             image=image_arr,
             psf=_normalize_psf_to_2d(psf),
@@ -820,7 +826,9 @@ def rlgc_biggs_ba_2d_batched(
 
     psf_2d = _normalize_psf_to_2d(psf)
     if init_arr.ndim == 0:
-        plane_init_values = np.full(image_arr.shape[0], float(init_arr), dtype=np.float32)
+        plane_init_values = np.full(
+            image_arr.shape[0], float(init_arr), dtype=np.float32
+        )
     else:
         plane_init_values = np.asarray(init_arr, dtype=np.float32).reshape(-1)
         if plane_init_values.size != image_arr.shape[0]:
@@ -952,7 +960,9 @@ def chunked_rlgc(
     # Tiled deconvolution with feathered blending
     else:
         init_value = (
-            np.mean(image_work, axis=(-2, -1)) if use_batched_2d else np.mean(image_work)
+            np.mean(image_work, axis=(-2, -1))
+            if use_batched_2d
+            else np.mean(image_work)
         )
         output_sum = np.zeros_like(image_work, dtype=np.float32)
         output_weight = np.zeros_like(image_work, dtype=np.float32)
