@@ -315,6 +315,153 @@ def _get_otf_pair_2d(
     return pair
 
 
+def _extract_padded_2d_region(
+    image: np.ndarray,
+    y0: int,
+    y1: int,
+    x0: int,
+    x1: int,
+    fill_values: np.ndarray,
+) -> np.ndarray:
+    """Extract a YX region from a stack and pad outside-image pixels manually."""
+
+    z, image_y, image_x = image.shape
+    region = np.empty((z, y1 - y0, x1 - x0), dtype=image.dtype)
+    region[...] = fill_values[:, None, None]
+
+    src_y0 = max(y0, 0)
+    src_y1 = min(y1, image_y)
+    src_x0 = max(x0, 0)
+    src_x1 = min(x1, image_x)
+
+    dst_y0 = src_y0 - y0
+    dst_y1 = dst_y0 + (src_y1 - src_y0)
+    dst_x0 = src_x0 - x0
+    dst_x1 = dst_x0 + (src_x1 - src_x0)
+
+    region[:, dst_y0:dst_y1, dst_x0:dst_x1] = image[:, src_y0:src_y1, src_x0:src_x1]
+    return region
+
+
+def _resolve_2d_chunk_crop_yx(
+    image_shape_yx: tuple[int, int],
+    crop_yx: int,
+    halo_yx: int,
+) -> int:
+    """Choose a 2D chunk size that leaves a positive kept core and avoids single-tile full-frame mode."""
+
+    min_crop = max(2 * halo_yx + 1, 3)
+    max_dim = max(image_shape_yx)
+    resolved_crop = max(int(crop_yx), min_crop)
+
+    if resolved_crop >= max_dim and max_dim > min_crop:
+        core_yx = max((max_dim + 1) // 2, 1)
+        resolved_crop = max(min_crop, core_yx + 2 * halo_yx)
+        resolved_crop = min(resolved_crop, max_dim - 1)
+        resolved_crop = max(resolved_crop, min_crop)
+
+    return resolved_crop
+
+
+def _chunked_rlgc_2d_core_stitch(
+    image: np.ndarray,
+    psf: np.ndarray,
+    gpu_id: int,
+    crop_yx: int,
+    overlap_yx: int,
+    safe_mode: bool,
+    verbose: int,
+    cache_otf: bool,
+    release_memory: bool,
+) -> np.ndarray:
+    """Run 2D RLGC on halo-padded tiles and keep only each tile's uncontaminated core."""
+
+    image_arr = np.asarray(image)
+    squeeze_output = image_arr.ndim == 2
+    if squeeze_output:
+        image_arr = image_arr[np.newaxis, ...]
+    if image_arr.ndim != 3:
+        raise ValueError(f"Expected a 2D or 3D image, got shape {image_arr.shape}")
+
+    psf_arr = np.asarray(psf)
+    halo_yx = max(
+        overlap_yx,
+        int(psf_arr.shape[-2]) // 2,
+        int(psf_arr.shape[-1]) // 2,
+    )
+    chunk_crop_yx = _resolve_2d_chunk_crop_yx(
+        image_shape_yx=image_arr.shape[-2:],
+        crop_yx=crop_yx,
+        halo_yx=halo_yx,
+    )
+    core_yx = chunk_crop_yx - 2 * halo_yx
+    if core_yx <= 0:
+        raise ValueError(
+            f"2D chunk crop {chunk_crop_yx} leaves no kept core with halo {halo_yx}."
+        )
+
+    plane_init_values = np.median(image_arr, axis=(-2, -1)).astype(np.float32)
+    output = np.zeros_like(image_arr, dtype=np.float32)
+
+    tile_specs = [
+        (
+            y0,
+            min(y0 + core_yx, image_arr.shape[-2]),
+            x0,
+            min(x0 + core_yx, image_arr.shape[-1]),
+        )
+        for y0 in range(0, image_arr.shape[-2], core_yx)
+        for x0 in range(0, image_arr.shape[-1], core_yx)
+    ]
+
+    if verbose >= 1:
+        from rich.progress import track
+
+        iterator = track(tile_specs, description="2D Chunks", transient=True)
+    else:
+        iterator = tile_specs
+
+    for target_y0, target_y1, target_x0, target_x1 in iterator:
+        patch_y0 = target_y0 - halo_yx
+        patch_y1 = target_y1 + halo_yx
+        patch_x0 = target_x0 - halo_yx
+        patch_x1 = target_x1 + halo_yx
+
+        patch = _extract_padded_2d_region(
+            image_arr,
+            patch_y0,
+            patch_y1,
+            patch_x0,
+            patch_x1,
+            fill_values=plane_init_values,
+        )
+        patch_output = rlgc_biggs_ba_2d_batched(
+            patch,
+            psf,
+            gpu_id=gpu_id,
+            safe_mode=safe_mode,
+            init_value=plane_init_values,
+            pad_yx=False,
+            cache_otf=cache_otf,
+            release_memory=False,
+        )
+
+        inner_y0 = target_y0 - patch_y0
+        inner_y1 = inner_y0 + (target_y1 - target_y0)
+        inner_x0 = target_x0 - patch_x0
+        inner_x1 = inner_x0 + (target_x1 - target_x0)
+        output[:, target_y0:target_y1, target_x0:target_x1] = patch_output[
+            :,
+            inner_y0:inner_y1,
+            inner_x0:inner_x1,
+        ]
+
+    if release_memory:
+        clear_rlgc_caches(clear_memory_pool=True)
+
+    return output[0] if squeeze_output else output
+
+
 def fft_conv_batched_2d(
     image: cp.ndarray,
     H: cp.ndarray,
@@ -370,8 +517,9 @@ def rlgc_biggs_ba(
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
     init_value: float = 1,
-    limit: float = 0.01,
-    max_delta: float = 0.01,
+    limit: float = 0.2,
+    max_delta: float = 0.02,
+    pad_yx: bool = True,
     release_memory: bool = True,
 ) -> np.ndarray:
     """
@@ -393,12 +541,16 @@ def rlgc_biggs_ba(
         If False, stop only when BOTH split KLDs increase.
     init_value : float, default=1
         Constant initializer value for the reconstruction.
-    limit : float, default=0.01
+    limit : float, default=0.2
         Minimum fraction of pixels that must be updated per iteration before
         early stopping is triggered.
-    max_delta : float, default=0.01
+    max_delta : float, default=0.02
         Maximum allowed relative update magnitude before early stopping is
         triggered.
+    pad_yx : bool, default=True
+        If True, pad Y/X to an FFT-friendly shape with reflected boundaries.
+        If False, keep the original Y/X field of view and rely on the caller
+        to manage any needed edge handling.
     release_memory : bool, default=True
         If True, release GPU memory pools after each call. Set False when
         calling in tight loops to avoid allocator thrashing.
@@ -419,22 +571,24 @@ def rlgc_biggs_ba(
         image = np.expand_dims(image, axis=0)
 
     _, y0, x0 = image.shape  # (z, y, x)
-
-    # Pad Y/X to FFT-friendly sizes
-    new_y = next_gpu_fft_size(y0)
-    new_x = next_gpu_fft_size(x0)
-    pad_y_before = (new_y - y0) // 2
-    pad_y_after = (new_y - y0) - pad_y_before
-    pad_x_before = (new_x - x0) // 2
-    pad_x_after = (new_x - x0) - pad_x_before
-
-    image_padded = np.pad(
-        image,
-        pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
-        mode="reflect",
-    ).astype(np.uint16)
-
     psf_z = int(psf.shape[0])
+
+    if pad_yx:
+        new_y = next_gpu_fft_size(y0)
+        new_x = next_gpu_fft_size(x0)
+        pad_y_before = (new_y - y0) // 2
+        pad_y_after = (new_y - y0) - pad_y_before
+        pad_x_before = (new_x - x0) // 2
+        pad_x_after = (new_x - x0) - pad_x_before
+        image_padded = np.pad(
+            image,
+            pad_width=((0, 0), (pad_y_before, pad_y_after), (pad_x_before, pad_x_after)),
+            mode="reflect",
+        ).astype(np.uint16)
+    else:
+        pad_y_before = pad_y_after = 0
+        pad_x_before = pad_x_after = 0
+        image_padded = image.astype(np.uint16, copy=False)
 
     # Z padding
     if image.ndim == 3:
@@ -496,7 +650,6 @@ def rlgc_biggs_ba(
             if cp.isnan(alpha):
                 alpha = 0.0
             alpha = float(alpha)
-            alpha = 0.0
         else:
             alpha = 0.0
 
@@ -631,9 +784,10 @@ def rlgc_biggs_ba_2d_batched(
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
-    init_value: float = 1,
-    limit: float = 0.01,
-    max_delta: float = 0.01,
+    init_value: float | np.ndarray = 1,
+    limit: float = 0.2,
+    max_delta: float = 0.02,
+    pad_yx: bool = True,
     cache_otf: bool = True,
     release_memory: bool = True,
 ) -> np.ndarray:
@@ -646,21 +800,34 @@ def rlgc_biggs_ba_2d_batched(
     """
 
     image_arr = np.asarray(image)
+    init_arr = np.asarray(init_value)
+
     if image_arr.ndim == 2:
+        plane_init_value = float(init_arr.ravel()[0]) if init_arr.ndim > 0 else float(init_arr)
         return rlgc_biggs_ba(
             image=image_arr,
             psf=_normalize_psf_to_2d(psf),
             gpu_id=gpu_id,
             safe_mode=safe_mode,
-            init_value=init_value,
+            init_value=plane_init_value,
             limit=limit,
             max_delta=max_delta,
+            pad_yx=pad_yx,
             release_memory=release_memory,
         )
     if image_arr.ndim != 3:
         raise ValueError(f"Expected a 2D or 3D image, got shape {image_arr.shape}")
 
     psf_2d = _normalize_psf_to_2d(psf)
+    if init_arr.ndim == 0:
+        plane_init_values = np.full(image_arr.shape[0], float(init_arr), dtype=np.float32)
+    else:
+        plane_init_values = np.asarray(init_arr, dtype=np.float32).reshape(-1)
+        if plane_init_values.size != image_arr.shape[0]:
+            raise ValueError(
+                "Batched 2D RLGC expected one init value per z plane or a scalar; "
+                f"got shape {init_arr.shape} for {image_arr.shape[0]} planes."
+            )
     output = np.zeros_like(image_arr, dtype=np.float32)
     for z_idx in range(image_arr.shape[0]):
         output[z_idx] = rlgc_biggs_ba(
@@ -668,9 +835,10 @@ def rlgc_biggs_ba_2d_batched(
             psf=psf_2d,
             gpu_id=gpu_id,
             safe_mode=safe_mode,
-            init_value=init_value,
+            init_value=float(plane_init_values[z_idx]),
             limit=limit,
             max_delta=max_delta,
+            pad_yx=pad_yx,
             release_memory=False,
         )
 
@@ -724,44 +892,74 @@ def chunked_rlgc(
         Deconvolved image (float32).
     """
     cp.cuda.Device(gpu_id).use()
+    image_arr = np.asarray(image)
+    original_ndim = image_arr.ndim
+    if original_ndim == 2:
+        image_work = image_arr[np.newaxis, ...]
+    elif original_ndim == 3:
+        image_work = image_arr
+    else:
+        raise ValueError(f"Expected a 2D or 3D image, got shape {image_arr.shape}")
 
+    psf_arr = np.asarray(psf)
+    is_2d_psf = psf_arr.ndim == 2 or (psf_arr.ndim == 3 and psf_arr.shape[0] == 1)
     if use_batched_2d is None:
-        psf_arr = np.asarray(psf)
-        use_batched_2d = image.ndim == 3 and (
-            psf_arr.ndim == 2 or (psf_arr.ndim == 3 and psf_arr.shape[0] == 1)
+        use_batched_2d = original_ndim == 3 and is_2d_psf
+
+    if (
+        is_2d_psf
+        and (original_ndim == 2 or use_batched_2d)
+        and (crop_yx < image_work.shape[-2] or crop_yx < image_work.shape[-1])
+    ):
+        return _chunked_rlgc_2d_core_stitch(
+            image=image_arr,
+            psf=psf,
+            gpu_id=gpu_id,
+            crop_yx=crop_yx,
+            overlap_yx=overlap_yx,
+            safe_mode=safe_mode,
+            verbose=verbose,
+            cache_otf=cache_otf,
+            release_memory=release_memory,
         )
 
     # Full-frame path if tiling not needed
-    if crop_yx >= image.shape[-2] and crop_yx >= image.shape[-1]:
+    if crop_yx >= image_work.shape[-2] and crop_yx >= image_work.shape[-1]:
         if use_batched_2d:
             output = rlgc_biggs_ba_2d_batched(
-                image,
+                image_arr,
                 psf,
                 gpu_id,
                 safe_mode=safe_mode,
-                init_value=float(np.median(image)),
+                init_value=np.median(image_arr, axis=(-2, -1)),
+                pad_yx=True,
                 cache_otf=cache_otf,
                 release_memory=False,
             )
         else:
             output = rlgc_biggs_ba(
-                image,
+                image_arr,
                 psf,
                 gpu_id,
                 safe_mode=safe_mode,
-                init_value=float(np.median(image)),
+                init_value=float(np.median(image_arr)),
+                pad_yx=True,
                 release_memory=False,
             )
+        if original_ndim == 2 and output.ndim == 3 and output.shape[0] == 1:
+            output = np.squeeze(output, axis=0)
 
     # Tiled deconvolution with feathered blending
     else:
-        init_value = np.mean(image)
-        output_sum = np.zeros_like(image, dtype=np.float32)
-        output_weight = np.zeros_like(image, dtype=np.float32)
+        init_value = (
+            np.mean(image_work, axis=(-2, -1)) if use_batched_2d else np.mean(image_work)
+        )
+        output_sum = np.zeros_like(image_work, dtype=np.float32)
+        output_weight = np.zeros_like(image_work, dtype=np.float32)
 
-        crop_size = (image.shape[0], crop_yx, crop_yx)
+        crop_size = (image_work.shape[0], crop_yx, crop_yx)
         overlap = (0, overlap_yx, overlap_yx)
-        slices = Slicer(image, crop_size=crop_size, overlap=overlap, pad=True)
+        slices = Slicer(image_work, crop_size=crop_size, overlap=overlap, pad=True)
 
         if verbose >= 1:
             from rich.progress import track
@@ -829,6 +1027,9 @@ def chunked_rlgc(
         nonzero = output_weight > 0
         output = np.zeros_like(output_sum, dtype=output_sum.dtype)
         output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
+
+        if original_ndim == 2:
+            output = np.squeeze(output, axis=0)
 
         del output_sum, output_weight, nonzero
         gc.collect()
