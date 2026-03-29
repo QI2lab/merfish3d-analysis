@@ -302,10 +302,9 @@ def convert_data_skip_z(
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
-            z=51,
+            z=1,
             nx=51,
             dxy=voxel_size_zyx_um[1],
-            dz=voxel_size_zyx_um[0],
             NA=na,
             wvl=em_wavelengths_um[channel_id],
             ns=1.47,
@@ -313,7 +312,7 @@ def convert_data_skip_z(
             ni0=ri,
             model="vectorial",
         ).astype(np.float32)
-        # psf = psf / np.sum(psf, axis=(0, 1, 2))
+        psf = psf / np.sum(psf, axis=(0, 1, 2))
         channel_psfs.append(psf)
 
     # initialize datastore
