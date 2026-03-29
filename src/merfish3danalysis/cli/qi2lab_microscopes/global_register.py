@@ -38,7 +38,13 @@ def batch_using_joblib(
     n_jobs
         Number of parallel workers (joblib semantics).
     """
-    Parallel(n_jobs=n_jobs)(delayed(func)(block_id) for block_id in block_ids)
+    def batch_using_joblib(func, block_ids, n_jobs):
+        Parallel(
+            n_jobs=n_jobs,
+            prefer="threads",
+            require="sharedmem",
+            pre_dispatch=n_jobs,
+        )(delayed(func)(block_id) for block_id in block_ids)
     return
 
 
@@ -162,7 +168,7 @@ def global_register_data(
 
     # perform and save downsampled fusion
 
-    output_zarr_path = datastore._fused_root_path / Path("fused_raw.zarr")
+    output_zarr_path = datastore._fused_root_path / Path("fused.ome.zarr")
 
     fused_sim = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
@@ -174,15 +180,15 @@ def global_register_data(
         },
         output_chunksize=fused_chunk_size,
         output_zarr_url=output_zarr_path,
-        zarr_options={"ome_zarr": False},
-        batch_options={
-            # "batch_func": misc_utils.process_batch_using_ray,
-            "batch_func": batch_using_joblib,
-            "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
-            "batch_func_kwargs": {
-                "n_jobs": n_jobs  # (note the change in parameter name)
-            },
-        },
+        zarr_options={"ome_zarr": True},
+        # batch_options={
+        #     # "batch_func": misc_utils.process_batch_using_ray,
+        #     "batch_func": batch_using_joblib,
+        #     "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
+        #     "batch_func_kwargs": {
+        #         "n_jobs": n_jobs  # (note the change in parameter name)
+        #     },
+        # },
     )
 
     fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
