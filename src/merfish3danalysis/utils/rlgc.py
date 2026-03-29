@@ -706,7 +706,7 @@ def rlgc_biggs_ba(
         HTratio2 = fft_conv(
             cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape
         )
-        HTratio = HTratio1 + HTratio2
+        HTratio = 0.5 * (HTratio1 + HTratio2)
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
         consensus_map = fft_conv(
