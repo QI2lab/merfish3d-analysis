@@ -47,16 +47,9 @@ This will automatically setup the correct CUDA libraries and other packages in t
 
 The `merfish3d-stitcher` environment is only used when individual tiles are registered into a global coordinate system. The code automatically invokes this second environment, but it is important to note that the current install strategy does create a new conda/mamba environment beyond what you as the user creates. As soon as the dependency issue is solved, we will remove this work around.
 
-### (Optional) Baysor installation and use
-If you plan on re-segmenting cells using [Baysor](https://github.com/kharchenkolab/Baysor), please follow the [Baysor installation instructions](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation). Our package will automatically call Baysor if installed correctly.
-
 ### (Coming soon) Proseg installation and use
 We are working to add [Proseg](https://github.com/dcjones/proseg) interoperability.
 
 ## Documentation
 
 To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.
-
-
-
-
