@@ -38,16 +38,12 @@ def batch_using_joblib(
     n_jobs
         Number of parallel workers (joblib semantics).
     """
-
-    def batch_using_joblib(func, block_ids, n_jobs) -> None:
-        Parallel(
-            n_jobs=n_jobs,
-            prefer="threads",
-            require="sharedmem",
-            pre_dispatch=n_jobs,
-        )(delayed(func)(block_id) for block_id in block_ids)
-
-    return
+    Parallel(
+        n_jobs=n_jobs,
+        prefer="threads",
+        require="sharedmem",
+        pre_dispatch=n_jobs,
+    )(delayed(func)(block_id) for block_id in block_ids)
 
 
 @app.command()
