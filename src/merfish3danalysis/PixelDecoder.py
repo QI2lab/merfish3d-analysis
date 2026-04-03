@@ -2465,7 +2465,7 @@ class PixelDecoder:
             print(f"Verbosity:  {self._verbose}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
-            radius_xy = self._datastore.voxel_size_zyx_um[-1]/2  # approx PSF radius
+            radius_xy = self._datastore.voxel_size_zyx_um[-1] / 2  # approx PSF radius
             radius_z = self._datastore.voxel_size_zyx_um[0]
             self._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
 
@@ -2511,9 +2511,13 @@ class PixelDecoder:
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
-                radius_xy = self._datastore.voxel_size_zyx_um[-1]/2  # approx PSF radius
+                radius_xy = (
+                    self._datastore.voxel_size_zyx_um[-1] / 2
+                )  # approx PSF radius
                 radius_z = self._datastore.voxel_size_zyx_um[0] * 2
-                self._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
+                self._remove_duplicates_within_tile(
+                    radius_xy=radius_xy, radius_z=radius_z
+                )
             else:
                 self._remove_duplicates_in_tile_overlap()
 
