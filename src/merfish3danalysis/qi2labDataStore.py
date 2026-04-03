@@ -585,8 +585,29 @@ class qi2labDataStore:
         experiment_order : pd.DataFrame
             Round and bit order.
         """
+        experiment_order = getattr(self, "_experiment_order", None)
+        if experiment_order is not None:
+            return experiment_order
 
-        return getattr(self, "_experiment_order", None)
+        legacy_experiment_order = getattr(self, "_exp_order", None)
+        if legacy_experiment_order is None:
+            return None
+
+        self._experiment_order = self._coerce_experiment_order_dataframe(
+            legacy_experiment_order
+        )
+        return self._experiment_order
+
+    def _coerce_experiment_order_dataframe(
+        self, value: ArrayLike | pd.DataFrame
+    ) -> pd.DataFrame:
+        """Normalize experiment order into the canonical DataFrame form."""
+
+        if isinstance(value, pd.DataFrame):
+            return value
+
+        channel_list = [str(channel) for channel in self._channels_in_data]
+        return pd.DataFrame(value, columns=channel_list, dtype="int64")
 
     @experiment_order.setter
     def experiment_order(self, value: ArrayLike | pd.DataFrame) -> None:
@@ -598,15 +619,7 @@ class qi2labDataStore:
             New round and bit order.
         """
 
-        if isinstance(value, pd.DataFrame):
-            self._experiment_order = value
-        else:
-            channel_list = []
-            for idx in range(len(self._channels_in_data)):
-                channel_list.append(str(self._channels_in_data[idx]))
-            self._experiment_order = pd.DataFrame(
-                value, columns=channel_list, dtype="int64"
-            )
+        self._experiment_order = self._coerce_experiment_order_dataframe(value)
 
         self._set_calibration_attribute("exp_order", self._experiment_order.values)
 
@@ -1814,6 +1827,11 @@ class qi2labDataStore:
                     raise KeyError("Calibration attributes incomplete")
                 else:
                     setattr(self, "_" + key, attributes[key])
+
+            if getattr(self, "_exp_order", None) is not None:
+                self._experiment_order = self._coerce_experiment_order_dataframe(
+                    self._exp_order
+                )
 
             psf_root_path = self._calibrations_zarr_path / Path("psf_data")
             try:
