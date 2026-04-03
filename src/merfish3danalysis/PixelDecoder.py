@@ -1952,15 +1952,16 @@ class PixelDecoder:
 
     def _remove_duplicates_within_tile(
         self,
-        radius_xy: float = 0.2,
+        radius_xy: float = 0.1,
         radius_z: float = 0.50,
     ) -> None:
-        """Collapse near-duplicate detections within each tile *and same gene_id*.
+        """Collapse cross-plane near-duplicate detections within each tile.
 
         Two rows are considered neighbors if and only if:
         1) They belong to the same tile (``tile_idx``),
         2) Their XY separation is within ``radius_xy`` (microns),
-        3) Their absolute Z separation is within ``radius_z`` (microns), and
+        3) They are in different Z planes and their absolute Z separation is
+           within ``radius_z`` (microns), and
         4) Their identity matches (``gene_id`` is equal).
 
         For each connected component (cluster) under this neighbor relation,
@@ -1970,7 +1971,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        radius_xy : float, default 0.75
+        radius_xy : float, default 0.1
             Neighborhood radius in the XY plane, in microns.
         radius_z : float, default 0.50
             Neighborhood half-extent along Z, in microns.
@@ -2045,11 +2046,11 @@ class PixelDecoder:
             if not pairs_local:
                 continue
 
-            # 2) Filter by Z window *and same gene_id*
+            # 2) Filter by cross-plane Z window *and same gene_id*
             filtered_pairs = [
                 (i, j)
                 for (i, j) in pairs_local
-                if (abs(z_local[i] - z_local[j]) <= radius_z)
+                if (0.0 < abs(z_local[i] - z_local[j]) <= radius_z)
                 and (genes_local[i] == genes_local[j])
             ]
             if not filtered_pairs:
@@ -2368,9 +2369,7 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_xy = (
-                        self._datastore.voxel_size_zyx_um[-1] * 2
-                    )  # approx PSF radius
+                    radius_xy = self._datastore.voxel_size_zyx_um[-1] / 2
                     radius_z = self._datastore.voxel_size_zyx_um[0]
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
@@ -2466,9 +2465,9 @@ class PixelDecoder:
             print(f"Verbosity:  {self._verbose}")
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if not (self._is_3D):
-            self._datastore.voxel_size_zyx_um[-1] * 2  # approx PSF radius
+            radius_xy = self._datastore.voxel_size_zyx_um[-1]/2  # approx PSF radius
             radius_z = self._datastore.voxel_size_zyx_um[0]
-            self._remove_duplicates_within_tile(radius_z=radius_z)
+            self._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
 
         if len(all_tiles) > 1:
             self._remove_duplicates_in_tile_overlap()
@@ -2512,8 +2511,9 @@ class PixelDecoder:
         self._filter_all_barcodes_LR(fdr_target=fdr_target)
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
+                radius_xy = self._datastore.voxel_size_zyx_um[-1]/2  # approx PSF radius
                 radius_z = self._datastore.voxel_size_zyx_um[0] * 2
-                self._remove_duplicates_within_tile(radius_z=radius_z)
+                self._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
             else:
                 self._remove_duplicates_in_tile_overlap()
 
