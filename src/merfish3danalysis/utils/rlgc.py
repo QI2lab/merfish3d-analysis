@@ -699,12 +699,18 @@ def rlgc_biggs_ba(
         # RL ratios: H^T( split / (0.5*(Hu+eps)) )
         eps = 1e-12
         ratio_denom = 0.5 * (Hu + eps)
-        HTratio1 = fft_conv(cp.divide(split1, ratio_denom, dtype=cp.float32), otfT, shape)
-        HTratio2 = fft_conv(cp.divide(split2, ratio_denom, dtype=cp.float32), otfT, shape)
+        HTratio1 = fft_conv(
+            cp.divide(split1, ratio_denom, dtype=cp.float32), otfT, shape
+        )
+        HTratio2 = fft_conv(
+            cp.divide(split2, ratio_denom, dtype=cp.float32), otfT, shape
+        )
         HTratio = 0.5 * (HTratio1 + HTratio2)
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
-        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
+        consensus_map = fft_conv(
+            (HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape
+        )
 
         # Gated multiplicative update
         filter_update_ba(recon, HTratio, consensus_map, recon_next)
