@@ -39,8 +39,8 @@ filter_update_ba = ElementwiseKernel(
 # -----------------------------------------------------------------------------
 # FFT / OTF caches (performance)
 # -----------------------------------------------------------------------------
-_fft_cache_3d: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
-_fft_cache_2d_batched: dict[tuple[int, int, int], tuple[cp.ndarray, cp.ndarray]] = {}
+_fft_cache_3d: dict[tuple[int, int, int], cp.ndarray] = {}
+_fft_cache_2d_batched: dict[tuple[int, int, int], cp.ndarray] = {}
 _otf_cache_2d: dict[tuple[int, int, str], tuple[cp.ndarray, cp.ndarray]] = {}
 
 
@@ -95,7 +95,7 @@ def make_feather_weight(
 
 def next_gpu_fft_size(x: int) -> int:
     """
-    Return the smallest FFT-friendly size ≥ ``x`` with prime factors in {2, 3}.
+    Return the smallest FFT-friendly size >= ``x`` with prime factors in {2, 3}.
 
     Parameters
     ----------
@@ -105,7 +105,7 @@ def next_gpu_fft_size(x: int) -> int:
     Returns
     -------
     int
-        Next 2-3-smooth length ≥ ``x``.
+        Next 2-3-smooth length >= ``x``.
     """
     if x <= 1:
         return 1
@@ -242,15 +242,12 @@ def fft_conv(
     if shape not in _fft_cache_3d:
         z, y, x = shape
         freq_shape = (z, y, x // 2 + 1)
-        fft_buf = cp.empty(freq_shape, dtype=cp.complex64)
-        ifft_buf = cp.empty(shape, dtype=cp.float32)
-        _fft_cache_3d[shape] = (fft_buf, ifft_buf)
+        _fft_cache_3d[shape] = cp.empty(freq_shape, dtype=cp.complex64)
 
-    fft_buf, ifft_buf = _fft_cache_3d[shape]
+    fft_buf = _fft_cache_3d[shape]
     fft_buf[...] = cp.fft.rfftn(image)
     fft_buf[...] *= H
-    ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape)
-    return ifft_buf
+    return cp.fft.irfftn(fft_buf, s=shape).astype(cp.float32, copy=False)
 
 
 def _normalize_psf_to_2d(psf: np.ndarray) -> np.ndarray:
@@ -370,6 +367,7 @@ def _chunked_rlgc_2d_core_stitch(
     crop_yx: int,
     overlap_yx: int,
     safe_mode: bool,
+    auto_delta_scale: float,
     verbose: int,
     cache_otf: bool,
     release_memory: bool,
@@ -402,7 +400,6 @@ def _chunked_rlgc_2d_core_stitch(
 
     plane_init_values = np.median(image_arr, axis=(-2, -1)).astype(np.float32)
     output = np.zeros_like(image_arr, dtype=np.float32)
-
     tile_specs = [
         (
             y0,
@@ -440,6 +437,7 @@ def _chunked_rlgc_2d_core_stitch(
             psf,
             gpu_id=gpu_id,
             safe_mode=safe_mode,
+            auto_delta_scale=auto_delta_scale,
             init_value=plane_init_values,
             pad_yx=False,
             cache_otf=cache_otf,
@@ -472,15 +470,14 @@ def fft_conv_batched_2d(
     if shape not in _fft_cache_2d_batched:
         z, y, x = shape
         freq_shape = (z, y, x // 2 + 1)
-        fft_buf = cp.empty(freq_shape, dtype=cp.complex64)
-        ifft_buf = cp.empty(shape, dtype=cp.float32)
-        _fft_cache_2d_batched[shape] = (fft_buf, ifft_buf)
+        _fft_cache_2d_batched[shape] = cp.empty(freq_shape, dtype=cp.complex64)
 
-    fft_buf, ifft_buf = _fft_cache_2d_batched[shape]
+    fft_buf = _fft_cache_2d_batched[shape]
     fft_buf[...] = cp.fft.rfftn(image, axes=(-2, -1))
     fft_buf[...] *= H
-    ifft_buf[...] = cp.fft.irfftn(fft_buf, s=shape[-2:], axes=(-2, -1))
-    return ifft_buf
+    return cp.fft.irfftn(fft_buf, s=shape[-2:], axes=(-2, -1)).astype(
+        cp.float32, copy=False
+    )
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
@@ -516,6 +513,7 @@ def rlgc_biggs_ba(
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
+    auto_delta_scale: float = 5.0,
     init_value: float = 1,
     limit: float = 0.2,
     max_delta: float = 0.02,
@@ -539,6 +537,10 @@ def rlgc_biggs_ba(
     safe_mode : bool, default=True
         If True, stop when EITHER split KLD increases (play-it-safe).
         If False, stop only when BOTH split KLDs increase.
+    auto_delta_scale : float, default=5.0
+        Scale factor in the automatic small-update stop threshold
+        ``auto_delta_scale / max(image)``. Smaller values make this stop
+        criterion more permissive.
     init_value : float, default=1
         Constant initializer value for the reconstruction.
     limit : float, default=0.2
@@ -562,6 +564,8 @@ def rlgc_biggs_ba(
     """
 
     cp.cuda.Device(gpu_id).use()
+    if auto_delta_scale <= 0:
+        raise ValueError("auto_delta_scale must be positive.")
     rng = cp.random.default_rng(42)
 
     # Ensure 3D inputs
@@ -594,19 +598,12 @@ def rlgc_biggs_ba(
         pad_x_before = pad_x_after = 0
         image_padded = image.astype(np.uint16, copy=False)
 
-    # Z padding
-    if image.ndim == 3:
-        image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded, psf_z=psf_z)
-        image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
-
-        del image_gpu_np
-    else:
-        image_gpu = cp.asarray(image_padded, dtype=cp.float32)[cp.newaxis, ...]
-        pad_z_before = pad_z_after = 0
+    image_gpu_np, pad_z_before, pad_z_after = pad_z(image_padded, psf_z=psf_z)
+    image_gpu = cp.asarray(image_gpu_np, dtype=cp.float32)
+    del image_gpu_np
 
     # OTFs
     if (otf is None) or (otfT is None):
-        # Pad PSF to image size first
         psf_gpu = pad_psf(cp.asarray(psf, dtype=cp.float32), image_gpu.shape)
         otf = cp.fft.rfftn(psf_gpu)
         otfT = cp.conjugate(otf)
@@ -619,6 +616,7 @@ def rlgc_biggs_ba(
     shape = image_gpu.shape
     z, y, x = shape
     num_pixels = z * y * x
+    image_peak = cp.maximum(cp.max(image_gpu), cp.float32(1.0))
 
     recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
     previous_recon = recon.copy()
@@ -641,10 +639,6 @@ def rlgc_biggs_ba(
         if DEBUG:
             iter_start_time = timeit.default_timer()
 
-        # 50:50 split of the data (counts)
-        split1 = rng.binomial(image_gpu.astype(cp.int64), p=0.5).astype(cp.float32)
-        split2 = image_gpu - split1
-
         # BA momentum: y = recon + alpha * (recon - previous_recon)
         if num_iters >= 1:
             numerator = cp.sum(g1 * g2)
@@ -661,6 +655,10 @@ def rlgc_biggs_ba(
 
         # Forward prediction
         Hu[...] = fft_conv(y_vec, otf, shape)
+
+        # 50:50 split of the data (counts)
+        split1 = rng.binomial(image_gpu.astype(cp.int64), p=0.5).astype(cp.float32)
+        split2 = image_gpu - split1
 
         # KLDs & stopping
         kldim = kl_div(Hu, image_gpu)
@@ -700,21 +698,17 @@ def rlgc_biggs_ba(
 
         # RL ratios: H^T( split / (0.5*(Hu+eps)) )
         eps = 1e-12
-        HTratio1 = fft_conv(
-            cp.divide(split1, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape
-        )
-        HTratio2 = fft_conv(
-            cp.divide(split2, 0.5 * (Hu + eps), dtype=cp.float32), otfT, shape
-        )
+        ratio_denom = 0.5 * (Hu + eps)
+        HTratio1 = fft_conv(cp.divide(split1, ratio_denom, dtype=cp.float32), otfT, shape)
+        HTratio2 = fft_conv(cp.divide(split2, ratio_denom, dtype=cp.float32), otfT, shape)
         HTratio = 0.5 * (HTratio1 + HTratio2)
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
-        consensus_map = fft_conv(
-            (HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape
-        )
+        consensus_map = fft_conv((HTratio1 - 1.0) * (HTratio2 - 1.0), otfotfT, recon.shape)
 
         # Gated multiplicative update
         filter_update_ba(recon, HTratio, consensus_map, recon_next)
+        recon_next = cp.nan_to_num(recon_next, nan=0.0, posinf=0.0, neginf=0.0)
 
         # BA vectors
         g2[...] = g1
@@ -723,7 +717,8 @@ def rlgc_biggs_ba(
         recon[...] = recon_next
 
         num_updated = num_pixels - cp.sum(consensus_map < 0)
-        max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
+        recon_max = cp.maximum(cp.max(recon), eps)
+        max_relative_delta = cp.max(cp.abs(recon - previous_recon) / recon_max)
 
         num_iters += 1
         if DEBUG:
@@ -752,23 +747,17 @@ def rlgc_biggs_ba(
             break
 
         # (3) Auto delta: updates small relative to overall image intensity
-        if max_relative_delta < 5.0 / cp.max(image_gpu):
+        if max_relative_delta < auto_delta_scale / image_peak:
             if DEBUG:
                 print("Hit auto delta")
             break
 
     # Enforce nonnegativity and unpad back to original
     recon = cp.maximum(recon, 0.0)
-
-    if image.ndim == 3:
-        recon = remove_padding_z(recon, pad_z_before, pad_z_after)
-    else:
-        recon = cp.squeeze(recon)
-
+    recon = remove_padding_z(recon, pad_z_before, pad_z_after)
     y_end = -pad_y_after if pad_y_after > 0 else None
     x_end = -pad_x_after if pad_x_after > 0 else None
     recon = recon[:, pad_y_before:y_end, pad_x_before:x_end]
-
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
 
     # Cleanup
@@ -788,6 +777,7 @@ def rlgc_biggs_ba_2d_batched(
     otf: cp.ndarray | None = None,
     otfT: cp.ndarray | None = None,
     safe_mode: bool = True,
+    auto_delta_scale: float = 5.0,
     init_value: float | np.ndarray = 1,
     limit: float = 0.2,
     max_delta: float = 0.02,
@@ -815,6 +805,7 @@ def rlgc_biggs_ba_2d_batched(
             psf=_normalize_psf_to_2d(psf),
             gpu_id=gpu_id,
             safe_mode=safe_mode,
+            auto_delta_scale=auto_delta_scale,
             init_value=plane_init_value,
             limit=limit,
             max_delta=max_delta,
@@ -843,6 +834,7 @@ def rlgc_biggs_ba_2d_batched(
             psf=psf_2d,
             gpu_id=gpu_id,
             safe_mode=safe_mode,
+            auto_delta_scale=auto_delta_scale,
             init_value=float(plane_init_values[z_idx]),
             limit=limit,
             max_delta=max_delta,
@@ -862,6 +854,7 @@ def chunked_rlgc(
     crop_yx: int = 1500,
     overlap_yx: int = 128,
     safe_mode: bool = True,
+    auto_delta_scale: float = 5.0,
     verbose: int = 0,
     use_batched_2d: bool | None = None,
     cache_otf: bool = True,
@@ -884,6 +877,10 @@ def chunked_rlgc(
         Overlap width in pixels between tiles (for feathering).
     safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
+    auto_delta_scale : float, default=5.0
+        Scale factor in the automatic small-update stop threshold
+        ``auto_delta_scale / max(image)``. Smaller values make this stop
+        criterion more permissive.
     verbose : int, default=0
         If ≥ 1, show a progress bar over subtiles.
     use_batched_2d : bool | None, default=None
@@ -926,6 +923,7 @@ def chunked_rlgc(
             crop_yx=crop_yx,
             overlap_yx=overlap_yx,
             safe_mode=safe_mode,
+            auto_delta_scale=auto_delta_scale,
             verbose=verbose,
             cache_otf=cache_otf,
             release_memory=release_memory,
@@ -939,6 +937,7 @@ def chunked_rlgc(
                 psf,
                 gpu_id,
                 safe_mode=safe_mode,
+                auto_delta_scale=auto_delta_scale,
                 init_value=np.median(image_arr, axis=(-2, -1)),
                 pad_yx=True,
                 cache_otf=cache_otf,
@@ -950,6 +949,7 @@ def chunked_rlgc(
                 psf,
                 gpu_id,
                 safe_mode=safe_mode,
+                auto_delta_scale=auto_delta_scale,
                 init_value=float(np.median(image_arr)),
                 pad_yx=True,
                 release_memory=False,
@@ -990,6 +990,7 @@ def chunked_rlgc(
                     psf,
                     gpu_id,
                     safe_mode=safe_mode,
+                    auto_delta_scale=auto_delta_scale,
                     init_value=init_value,
                     cache_otf=cache_otf,
                     release_memory=False,
@@ -1000,6 +1001,7 @@ def chunked_rlgc(
                     psf,
                     gpu_id,
                     safe_mode=safe_mode,
+                    auto_delta_scale=auto_delta_scale,
                     init_value=init_value,
                     release_memory=False,
                 )
