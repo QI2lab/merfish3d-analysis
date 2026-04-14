@@ -799,12 +799,8 @@ def chunked_rlgc(
 
             y_source_start, y_source_stop = resolve_slice(y_source_slice, crop.shape[1])
             x_source_start, x_source_stop = resolve_slice(x_source_slice, crop.shape[2])
-            y_dest_start, y_dest_stop = resolve_slice(
-                y_dest_slice, image_work.shape[1]
-            )
-            x_dest_start, x_dest_stop = resolve_slice(
-                x_dest_slice, image_work.shape[2]
-            )
+            y_dest_start, y_dest_stop = resolve_slice(y_dest_slice, image_work.shape[1])
+            x_dest_start, x_dest_stop = resolve_slice(x_dest_slice, image_work.shape[2])
 
             y_expand_before = (
                 min(expand_before, y_dest_start, y_source_start)
