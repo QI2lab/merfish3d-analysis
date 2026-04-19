@@ -1223,7 +1223,12 @@ class qi2labDataStore:
         if array.ndim == 3:
             return [min(shape[0], 16), min(shape[1], 512), min(shape[2], 512)]
         if array.ndim == 4:
-            return [min(shape[0], 1), min(shape[1], 16), min(shape[2], 512), min(shape[3], 512)]
+            return [
+                min(shape[0], 1),
+                min(shape[1], 16),
+                min(shape[2], 512),
+                min(shape[3], 512),
+            ]
         if array.ndim == 5:
             return [
                 min(shape[0], 1),
