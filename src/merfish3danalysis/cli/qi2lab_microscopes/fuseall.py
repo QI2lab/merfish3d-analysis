@@ -83,7 +83,7 @@ def fuse_all_channels(root_path: Path) -> None:
             / Path("round001")
             / Path("registered_decon_data.ome.zarr")
         )
-        im_data[0, :] = da.from_zarr(str(input_path)).astype("uint16")
+        im_data[0, :] = da.from_zarr(str(input_path)).astype(np.uint16)
 
         # create spatial image for all channels in current tile
         sim = si_utils.get_sim_from_array(
@@ -199,6 +199,7 @@ def fuse_all_channels(root_path: Path) -> None:
         ome_output_path = fused_path / Path("ch" + str(ch_idx).zfill(2) + ".ome.zarr")
         print(f"Fusing views and saving output to {ome_output_path!s}...")
         with dask.diagnostics.ProgressBar():
+            fused = fused.clip(min=0, max=np.iinfo(np.uint16).max).astype(np.uint16)
             fused = ngff_utils.write_sim_to_ome_zarr(
                 fused,
                 str(ome_output_path),
