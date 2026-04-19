@@ -1214,6 +1214,27 @@ class qi2labDataStore:
         return list(array.shape)
 
     @staticmethod
+    def _fused_image_chunks(array: np.ndarray) -> list[int]:
+        """Create chunk sizes tailored for large fused images only."""
+
+        shape = [int(dim) for dim in array.shape]
+        if array.ndim == 2:
+            return [min(shape[0], 2048), min(shape[1], 2048)]
+        if array.ndim == 3:
+            return [min(shape[0], 16), min(shape[1], 512), min(shape[2], 512)]
+        if array.ndim == 4:
+            return [min(shape[0], 1), min(shape[1], 16), min(shape[2], 512), min(shape[3], 512)]
+        if array.ndim == 5:
+            return [
+                min(shape[0], 1),
+                min(shape[1], 1),
+                min(shape[2], 16),
+                min(shape[3], 512),
+                min(shape[4], 512),
+            ]
+        return qi2labDataStore._default_chunks(array)
+
+    @staticmethod
     def _build_axes(v05: Any, ndim: int) -> list[Any]:
         """Build NGFF axes models for a given dimensionality."""
 
@@ -4170,13 +4191,15 @@ class qi2labDataStore:
             "origin_zyx_um": np.asarray(origin_zyx_um, dtype=np.float32).tolist(),
             "spacing_zyx_um": np.asarray(spacing_zyx_um, dtype=np.float32).tolist(),
         }
+        fused_array = np.asarray(fused_image)
         try:
             spec = self._build_image_write_spec(
                 dtype="<u2",
                 extra_attributes=metadata_attrs,
             )
+            spec["metadata"]["chunks"] = self._fused_image_chunks(fused_array)
             self._save_to_zarr_array(
-                fused_image.astype(np.uint16),
+                fused_array.astype(np.uint16),
                 self._get_kvstore_key(current_local_zarr_path),
                 spec,
                 return_future,
