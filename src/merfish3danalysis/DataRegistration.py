@@ -96,7 +96,6 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         psf=_resolve_psf(dr._psfs, 0),
         gpu_id=0,
         crop_yx=dr._crop_yx_decon,
-        use_batched_2d=dr._use_batched_2d_decon,
         release_memory=False,
     )
 
@@ -201,7 +200,6 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                         psf=_resolve_psf(dr._psfs, 0),
                         gpu_id=gpu_id,
                         crop_yx=bkd_image.shape[-1],
-                        use_batched_2d=dr._use_batched_2d_decon,
                         release_memory=False,
                     )
                     mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
@@ -419,7 +417,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                         psf=_resolve_psf(dr._psfs, psf_idx),
                         gpu_id=gpu_id,
                         crop_yx=corrected_image.shape[-1],
-                        use_batched_2d=dr._use_batched_2d_decon,
                         release_memory=False,
                     )
                     decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
@@ -584,9 +581,6 @@ class DataRegistration:
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
         Crop size for deconvolution applied to both y and x dimensions.
-    use_batched_2d_decon: bool | None, default None
-        If None, automatically enable batched 2D deconvolution when datastore
-        microscope type is "2D". If True/False, explicitly enable/disable it.
     """
 
     def __init__(
@@ -599,7 +593,6 @@ class DataRegistration:
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
-        use_batched_2d_decon: bool | None = None,
     ) -> None:
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
@@ -610,10 +603,6 @@ class DataRegistration:
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
         self._bkd_subtract_fiducial = bkd_subtract_fiducial
-        if use_batched_2d_decon is None:
-            self._use_batched_2d_decon = self._datastore.microscope_type == "2D"
-        else:
-            self._use_batched_2d_decon = bool(use_batched_2d_decon)
 
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None

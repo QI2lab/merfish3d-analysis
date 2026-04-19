@@ -12,14 +12,13 @@ Biggs & Andrews, 1997, https://doi.org/10.1364/AO.36.001766
 """
 
 import gc
+import logging
 import timeit
 
 import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
 from ryomen import Slicer
-
-DEBUG = False
 
 # -----------------------------------------------------------------------------
 # CUDA kernel: multiplicative RL step gated by consensus (reference-accurate)
@@ -50,61 +49,6 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
         cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
         gc.collect()
-
-
-def make_feather_weight(
-    shape: tuple[int, int, int],
-    feather_px: int = 64,
-    taper_top: bool = True,
-    taper_bottom: bool = True,
-    taper_left: bool = True,
-    taper_right: bool = True,
-) -> np.ndarray:
-    """
-    Create a feathered weight mask using directional cosine tapers on Y/X only.
-
-    Z is uniform. Feather taper width is explicitly specified in pixels. Each
-    lateral edge can be tapered independently so outer image boundaries can stay
-    untapered while interior tile overlaps are blended.
-
-    Parameters
-    ----------
-    shape : tuple of int
-        Crop shape as (z, y, x).
-    feather_px : int
-        Number of pixels to taper at each Y/X edge.
-    taper_top, taper_bottom, taper_left, taper_right : bool, default=True
-        Whether to apply the taper on the corresponding edge.
-
-    Returns
-    -------
-    numpy.ndarray
-        Feather mask of shape (z, y, x), values in [0, 1].
-    """
-
-    def cosine_taper(
-        length: int,
-        feather: int,
-        taper_low: bool,
-        taper_high: bool,
-    ) -> np.ndarray:
-        window = np.ones(length, dtype=np.float32)
-        if feather > 0:
-            feather = min(feather, length)
-            ramp = 0.5 * (
-                1 - np.cos(np.linspace(0, np.pi, feather + 2, dtype=np.float32)[1:-1])
-            )
-            if taper_low:
-                window[:feather] = np.minimum(window[:feather], ramp)
-            if taper_high:
-                window[-feather:] = np.minimum(window[-feather:], ramp[::-1])
-        return window
-
-    y_win = cosine_taper(shape[1], feather_px, taper_top, taper_bottom)
-    x_win = cosine_taper(shape[2], feather_px, taper_left, taper_right)
-    weight2d = np.outer(y_win, x_win).astype(np.float32)
-    weight = np.broadcast_to(weight2d[None, :, :], shape)
-    return weight
 
 
 def next_gpu_fft_size(x: int) -> int:
@@ -309,28 +253,29 @@ def _median_init_planes(image: np.ndarray) -> np.ndarray:
     return np.maximum(plane_medians, 1.0, dtype=np.float32)
 
 
-def _resolve_blend_overlap_yx(
-    psf_shape: tuple[int, ...],
-    crop_yx: int,
-) -> int:
-    """
-    Derive a lateral feather overlap from the PSF support.
+def _child_log_prefix(base_prefix: str, suffix: str) -> str:
+    """Append one structured suffix to an RLGC log prefix."""
 
-    The retained overlap is set to the full lateral PSF support width minus the
-    center pixel, which corresponds to twice the lateral PSF half-width for odd
-    support sizes.
-    """
+    return suffix if not base_prefix else f"{base_prefix} {suffix}"
 
-    if crop_yx <= 1:
-        raise ValueError("crop_yx must be greater than 1 for tiled 3D RLGC.")
 
-    lateral_overlap = max(int(psf_shape[-2]) - 1, int(psf_shape[-1]) - 1, 1)
-    if lateral_overlap >= crop_yx:
-        raise ValueError(
-            "crop_yx must be larger than the PSF-derived lateral overlap "
-            f"({lateral_overlap} for PSF shape {psf_shape[-2:]!r})."
-        )
-    return lateral_overlap
+def _resolve_tiled_axis_geometry(
+    requested_crop: int,
+    image_size: int,
+    psf_support: int,
+    axis_name: str,
+) -> tuple[int, int]:
+    """Resolve retained crop size and hidden PSF halo for one tiled axis."""
+
+    if requested_crop <= 0:
+        raise ValueError(f"{axis_name} must be greater than 0 for tiled 3D RLGC.")
+
+    retained_size = min(int(requested_crop), int(image_size))
+    if retained_size >= image_size:
+        return retained_size, 0
+
+    tile_pad = int(psf_support) // 2
+    return retained_size, tile_pad
 
 
 def rlgc_biggs_ba(
@@ -340,10 +285,12 @@ def rlgc_biggs_ba(
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
     init_value: float = 1,
-    limit: float = 0.05,
+    limit: float = 0.01,
     max_delta: float = 0.001,
     pad_yx: bool = True,
     release_memory: bool = True,
+    logger: logging.Logger | None = None,
+    log_prefix: str = "",
 ) -> np.ndarray:
     """
     Biggs-Andrews accelerated Richardson-Lucy Gradient Consensus.
@@ -366,10 +313,10 @@ def rlgc_biggs_ba(
         criterion more permissive.
     init_value : float, default=1
         Constant initializer value for the reconstruction.
-    limit : float, default=0.2
+    limit : float, default=0.01
         Minimum fraction of pixels that must be updated per iteration before
         early stopping is triggered.
-    max_delta : float, default=0.02
+    max_delta : float, default=0.001
         Maximum allowed relative update magnitude before early stopping is
         triggered.
     pad_yx : bool, default=True
@@ -380,6 +327,10 @@ def rlgc_biggs_ba(
     release_memory : bool, default=True
         If True, release GPU memory pools after each call. Set False when
         calling in tight loops to avoid allocator thrashing.
+    logger : logging.Logger or None, default=None
+        Optional logger for per-iteration RLGC diagnostics.
+    log_prefix : str, default=""
+        Structured prefix prepended to every emitted log line.
 
     Returns
     -------
@@ -391,12 +342,28 @@ def rlgc_biggs_ba(
     if auto_delta_scale <= 0:
         raise ValueError("auto_delta_scale must be positive.")
     rng = cp.random.default_rng(42)
+    logging_enabled = logger is not None and logger.isEnabledFor(logging.INFO)
+    log_tag = f"{log_prefix} " if log_prefix else ""
+    solver_start_time = timeit.default_timer() if logging_enabled else None
 
     # Ensure 3D inputs
     if psf.ndim == 2:
         psf = np.expand_dims(psf, axis=0)
     if image.ndim == 2:
         image = np.expand_dims(image, axis=0)
+
+    if logging_enabled:
+        logger.info(
+            "%ssolver_started image_shape=%s psf_shape=%s pad_yx=%s safe_mode=%s limit=%.4f max_delta=%.4f auto_delta_scale=%.3f",
+            log_tag,
+            tuple(int(v) for v in image.shape),
+            tuple(int(v) for v in psf.shape),
+            pad_yx,
+            safe_mode,
+            limit,
+            max_delta,
+            auto_delta_scale,
+        )
 
     image_gpu_np, pad_width = pad_for_linear_fft(
         image=image,
@@ -433,12 +400,9 @@ def rlgc_biggs_ba(
     prev_kld1 = np.inf
     prev_kld2 = np.inf
     num_iters = 0
-    if DEBUG:
-        start_time = timeit.default_timer()
 
     while True:
-        if DEBUG:
-            iter_start_time = timeit.default_timer()
+        iter_start_time = timeit.default_timer() if logging_enabled else None
 
         # BA momentum: y = recon + alpha * (recon - previous_recon)
         if num_iters >= 1:
@@ -462,7 +426,6 @@ def rlgc_biggs_ba(
         split2 = image_gpu - split1
 
         # KLDs & stopping
-        kldim = kl_div(Hu, image_gpu)
         kld1 = kl_div(Hu, split1)
         kld2 = kl_div(Hu, split2)
 
@@ -474,9 +437,18 @@ def rlgc_biggs_ba(
                 or (kld2 < 1e-4)
             ):
                 recon[...] = previous_recon
-                if DEBUG:
-                    total_time = timeit.default_timer() - start_time
-                    print(f"Optimum after {num_iters - 1} iters in {total_time:.1f} s.")
+                if logging_enabled:
+                    logger.info(
+                        "%sstop=restore_previous_recon best_iteration=%d elapsed_s=%.2f safe_mode=%s kld_split1=%.6f prev_kld_split1=%.6f kld_split2=%.6f prev_kld_split2=%.6f",
+                        log_tag,
+                        max(num_iters - 1, 0),
+                        timeit.default_timer() - solver_start_time,
+                        safe_mode,
+                        float(kld1),
+                        float(prev_kld1),
+                        float(kld2),
+                        float(prev_kld2),
+                    )
                 break
         else:
             if (
@@ -485,9 +457,18 @@ def rlgc_biggs_ba(
                 or (kld2 < 1e-4)
             ):
                 recon[...] = previous_recon
-                if DEBUG:
-                    total_time = timeit.default_timer() - start_time
-                    print(f"Optimum after {num_iters - 1} iters in {total_time:.1f} s.")
+                if logging_enabled:
+                    logger.info(
+                        "%sstop=restore_previous_recon best_iteration=%d elapsed_s=%.2f safe_mode=%s kld_split1=%.6f prev_kld_split1=%.6f kld_split2=%.6f prev_kld_split2=%.6f",
+                        log_tag,
+                        max(num_iters - 1, 0),
+                        timeit.default_timer() - solver_start_time,
+                        safe_mode,
+                        float(kld1),
+                        float(prev_kld1),
+                        float(kld2),
+                        float(prev_kld2),
+                    )
                 break
 
         prev_kld1 = kld1
@@ -525,44 +506,77 @@ def rlgc_biggs_ba(
 
         num_updated = num_pixels - cp.sum(consensus_map < 0)
         recon_max = cp.maximum(cp.max(recon), eps)
-        max_relative_delta = cp.max(cp.abs(recon - previous_recon) / recon_max)
+        updated_fraction = float(num_updated) / float(num_pixels)
+        max_relative_delta = float(cp.max(cp.abs(recon - previous_recon) / recon_max))
+        auto_delta_threshold = float(auto_delta_scale / image_peak)
 
         num_iters += 1
-        if DEBUG:
-            calc_time = timeit.default_timer() - iter_start_time
-            min_HTratio = cp.min(HTratio)
-            max_HTratio = cp.max(HTratio)
-            max_relative_delta = cp.max((recon - previous_recon) / cp.max(recon))
-            print(
-                f"Iteration {num_iters:03d} completed in {calc_time:.2f}s. "
-                f"KLDs: {kldim:.6f} (image), {kld1:.6f} (split1), {kld2:.6f} (split2)."
-                f"Update range : {min_HTratio:.3f} to {max_HTratio:.3f}."
-                f"Largest relative delta = {max_relative_delta:.5f}."
+        if logging_enabled:
+            logger.info(
+                "%siteration=%03d elapsed_s=%.2f kld_image=%.6f kld_split1=%.6f kld_split2=%.6f update_min=%.3f update_max=%.3f updated_fraction=%.5f max_relative_delta=%.5f",
+                log_tag,
+                num_iters,
+                timeit.default_timer() - iter_start_time,
+                float(kl_div(Hu, image_gpu)),
+                float(kld1),
+                float(kld2),
+                float(cp.min(HTratio)),
+                float(cp.max(HTratio)),
+                updated_fraction,
+                max_relative_delta,
             )
+
         # Cleanup per-iter temporaries
         del split1, split2, HTratio1, HTratio2, HTratio, consensus_map
 
-        if num_updated / num_pixels < limit:
-            if DEBUG:
-                print("Hit limit")
+        if updated_fraction < limit:
+            if logging_enabled:
+                logger.info(
+                    "%sstop=limit iteration=%03d updated_fraction=%.5f limit=%.5f",
+                    log_tag,
+                    num_iters,
+                    updated_fraction,
+                    limit,
+                )
             break
 
         # (2) Hit max delta: updates have become very small
         if max_relative_delta < max_delta:
-            if DEBUG:
-                print("Hit max delta")
+            if logging_enabled:
+                logger.info(
+                    "%sstop=max_delta iteration=%03d max_relative_delta=%.5f threshold=%.5f",
+                    log_tag,
+                    num_iters,
+                    max_relative_delta,
+                    max_delta,
+                )
             break
 
         # (3) Auto delta: updates small relative to overall image intensity
-        if max_relative_delta < auto_delta_scale / image_peak:
-            if DEBUG:
-                print("Hit auto delta")
+        if max_relative_delta < auto_delta_threshold:
+            if logging_enabled:
+                logger.info(
+                    "%sstop=auto_delta iteration=%03d max_relative_delta=%.5f threshold=%.5f",
+                    log_tag,
+                    num_iters,
+                    max_relative_delta,
+                    auto_delta_threshold,
+                )
             break
 
     # Enforce nonnegativity and unpad back to original
     recon = cp.maximum(recon, 0.0)
     recon = remove_padding_zyx(recon, pad_width)
     recon_cpu = cp.asnumpy(recon).astype(np.float32)
+
+    if logging_enabled:
+        logger.info(
+            "%ssolver_completed iterations=%d elapsed_s=%.2f output_shape=%s",
+            log_tag,
+            num_iters,
+            timeit.default_timer() - solver_start_time,
+            tuple(int(v) for v in recon_cpu.shape),
+        )
 
     # Cleanup
     del g1, g2, recon, previous_recon, Hu, otf, otfT, otfotfT, image_gpu
@@ -581,10 +595,12 @@ def rlgc_biggs_ba_2d_batched(
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
     init_value: float | np.ndarray = 1,
-    limit: float = 0.05,
+    limit: float = 0.01,
     max_delta: float = 0.001,
     pad_yx: bool = True,
     release_memory: bool = True,
+    logger: logging.Logger | None = None,
+    log_prefix: str = "",
 ) -> np.ndarray:
     """
     Quality-preserving 2D fast path over z-planes.
@@ -612,11 +628,21 @@ def rlgc_biggs_ba_2d_batched(
             max_delta=max_delta,
             pad_yx=pad_yx,
             release_memory=release_memory,
+            logger=logger,
+            log_prefix=log_prefix,
         )
     if image_arr.ndim != 3:
         raise ValueError(f"Expected a 2D or 3D image, got shape {image_arr.shape}")
 
     psf_2d = _normalize_psf_to_2d(psf)
+    if logger is not None and logger.isEnabledFor(logging.INFO):
+        logger.info(
+            "%sbatch_mode=2d planes=%d image_shape=%s psf_shape=%s",
+            f"{log_prefix} " if log_prefix else "",
+            int(image_arr.shape[0]),
+            tuple(int(v) for v in image_arr.shape),
+            tuple(int(v) for v in psf_2d.shape),
+        )
     if init_arr.ndim == 0:
         plane_init_values = np.full(
             image_arr.shape[0], float(init_arr), dtype=np.float32
@@ -641,6 +667,8 @@ def rlgc_biggs_ba_2d_batched(
             max_delta=max_delta,
             pad_yx=pad_yx,
             release_memory=False,
+            logger=logger,
+            log_prefix=_child_log_prefix(log_prefix, f"z={z_idx:04d}"),
         )
 
     if release_memory:
@@ -653,13 +681,16 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 1500,
+    crop_z: int | None = None,
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
     verbose: int = 0,
     release_memory: bool = True,
+    logger: logging.Logger | None = None,
+    log_prefix: str = "",
 ) -> np.ndarray:
     """
-    Chunked RLGC deconvolution with feathered blending.
+    Chunked RLGC deconvolution with hidden-halo stitching.
 
     Parameters
     ----------
@@ -671,8 +702,13 @@ def chunked_rlgc(
     gpu_id : int, default=0
         Which GPU to use.
     crop_yx : int, default=1500
-        Tile size in Y and X. The feathered retained overlap is derived
-        internally from the lateral PSF support.
+        Retained tile size in Y and X. A hidden PSF halo is added internally
+        around each lateral tile before deconvolution.
+    crop_z : int or None, default=None
+        Total tile size in Z for chunked 3D deconvolution, including the hidden
+        PSF halo used by each z tile. If ``None``, the tiled 3D path uses the
+        full z-extent and only subdivides laterally. This is ignored for the 2D
+        batched path.
     safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
     auto_delta_scale : float, default=5.0
@@ -683,6 +719,10 @@ def chunked_rlgc(
         If ≥ 1, show a progress bar over subtiles.
     release_memory : bool, default=True
         If True, clear RLGC caches and release memory pools on exit.
+    logger : logging.Logger or None, default=None
+        Optional logger for RLGC route and per-iteration diagnostics.
+    log_prefix : str, default=""
+        Structured prefix prepended to every emitted log line.
 
     Returns
     -------
@@ -690,6 +730,11 @@ def chunked_rlgc(
         Deconvolved image (float32).
     """
     cp.cuda.Device(gpu_id).use()
+    if crop_yx <= 0:
+        raise ValueError("crop_yx must be greater than 0.")
+    if crop_z is not None and crop_z <= 0:
+        raise ValueError("crop_z must be greater than 0 when provided.")
+
     image_arr = np.asarray(image)
     original_ndim = image_arr.ndim
     if original_ndim == 2:
@@ -706,6 +751,13 @@ def chunked_rlgc(
         raise ValueError("2D RLGC requires a 2D PSF or a single-z 3D PSF.")
 
     if is_2d_psf:
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "%spath=2d_batched image_shape=%s psf_shape=%s",
+                f"{log_prefix} " if log_prefix else "",
+                tuple(int(v) for v in image_arr.shape),
+                tuple(int(v) for v in np.asarray(psf).shape),
+            )
         init_value = (
             _median_init_planes(image_arr)
             if image_arr.ndim == 3
@@ -720,6 +772,8 @@ def chunked_rlgc(
             init_value=init_value,
             pad_yx=True,
             release_memory=False,
+            logger=logger,
+            log_prefix=_child_log_prefix(log_prefix, "path=2d_batched"),
         )
         if original_ndim == 2 and output.ndim == 3 and output.shape[0] == 1:
             output = np.squeeze(output, axis=0)
@@ -727,8 +781,21 @@ def chunked_rlgc(
             clear_rlgc_caches(clear_memory_pool=True)
         return output
 
+    effective_crop_z = image_work.shape[0] if crop_z is None else crop_z
+
     # Full-frame path if tiling not needed
-    if crop_yx >= image_work.shape[-2] and crop_yx >= image_work.shape[-1]:
+    if (
+        effective_crop_z >= image_work.shape[0]
+        and crop_yx >= image_work.shape[-2]
+        and crop_yx >= image_work.shape[-1]
+    ):
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "%spath=3d_fullframe image_shape=%s psf_shape=%s",
+                f"{log_prefix} " if log_prefix else "",
+                tuple(int(v) for v in image_arr.shape),
+                tuple(int(v) for v in psf_arr.shape),
+            )
         output = rlgc_biggs_ba(
             image_arr,
             psf,
@@ -738,31 +805,62 @@ def chunked_rlgc(
             init_value=_median_init_scalar(image_arr),
             pad_yx=True,
             release_memory=False,
+            logger=logger,
+            log_prefix=_child_log_prefix(log_prefix, "path=3d_fullframe"),
         )
         if original_ndim == 2 and output.ndim == 3 and output.shape[0] == 1:
             output = np.squeeze(output, axis=0)
 
-    # Tiled 3D deconvolution with hidden PSF halo and feathered blending
+    # Tiled 3D deconvolution with hidden PSF halo and halo-discard stitching
     else:
-        blend_overlap_yx = _resolve_blend_overlap_yx(psf_arr.shape, crop_yx)
-
-        expand_before = blend_overlap_yx // 2
-        expand_after = blend_overlap_yx - expand_before
-        psf_half_y = int(psf_arr.shape[-2]) // 2
-        psf_half_x = int(psf_arr.shape[-1]) // 2
-        tile_pad_y = psf_half_y + max(expand_before, expand_after)
-        tile_pad_x = psf_half_x + max(expand_before, expand_after)
+        full_shape = image_work.shape
+        if effective_crop_z >= full_shape[0]:
+            retained_z = full_shape[0]
+            tile_pad_z = 0
+        else:
+            psf_half_z = int(psf_arr.shape[0]) // 2
+            if effective_crop_z <= 2 * psf_half_z:
+                raise ValueError(
+                    "crop_z must be larger than twice the axial PSF half-width "
+                    f"({2 * psf_half_z} for PSF support {int(psf_arr.shape[0])})."
+                )
+            retained_z = int(effective_crop_z) - 2 * psf_half_z
+            tile_pad_z = psf_half_z
+        retained_y, tile_pad_y = _resolve_tiled_axis_geometry(
+            crop_yx,
+            full_shape[1],
+            int(psf_arr.shape[-2]),
+            "crop_yx",
+        )
+        retained_x, tile_pad_x = _resolve_tiled_axis_geometry(
+            crop_yx,
+            full_shape[2],
+            int(psf_arr.shape[-1]),
+            "crop_yx",
+        )
         init_value = _median_init_scalar(image_work)
-        output_sum = np.zeros_like(image_work, dtype=np.float32)
-        output_weight = np.zeros_like(image_work, dtype=np.float32)
+        output = np.zeros_like(image_work, dtype=np.float32)
 
         crop_size = (
-            image_work.shape[0],
-            crop_yx + 2 * tile_pad_y,
-            crop_yx + 2 * tile_pad_x,
+            retained_z + 2 * tile_pad_z,
+            retained_y + 2 * tile_pad_y,
+            retained_x + 2 * tile_pad_x,
         )
-        overlap = (0, tile_pad_y, tile_pad_x)
+        overlap = (tile_pad_z, tile_pad_y, tile_pad_x)
         slices = Slicer(image_work, crop_size=crop_size, overlap=overlap, pad=True)
+        num_tiles = len(slices)
+
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            logger.info(
+                "%spath=3d_tiled image_shape=%s psf_shape=%s retained_shape=%s crop_size=%s overlap=%s num_tiles=%d",
+                f"{log_prefix} " if log_prefix else "",
+                tuple(int(v) for v in image_work.shape),
+                tuple(int(v) for v in psf_arr.shape),
+                (retained_z, retained_y, retained_x),
+                crop_size,
+                overlap,
+                num_tiles,
+            )
 
         if verbose >= 1:
             from rich.progress import track
@@ -770,13 +868,13 @@ def chunked_rlgc(
             iterator = track(
                 enumerate(slices),
                 description="Chunks",
-                total=len(slices),
+                total=num_tiles,
                 transient=True,
             )
         else:
             iterator = enumerate(slices)
 
-        for _, (crop, source, destination) in iterator:
+        for tile_idx, (crop, source, destination) in iterator:
             crop_array = rlgc_biggs_ba(
                 crop,
                 psf,
@@ -785,6 +883,8 @@ def chunked_rlgc(
                 auto_delta_scale=auto_delta_scale,
                 init_value=init_value,
                 release_memory=False,
+                logger=logger,
+                log_prefix=_child_log_prefix(log_prefix, f"path=3d_tiled tile={tile_idx:04d}"),
             )
 
             def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
@@ -794,88 +894,43 @@ def chunked_rlgc(
                     stop = dim + stop
                 return start, stop
 
-            y_source_slice, x_source_slice = source[-2:]
-            y_dest_slice, x_dest_slice = destination[-2:]
+            crop_shape = crop.shape[-3:]
+            image_shape = image_work.shape[-3:]
+            source_slices = source[-3:]
+            destination_slices = destination[-3:]
+            source_bounds = [
+                resolve_slice(source_slices[axis], crop_shape[axis]) for axis in range(3)
+            ]
+            destination_bounds = [
+                resolve_slice(destination_slices[axis], image_shape[axis])
+                for axis in range(3)
+            ]
 
-            y_source_start, y_source_stop = resolve_slice(y_source_slice, crop.shape[1])
-            x_source_start, x_source_stop = resolve_slice(x_source_slice, crop.shape[2])
-            y_dest_start, y_dest_stop = resolve_slice(y_dest_slice, image_work.shape[1])
-            x_dest_start, x_dest_stop = resolve_slice(x_dest_slice, image_work.shape[2])
-
-            y_expand_before = (
-                min(expand_before, y_dest_start, y_source_start)
-                if y_dest_start > 0
-                else 0
-            )
-            y_expand_after = (
-                min(
-                    expand_after,
-                    image_work.shape[1] - y_dest_stop,
-                    crop.shape[1] - y_source_stop,
-                )
-                if y_dest_stop < image_work.shape[1]
-                else 0
-            )
-            x_expand_before = (
-                min(expand_before, x_dest_start, x_source_start)
-                if x_dest_start > 0
-                else 0
-            )
-            x_expand_after = (
-                min(
-                    expand_after,
-                    image_work.shape[2] - x_dest_stop,
-                    crop.shape[2] - x_source_stop,
-                )
-                if x_dest_stop < image_work.shape[2]
-                else 0
-            )
-
-            y_source_start -= y_expand_before
-            y_source_stop += y_expand_after
-            x_source_start -= x_expand_before
-            x_source_stop += x_expand_after
-            y_dest_start -= y_expand_before
-            y_dest_stop += y_expand_after
-            x_dest_start -= x_expand_before
-            x_dest_stop += x_expand_after
+            (z_source_start, z_source_stop), (y_source_start, y_source_stop), (
+                x_source_start,
+                x_source_stop,
+            ) = source_bounds
+            (z_dest_start, z_dest_stop), (y_dest_start, y_dest_stop), (
+                x_dest_start,
+                x_dest_stop,
+            ) = destination_bounds
 
             crop_sub = crop_array[
-                :,
+                z_source_start:z_source_stop,
                 y_source_start:y_source_stop,
                 x_source_start:x_source_stop,
             ]
-            feather_weight = make_feather_weight(
-                crop_sub.shape,
-                feather_px=blend_overlap_yx,
-                taper_top=y_dest_start > 0,
-                taper_bottom=y_dest_stop < image_work.shape[1],
-                taper_left=x_dest_start > 0,
-                taper_right=x_dest_stop < image_work.shape[2],
-            )
+            output[
+                z_dest_start:z_dest_stop,
+                y_dest_start:y_dest_stop,
+                x_dest_start:x_dest_stop,
+            ] = crop_sub
 
-            weighted_sub = crop_sub * feather_weight
-            weight_sub = feather_weight
-
-            output_sum[:, y_dest_start:y_dest_stop, x_dest_start:x_dest_stop] += (
-                weighted_sub
-            )
-            output_weight[:, y_dest_start:y_dest_stop, x_dest_start:x_dest_stop] += (
-                weight_sub
-            )
-
-        del feather_weight, weighted_sub, weight_sub, crop_sub
+        del crop_sub
         gc.collect()
-
-        nonzero = output_weight > 0
-        output = np.zeros_like(output_sum, dtype=output_sum.dtype)
-        output[nonzero] = output_sum[nonzero] / output_weight[nonzero]
 
         if original_ndim == 2:
             output = np.squeeze(output, axis=0)
-
-        del output_sum, output_weight, nonzero
-        gc.collect()
 
     if release_memory:
         clear_rlgc_caches(clear_memory_pool=True)
