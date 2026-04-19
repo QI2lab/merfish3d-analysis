@@ -884,7 +884,9 @@ def chunked_rlgc(
                 init_value=init_value,
                 release_memory=False,
                 logger=logger,
-                log_prefix=_child_log_prefix(log_prefix, f"path=3d_tiled tile={tile_idx:04d}"),
+                log_prefix=_child_log_prefix(
+                    log_prefix, f"path=3d_tiled tile={tile_idx:04d}"
+                ),
             )
 
             def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
@@ -899,20 +901,29 @@ def chunked_rlgc(
             source_slices = source[-3:]
             destination_slices = destination[-3:]
             source_bounds = [
-                resolve_slice(source_slices[axis], crop_shape[axis]) for axis in range(3)
+                resolve_slice(source_slices[axis], crop_shape[axis])
+                for axis in range(3)
             ]
             destination_bounds = [
                 resolve_slice(destination_slices[axis], image_shape[axis])
                 for axis in range(3)
             ]
 
-            (z_source_start, z_source_stop), (y_source_start, y_source_stop), (
-                x_source_start,
-                x_source_stop,
+            (
+                (z_source_start, z_source_stop),
+                (y_source_start, y_source_stop),
+                (
+                    x_source_start,
+                    x_source_stop,
+                ),
             ) = source_bounds
-            (z_dest_start, z_dest_stop), (y_dest_start, y_dest_stop), (
-                x_dest_start,
-                x_dest_stop,
+            (
+                (z_dest_start, z_dest_stop),
+                (y_dest_start, y_dest_stop),
+                (
+                    x_dest_start,
+                    x_dest_stop,
+                ),
             ) = destination_bounds
 
             crop_sub = crop_array[
