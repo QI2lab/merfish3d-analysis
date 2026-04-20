@@ -567,7 +567,7 @@ class DataRegistration:
     ----------
     datastore : qi2labDataStore
         Initialized qi2labDataStore object
-    decon_fiducial: bool, default False
+    decon_fiducial: bool, default True
         Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
         stitching.
     decon_readout: bool, default False
@@ -589,7 +589,7 @@ class DataRegistration:
     def __init__(
         self,
         datastore: qi2labDataStore,
-        decon_fiducial: bool = False,
+        decon_fiducial: bool = True,
         decon_readout: bool = False,
         bkd_subtract_fiducial: bool = False,
         overwrite_registered: bool = False,

@@ -24,7 +24,7 @@ def local_register_data(
     num_gpus: int = 1,
     decon: bool = False,
     opticalflow: bool = True,
-    decon_allfiducial: bool = False,
+    decon_allfiducial: bool = True,
     bkdsubtract_all_fiducial: bool = False,
     save_all_fiducial: bool = False,
     overwrite: bool = True,
@@ -43,7 +43,7 @@ def local_register_data(
         compatibility instead of deconvolved readouts.
     opticalflow: bool, Default = True
         perform optical flow based registration.
-    decon_allfiducial: bool, Default = False
+    decon_allfiducial: bool, Default = True
         perform deconvolution prior to registration for fiducials beyond the first round.
     bkdsubtract_all_fiducial: bool, Default = False
         perform background subtraction prior to registration.
