@@ -316,7 +316,7 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 dr._datastore.save_local_registered_image(
                     registered_image=data_registered.astype(np.uint16),
                     tile=dr._tile_id,
-                    deconvolution=True,
+                    deconvolution=dr._decon_fiducial,
                     round=round_id,
                 )
             print(
@@ -479,6 +479,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # clip to uint16
             data_reg = data_reg.clip(0, 2**16 - 1).astype(np.uint16)
 
+            # save registered readout immediately so overwrite does not depend on U-FISH
+            dr._datastore.save_local_registered_image(
+                data_reg,
+                tile=dr._tile_id,
+                deconvolution=dr._decon_readout,
+                bit=bit_id,
+            )
+
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
             ufish.load_weights_from_internet()
@@ -532,9 +540,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             feature_predictor_loc["tile_x_px"] = feature_predictor_loc["x"]
 
             # save results
-            dr._datastore.save_local_registered_image(
-                data_reg, tile=dr._tile_id, deconvolution=True, bit=bit_id
-            )
             dr._datastore.save_local_feature_predictor_image(
                 feature_predictor_data, tile=dr._tile_id, bit=bit_id
             )
