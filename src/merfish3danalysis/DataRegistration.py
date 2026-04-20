@@ -570,7 +570,7 @@ class DataRegistration:
     decon_fiducial: bool, default False
         Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
         stitching.
-    decon_readout: bool, default True
+    decon_readout: bool, default False
         Deconvolve readout images before registration to fiducials.
     bkd_subtract_fiducial: bool, default False
         Background subtraction ALL fiducial rounds.
@@ -590,7 +590,7 @@ class DataRegistration:
         self,
         datastore: qi2labDataStore,
         decon_fiducial: bool = False,
-        decon_readout: bool = True,
+        decon_readout: bool = False,
         bkd_subtract_fiducial: bool = False,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
