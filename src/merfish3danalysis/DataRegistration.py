@@ -410,7 +410,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             )
 
             # deconvolution
-            if dr._decon:
+            if dr._decon_readout:
                 if dr._datastore.microscope_type == "2D":
                     decon_image = chunked_rlgc(
                         image=corrected_image,
@@ -569,7 +569,9 @@ class DataRegistration:
         Initialized qi2labDataStore object
     decon_fiducial: bool, default False
         Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
-        stitching and disables readout deconvolution.
+        stitching.
+    decon_readout: bool, default True
+        Deconvolve readout images before registration to fiducials.
     bkd_subtract_fiducial: bool, default False
         Background subtraction ALL fiducial rounds.
     overwrite_registered: bool, default False
@@ -588,6 +590,7 @@ class DataRegistration:
         self,
         datastore: qi2labDataStore,
         decon_fiducial: bool = False,
+        decon_readout: bool = True,
         bkd_subtract_fiducial: bool = False,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
@@ -610,7 +613,7 @@ class DataRegistration:
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_fiducial_registered = save_all_fiducial_registered
-        self._decon = decon_fiducial
+        self._decon_readout = decon_readout
         self._original_print = builtins.print
 
     # -----------------------------------

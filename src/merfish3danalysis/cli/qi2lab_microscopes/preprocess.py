@@ -39,13 +39,12 @@ def local_register_data(
     num_gpus: int, Default = 1
         number of gpus available.
     decon: bool, Default = True
-        allow deconvolution when enabled by the registration decon flags. If False,
-        readout deconvolution is disabled and corrected data are re-saved for compatibility.
+        perform readout deconvolution. If False, corrected data are re-saved for
+        compatibility instead of deconvolved readouts.
     opticalflow: bool, Default = True
         perform optical flow based registration.
     decon_allfiducial: bool, Default = False
-        perform deconvolution prior to registration for fiducials. Readout deconvolution
-        is only applied when this is True.
+        perform deconvolution prior to registration for fiducials beyond the first round.
     bkdsubtract_all_fiducial: bool, Default = False
         perform background subtraction prior to registration.
     save_all_fiducial: bool, Default = False
@@ -66,6 +65,7 @@ def local_register_data(
     registration_factory = DataRegistration(
         datastore=datastore,
         decon_fiducial=decon_allfiducial,
+        decon_readout=decon,
         bkd_subtract_fiducial=bkdsubtract_all_fiducial,
         perform_optical_flow=opticalflow,
         overwrite_registered=overwrite,
@@ -73,9 +73,6 @@ def local_register_data(
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
     )
-
-    if not (decon):
-        registration_factory._decon = False
 
     # run local registration across rounds
     registration_factory.register_all_tiles()
