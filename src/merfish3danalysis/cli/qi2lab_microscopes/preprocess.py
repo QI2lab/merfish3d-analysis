@@ -25,7 +25,7 @@ def local_register_data(
     decon: bool = True,
     opticalflow: bool = True,
     decon_allfiducial: bool = False,
-    bkdsubtract_all_fiducial: bool = True,
+    bkdsubtract_all_fiducial: bool = False,
     save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
@@ -39,12 +39,14 @@ def local_register_data(
     num_gpus: int, Default = 1
         number of gpus available.
     decon: bool, Default = True
-        perform deconvolution on 1st round fiducial and FISH readout images.
+        allow deconvolution when enabled by the registration decon flags. If False,
+        readout deconvolution is disabled and corrected data are re-saved for compatibility.
     opticalflow: bool, Default = True
         perform optical flow based registration.
     decon_allfiducial: bool, Default = False
-        perform deconvolution prior to registration.
-    bkdsubtract_all_fiducial: bool, Default = True
+        perform deconvolution prior to registration for fiducials. Readout deconvolution
+        is only applied when this is True.
+    bkdsubtract_all_fiducial: bool, Default = False
         perform background subtraction prior to registration.
     save_all_fiducial: bool, Default = False
         save all registered fiducial images.

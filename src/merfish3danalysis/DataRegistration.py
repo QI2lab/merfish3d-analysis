@@ -568,8 +568,9 @@ class DataRegistration:
     datastore : qi2labDataStore
         Initialized qi2labDataStore object
     decon_fiducial: bool, default False
-        Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream stitching.
-    bkd_subtract_fiducial: bool, default True
+        Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
+        stitching and disables readout deconvolution.
+    bkd_subtract_fiducial: bool, default False
         Background subtraction ALL fiducial rounds.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
@@ -587,7 +588,7 @@ class DataRegistration:
         self,
         datastore: qi2labDataStore,
         decon_fiducial: bool = False,
-        bkd_subtract_fiducial: bool = True,
+        bkd_subtract_fiducial: bool = False,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
         save_all_fiducial_registered: bool = False,
@@ -609,7 +610,7 @@ class DataRegistration:
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_fiducial_registered = save_all_fiducial_registered
-        self._decon = True
+        self._decon = decon_fiducial
         self._original_print = builtins.print
 
     # -----------------------------------
