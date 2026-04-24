@@ -29,7 +29,7 @@ def local_register_data(
     save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
-    zstride_level: int = 0
+    zstride_level: int = 0,
 ) -> None:
     """Preprocess and register each tile across rounds in local coordinates.
 
