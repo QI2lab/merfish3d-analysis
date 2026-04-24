@@ -29,6 +29,7 @@ def local_register_data(
     save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
+    zstride_level: int = 0
 ) -> None:
     """Preprocess and register each tile across rounds in local coordinates.
 
@@ -53,13 +54,19 @@ def local_register_data(
         overwrite existing registered data.
     crop_yx_decon: int, default = 1024
         size of tile for GPU deconvolution.
+    zstride_level: int, default = 0
+        look for a skip z dataset.
 
     """
     from merfish3danalysis.DataRegistration import DataRegistration
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    if zstride_level == 0:
+        datastore_path = root_path / Path(r"qi2labdatastore")
+    else:
+        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
     datastore = qi2labDataStore(datastore_path)
+    print(f"Using datastore at {datastore_path}")
 
     # initialize registration class
     registration_factory = DataRegistration(
