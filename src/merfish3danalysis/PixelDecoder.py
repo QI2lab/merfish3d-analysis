@@ -1373,7 +1373,9 @@ class PixelDecoder:
             df_barcode["distance_min"] = df_barcode["intensity_min-1"].to_numpy(
                 dtype=np.float32, copy=False
             )
-            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(drop=True)
+            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(
+                drop=True
+            )
 
             # barcode_id is 1-based, matches old code
             df_barcode["barcode_id"] = df_barcode["decoded_id"].astype(np.int32) + 1
