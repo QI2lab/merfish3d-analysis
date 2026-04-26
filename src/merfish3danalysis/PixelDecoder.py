@@ -503,6 +503,11 @@ def decode_tiles_worker(
     local_decoder._optimize_normalization_weights = False
 
     for tile_tracker, tile_idx in enumerate(tile_indices):
+        print(
+            time_stamp(),
+            f"GPU {gpu_id}: starting tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
+            flush=True,
+        )
         local_decoder.decode_one_tile(
             tile_idx=tile_idx,
             display_results=False,
@@ -519,7 +524,7 @@ def decode_tiles_worker(
         local_decoder._cleanup()
         print(
             time_stamp(),
-            f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of out {len(tile_indices)} (tile index: {tile_idx}).",
+            f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
             flush=True,
         )
 
@@ -1708,7 +1713,43 @@ class PixelDecoder:
                 codewords_label_image_cp, min_size=minimum_pixels
             )
 
-            # move arrays to CPU
+            max_label = int(cp.max(codewords_label_image_cp).get())
+            label_to_id = np.full(max_label + 1, -1, dtype=np.int16)
+            label_to_distance_min = np.full(max_label + 1, np.nan, dtype=np.float32)
+
+            if max_label > 0:
+                labels_flat_cp = codewords_label_image_cp.ravel()
+                decoded_flat_cp = decoded_image_cp.ravel()
+                order_cp = cp.argsort(labels_flat_cp)
+                labels_sorted_cp = labels_flat_cp[order_cp]
+                decoded_sorted_cp = decoded_flat_cp[order_cp]
+                uniq_labels_cp, first_idx_cp = cp.unique(
+                    labels_sorted_cp, return_index=True
+                )
+                label_to_id_cp = cp.full(max_label + 1, -1, dtype=cp.int16)
+                label_to_id_cp[uniq_labels_cp] = decoded_sorted_cp[first_idx_cp]
+                label_to_id_cp[0] = -1
+                label_to_id = cp.asnumpy(label_to_id_cp)
+
+                distance_image_cp = cp.asarray(self._distance_image, dtype=cp.float32)
+                component_labels, component_distance_min = _compute_component_min_values(
+                    codewords_label_image_cp, distance_image_cp
+                )
+                label_to_distance_min[component_labels] = component_distance_min
+
+                del (
+                    labels_flat_cp,
+                    decoded_flat_cp,
+                    order_cp,
+                    labels_sorted_cp,
+                    decoded_sorted_cp,
+                    uniq_labels_cp,
+                    first_idx_cp,
+                    label_to_id_cp,
+                    distance_image_cp,
+                )
+
+            # move arrays to CPU for the existing regionprops path
             codewords_label_image = cp.asnumpy(codewords_label_image_cp)
 
             del codewords_label_image_cp, decoded_image_cp
@@ -1750,26 +1791,6 @@ class PixelDecoder:
                 )
 
             df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
-
-            labels_flat = codewords_label_image.ravel()
-            decoded_flat = self._decoded_image.ravel()
-
-            max_label = int(labels_flat.max())
-            label_to_id = np.full(max_label + 1, -1, dtype=np.int16)
-            label_to_distance_min = np.full(max_label + 1, np.nan, dtype=np.float32)
-
-            order = np.argsort(labels_flat, kind="mergesort")
-            labels_sorted = labels_flat[order]
-            decoded_sorted = decoded_flat[order]
-
-            uniq_labels, first_idx = np.unique(labels_sorted, return_index=True)
-            # assign decoded values for each label; background label 0 will map to -1
-            label_to_id[uniq_labels] = decoded_sorted[first_idx]
-            label_to_id[0] = -1
-            component_labels, component_distance_min = _compute_component_min_values(
-                codewords_label_image, self._distance_image
-            )
-            label_to_distance_min[component_labels] = component_distance_min
 
             # Map each region (component label) -> decoded_id
             region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
