@@ -1386,7 +1386,9 @@ class PixelDecoder:
             df_barcode["decoded_id"] = np.rint(
                 df_barcode["intensity_mean-0"].to_numpy(dtype=np.float64, copy=False)
             ).astype(np.int32, copy=False)
-            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(drop=True)
+            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(
+                drop=True
+            )
 
             # barcode_id is 1-based, matches old code
             df_barcode["barcode_id"] = df_barcode["decoded_id"].astype(np.int32) + 1
