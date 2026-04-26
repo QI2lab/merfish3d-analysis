@@ -280,7 +280,6 @@ class PixelDecoder:
             ),
         )
 
-
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
 
@@ -1613,9 +1612,9 @@ class PixelDecoder:
             baysor_df["transcript_id"] = pd.util.hash_pandas_object(
                 baysor_df, index=False
             )
-            baysor_df["is_gene"] = ~baysor_df["feature_name"].str.lower().str.startswith(
-                "blank", na=False
-            )
+            baysor_df["is_gene"] = ~baysor_df[
+                "feature_name"
+            ].str.lower().str.startswith("blank", na=False)
             self._datastore.save_spots_prepped_for_baysor(baysor_df)
 
     def _load_all_barcodes(self) -> None:
@@ -1764,14 +1763,10 @@ class PixelDecoder:
                             raise ValueError(
                                 "Explicit histogram edges must contain at least two finite values."
                             )
-                        intensity_edges[-1] = np.nextafter(
-                            intensity_edges[-1], np.inf
-                        )
+                        intensity_edges[-1] = np.nextafter(intensity_edges[-1], np.inf)
                     else:
                         intensity_edges = np.unique(
-                            np.quantile(
-                                intensity_values, np.linspace(0.0, 1.0, 11)
-                            )
+                            np.quantile(intensity_values, np.linspace(0.0, 1.0, 11))
                         )
                         intensity_edges = intensity_edges[np.isfinite(intensity_edges)]
                         if intensity_edges.size < 2:
@@ -1790,9 +1785,7 @@ class PixelDecoder:
                         intensity_edges[-1] = max(
                             intensity_edges[-1], float(np.max(intensity_values))
                         )
-                        intensity_edges[-1] = np.nextafter(
-                            intensity_edges[-1], np.inf
-                        )
+                        intensity_edges[-1] = np.nextafter(intensity_edges[-1], np.inf)
 
                     if voxel_number_bins is not None:
                         voxel_number_edges = np.unique(
@@ -1819,7 +1812,9 @@ class PixelDecoder:
                             quantiles = np.quantile(
                                 voxel_count_values, np.linspace(0.0, 1.0, 11)
                             )
-                            quantile_edges = np.unique(np.floor(quantiles).astype(float))
+                            quantile_edges = np.unique(
+                                np.floor(quantiles).astype(float)
+                            )
                             if quantile_edges.size == 0:
                                 quantile_edges = np.array(
                                     [float(min_value), float(max_value + 1)]
@@ -1844,9 +1839,7 @@ class PixelDecoder:
                             voxel_number_edges = np.array(
                                 [center - 0.5, center + 0.5], dtype=float
                             )
-                        elif np.allclose(
-                            voxel_number_edges[0], voxel_number_edges[-1]
-                        ):
+                        elif np.allclose(voxel_number_edges[0], voxel_number_edges[-1]):
                             center = float(voxel_number_edges[0])
                             voxel_number_edges = np.array(
                                 [center - 0.5, center + 0.5], dtype=float
@@ -2017,7 +2010,9 @@ class PixelDecoder:
                             blank_fraction_histogram.ravel()[in_range_flat_bins]
                         )
 
-                        thresholds = np.unique(cp.asnumpy(blank_fraction_histogram[nonempty]))
+                        thresholds = np.unique(
+                            cp.asnumpy(blank_fraction_histogram[nonempty])
+                        )
                         sweep_rows: list[dict[str, float | int]] = []
                         chosen_threshold = np.nan
                         achieved_rate = np.inf
@@ -2041,9 +2036,7 @@ class PixelDecoder:
                                 if not np.any(keep):
                                     gross_misid = np.inf
                                 else:
-                                    blank_kept = np.count_nonzero(
-                                        keep & is_blank_numpy
-                                    )
+                                    blank_kept = np.count_nonzero(keep & is_blank_numpy)
                                     total_kept = np.count_nonzero(keep)
                                     gross_misid = (
                                         blank_kept / float(self._blank_count)
@@ -2132,10 +2125,7 @@ class PixelDecoder:
         """
 
         blank_mask = (
-            df["gene_id"]
-            .astype("string")
-            .str.lower()
-            .str.startswith("blank", na=False)
+            df["gene_id"].astype("string").str.lower().str.startswith("blank", na=False)
         )
 
         if threshold >= 0:
@@ -2933,9 +2923,7 @@ class PixelDecoder:
         elif filter_method == "lr":
             self._filter_all_barcodes_LR(lr_fdr_target=float(lr_fdr_target))
         else:
-            raise ValueError(
-                "filter_method must be either 'blank_fraction' or 'lr'."
-            )
+            raise ValueError("filter_method must be either 'blank_fraction' or 'lr'.")
         if not (self._is_3D):
             radius_xy = self._datastore.voxel_size_zyx_um[-1]
             radius_z = self._datastore.voxel_size_zyx_um[0]
@@ -2997,9 +2985,7 @@ class PixelDecoder:
         elif filter_method == "lr":
             self._filter_all_barcodes_LR(lr_fdr_target=float(lr_fdr_target))
         else:
-            raise ValueError(
-                "filter_method must be either 'blank_fraction' or 'lr'."
-            )
+            raise ValueError("filter_method must be either 'blank_fraction' or 'lr'.")
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
                 radius_xy = self._datastore.voxel_size_zyx_um[-1]
