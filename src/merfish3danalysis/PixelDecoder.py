@@ -248,38 +248,6 @@ class PixelDecoder:
         self._pixel_assignment_threshold = float(np.sqrt(2.0 - np.sqrt(2.0)))
         self._transcript_distance_threshold = float(np.sqrt(2.0 - 4.0 / np.sqrt(6.0)))
 
-    @staticmethod
-    def _compute_component_min_values(
-        label_image: cp.ndarray, value_image: cp.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Compute per-component minima for a GPU label image."""
-
-        labels_flat = cp.asarray(label_image).ravel()
-        values_flat = cp.asarray(value_image, dtype=cp.float32).ravel()
-
-        if labels_flat.shape != values_flat.shape:
-            raise ValueError("Label and value images must have the same shape.")
-
-        if labels_flat.size == 0:
-            return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
-
-        max_label = int(cp.max(labels_flat).get())
-        min_values_by_label = cp.full(max_label + 1, cp.inf, dtype=cp.float32)
-        cp.minimum.at(
-            min_values_by_label,
-            labels_flat.astype(cp.int32, copy=False),
-            values_flat,
-        )
-        unique_labels = cp.unique(labels_flat)
-        keep = unique_labels != 0
-
-        return (
-            cp.asnumpy(unique_labels[keep]).astype(np.int64, copy=False),
-            cp.asnumpy(min_values_by_label[unique_labels[keep]]).astype(
-                np.float32, copy=False
-            ),
-        )
-
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
 
@@ -1273,6 +1241,10 @@ class PixelDecoder:
                 if self._filter_type == "lp":
                     intensity_image = np.concatenate(
                         [
+                            np.expand_dims(
+                                self._decoded_image.astype(np.float32, copy=False),
+                                axis=0,
+                            ),
                             np.expand_dims(self._distance_image, axis=0),
                             self._image_data_lp,
                         ],
@@ -1281,6 +1253,10 @@ class PixelDecoder:
                 else:
                     intensity_image = np.concatenate(
                         [
+                            np.expand_dims(
+                                self._decoded_image.astype(np.float32, copy=False),
+                                axis=0,
+                            ),
                             np.expand_dims(self._distance_image, axis=0),
                             self._image_data,
                         ],
@@ -1289,6 +1265,9 @@ class PixelDecoder:
             else:
                 intensity_image = np.concatenate(
                     [
+                        np.expand_dims(
+                            self._decoded_image.astype(np.float32, copy=False), axis=0
+                        ),
                         np.expand_dims(self._distance_image, axis=0),
                         self._scaled_pixel_images,
                     ],
@@ -1343,44 +1322,6 @@ class PixelDecoder:
                 codewords_label_image_cp, min_size=minimum_pixels
             )
 
-            max_label = int(cp.max(codewords_label_image_cp).get())
-            label_to_id = np.full(max_label + 1, -1, dtype=np.int16)
-            label_to_distance_min = np.full(max_label + 1, np.nan, dtype=np.float32)
-
-            if max_label > 0:
-                labels_flat_cp = codewords_label_image_cp.ravel()
-                decoded_flat_cp = decoded_image_cp.ravel()
-                order_cp = cp.argsort(labels_flat_cp)
-                labels_sorted_cp = labels_flat_cp[order_cp]
-                decoded_sorted_cp = decoded_flat_cp[order_cp]
-                uniq_labels_cp, first_idx_cp = cp.unique(
-                    labels_sorted_cp, return_index=True
-                )
-                label_to_id_cp = cp.full(max_label + 1, -1, dtype=cp.int16)
-                label_to_id_cp[uniq_labels_cp] = decoded_sorted_cp[first_idx_cp]
-                label_to_id_cp[0] = -1
-                label_to_id = cp.asnumpy(label_to_id_cp)
-
-                distance_image_cp = cp.asarray(self._distance_image, dtype=cp.float32)
-                component_labels, component_distance_min = (
-                    self._compute_component_min_values(
-                        codewords_label_image_cp, distance_image_cp
-                    )
-                )
-                label_to_distance_min[component_labels] = component_distance_min
-
-                del (
-                    labels_flat_cp,
-                    decoded_flat_cp,
-                    order_cp,
-                    labels_sorted_cp,
-                    decoded_sorted_cp,
-                    uniq_labels_cp,
-                    first_idx_cp,
-                    label_to_id_cp,
-                    distance_image_cp,
-                )
-
             # move arrays to CPU for the existing regionprops path
             codewords_label_image = cp.asnumpy(codewords_label_image_cp)
 
@@ -1400,6 +1341,7 @@ class PixelDecoder:
                     "area",
                     "centroid",
                     "intensity_mean",
+                    "intensity_min",
                     "inertia_tensor_eigvals",
                 ],
             )
@@ -1424,16 +1366,14 @@ class PixelDecoder:
 
             df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
-            # Map each region (component label) -> decoded_id
-            region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
-            decoded_ids = label_to_id[region_labels].astype(np.int32, copy=False)
-            df_barcode["decoded_id"] = decoded_ids
-            df_barcode["distance_min"] = label_to_distance_min[region_labels]
-
             # Sanity: drop any region that somehow mapped to background
-            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(
-                drop=True
+            df_barcode["decoded_id"] = np.rint(
+                df_barcode["intensity_mean-0"].to_numpy(dtype=np.float64, copy=False)
+            ).astype(np.int32, copy=False)
+            df_barcode["distance_min"] = df_barcode["intensity_min-1"].to_numpy(
+                dtype=np.float32, copy=False
             )
+            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(drop=True)
 
             # barcode_id is 1-based, matches old code
             df_barcode["barcode_id"] = df_barcode["decoded_id"].astype(np.int32) + 1
@@ -1484,13 +1424,13 @@ class PixelDecoder:
             df_barcode["global_y"] = np.round(pts[:, 1], 2)
             df_barcode["global_x"] = np.round(pts[:, 2], 2)
 
-            if "intensity_mean-0" in df_barcode.columns:
+            if "intensity_mean-1" in df_barcode.columns:
                 df_barcode = df_barcode.rename(
-                    columns={"intensity_mean-0": "distance_mean"}
+                    columns={"intensity_mean-1": "distance_mean"}
                 )
 
             for i in range(1, self._n_merfish_bits + 1):
-                src = f"intensity_mean-{i}"
+                src = f"intensity_mean-{i + 1}"
                 dst = f"bit{i:02d}_mean_intensity"
                 if src in df_barcode.columns:
                     df_barcode = df_barcode.rename(columns={src: dst})
@@ -1516,7 +1456,15 @@ class PixelDecoder:
             df_barcode["signal_mean"] = signal_sum / float(n_on)
             df_barcode["bkd_mean"] = (total_sum - signal_sum) / denom
             df_barcode["s-b_mean"] = df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-            df_barcode = df_barcode.drop(columns=["label", "decoded_id"])
+            drop_columns = ["label", "decoded_id", "intensity_mean-0"]
+            drop_columns.extend(
+                [
+                    column
+                    for column in df_barcode.columns
+                    if column.startswith("intensity_min-")
+                ]
+            )
+            df_barcode = df_barcode.drop(columns=drop_columns, errors="ignore")
             df_barcode = df_barcode[
                 df_barcode["distance_min"] <= self._transcript_distance_threshold
             ].reset_index(drop=True)

@@ -17,8 +17,8 @@ def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
     feature_predictor_threshold: float = 0.01,
-    magnitude_threshold: float = (0.1, 10.0),
-    fdr_target: float = 0.3,
+    magnitude_threshold: tuple[float, float] = (0.1, 10.0),
+    target_gross_misid_rate: float = 0.05,
     run_baysor: bool = False,
 ) -> None:
     """Perform pixel decoding.
@@ -27,23 +27,18 @@ def decode_pixels(
     ----------
     root_path: Path
         path to experiment
-    merfish_bits : int
-        number of bits in codebook
     minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 9.
+        minimum pixels with same barcode ID required to call a spot. Default = 2.
     feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.1
-    magnitude_threshold: tuple[float,float], default = (1.,5.)
+        threshold to accept feature_predictor prediction. Default = 0.01
+    magnitude_threshold: tuple[float,float], default = (0.1, 10.0)
         lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because
         spots are normalized to median spot value, not maximum.
-    fdr_target : float
-        false discovery rate (FDR) target. Default = .2
-        NOTE: This is higher than usual, but we are finding that .05 is too
-        aggressive for nyquist-sampled 3D data  and MLP filtering strategy we
-        have implemented. Ongoing effort to fully understand this issue using
-        synthetic data.
+    target_gross_misid_rate : float
+        gross barcode misidentification-rate target for blank-fraction filtering.
+        Default = .05
     run_baysor : bool
-        flag to run Baysor segmentation. Default = True
+        flag to run Baysor segmentation. Default = False
     """
 
     # initialize datastore
@@ -76,10 +71,9 @@ def decode_pixels(
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         feature_predictor_threshold=feature_predictor_threshold,
-        fdr_target=fdr_target,
+        target_gross_misid_rate=target_gross_misid_rate,
     )
 
-    # resegment data using baysor and cellpose prior assignments
     if run_baysor:
         datastore.run_baysor()
         datastore.save_mtx()
