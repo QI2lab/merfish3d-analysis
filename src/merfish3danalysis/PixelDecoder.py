@@ -74,8 +74,11 @@ def _to_numpy(array: object) -> np.ndarray:
 def _is_blank_gene_id(values: pd.Series | np.ndarray | Sequence[object]) -> pd.Series:
     """Return a boolean mask for blank-control barcode labels."""
 
-    return pd.Series(values, copy=False).astype("string").str.lower().str.startswith(
-        "blank", na=False
+    return (
+        pd.Series(values, copy=False)
+        .astype("string")
+        .str.lower()
+        .str.startswith("blank", na=False)
     )
 
 
@@ -124,7 +127,9 @@ def _calculate_gross_misidentification_rate(
     blank_kept = np.count_nonzero(keep & is_blank_array)
     total_kept = np.count_nonzero(keep)
 
-    return (blank_kept / float(blank_barcode_count)) / (total_kept / float(barcode_count))
+    return (blank_kept / float(blank_barcode_count)) / (
+        total_kept / float(barcode_count)
+    )
 
 
 def _sanitize_explicit_edges(edges: Sequence[float]) -> np.ndarray:
@@ -133,7 +138,9 @@ def _sanitize_explicit_edges(edges: Sequence[float]) -> np.ndarray:
     edge_array = np.unique(np.asarray(edges, dtype=float))
     edge_array = edge_array[np.isfinite(edge_array)]
     if edge_array.size < 2:
-        raise ValueError("Explicit histogram edges must contain at least two finite values.")
+        raise ValueError(
+            "Explicit histogram edges must contain at least two finite values."
+        )
 
     edge_array[-1] = np.nextafter(edge_array[-1], np.inf)
     return edge_array
@@ -301,9 +308,7 @@ def _filter_blank_fraction_transcripts(
     vector_distance_values = cp.asarray(
         annotated["vector_distance"].to_numpy(dtype=np.float32, copy=False)
     )
-    is_blank_values = cp.asarray(
-        annotated["is_blank"].to_numpy(dtype=bool, copy=False)
-    )
+    is_blank_values = cp.asarray(annotated["is_blank"].to_numpy(dtype=bool, copy=False))
 
     features = cp.column_stack(
         (voxel_intensity_values, voxel_number_values, vector_distance_values)
@@ -410,7 +415,9 @@ def _filter_blank_fraction_transcripts(
     chosen_keep = np.zeros(len(annotated), dtype=bool)
     target_reached = False
 
-    blank_fraction_values = annotated["blank_fraction"].to_numpy(dtype=float, copy=False)
+    blank_fraction_values = annotated["blank_fraction"].to_numpy(
+        dtype=float, copy=False
+    )
     is_blank_numpy = _to_numpy(is_blank_values).astype(bool, copy=False)
     for threshold in thresholds:
         keep_mask = in_range & (blank_fraction_values <= float(threshold))
@@ -644,9 +651,7 @@ class PixelDecoder:
         self._iterative_normalization_loaded = False
         self._blank_fraction_filter_results: dict[str, object] | None = None
         self._pixel_assignment_threshold = float(np.sqrt(2.0 - np.sqrt(2.0)))
-        self._transcript_distance_threshold = float(
-            np.sqrt(2.0 - 4.0 / np.sqrt(6.0))
-        )
+        self._transcript_distance_threshold = float(np.sqrt(2.0 - 4.0 / np.sqrt(6.0)))
 
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
@@ -654,15 +659,15 @@ class PixelDecoder:
         self._df_codebook = self._datastore.codebook.copy()
         self._df_codebook.fillna(0, inplace=True)
         bit_columns = self._df_codebook.columns[1 : self._n_merfish_bits + 1]
-        on_counts = self._df_codebook.loc[:, bit_columns].to_numpy(
-            dtype=np.int8, copy=False
-        ).sum(axis=1)
-        self._df_codebook = self._df_codebook.loc[on_counts != 1].reset_index(
-            drop=True
+        on_counts = (
+            self._df_codebook.loc[:, bit_columns]
+            .to_numpy(dtype=np.int8, copy=False)
+            .sum(axis=1)
         )
+        self._df_codebook = self._df_codebook.loc[on_counts != 1].reset_index(drop=True)
 
-        self._codebook_matrix = (
-            self._df_codebook.loc[:, bit_columns].to_numpy(dtype=int, copy=False)
+        self._codebook_matrix = self._df_codebook.loc[:, bit_columns].to_numpy(
+            dtype=int, copy=False
         )
 
         self._blank_count = int(_is_blank_gene_id(self._df_codebook["gene_id"]).sum())
@@ -1790,9 +1795,7 @@ class PixelDecoder:
             _n_codewords, _n_bits = codebook_bool.shape
 
             # Exactly 4 on-bits per codeword after codebook validation.
-            on_bits_0based = np.argsort(~codebook_bool, axis=1)[:, :4].astype(
-                np.int32
-            )
+            on_bits_0based = np.argsort(~codebook_bool, axis=1)[:, :4].astype(np.int32)
             on_bits_1based = on_bits_0based + 1
             sel = df_barcode["decoded_id"].to_numpy(dtype=np.int32)
             on_sel = on_bits_1based[sel]  # shape (n_regions, 4)
@@ -1847,9 +1850,9 @@ class PixelDecoder:
             total_sum = bit_means.sum(axis=1)
 
             on0 = (
-                df_barcode[
-                    ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
-                ].to_numpy(dtype=np.int32)
+                df_barcode[["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]].to_numpy(
+                    dtype=np.int32
+                )
                 - 1
             )  # shape (n_regions, 4)
             signal_vals = np.take_along_axis(bit_means, on0, axis=1)  # (n_regions, 4)
@@ -2045,9 +2048,7 @@ class PixelDecoder:
         )
 
         self._blank_fraction_filter_results = diagnostics
-        self._df_filtered_barcodes = annotated[
-            annotated["blank_fraction_keep"]
-        ].copy()
+        self._df_filtered_barcodes = annotated[annotated["blank_fraction_keep"]].copy()
         self._df_filtered_barcodes["cell_id"] = -1
         self._barcodes_filtered = True
 
@@ -2095,7 +2096,9 @@ class PixelDecoder:
             noncoding = df[blank_mask].shape[0]
 
         if coding > 0:
-            lr_fdr = (noncoding / blank_count) / (coding / (barcode_count - blank_count))
+            lr_fdr = (noncoding / blank_count) / (
+                coding / (barcode_count - blank_count)
+            )
         else:
             lr_fdr = np.inf
 
@@ -2361,8 +2364,7 @@ class PixelDecoder:
 
         if self._verbose > 1:
             print(
-                "Average distance_min of dropped points (overlap): "
-                + str(avg_distance)
+                "Average distance_min of dropped points (overlap): " + str(avg_distance)
             )
             print("Dropped points: " + str(dropped_count))
 
@@ -2502,7 +2504,9 @@ class PixelDecoder:
             df.reset_index(drop=True, inplace=True)
 
         if getattr(self, "_verbose", 0) > 1:
-            dropped = dmin[list(rows_to_drop)] if rows_to_drop else np.array([], dtype=float)
+            dropped = (
+                dmin[list(rows_to_drop)] if rows_to_drop else np.array([], dtype=float)
+            )
             avg = float(dropped.mean()) if dropped.size else 0.0
             print(
                 "Average distance_min of dropped points (within-tile, same gene, clusters): "
