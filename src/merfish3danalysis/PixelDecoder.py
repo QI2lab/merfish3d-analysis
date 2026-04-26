@@ -1732,8 +1732,10 @@ class PixelDecoder:
                 label_to_id = cp.asnumpy(label_to_id_cp)
 
                 distance_image_cp = cp.asarray(self._distance_image, dtype=cp.float32)
-                component_labels, component_distance_min = _compute_component_min_values(
-                    codewords_label_image_cp, distance_image_cp
+                component_labels, component_distance_min = (
+                    _compute_component_min_values(
+                        codewords_label_image_cp, distance_image_cp
+                    )
                 )
                 label_to_distance_min[component_labels] = component_distance_min
 
