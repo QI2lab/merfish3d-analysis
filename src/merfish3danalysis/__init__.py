@@ -5,9 +5,8 @@ This package provides tools for processing 3D MERFISH data using GPU
 acceleration.
 """
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from types import ModuleType
+from typing import Any
 
 __author__ = "Douglas Shepherd"
 __email__ = "douglas.shepherd@asu.edu"
@@ -18,9 +17,6 @@ __version__ = "0.9.0"
 import importlib
 import importlib.util as _ilus
 import pkgutil as _pkgutil
-
-if TYPE_CHECKING:
-    from types import ModuleType
 
 __all__: list[str] = []
 

@@ -13,15 +13,11 @@ Notes
   this package's ``__path__``.
 """
 
-from __future__ import annotations
-
 import importlib
 import importlib.util as _ilus
 import pkgutil as _pkgutil
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from types import ModuleType
+from types import ModuleType
+from typing import Any
 
 __all__: list[str] = []
 

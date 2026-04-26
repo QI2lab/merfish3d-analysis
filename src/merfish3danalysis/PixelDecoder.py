@@ -54,420 +54,6 @@ warnings.filterwarnings(
     message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
 )
 
-
-def _get_array_module(*arrays: object) -> object:
-    """Return CuPy when any input is a CuPy array, else NumPy."""
-
-    if any(isinstance(array, cp.ndarray) for array in arrays):
-        return cp
-    return np
-
-
-def _to_numpy(array: object) -> np.ndarray:
-    """Convert an array-like object to a NumPy ndarray."""
-
-    if isinstance(array, cp.ndarray):
-        return cp.asnumpy(array)
-    return np.asarray(array)
-
-
-def _is_blank_gene_id(values: pd.Series | np.ndarray | Sequence[object]) -> pd.Series:
-    """Return a boolean mask for blank-control barcode labels."""
-
-    return (
-        pd.Series(values, copy=False)
-        .astype("string")
-        .str.lower()
-        .str.startswith("blank", na=False)
-    )
-
-
-def _compute_component_min_values(
-    label_image: np.ndarray | cp.ndarray, value_image: np.ndarray | cp.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Compute per-component minima for a label image, excluding background label 0."""
-
-    xp = _get_array_module(label_image, value_image)
-    labels_flat = xp.asarray(label_image).ravel()
-    values_flat = xp.asarray(value_image, dtype=xp.float32).ravel()
-
-    if labels_flat.shape != values_flat.shape:
-        raise ValueError("Label and value images must have the same shape.")
-
-    order = xp.argsort(labels_flat)
-    labels_sorted = labels_flat[order]
-    values_sorted = values_flat[order]
-
-    unique_labels, first_idx = xp.unique(labels_sorted, return_index=True)
-    min_values = xp.minimum.reduceat(values_sorted, first_idx)
-    keep = unique_labels != 0
-
-    return (
-        _to_numpy(unique_labels[keep]).astype(np.int64, copy=False),
-        _to_numpy(min_values[keep]).astype(np.float32, copy=False),
-    )
-
-
-def _calculate_gross_misidentification_rate(
-    is_blank: np.ndarray,
-    keep_mask: np.ndarray,
-    blank_barcode_count: int,
-    barcode_count: int,
-) -> float:
-    """Calculate gross barcode misidentification rate for kept transcripts."""
-
-    if blank_barcode_count <= 0 or barcode_count <= 0:
-        return np.inf
-
-    keep = np.asarray(keep_mask, dtype=bool)
-    if not np.any(keep):
-        return np.inf
-
-    is_blank_array = np.asarray(is_blank, dtype=bool)
-    blank_kept = np.count_nonzero(keep & is_blank_array)
-    total_kept = np.count_nonzero(keep)
-
-    return (blank_kept / float(blank_barcode_count)) / (
-        total_kept / float(barcode_count)
-    )
-
-
-def _sanitize_explicit_edges(edges: Sequence[float]) -> np.ndarray:
-    """Validate explicitly provided histogram edges."""
-
-    edge_array = np.unique(np.asarray(edges, dtype=float))
-    edge_array = edge_array[np.isfinite(edge_array)]
-    if edge_array.size < 2:
-        raise ValueError(
-            "Explicit histogram edges must contain at least two finite values."
-        )
-
-    edge_array[-1] = np.nextafter(edge_array[-1], np.inf)
-    return edge_array
-
-
-def _sanitize_computed_edges(edges: np.ndarray, values: np.ndarray) -> np.ndarray:
-    """Deduplicate computed histogram edges and ensure a non-empty range."""
-
-    edge_array = np.unique(np.asarray(edges, dtype=float))
-    edge_array = edge_array[np.isfinite(edge_array)]
-    if edge_array.size < 2:
-        center = float(np.mean(values))
-        edge_array = np.array([center - 0.5, center + 0.5], dtype=float)
-    elif np.allclose(edge_array[0], edge_array[-1]):
-        center = float(edge_array[0])
-        edge_array = np.array([center - 0.5, center + 0.5], dtype=float)
-
-    min_value = float(np.min(values))
-    max_value = float(np.max(values))
-    edge_array[0] = min(edge_array[0], min_value)
-    edge_array[-1] = max(edge_array[-1], max_value)
-    edge_array[-1] = np.nextafter(edge_array[-1], np.inf)
-
-    return edge_array
-
-
-def _resolve_intensity_edges(
-    values: np.ndarray, edges: Sequence[float] | None, n_bins: int = 10
-) -> np.ndarray:
-    """Resolve histogram edges for transcript intensity."""
-
-    finite_values = np.asarray(values, dtype=float)
-    if edges is not None:
-        return _sanitize_explicit_edges(edges)
-
-    quantiles = np.quantile(finite_values, np.linspace(0.0, 1.0, n_bins + 1))
-    return _sanitize_computed_edges(quantiles, finite_values)
-
-
-def _resolve_voxel_number_edges(
-    values: np.ndarray, edges: Sequence[float] | None, n_bins: int = 10
-) -> np.ndarray:
-    """Resolve histogram edges for transcript voxel counts."""
-
-    finite_values = np.asarray(values, dtype=float)
-    if edges is not None:
-        return _sanitize_explicit_edges(edges)
-
-    min_value = int(np.floor(np.min(finite_values)))
-    max_value = int(np.ceil(np.max(finite_values)))
-    if max_value - min_value + 1 <= n_bins:
-        integer_edges = np.arange(min_value - 0.5, max_value + 1.5, 1.0)
-        return _sanitize_computed_edges(integer_edges, finite_values)
-
-    quantiles = np.quantile(finite_values, np.linspace(0.0, 1.0, n_bins + 1))
-    quantile_edges = np.unique(np.floor(quantiles).astype(float))
-    if quantile_edges.size == 0:
-        quantile_edges = np.array([float(min_value), float(max_value + 1)])
-    if quantile_edges[0] > min_value:
-        quantile_edges = np.insert(quantile_edges, 0, float(min_value))
-    if quantile_edges[-1] <= max_value:
-        quantile_edges = np.append(quantile_edges, float(max_value + 1))
-    return _sanitize_computed_edges(quantile_edges - 0.5, finite_values)
-
-
-def _resolve_vector_distance_edges(
-    values: np.ndarray, edges: Sequence[float] | None, n_bins: int = 10
-) -> np.ndarray:
-    """Resolve histogram edges for transcript distance minima."""
-
-    finite_values = np.asarray(values, dtype=float)
-    if edges is not None:
-        return _sanitize_explicit_edges(edges)
-
-    linear_edges = np.linspace(
-        float(np.min(finite_values)),
-        float(np.max(finite_values)),
-        n_bins + 1,
-    )
-    return _sanitize_computed_edges(linear_edges, finite_values)
-
-
-def _assign_bins(
-    values: np.ndarray | cp.ndarray,
-    edges: np.ndarray | cp.ndarray,
-    xp: object = np,
-) -> np.ndarray | cp.ndarray:
-    """Assign values to histogram bins, returning -1 when outside the provided range."""
-
-    value_array = xp.asarray(values, dtype=xp.float32)
-    edge_array = xp.asarray(edges, dtype=xp.float32)
-    bin_indices = xp.searchsorted(edge_array, value_array, side="right") - 1
-    valid = (
-        xp.isfinite(value_array)
-        & (bin_indices >= 0)
-        & (bin_indices < len(edge_array) - 1)
-    )
-
-    output = xp.full(value_array.shape, -1, dtype=xp.int64)
-    output[valid] = bin_indices[valid]
-    return output
-
-
-def _filter_blank_fraction_transcripts(
-    df: pd.DataFrame,
-    blank_barcode_count: int,
-    barcode_count: int,
-    target_gross_misid_rate: float = 0.05,
-    intensity_bins: Sequence[float] | None = None,
-    voxel_number_bins: Sequence[float] | None = None,
-    vector_distance_bins: Sequence[float] | None = None,
-) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Annotate transcripts with blank-fraction statistics and choose a keep mask."""
-
-    required_columns = {"gene_id", "magnitude_mean", "area", "distance_min"}
-    missing = sorted(required_columns.difference(df.columns))
-    if missing:
-        raise ValueError(
-            "Blank-fraction filtering requires columns: "
-            + ", ".join(missing)
-            + ". Re-decode transcripts with the exact caller."
-        )
-
-    annotated = df.copy()
-    annotated["voxel_intensity"] = annotated["magnitude_mean"].to_numpy(
-        dtype=float, copy=False
-    )
-    annotated["voxel_number"] = annotated["area"].to_numpy(dtype=float, copy=False)
-    annotated["vector_distance"] = annotated["distance_min"].to_numpy(
-        dtype=float, copy=False
-    )
-    annotated["is_blank"] = _is_blank_gene_id(annotated["gene_id"]).to_numpy(
-        dtype=bool, copy=False
-    )
-    annotated["blank_fraction_bin"] = -1
-    annotated["blank_fraction"] = np.nan
-    annotated["blank_fraction_keep"] = False
-
-    diagnostics: dict[str, object] = {
-        "target_gross_misid_rate": float(target_gross_misid_rate),
-        "chosen_threshold": np.nan,
-        "achieved_gross_misid_rate": np.inf,
-        "target_reached": False,
-        "all_histogram": np.zeros((0, 0, 0), dtype=np.int64),
-        "blank_histogram": np.zeros((0, 0, 0), dtype=np.int64),
-        "blank_fraction_histogram": np.zeros((0, 0, 0), dtype=float),
-        "intensity_bins": np.array([], dtype=float),
-        "voxel_number_bins": np.array([], dtype=float),
-        "vector_distance_bins": np.array([], dtype=float),
-        "threshold_sweep": pd.DataFrame(
-            columns=["threshold", "gross_misid_rate", "kept_transcripts"]
-        ),
-    }
-
-    if annotated.empty:
-        diagnostics["reason"] = "no_transcripts"
-        return annotated, diagnostics
-
-    voxel_intensity_values = cp.asarray(
-        annotated["voxel_intensity"].to_numpy(dtype=np.float32, copy=False)
-    )
-    voxel_number_values = cp.asarray(
-        annotated["voxel_number"].to_numpy(dtype=np.float32, copy=False)
-    )
-    vector_distance_values = cp.asarray(
-        annotated["vector_distance"].to_numpy(dtype=np.float32, copy=False)
-    )
-    is_blank_values = cp.asarray(annotated["is_blank"].to_numpy(dtype=bool, copy=False))
-
-    features = cp.column_stack(
-        (voxel_intensity_values, voxel_number_values, vector_distance_values)
-    )
-    valid_features = _to_numpy(cp.all(cp.isfinite(features), axis=1)).astype(
-        bool, copy=False
-    )
-    if not np.any(valid_features):
-        diagnostics["reason"] = "no_valid_features"
-        return annotated, diagnostics
-
-    valid = annotated.loc[valid_features]
-    if blank_barcode_count <= 0:
-        annotated.loc[valid_features, "blank_fraction_keep"] = True
-        diagnostics["reason"] = "no_blank_barcodes"
-        return annotated, diagnostics
-
-    if not np.any(valid["is_blank"].to_numpy(dtype=bool, copy=False)):
-        annotated.loc[valid_features, "blank_fraction_keep"] = True
-        diagnostics["reason"] = "no_blank_transcripts"
-        return annotated, diagnostics
-
-    intensity_edges = _resolve_intensity_edges(
-        valid["voxel_intensity"].to_numpy(dtype=float, copy=False),
-        intensity_bins,
-    )
-    voxel_number_edges = _resolve_voxel_number_edges(
-        valid["voxel_number"].to_numpy(dtype=float, copy=False),
-        voxel_number_bins,
-    )
-    vector_distance_edges = _resolve_vector_distance_edges(
-        valid["vector_distance"].to_numpy(dtype=float, copy=False),
-        vector_distance_bins,
-    )
-
-    diagnostics["intensity_bins"] = intensity_edges
-    diagnostics["voxel_number_bins"] = voxel_number_edges
-    diagnostics["vector_distance_bins"] = vector_distance_edges
-
-    intensity_edges_cp = cp.asarray(intensity_edges, dtype=cp.float32)
-    voxel_number_edges_cp = cp.asarray(voxel_number_edges, dtype=cp.float32)
-    vector_distance_edges_cp = cp.asarray(vector_distance_edges, dtype=cp.float32)
-
-    bin_indices = cp.column_stack(
-        (
-            _assign_bins(voxel_intensity_values, intensity_edges_cp, xp=cp),
-            _assign_bins(voxel_number_values, voxel_number_edges_cp, xp=cp),
-            _assign_bins(vector_distance_values, vector_distance_edges_cp, xp=cp),
-        )
-    )
-
-    in_range = valid_features & _to_numpy(cp.all(bin_indices >= 0, axis=1)).astype(
-        bool, copy=False
-    )
-    if not np.any(in_range):
-        diagnostics["reason"] = "no_transcripts_in_histogram_range"
-        return annotated, diagnostics
-
-    histogram_shape = (
-        len(intensity_edges) - 1,
-        len(voxel_number_edges) - 1,
-        len(vector_distance_edges) - 1,
-    )
-    all_histogram = cp.zeros(histogram_shape, dtype=cp.int32)
-    blank_histogram = cp.zeros(histogram_shape, dtype=cp.int32)
-
-    in_range_indices = bin_indices[in_range]
-    cp.add.at(
-        all_histogram,
-        tuple(in_range_indices[:, axis] for axis in range(3)),
-        1,
-    )
-
-    blank_in_range = in_range & _to_numpy(is_blank_values).astype(bool, copy=False)
-    blank_indices = bin_indices[blank_in_range]
-    if blank_indices.size:
-        cp.add.at(
-            blank_histogram,
-            tuple(blank_indices[:, axis] for axis in range(3)),
-            1,
-        )
-
-    blank_fraction_histogram = cp.full(histogram_shape, cp.nan, dtype=cp.float32)
-    nonempty = all_histogram > 0
-    blank_fraction_histogram[nonempty] = (
-        blank_histogram[nonempty] / all_histogram[nonempty]
-    )
-
-    in_range_flat_bins = cp.ravel_multi_index(
-        tuple(in_range_indices[:, axis] for axis in range(3)),
-        dims=histogram_shape,
-    )
-    flat_bins = np.full(len(annotated), -1, dtype=np.int64)
-    flat_bins[in_range] = _to_numpy(in_range_flat_bins)
-    annotated["blank_fraction_bin"] = flat_bins
-    annotated.loc[in_range, "blank_fraction"] = _to_numpy(
-        blank_fraction_histogram.ravel()[in_range_flat_bins]
-    )
-
-    thresholds = np.unique(_to_numpy(blank_fraction_histogram[nonempty]))
-    sweep_rows: list[dict[str, float | int]] = []
-    chosen_threshold = np.nan
-    achieved_rate = np.inf
-    chosen_keep = np.zeros(len(annotated), dtype=bool)
-    target_reached = False
-
-    blank_fraction_values = annotated["blank_fraction"].to_numpy(
-        dtype=float, copy=False
-    )
-    is_blank_numpy = _to_numpy(is_blank_values).astype(bool, copy=False)
-    for threshold in thresholds:
-        keep_mask = in_range & (blank_fraction_values <= float(threshold))
-        gross_misid = _calculate_gross_misidentification_rate(
-            is_blank_numpy,
-            keep_mask,
-            blank_barcode_count=blank_barcode_count,
-            barcode_count=barcode_count,
-        )
-        sweep_rows.append(
-            {
-                "threshold": float(threshold),
-                "gross_misid_rate": float(gross_misid),
-                "kept_transcripts": int(np.count_nonzero(keep_mask)),
-            }
-        )
-
-        if gross_misid <= target_gross_misid_rate:
-            chosen_threshold = float(threshold)
-            achieved_rate = float(gross_misid)
-            chosen_keep = keep_mask.copy()
-            target_reached = True
-
-    if not sweep_rows:
-        diagnostics["reason"] = "no_nonempty_histogram_bins"
-        return annotated, diagnostics
-
-    sweep_df = pd.DataFrame(sweep_rows)
-    if not target_reached:
-        best_idx = int(sweep_df["gross_misid_rate"].argmin())
-        chosen_threshold = float(sweep_df.loc[best_idx, "threshold"])
-        achieved_rate = float(sweep_df.loc[best_idx, "gross_misid_rate"])
-        chosen_keep = in_range & (blank_fraction_values <= chosen_threshold)
-
-    annotated["blank_fraction_keep"] = chosen_keep
-    diagnostics.update(
-        {
-            "chosen_threshold": chosen_threshold,
-            "achieved_gross_misid_rate": achieved_rate,
-            "target_reached": target_reached,
-            "all_histogram": _to_numpy(all_histogram),
-            "blank_histogram": _to_numpy(blank_histogram),
-            "blank_fraction_histogram": _to_numpy(blank_fraction_histogram),
-            "threshold_sweep": sweep_df,
-        }
-    )
-
-    return annotated, diagnostics
-
-
 # GPU helper functions
 
 
@@ -476,6 +62,7 @@ def decode_tiles_worker(
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
+    verbose: int,
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
@@ -503,11 +90,12 @@ def decode_tiles_worker(
     local_decoder._optimize_normalization_weights = False
 
     for tile_tracker, tile_idx in enumerate(tile_indices):
-        print(
-            time_stamp(),
-            f"GPU {gpu_id}: starting tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
-            flush=True,
-        )
+        if verbose >= 1:
+            print(
+                time_stamp(),
+                f"GPU {gpu_id}: starting tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
+                flush=True,
+            )
         local_decoder.decode_one_tile(
             tile_idx=tile_idx,
             display_results=False,
@@ -522,11 +110,12 @@ def decode_tiles_worker(
 
         local_decoder._save_barcodes()
         local_decoder._cleanup()
-        print(
-            time_stamp(),
-            f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
-            flush=True,
-        )
+        if verbose >= 1:
+            print(
+                time_stamp(),
+                f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
+                flush=True,
+            )
 
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
@@ -659,6 +248,39 @@ class PixelDecoder:
         self._pixel_assignment_threshold = float(np.sqrt(2.0 - np.sqrt(2.0)))
         self._transcript_distance_threshold = float(np.sqrt(2.0 - 4.0 / np.sqrt(6.0)))
 
+    @staticmethod
+    def _compute_component_min_values(
+        label_image: cp.ndarray, value_image: cp.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute per-component minima for a GPU label image."""
+
+        labels_flat = cp.asarray(label_image).ravel()
+        values_flat = cp.asarray(value_image, dtype=cp.float32).ravel()
+
+        if labels_flat.shape != values_flat.shape:
+            raise ValueError("Label and value images must have the same shape.")
+
+        if labels_flat.size == 0:
+            return np.array([], dtype=np.int64), np.array([], dtype=np.float32)
+
+        max_label = int(cp.max(labels_flat).get())
+        min_values_by_label = cp.full(max_label + 1, cp.inf, dtype=cp.float32)
+        cp.minimum.at(
+            min_values_by_label,
+            labels_flat.astype(cp.int32, copy=False),
+            values_flat,
+        )
+        unique_labels = cp.unique(labels_flat)
+        keep = unique_labels != 0
+
+        return (
+            cp.asnumpy(unique_labels[keep]).astype(np.int64, copy=False),
+            cp.asnumpy(min_values_by_label[unique_labels[keep]]).astype(
+                np.float32, copy=False
+            ),
+        )
+
+
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
 
@@ -676,7 +298,13 @@ class PixelDecoder:
             dtype=int, copy=False
         )
 
-        self._blank_count = int(_is_blank_gene_id(self._df_codebook["gene_id"]).sum())
+        self._blank_count = int(
+            self._df_codebook["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+            .sum()
+        )
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
 
     def _normalize_codebook(
@@ -964,8 +592,11 @@ class PixelDecoder:
             GPU identifier
         """
         with cp.cuda.Device(gpu_id):
-            keep = ~self._df_barcodes_loaded["gene_id"].astype("string").str.startswith(
-                "Blank", na=False
+            keep = ~(
+                self._df_barcodes_loaded["gene_id"]
+                .astype("string")
+                .str.lower()
+                .str.startswith("blank", na=False)
             )
 
             df_barcodes_loaded_no_blanks = self._df_barcodes_loaded[keep]
@@ -1733,7 +1364,7 @@ class PixelDecoder:
 
                 distance_image_cp = cp.asarray(self._distance_image, dtype=cp.float32)
                 component_labels, component_distance_min = (
-                    _compute_component_min_values(
+                    self._compute_component_min_values(
                         codewords_label_image_cp, distance_image_cp
                     )
                 )
@@ -1982,8 +1613,8 @@ class PixelDecoder:
             baysor_df["transcript_id"] = pd.util.hash_pandas_object(
                 baysor_df, index=False
             )
-            baysor_df["is_gene"] = ~baysor_df["feature_name"].str.contains(
-                "Blank", na=False
+            baysor_df["is_gene"] = ~baysor_df["feature_name"].str.lower().str.startswith(
+                "blank", na=False
             )
             self._datastore.save_spots_prepped_for_baysor(baysor_df)
 
@@ -2021,35 +1652,10 @@ class PixelDecoder:
             self._df_barcodes_loaded["gene_id"].notna()
             & self._df_barcodes_loaded["gene_id"].astype(str).str.strip().ne("")
         ]
-        self._ensure_exact_decode_schema(self._df_barcodes_loaded)
-
-    @staticmethod
-    def _ensure_exact_decode_schema(df: pd.DataFrame) -> None:
-        """Require transcripts produced by the exact two-threshold caller."""
-
-        if "distance_min" not in df.columns:
+        if "distance_min" not in self._df_barcodes_loaded.columns:
             raise ValueError(
                 "Decoded transcripts are missing 'distance_min'. "
                 "Re-decode local transcript parquet files with the exact two-threshold caller."
-            )
-
-    def _dispatch_barcode_filter(
-        self,
-        filter_method: Literal["blank_fraction", "lr"],
-        target_gross_misid_rate: float,
-        lr_fdr_target: float,
-    ) -> None:
-        """Run the requested downstream transcript filter."""
-
-        if filter_method == "blank_fraction":
-            self._filter_all_barcodes_blank_fraction(
-                target_gross_misid_rate=target_gross_misid_rate
-            )
-        elif filter_method == "lr":
-            self._filter_all_barcodes_LR(lr_fdr_target=lr_fdr_target)
-        else:
-            raise ValueError(
-                f"Unsupported filter_method '{filter_method}'. Expected 'blank_fraction' or 'lr'."
             )
 
     def _filter_all_barcodes_blank_fraction(
@@ -2061,15 +1667,433 @@ class PixelDecoder:
     ) -> None:
         """Filter transcripts using blank-fraction histograms in feature space."""
 
-        annotated, diagnostics = _filter_blank_fraction_transcripts(
-            self._df_barcodes_loaded,
-            blank_barcode_count=self._blank_count,
-            barcode_count=self._barcode_count,
-            target_gross_misid_rate=target_gross_misid_rate,
-            intensity_bins=intensity_bins,
-            voxel_number_bins=voxel_number_bins,
-            vector_distance_bins=vector_distance_bins,
+        required_columns = {"gene_id", "magnitude_mean", "area", "distance_min"}
+        missing = sorted(required_columns.difference(self._df_barcodes_loaded.columns))
+        if missing:
+            raise ValueError(
+                "Blank-fraction filtering requires columns: "
+                + ", ".join(missing)
+                + ". Re-decode transcripts with the exact caller."
+            )
+
+        annotated = self._df_barcodes_loaded.copy()
+        annotated["voxel_intensity"] = annotated["magnitude_mean"].to_numpy(
+            dtype=float, copy=False
         )
+        annotated["voxel_number"] = annotated["area"].to_numpy(dtype=float, copy=False)
+        annotated["vector_distance"] = annotated["distance_min"].to_numpy(
+            dtype=float, copy=False
+        )
+        annotated["is_blank"] = (
+            annotated["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+            .to_numpy(dtype=bool, copy=False)
+        )
+        annotated["blank_fraction_bin"] = -1
+        annotated["blank_fraction"] = np.nan
+        annotated["blank_fraction_keep"] = False
+
+        diagnostics: dict[str, object] = {
+            "target_gross_misid_rate": float(target_gross_misid_rate),
+            "chosen_threshold": np.nan,
+            "achieved_gross_misid_rate": np.inf,
+            "target_reached": False,
+            "all_histogram": np.zeros((0, 0, 0), dtype=np.int64),
+            "blank_histogram": np.zeros((0, 0, 0), dtype=np.int64),
+            "blank_fraction_histogram": np.zeros((0, 0, 0), dtype=float),
+            "intensity_bins": np.array([], dtype=float),
+            "voxel_number_bins": np.array([], dtype=float),
+            "vector_distance_bins": np.array([], dtype=float),
+            "threshold_sweep": pd.DataFrame(
+                columns=["threshold", "gross_misid_rate", "kept_transcripts"]
+            ),
+        }
+
+        if annotated.empty:
+            diagnostics["reason"] = "no_transcripts"
+        else:
+            voxel_intensity_values = cp.asarray(
+                annotated["voxel_intensity"].to_numpy(dtype=np.float32, copy=False)
+            )
+            voxel_number_values = cp.asarray(
+                annotated["voxel_number"].to_numpy(dtype=np.float32, copy=False)
+            )
+            vector_distance_values = cp.asarray(
+                annotated["vector_distance"].to_numpy(dtype=np.float32, copy=False)
+            )
+            is_blank_values = cp.asarray(
+                annotated["is_blank"].to_numpy(dtype=bool, copy=False)
+            )
+
+            features = cp.column_stack(
+                (voxel_intensity_values, voxel_number_values, vector_distance_values)
+            )
+            valid_features = cp.asnumpy(cp.all(cp.isfinite(features), axis=1)).astype(
+                bool, copy=False
+            )
+
+            if not np.any(valid_features):
+                diagnostics["reason"] = "no_valid_features"
+            else:
+                valid = annotated.loc[valid_features]
+                if self._blank_count <= 0:
+                    annotated.loc[valid_features, "blank_fraction_keep"] = True
+                    diagnostics["reason"] = "no_blank_barcodes"
+                elif not np.any(valid["is_blank"].to_numpy(dtype=bool, copy=False)):
+                    annotated.loc[valid_features, "blank_fraction_keep"] = True
+                    diagnostics["reason"] = "no_blank_transcripts"
+                else:
+                    intensity_values = valid["voxel_intensity"].to_numpy(
+                        dtype=float, copy=False
+                    )
+                    voxel_count_values = valid["voxel_number"].to_numpy(
+                        dtype=float, copy=False
+                    )
+                    distance_values = valid["vector_distance"].to_numpy(
+                        dtype=float, copy=False
+                    )
+
+                    if intensity_bins is not None:
+                        intensity_edges = np.unique(
+                            np.asarray(intensity_bins, dtype=float)
+                        )
+                        intensity_edges = intensity_edges[np.isfinite(intensity_edges)]
+                        if intensity_edges.size < 2:
+                            raise ValueError(
+                                "Explicit histogram edges must contain at least two finite values."
+                            )
+                        intensity_edges[-1] = np.nextafter(
+                            intensity_edges[-1], np.inf
+                        )
+                    else:
+                        intensity_edges = np.unique(
+                            np.quantile(
+                                intensity_values, np.linspace(0.0, 1.0, 11)
+                            )
+                        )
+                        intensity_edges = intensity_edges[np.isfinite(intensity_edges)]
+                        if intensity_edges.size < 2:
+                            center = float(np.mean(intensity_values))
+                            intensity_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        elif np.allclose(intensity_edges[0], intensity_edges[-1]):
+                            center = float(intensity_edges[0])
+                            intensity_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        intensity_edges[0] = min(
+                            intensity_edges[0], float(np.min(intensity_values))
+                        )
+                        intensity_edges[-1] = max(
+                            intensity_edges[-1], float(np.max(intensity_values))
+                        )
+                        intensity_edges[-1] = np.nextafter(
+                            intensity_edges[-1], np.inf
+                        )
+
+                    if voxel_number_bins is not None:
+                        voxel_number_edges = np.unique(
+                            np.asarray(voxel_number_bins, dtype=float)
+                        )
+                        voxel_number_edges = voxel_number_edges[
+                            np.isfinite(voxel_number_edges)
+                        ]
+                        if voxel_number_edges.size < 2:
+                            raise ValueError(
+                                "Explicit histogram edges must contain at least two finite values."
+                            )
+                        voxel_number_edges[-1] = np.nextafter(
+                            voxel_number_edges[-1], np.inf
+                        )
+                    else:
+                        min_value = int(np.floor(np.min(voxel_count_values)))
+                        max_value = int(np.ceil(np.max(voxel_count_values)))
+                        if max_value - min_value + 1 <= 10:
+                            voxel_number_edges = np.arange(
+                                min_value - 0.5, max_value + 1.5, 1.0
+                            )
+                        else:
+                            quantiles = np.quantile(
+                                voxel_count_values, np.linspace(0.0, 1.0, 11)
+                            )
+                            quantile_edges = np.unique(np.floor(quantiles).astype(float))
+                            if quantile_edges.size == 0:
+                                quantile_edges = np.array(
+                                    [float(min_value), float(max_value + 1)]
+                                )
+                            if quantile_edges[0] > min_value:
+                                quantile_edges = np.insert(
+                                    quantile_edges, 0, float(min_value)
+                                )
+                            if quantile_edges[-1] <= max_value:
+                                quantile_edges = np.append(
+                                    quantile_edges, float(max_value + 1)
+                                )
+                            voxel_number_edges = quantile_edges - 0.5
+                        voxel_number_edges = np.unique(
+                            np.asarray(voxel_number_edges, dtype=float)
+                        )
+                        voxel_number_edges = voxel_number_edges[
+                            np.isfinite(voxel_number_edges)
+                        ]
+                        if voxel_number_edges.size < 2:
+                            center = float(np.mean(voxel_count_values))
+                            voxel_number_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        elif np.allclose(
+                            voxel_number_edges[0], voxel_number_edges[-1]
+                        ):
+                            center = float(voxel_number_edges[0])
+                            voxel_number_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        voxel_number_edges[0] = min(
+                            voxel_number_edges[0], float(np.min(voxel_count_values))
+                        )
+                        voxel_number_edges[-1] = max(
+                            voxel_number_edges[-1], float(np.max(voxel_count_values))
+                        )
+                        voxel_number_edges[-1] = np.nextafter(
+                            voxel_number_edges[-1], np.inf
+                        )
+
+                    if vector_distance_bins is not None:
+                        vector_distance_edges = np.unique(
+                            np.asarray(vector_distance_bins, dtype=float)
+                        )
+                        vector_distance_edges = vector_distance_edges[
+                            np.isfinite(vector_distance_edges)
+                        ]
+                        if vector_distance_edges.size < 2:
+                            raise ValueError(
+                                "Explicit histogram edges must contain at least two finite values."
+                            )
+                        vector_distance_edges[-1] = np.nextafter(
+                            vector_distance_edges[-1], np.inf
+                        )
+                    else:
+                        vector_distance_edges = np.linspace(
+                            float(np.min(distance_values)),
+                            float(np.max(distance_values)),
+                            11,
+                        )
+                        vector_distance_edges = np.unique(
+                            np.asarray(vector_distance_edges, dtype=float)
+                        )
+                        vector_distance_edges = vector_distance_edges[
+                            np.isfinite(vector_distance_edges)
+                        ]
+                        if vector_distance_edges.size < 2:
+                            center = float(np.mean(distance_values))
+                            vector_distance_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        elif np.allclose(
+                            vector_distance_edges[0], vector_distance_edges[-1]
+                        ):
+                            center = float(vector_distance_edges[0])
+                            vector_distance_edges = np.array(
+                                [center - 0.5, center + 0.5], dtype=float
+                            )
+                        vector_distance_edges[0] = min(
+                            vector_distance_edges[0], float(np.min(distance_values))
+                        )
+                        vector_distance_edges[-1] = max(
+                            vector_distance_edges[-1], float(np.max(distance_values))
+                        )
+                        vector_distance_edges[-1] = np.nextafter(
+                            vector_distance_edges[-1], np.inf
+                        )
+
+                    diagnostics["intensity_bins"] = intensity_edges
+                    diagnostics["voxel_number_bins"] = voxel_number_edges
+                    diagnostics["vector_distance_bins"] = vector_distance_edges
+
+                    intensity_edges_cp = cp.asarray(intensity_edges, dtype=cp.float32)
+                    voxel_number_edges_cp = cp.asarray(
+                        voxel_number_edges, dtype=cp.float32
+                    )
+                    vector_distance_edges_cp = cp.asarray(
+                        vector_distance_edges, dtype=cp.float32
+                    )
+
+                    bin_indices = cp.column_stack(
+                        (
+                            cp.searchsorted(
+                                intensity_edges_cp,
+                                voxel_intensity_values,
+                                side="right",
+                            )
+                            - 1,
+                            cp.searchsorted(
+                                voxel_number_edges_cp,
+                                voxel_number_values,
+                                side="right",
+                            )
+                            - 1,
+                            cp.searchsorted(
+                                vector_distance_edges_cp,
+                                vector_distance_values,
+                                side="right",
+                            )
+                            - 1,
+                        )
+                    )
+
+                    in_range = valid_features & cp.asnumpy(
+                        cp.all(
+                            cp.column_stack(
+                                (
+                                    cp.isfinite(voxel_intensity_values)
+                                    & (bin_indices[:, 0] >= 0)
+                                    & (bin_indices[:, 0] < len(intensity_edges_cp) - 1),
+                                    cp.isfinite(voxel_number_values)
+                                    & (bin_indices[:, 1] >= 0)
+                                    & (
+                                        bin_indices[:, 1]
+                                        < len(voxel_number_edges_cp) - 1
+                                    ),
+                                    cp.isfinite(vector_distance_values)
+                                    & (bin_indices[:, 2] >= 0)
+                                    & (
+                                        bin_indices[:, 2]
+                                        < len(vector_distance_edges_cp) - 1
+                                    ),
+                                )
+                            ),
+                            axis=1,
+                        )
+                    ).astype(bool, copy=False)
+
+                    if not np.any(in_range):
+                        diagnostics["reason"] = "no_transcripts_in_histogram_range"
+                    else:
+                        histogram_shape = (
+                            len(intensity_edges) - 1,
+                            len(voxel_number_edges) - 1,
+                            len(vector_distance_edges) - 1,
+                        )
+                        all_histogram = cp.zeros(histogram_shape, dtype=cp.int32)
+                        blank_histogram = cp.zeros(histogram_shape, dtype=cp.int32)
+
+                        in_range_indices = bin_indices[in_range]
+                        cp.add.at(
+                            all_histogram,
+                            tuple(in_range_indices[:, axis] for axis in range(3)),
+                            1,
+                        )
+
+                        blank_in_range = in_range & cp.asnumpy(is_blank_values).astype(
+                            bool, copy=False
+                        )
+                        blank_indices = bin_indices[blank_in_range]
+                        if blank_indices.size:
+                            cp.add.at(
+                                blank_histogram,
+                                tuple(blank_indices[:, axis] for axis in range(3)),
+                                1,
+                            )
+
+                        blank_fraction_histogram = cp.full(
+                            histogram_shape, cp.nan, dtype=cp.float32
+                        )
+                        nonempty = all_histogram > 0
+                        blank_fraction_histogram[nonempty] = (
+                            blank_histogram[nonempty] / all_histogram[nonempty]
+                        )
+
+                        in_range_flat_bins = cp.ravel_multi_index(
+                            tuple(in_range_indices[:, axis] for axis in range(3)),
+                            dims=histogram_shape,
+                        )
+                        flat_bins = np.full(len(annotated), -1, dtype=np.int64)
+                        flat_bins[in_range] = cp.asnumpy(in_range_flat_bins)
+                        annotated["blank_fraction_bin"] = flat_bins
+                        annotated.loc[in_range, "blank_fraction"] = cp.asnumpy(
+                            blank_fraction_histogram.ravel()[in_range_flat_bins]
+                        )
+
+                        thresholds = np.unique(cp.asnumpy(blank_fraction_histogram[nonempty]))
+                        sweep_rows: list[dict[str, float | int]] = []
+                        chosen_threshold = np.nan
+                        achieved_rate = np.inf
+                        chosen_keep = np.zeros(len(annotated), dtype=bool)
+                        target_reached = False
+
+                        blank_fraction_values = annotated["blank_fraction"].to_numpy(
+                            dtype=float, copy=False
+                        )
+                        is_blank_numpy = cp.asnumpy(is_blank_values).astype(
+                            bool, copy=False
+                        )
+                        for threshold in thresholds:
+                            keep_mask = in_range & (
+                                blank_fraction_values <= float(threshold)
+                            )
+                            if self._blank_count <= 0 or self._barcode_count <= 0:
+                                gross_misid = np.inf
+                            else:
+                                keep = np.asarray(keep_mask, dtype=bool)
+                                if not np.any(keep):
+                                    gross_misid = np.inf
+                                else:
+                                    blank_kept = np.count_nonzero(
+                                        keep & is_blank_numpy
+                                    )
+                                    total_kept = np.count_nonzero(keep)
+                                    gross_misid = (
+                                        blank_kept / float(self._blank_count)
+                                    ) / (total_kept / float(self._barcode_count))
+                            sweep_rows.append(
+                                {
+                                    "threshold": float(threshold),
+                                    "gross_misid_rate": float(gross_misid),
+                                    "kept_transcripts": int(
+                                        np.count_nonzero(keep_mask)
+                                    ),
+                                }
+                            )
+
+                            if gross_misid <= target_gross_misid_rate:
+                                chosen_threshold = float(threshold)
+                                achieved_rate = float(gross_misid)
+                                chosen_keep = keep_mask.copy()
+                                target_reached = True
+
+                        if not sweep_rows:
+                            diagnostics["reason"] = "no_nonempty_histogram_bins"
+                        else:
+                            sweep_df = pd.DataFrame(sweep_rows)
+                            if not target_reached:
+                                best_idx = int(sweep_df["gross_misid_rate"].argmin())
+                                chosen_threshold = float(
+                                    sweep_df.loc[best_idx, "threshold"]
+                                )
+                                achieved_rate = float(
+                                    sweep_df.loc[best_idx, "gross_misid_rate"]
+                                )
+                                chosen_keep = in_range & (
+                                    blank_fraction_values <= chosen_threshold
+                                )
+
+                            annotated["blank_fraction_keep"] = chosen_keep
+                            diagnostics.update(
+                                {
+                                    "chosen_threshold": chosen_threshold,
+                                    "achieved_gross_misid_rate": achieved_rate,
+                                    "target_reached": target_reached,
+                                    "all_histogram": cp.asnumpy(all_histogram),
+                                    "blank_histogram": cp.asnumpy(blank_histogram),
+                                    "blank_fraction_histogram": cp.asnumpy(
+                                        blank_fraction_histogram
+                                    ),
+                                    "threshold_sweep": sweep_df,
+                                }
+                            )
 
         self._blank_fraction_filter_results = diagnostics
         self._df_filtered_barcodes = annotated[annotated["blank_fraction_keep"]].copy()
@@ -2107,7 +2131,12 @@ class PixelDecoder:
             False discovery rate for the LR filter.
         """
 
-        blank_mask = _is_blank_gene_id(df["gene_id"])
+        blank_mask = (
+            df["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+        )
 
         if threshold >= 0:
             df["prediction"] = df["predicted_probability"] > threshold
@@ -2151,9 +2180,13 @@ class PixelDecoder:
         from sklearn.preprocessing import StandardScaler
 
         df_barcodes_to_filter = self._df_barcodes_loaded.copy()
-        df_barcodes_to_filter["X"] = ~_is_blank_gene_id(
+        df_barcodes_to_filter["X"] = ~(
             df_barcodes_to_filter["gene_id"]
-        ).to_numpy(dtype=bool, copy=False)
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+            .to_numpy(dtype=bool, copy=False)
+        )
 
         if self._is_3D:
             columns = [
@@ -2874,6 +2907,7 @@ class PixelDecoder:
                     subset,
                     gpu,
                     self._n_merfish_bits,
+                    self._verbose,
                     lowpass_sigma,
                     magnitude_threshold,
                     minimum_pixels,
@@ -2892,11 +2926,16 @@ class PixelDecoder:
         if self._verbose >= 1:
             print(f"Number of loaded barcodes: {len(self._df_barcodes_loaded)}")
             print(f"Verbosity:  {self._verbose}")
-        self._dispatch_barcode_filter(
-            filter_method=filter_method,
-            target_gross_misid_rate=float(target_gross_misid_rate),
-            lr_fdr_target=float(lr_fdr_target),
-        )
+        if filter_method == "blank_fraction":
+            self._filter_all_barcodes_blank_fraction(
+                target_gross_misid_rate=float(target_gross_misid_rate)
+            )
+        elif filter_method == "lr":
+            self._filter_all_barcodes_LR(lr_fdr_target=float(lr_fdr_target))
+        else:
+            raise ValueError(
+                "filter_method must be either 'blank_fraction' or 'lr'."
+            )
         if not (self._is_3D):
             radius_xy = self._datastore.voxel_size_zyx_um[-1]
             radius_z = self._datastore.voxel_size_zyx_um[0]
@@ -2951,11 +2990,16 @@ class PixelDecoder:
         all_tiles = list(range(len(self._datastore.tile_ids)))
         if not (self._verbose == 0):
             self._verbose = 2
-        self._dispatch_barcode_filter(
-            filter_method=filter_method,
-            target_gross_misid_rate=float(target_gross_misid_rate),
-            lr_fdr_target=float(lr_fdr_target),
-        )
+        if filter_method == "blank_fraction":
+            self._filter_all_barcodes_blank_fraction(
+                target_gross_misid_rate=float(target_gross_misid_rate)
+            )
+        elif filter_method == "lr":
+            self._filter_all_barcodes_LR(lr_fdr_target=float(lr_fdr_target))
+        else:
+            raise ValueError(
+                "filter_method must be either 'blank_fraction' or 'lr'."
+            )
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
                 radius_xy = self._datastore.voxel_size_zyx_um[-1]
