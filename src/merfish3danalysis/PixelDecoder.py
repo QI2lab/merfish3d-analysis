@@ -1239,40 +1239,11 @@ class PixelDecoder:
             decoded_image_cp = cp.asarray(self._decoded_image, dtype=cp.int16)
             if self._optimize_normalization_weights:
                 if self._filter_type == "lp":
-                    intensity_image = np.concatenate(
-                        [
-                            np.expand_dims(
-                                self._decoded_image.astype(np.float32, copy=False),
-                                axis=0,
-                            ),
-                            np.expand_dims(self._distance_image, axis=0),
-                            self._image_data_lp,
-                        ],
-                        axis=0,
-                    ).transpose(1, 2, 3, 0)
+                    intensity_image = self._image_data_lp.transpose(1, 2, 3, 0)
                 else:
-                    intensity_image = np.concatenate(
-                        [
-                            np.expand_dims(
-                                self._decoded_image.astype(np.float32, copy=False),
-                                axis=0,
-                            ),
-                            np.expand_dims(self._distance_image, axis=0),
-                            self._image_data,
-                        ],
-                        axis=0,
-                    ).transpose(1, 2, 3, 0)
+                    intensity_image = self._image_data.transpose(1, 2, 3, 0)
             else:
-                intensity_image = np.concatenate(
-                    [
-                        np.expand_dims(
-                            self._decoded_image.astype(np.float32, copy=False), axis=0
-                        ),
-                        np.expand_dims(self._distance_image, axis=0),
-                        self._scaled_pixel_images,
-                    ],
-                    axis=0,
-                ).transpose(1, 2, 3, 0)
+                intensity_image = self._scaled_pixel_images.transpose(1, 2, 3, 0)
 
             if self._verbose > 1:
                 print("")
@@ -1382,10 +1353,23 @@ class PixelDecoder:
 
             df_barcode = df_barcode[df_barcode["area"] > 0.1].reset_index(drop=True)
 
-            # Sanity: drop any region that somehow mapped to background
-            df_barcode["decoded_id"] = np.rint(
-                df_barcode["intensity_mean-0"].to_numpy(dtype=np.float64, copy=False)
-            ).astype(np.int32, copy=False)
+            labels_flat = codewords_label_image.ravel()
+            decoded_flat = self._decoded_image.ravel()
+
+            max_label = int(labels_flat.max())
+            label_to_id = np.full(max_label + 1, -1, dtype=np.int16)
+
+            order = np.argsort(labels_flat, kind="mergesort")
+            labels_sorted = labels_flat[order]
+            decoded_sorted = decoded_flat[order]
+
+            uniq_labels, first_idx = np.unique(labels_sorted, return_index=True)
+            label_to_id[uniq_labels] = decoded_sorted[first_idx]
+            label_to_id[0] = -1
+
+            region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
+            decoded_ids = label_to_id[region_labels].astype(np.int32, copy=False)
+            df_barcode["decoded_id"] = decoded_ids
             df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(
                 drop=True
             )
@@ -1440,7 +1424,7 @@ class PixelDecoder:
             df_barcode["global_x"] = np.round(pts[:, 2], 2)
 
             for i in range(1, self._n_merfish_bits + 1):
-                src = f"intensity_mean-{i + 1}"
+                src = f"intensity_mean-{i - 1}"
                 dst = f"bit{i:02d}_mean_intensity"
                 if src in df_barcode.columns:
                     df_barcode = df_barcode.rename(columns={src: dst})
@@ -1466,10 +1450,7 @@ class PixelDecoder:
             df_barcode["signal_mean"] = signal_sum / float(n_on)
             df_barcode["bkd_mean"] = (total_sum - signal_sum) / denom
             df_barcode["s-b_mean"] = df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-            df_barcode = df_barcode.drop(
-                columns=["label", "decoded_id", "intensity_mean-0", "intensity_mean-1"],
-                errors="ignore",
-            )
+            df_barcode = df_barcode.drop(columns=["label", "decoded_id"])
             df_barcode = df_barcode[
                 df_barcode["distance_min"] <= self._transcript_distance_threshold
             ].reset_index(drop=True)
