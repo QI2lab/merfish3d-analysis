@@ -53,6 +53,7 @@ def global_register_data(
     n_jobs: int = 16,
     swap_yx: bool = False,
     create_max_proj_tiff: bool = True,
+    zstride_level: int = 0,
 ) -> None:
     """Register all tiles in first round in global coordinates.
 
@@ -68,6 +69,8 @@ def global_register_data(
         swap y and x coordinates when loading stage positions.
     create_max_proj_tiff: bool, default = True
         create max projection tiff in the segmentation/cellpose directory.
+    zstride_level: int, default = 0
+        look for a skip z dataset.
     """
 
     import dask.array as da
@@ -76,8 +79,12 @@ def global_register_data(
     from multiview_stitcher import spatial_image_utils as si_utils
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    if zstride_level == 0:
+        datastore_path = root_path / Path(r"qi2labdatastore")
+    else:
+        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
     datastore = qi2labDataStore(datastore_path)
+    print(f"Using datastore at {datastore_path}")
 
     # convert local tiles from first round to multiscale spatial images
     msims = []

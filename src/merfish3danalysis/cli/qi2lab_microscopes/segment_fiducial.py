@@ -33,6 +33,7 @@ def run_cellpose(
     diameter: int = 30,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
+    zstride_level: int = 0,
 ) -> None:
     """Run cellpose and save ROIs
 
@@ -48,11 +49,17 @@ def run_cellpose(
         flow threshold.
     cellprob_threshold: float, default = 0.0
         cell probability threshold.
+    zstride_level: int, default = 0
+        look for a skip z dataset.
     """
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    if zstride_level == 0:
+        datastore_path = root_path / Path(r"qi2labdatastore")
+    else:
+        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
     datastore = qi2labDataStore(datastore_path)
+    print(f"Using datastore at {datastore_path}")
 
     # load downsampled, fused fiducial image and coordinates
     fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = (

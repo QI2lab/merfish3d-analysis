@@ -283,6 +283,7 @@ def decode_pixels(
         minimum_pixels=minimum_pixels,
         magnitude_threshold=mag_threshold,
         feature_predictor_threshold=feature_predictor_threshold,
+        filter_method="blank_fraction",
     )
 
 
@@ -350,7 +351,7 @@ def sweep_decode_params(
         for feature_predictor in feature_predictor_values:
             for mag in mag_values:
                 params = {
-                    "fdr": 0.05,
+                    "lr_fdr_target": 0.05,
                     "min_pixels": round(pixels, 2),
                     "mag_lower_thresh": round(mag, 2),
                     "mag_upper_thresh": 2.0,

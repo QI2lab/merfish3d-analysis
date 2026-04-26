@@ -20,11 +20,11 @@ app.pretty_exceptions_enable = False
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 2,
-    distance_threshold: float = 0.5176,
     feature_predictor_threshold: float = 0.2,
     magnitude_threshold: tuple[float, float] = [0.9, 10.0],
-    fdr_target: float = 0.05,
-    smFISH: bool = False,
+    filter_method: str = "blank_fraction",
+    target_gross_misid_rate: float = 0.05,
+    lr_fdr_target: float = 0.05,
 ) -> None:
     """Perform pixel decoding.
 
@@ -34,16 +34,16 @@ def decode_pixels(
         path to experiment
     minimum_pixels_per_RNA : int, default 2
         minimum pixels with same barcode ID required to call a spot.
-    distance_threshold: float, default 0.5176
-        maximum allowed Euclidean distance threshold between a pixel trace and codeword.
     feature_predictor_threshold : float, default 0.2
         threshold to accept feature_predictor prediction.
     magnitude_threshold: tuple[float,float], default (0.9,10.0)
         minimum magnitude across all normalized bits required to accept a spot.
-    fdr_target : float, default .05
-        false discovery rate (FDR) target.
-    smFISH: bool, default = False
-        Run in smFISH mode. Overrides distance threshold to 1.0.
+    filter_method : str, default "blank_fraction"
+        downstream transcript filter. Supported values are "blank_fraction" and "lr".
+    target_gross_misid_rate : float, default .05
+        gross misidentification-rate target for blank-fraction filtering.
+    lr_fdr_target : float, default .05
+        false discovery rate target for LR filtering.
     """
 
     # initialize datastore
@@ -57,16 +57,11 @@ def decode_pixels(
         use_mask=False,
         merfish_bits=merfish_bits,
         verbose=1,
-        smFISH=smFISH,
     )
-    if smFISH:
-        distance_threshold = 1.0
-        decoder._distance_threshold = distance_threshold
 
     decoder.optimize_normalization_by_decoding(
         n_random_tiles=1,
         n_iterations=3,
-        distance_threshold=distance_threshold,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         feature_predictor_threshold=feature_predictor_threshold,
@@ -75,11 +70,12 @@ def decode_pixels(
     decoder.decode_all_tiles(
         assign_to_cells=False,
         prep_for_baysor=False,
-        distance_threshold=distance_threshold,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
         feature_predictor_threshold=feature_predictor_threshold,
-        fdr_target=fdr_target,
+        filter_method=filter_method,
+        target_gross_misid_rate=target_gross_misid_rate,
+        lr_fdr_target=lr_fdr_target,
     )
 
 
