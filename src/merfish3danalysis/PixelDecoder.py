@@ -520,6 +520,7 @@ def decode_tiles_worker(
         print(
             time_stamp(),
             f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of out {len(tile_indices)} (tile index: {tile_idx}).",
+            flush=True,
         )
 
     cp.cuda.Stream.null.synchronize()
