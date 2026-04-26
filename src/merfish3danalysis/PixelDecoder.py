@@ -1341,11 +1341,17 @@ class PixelDecoder:
                     "area",
                     "centroid",
                     "intensity_mean",
-                    "intensity_min",
                     "inertia_tensor_eigvals",
                 ],
             )
             df_barcode = pd.DataFrame(props)
+
+            props_distance = regionprops_table(
+                codewords_label_image,
+                intensity_image=self._distance_image,
+                properties=["label", "intensity_min"],
+            )
+            df_distance = pd.DataFrame(props_distance)
 
             props_magnitude = regionprops_table(
                 codewords_label_image,
@@ -1353,6 +1359,16 @@ class PixelDecoder:
                 properties=["label", "intensity_mean"],
             )
             df_magnitude = pd.DataFrame(props_magnitude)
+
+            if not df_distance.empty:
+                df_distance = df_distance.rename(
+                    columns={"intensity_min": "distance_min"}
+                )
+                df_barcode = df_barcode.merge(
+                    df_distance[["label", "distance_min"]],
+                    on="label",
+                    how="left",
+                )
 
             if not df_magnitude.empty:
                 df_magnitude = df_magnitude.rename(
@@ -1370,12 +1386,7 @@ class PixelDecoder:
             df_barcode["decoded_id"] = np.rint(
                 df_barcode["intensity_mean-0"].to_numpy(dtype=np.float64, copy=False)
             ).astype(np.int32, copy=False)
-            df_barcode["distance_min"] = df_barcode["intensity_min-1"].to_numpy(
-                dtype=np.float32, copy=False
-            )
-            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(
-                drop=True
-            )
+            df_barcode = df_barcode[df_barcode["decoded_id"] >= 0].reset_index(drop=True)
 
             # barcode_id is 1-based, matches old code
             df_barcode["barcode_id"] = df_barcode["decoded_id"].astype(np.int32) + 1
@@ -1426,11 +1437,6 @@ class PixelDecoder:
             df_barcode["global_y"] = np.round(pts[:, 1], 2)
             df_barcode["global_x"] = np.round(pts[:, 2], 2)
 
-            if "intensity_mean-1" in df_barcode.columns:
-                df_barcode = df_barcode.rename(
-                    columns={"intensity_mean-1": "distance_mean"}
-                )
-
             for i in range(1, self._n_merfish_bits + 1):
                 src = f"intensity_mean-{i + 1}"
                 dst = f"bit{i:02d}_mean_intensity"
@@ -1458,15 +1464,10 @@ class PixelDecoder:
             df_barcode["signal_mean"] = signal_sum / float(n_on)
             df_barcode["bkd_mean"] = (total_sum - signal_sum) / denom
             df_barcode["s-b_mean"] = df_barcode["signal_mean"] - df_barcode["bkd_mean"]
-            drop_columns = ["label", "decoded_id", "intensity_mean-0"]
-            drop_columns.extend(
-                [
-                    column
-                    for column in df_barcode.columns
-                    if column.startswith("intensity_min-")
-                ]
+            df_barcode = df_barcode.drop(
+                columns=["label", "decoded_id", "intensity_mean-0", "intensity_mean-1"],
+                errors="ignore",
             )
-            df_barcode = df_barcode.drop(columns=drop_columns, errors="ignore")
             df_barcode = df_barcode[
                 df_barcode["distance_min"] <= self._transcript_distance_threshold
             ].reset_index(drop=True)
@@ -1483,7 +1484,9 @@ class PixelDecoder:
             del (
                 codewords_label_image,
                 props,
+                props_distance,
                 props_magnitude,
+                df_distance,
                 df_magnitude,
                 df_barcode,
             )
@@ -1528,7 +1531,7 @@ class PixelDecoder:
                     "global_x",
                     "cell_id",
                     "tile_idx",
-                    "distance_mean",
+                    "distance_min",
                 ]
                 if col not in self._df_filtered_barcodes.columns
             ]
@@ -1542,7 +1545,7 @@ class PixelDecoder:
                     "global_x",
                     "cell_id",
                     "tile_idx",
-                    "distance_mean",
+                    "distance_min",
                 ]
             ].copy()
             baysor_df.rename(
@@ -1553,7 +1556,7 @@ class PixelDecoder:
                     "global_z": "z_location",
                     "barcode_id": "codeword_index",
                     "tile_idx": "fov_name",
-                    "distance_mean": "qv",
+                    "distance_min": "qv",
                 },
                 inplace=True,
             )
@@ -2134,7 +2137,7 @@ class PixelDecoder:
                 "area",
                 "signal_mean",
                 "s-b_mean",
-                "distance_mean",
+                "distance_min",
                 "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
@@ -2146,7 +2149,7 @@ class PixelDecoder:
                 "area",
                 "signal_mean",
                 "s-b_mean",
-                "distance_mean",
+                "distance_min",
                 "magnitude_mean",
                 "inertia_tensor_eigvals-0",
                 "inertia_tensor_eigvals-1",
@@ -2331,9 +2334,6 @@ class PixelDecoder:
         distance_min = self._df_filtered_barcodes["distance_min"].to_numpy(
             dtype=float, copy=False
         )
-        distance_mean = self._df_filtered_barcodes["distance_mean"].to_numpy(
-            dtype=float, copy=False
-        )
 
         tree = cKDTree(coords)
         pairs = tree.query_pairs(radius)
@@ -2342,11 +2342,7 @@ class PixelDecoder:
         distances = []
         for i, j in pairs:
             if tile_idxs[i] != tile_idxs[j]:
-                if (distance_min[i], distance_mean[i], i) <= (
-                    distance_min[j],
-                    distance_mean[j],
-                    j,
-                ):
+                if (distance_min[i], i) <= (distance_min[j], j):
                     rows_to_drop.add(j)
                     distances.append(distance_min[j])
                 else:
@@ -2381,8 +2377,8 @@ class PixelDecoder:
 
         For each connected component (cluster) under this neighbor relation,
         keep exactly one row: the one with the smallest ``distance_min``.
-        Ties are broken deterministically by ``distance_mean`` and then the
-        original row index (lower index wins).
+        Ties are broken deterministically by original row index
+        (lower index wins).
 
         Parameters
         ----------
@@ -2399,7 +2395,7 @@ class PixelDecoder:
         Notes
         -----
         Expected columns: ``global_z``, ``global_y``, ``global_x``,
-        ``tile_idx``, ``gene_id``, ``distance_min``, ``distance_mean``.
+        ``tile_idx``, ``gene_id``, ``distance_min``.
         """
         df = getattr(self, "_df_filtered_barcodes", None)
         filtered = df is not None
@@ -2420,7 +2416,6 @@ class PixelDecoder:
             "gene_id"
         ].to_numpy()  # dtype can be int/str/object; equality works elementwise
         dmin = df["distance_min"].to_numpy(dtype=float, copy=False)
-        dmean = df["distance_mean"].to_numpy(dtype=float, copy=False)
 
         rows_to_drop: set[int] = set()
 
@@ -2488,9 +2483,9 @@ class PixelDecoder:
                 if len(members) < 2:
                     continue
                 glob_members = local_idx[np.asarray(members)]
-                # Lexicographic: primary key is distance_min, then distance_mean, then row index.
+                # Lexicographic: primary key is distance_min, then row index.
                 best_global = glob_members[
-                    np.lexsort((glob_members, dmean[glob_members], dmin[glob_members]))
+                    np.lexsort((glob_members, dmin[glob_members]))
                 ][0]
                 for g in glob_members:
                     if g != best_global:
