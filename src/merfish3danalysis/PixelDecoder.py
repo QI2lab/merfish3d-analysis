@@ -36,7 +36,7 @@ import cupy as cp
 import numpy as np
 import pandas as pd
 import rtree
-from cucim.skimage.measure import label
+from cucim.skimage.measure import label, regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
 from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
@@ -1293,6 +1293,28 @@ class PixelDecoder:
                 codewords_label_image_cp, min_size=minimum_pixels
             )
 
+            props_distance = gpu_regionprops_table(
+                codewords_label_image_cp,
+                intensity_image=cp.asarray(self._distance_image, dtype=cp.float32),
+                properties=["label", "intensity_min", "area"],
+            )
+            df_distance = pd.DataFrame(
+                {
+                    key: (
+                        cp.asnumpy(value)
+                        if isinstance(value, cp.ndarray)
+                        else np.asarray(value)
+                    )
+                    for key, value in props_distance.items()
+                }
+            )
+            if not df_distance.empty:
+                df_distance = df_distance[df_distance["area"] > 0].copy()
+                df_distance = df_distance.sort_values("label").reset_index(drop=True)
+                df_distance = df_distance.rename(
+                    columns={"intensity_min": "distance_min"}
+                )
+
             # move arrays to CPU for the existing regionprops path
             codewords_label_image = cp.asnumpy(codewords_label_image_cp)
 
@@ -1317,13 +1339,6 @@ class PixelDecoder:
             )
             df_barcode = pd.DataFrame(props)
 
-            props_distance = regionprops_table(
-                codewords_label_image,
-                intensity_image=self._distance_image,
-                properties=["label", "intensity_min"],
-            )
-            df_distance = pd.DataFrame(props_distance)
-
             props_magnitude = regionprops_table(
                 codewords_label_image,
                 intensity_image=self._magnitude_image,
@@ -1332,9 +1347,6 @@ class PixelDecoder:
             df_magnitude = pd.DataFrame(props_magnitude)
 
             if not df_distance.empty:
-                df_distance = df_distance.rename(
-                    columns={"intensity_min": "distance_min"}
-                )
                 df_barcode = df_barcode.merge(
                     df_distance[["label", "distance_min"]],
                     on="label",
@@ -2024,6 +2036,13 @@ class PixelDecoder:
                                 }
                             )
 
+        if self._verbose > 1:
+            print("blank fraction filter diagnostics:")
+            for key, value in diagnostics.items():
+                if isinstance(value, (float, int, str, bool)):
+                    print(f"{key}: {value}")
+                else:
+                    print(f"{key}: {type(value)} with shape {getattr(value, 'shape', 'N/A')}")
         self._blank_fraction_filter_results = diagnostics
         self._df_filtered_barcodes = annotated[annotated["blank_fraction_keep"]].copy()
         self._df_filtered_barcodes["cell_id"] = -1
@@ -2870,7 +2889,7 @@ class PixelDecoder:
 
     def optimize_filtering(
         self,
-        assign_to_cells: bool = False,
+        assign_to_cells: bool = True,
         prep_for_baysor: bool = True,
         filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
         target_gross_misid_rate: float = 0.05,
