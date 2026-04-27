@@ -36,7 +36,8 @@ import cupy as cp
 import numpy as np
 import pandas as pd
 import rtree
-from cucim.skimage.measure import label, regionprops_table as gpu_regionprops_table
+from cucim.skimage.measure import label
+from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
 from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
@@ -2042,7 +2043,9 @@ class PixelDecoder:
                 if isinstance(value, (float, int, str, bool)):
                     print(f"{key}: {value}")
                 else:
-                    print(f"{key}: {type(value)} with shape {getattr(value, 'shape', 'N/A')}")
+                    print(
+                        f"{key}: {type(value)} with shape {getattr(value, 'shape', 'N/A')}"
+                    )
         self._blank_fraction_filter_results = diagnostics
         self._df_filtered_barcodes = annotated[annotated["blank_fraction_keep"]].copy()
         self._df_filtered_barcodes["cell_id"] = -1
