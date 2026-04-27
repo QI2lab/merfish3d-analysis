@@ -249,9 +249,9 @@ class PixelDecoder:
         self._pixel_assignment_threshold = float(np.sqrt(2.0 - np.sqrt(2.0)))
         self._transcript_distance_threshold = float(np.sqrt(2.0 - 4.0 / np.sqrt(6.0)))
         self._feature_predictor_bit_thresholds: np.ndarray | None = None
-        self._feature_predictor_threshold_refinement_results: dict[str, object] | None = (
-            None
-        )
+        self._feature_predictor_threshold_refinement_results: (
+            dict[str, object] | None
+        ) = None
 
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
@@ -301,7 +301,9 @@ class PixelDecoder:
             return self._feature_predictor_bit_thresholds
 
         threshold_value = (
-            0.1 if feature_predictor_threshold is None else float(feature_predictor_threshold)
+            0.1
+            if feature_predictor_threshold is None
+            else float(feature_predictor_threshold)
         )
         return np.full(self._n_merfish_bits, threshold_value, dtype=np.float32)
 
@@ -338,9 +340,7 @@ class PixelDecoder:
         if threshold_grid is None or fraction_curves is None:
             return
 
-        threshold_grid = np.asarray(
-            threshold_grid[0 :], dtype=np.float32
-        )
+        threshold_grid = np.asarray(threshold_grid[0:], dtype=np.float32)
         fraction_curves = np.asarray(
             fraction_curves[0 : self._n_merfish_bits], dtype=np.float32
         )
@@ -398,19 +398,20 @@ class PixelDecoder:
             blank_values, blank_counts = np.unique(blank_bits, return_counts=True)
             blank_support_counts[blank_values - 1] = blank_counts.astype(np.float64)
 
-        barcode_support_per_bit = self._codebook_matrix[
-            :, 0 : self._n_merfish_bits
-        ].sum(axis=0).astype(np.float64)
+        barcode_support_per_bit = (
+            self._codebook_matrix[:, 0 : self._n_merfish_bits]
+            .sum(axis=0)
+            .astype(np.float64)
+        )
         blank_codebook_mask = np.asarray(
-            [
-                str(gene_id).lower().startswith("blank")
-                for gene_id in self._gene_ids
-            ],
+            [str(gene_id).lower().startswith("blank") for gene_id in self._gene_ids],
             dtype=bool,
         )
-        blank_support_per_bit = self._codebook_matrix[
-            blank_codebook_mask, 0 : self._n_merfish_bits
-        ].sum(axis=0).astype(np.float64)
+        blank_support_per_bit = (
+            self._codebook_matrix[blank_codebook_mask, 0 : self._n_merfish_bits]
+            .sum(axis=0)
+            .astype(np.float64)
+        )
 
         support_per_barcode = support_counts / np.maximum(barcode_support_per_bit, 1.0)
         blank_per_blank_barcode = np.divide(
@@ -454,9 +455,7 @@ class PixelDecoder:
             proposed_idx = int(
                 np.argmin(np.abs(fraction_curves[bit_idx] - desired_fraction))
             )
-            proposed_idx = int(
-                np.clip(proposed_idx, current_idx - 4, current_idx + 4)
-            )
+            proposed_idx = int(np.clip(proposed_idx, current_idx - 4, current_idx + 4))
             new_thresholds[bit_idx] = float(threshold_grid[proposed_idx])
             refinement_rows.append(
                 {

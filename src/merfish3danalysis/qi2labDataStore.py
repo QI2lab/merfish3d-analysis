@@ -1014,9 +1014,7 @@ class qi2labDataStore:
     def feature_predictor_input_scale_vector(self, value: ArrayLike) -> None:
         """Set the per-bit scale vector used to normalize predictor inputs."""
 
-        self._feature_predictor_input_scale_vector = np.asarray(
-            value, dtype=np.float32
-        )
+        self._feature_predictor_input_scale_vector = np.asarray(value, dtype=np.float32)
         self._set_calibration_attribute(
             "feature_predictor_input_scale_vector",
             self._feature_predictor_input_scale_vector,
@@ -2020,7 +2018,8 @@ class qi2labDataStore:
 
             if getattr(self, "_num_tiles", None) is not None:
                 self._tile_ids = [
-                    "tile" + str(tile_idx).zfill(4) for tile_idx in range(self._num_tiles)
+                    "tile" + str(tile_idx).zfill(4)
+                    for tile_idx in range(self._num_tiles)
                 ]
             if getattr(self, "_num_rounds", None) is not None:
                 self._round_ids = [

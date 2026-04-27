@@ -895,7 +895,9 @@ class DataRegistration:
                 gc.collect()
 
             bit_background = float(np.median(q50_values))
-            bit_scale = float(np.median(np.asarray(q999_values) - np.asarray(q50_values)))
+            bit_scale = float(
+                np.median(np.asarray(q999_values) - np.asarray(q50_values))
+            )
             backgrounds[bit_idx] = bit_background
             scales[bit_idx] = max(bit_scale, 1.0)
 
@@ -927,9 +929,7 @@ class DataRegistration:
 
         sample = image[:, ::stride_xy, ::stride_xy].astype(np.float32, copy=False)
         max_edge = max(float(sample.max()), float(threshold_grid[-1]) + 1e-6)
-        edges = np.concatenate(
-            ([-1e-6], threshold_grid.astype(np.float64), [max_edge])
-        )
+        edges = np.concatenate(([-1e-6], threshold_grid.astype(np.float64), [max_edge]))
         counts, _ = np.histogram(sample, bins=edges)
         tail_counts = np.cumsum(counts[::-1])[::-1][1:]
         return tail_counts.astype(np.float32) / float(sample.size)
@@ -983,9 +983,7 @@ class DataRegistration:
             )
         )
         target_fraction = float(np.median(fraction_curves[:, reference_idx]))
-        threshold_indices = np.argmin(
-            np.abs(fraction_curves - target_fraction), axis=1
-        )
+        threshold_indices = np.argmin(np.abs(fraction_curves - target_fraction), axis=1)
         bit_thresholds = threshold_grid[threshold_indices]
 
         self._datastore.feature_predictor_threshold_grid = threshold_grid
