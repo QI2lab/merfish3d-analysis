@@ -40,10 +40,13 @@ class qi2labDataStore:
     ----------
     datastore_path : Union[str, Path]
         Path to qi2lab MERFISH store
+    validate : bool, default True
+        Validate datastore contents on open. Set False to skip expensive
+        zarr readability checks and load only metadata/path structure.
 
     """
 
-    def __init__(self, datastore_path: str | Path) -> None:
+    def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
         compressor = {
             "id": "blosc",
             "cname": "zstd",
@@ -62,7 +65,7 @@ class qi2labDataStore:
 
         self._datastore_path = Path(datastore_path)
         if self._datastore_path.exists():
-            self._parse_datastore()
+            self._parse_datastore(validate=validate)
         else:
             self._init_datastore()
 
@@ -956,6 +959,162 @@ class qi2labDataStore:
         )
 
     @property
+    def feature_predictor_input_background_vector(self) -> ArrayLike | None:
+        """Per-bit background vector used to normalize predictor inputs."""
+
+        value = getattr(self, "_feature_predictor_input_background_vector", None)
+        if value is None:
+            calib_attrs = self._load_calibrations_attributes()
+            try:
+                value = np.asarray(
+                    calib_attrs["feature_predictor_input_background_vector"],
+                    dtype=np.float32,
+                )
+            except KeyError:
+                value = None
+            if value is None:
+                print("Feature predictor input background vector not calculated.")
+                return None
+            return value
+        return value
+
+    @feature_predictor_input_background_vector.setter
+    def feature_predictor_input_background_vector(self, value: ArrayLike) -> None:
+        """Set the per-bit background vector used to normalize predictor inputs."""
+
+        self._feature_predictor_input_background_vector = np.asarray(
+            value, dtype=np.float32
+        )
+        self._set_calibration_attribute(
+            "feature_predictor_input_background_vector",
+            self._feature_predictor_input_background_vector,
+        )
+
+    @property
+    def feature_predictor_input_scale_vector(self) -> ArrayLike | None:
+        """Per-bit scale vector used to normalize predictor inputs."""
+
+        value = getattr(self, "_feature_predictor_input_scale_vector", None)
+        if value is None:
+            calib_attrs = self._load_calibrations_attributes()
+            try:
+                value = np.asarray(
+                    calib_attrs["feature_predictor_input_scale_vector"],
+                    dtype=np.float32,
+                )
+            except KeyError:
+                value = None
+            if value is None:
+                print("Feature predictor input scale vector not calculated.")
+                return None
+            return value
+        return value
+
+    @feature_predictor_input_scale_vector.setter
+    def feature_predictor_input_scale_vector(self, value: ArrayLike) -> None:
+        """Set the per-bit scale vector used to normalize predictor inputs."""
+
+        self._feature_predictor_input_scale_vector = np.asarray(
+            value, dtype=np.float32
+        )
+        self._set_calibration_attribute(
+            "feature_predictor_input_scale_vector",
+            self._feature_predictor_input_scale_vector,
+        )
+
+    @property
+    def feature_predictor_bit_thresholds(self) -> ArrayLike | None:
+        """Per-bit thresholds applied to feature predictor probability images."""
+
+        value = getattr(self, "_feature_predictor_bit_thresholds", None)
+        if value is None:
+            calib_attrs = self._load_calibrations_attributes()
+            try:
+                value = np.asarray(
+                    calib_attrs["feature_predictor_bit_thresholds"],
+                    dtype=np.float32,
+                )
+            except KeyError:
+                value = None
+            if value is None:
+                print("Feature predictor bit thresholds not calculated.")
+                return None
+            return value
+        return value
+
+    @feature_predictor_bit_thresholds.setter
+    def feature_predictor_bit_thresholds(self, value: ArrayLike) -> None:
+        """Set the per-bit thresholds applied to predictor probability images."""
+
+        self._feature_predictor_bit_thresholds = np.asarray(value, dtype=np.float32)
+        self._set_calibration_attribute(
+            "feature_predictor_bit_thresholds",
+            self._feature_predictor_bit_thresholds,
+        )
+
+    @property
+    def feature_predictor_threshold_grid(self) -> ArrayLike | None:
+        """Threshold grid used during predictor threshold calibration."""
+
+        value = getattr(self, "_feature_predictor_threshold_grid", None)
+        if value is None:
+            calib_attrs = self._load_calibrations_attributes()
+            try:
+                value = np.asarray(
+                    calib_attrs["feature_predictor_threshold_grid"],
+                    dtype=np.float32,
+                )
+            except KeyError:
+                value = None
+            if value is None:
+                print("Feature predictor threshold grid not calculated.")
+                return None
+            return value
+        return value
+
+    @feature_predictor_threshold_grid.setter
+    def feature_predictor_threshold_grid(self, value: ArrayLike) -> None:
+        """Set the predictor threshold grid used during calibration."""
+
+        self._feature_predictor_threshold_grid = np.asarray(value, dtype=np.float32)
+        self._set_calibration_attribute(
+            "feature_predictor_threshold_grid",
+            self._feature_predictor_threshold_grid,
+        )
+
+    @property
+    def feature_predictor_positive_fraction_curves(self) -> ArrayLike | None:
+        """Per-bit positive-fraction curves over the predictor threshold grid."""
+
+        value = getattr(self, "_feature_predictor_positive_fraction_curves", None)
+        if value is None:
+            calib_attrs = self._load_calibrations_attributes()
+            try:
+                value = np.asarray(
+                    calib_attrs["feature_predictor_positive_fraction_curves"],
+                    dtype=np.float32,
+                )
+            except KeyError:
+                value = None
+            if value is None:
+                print("Feature predictor positive-fraction curves not calculated.")
+                return None
+            return value
+        return value
+
+    @feature_predictor_positive_fraction_curves.setter
+    def feature_predictor_positive_fraction_curves(self, value: ArrayLike) -> None:
+        """Set the per-bit positive-fraction curves over the threshold grid."""
+
+        self._feature_predictor_positive_fraction_curves = np.asarray(
+            value, dtype=np.float32
+        )
+        self._set_calibration_attribute(
+            "feature_predictor_positive_fraction_curves",
+            self._feature_predictor_positive_fraction_curves,
+        )
+
+    @property
     def tile_ids(self) -> Collection[str] | None:
         """Tile IDs.
 
@@ -1798,7 +1957,7 @@ class qi2labDataStore:
 
         df.to_parquet(parquet_path, engine="fastparquet", index=False)
 
-    def _parse_datastore(self) -> None:
+    def _parse_datastore(self, validate: bool = True) -> None:
         """Parse datastore to discover available components."""
 
         # directory structure as defined by qi2lab spec
@@ -1859,33 +2018,49 @@ class qi2labDataStore:
                     self._exp_order
                 )
 
-            psf_root_path = self._calibrations_zarr_path / Path("psf_data")
-            try:
-                if psf_root_path.exists():
-                    psf_dirs = sorted(
-                        [
-                            entry
-                            for entry in psf_root_path.iterdir()
-                            if entry.is_dir()
-                            and re.fullmatch(r"psf_\d{3}\.ome\.zarr", entry.name)
-                        ],
-                        key=lambda p: int(p.name[len("psf_") : len("psf_") + 3]),
-                    )
-                else:
-                    psf_dirs = []
+            if getattr(self, "_num_tiles", None) is not None:
+                self._tile_ids = [
+                    "tile" + str(tile_idx).zfill(4) for tile_idx in range(self._num_tiles)
+                ]
+            if getattr(self, "_num_rounds", None) is not None:
+                self._round_ids = [
+                    "round" + str(round_idx + 1).zfill(3)
+                    for round_idx in range(self._num_rounds)
+                ]
+            if getattr(self, "_num_bits", None) is not None:
+                self._bit_ids = [
+                    "bit" + str(bit_idx + 1).zfill(3)
+                    for bit_idx in range(self._num_bits)
+                ]
 
-                if len(psf_dirs) > 0:
-                    psf_list = []
-                    for psf_dir in psf_dirs:
-                        psf_array = self._load_from_zarr_array(
-                            kvstore=self._get_kvstore_key(psf_dir),
-                            spec=self._zarrv2_spec.copy(),
-                            return_future=False,
+            if validate:
+                psf_root_path = self._calibrations_zarr_path / Path("psf_data")
+                try:
+                    if psf_root_path.exists():
+                        psf_dirs = sorted(
+                            [
+                                entry
+                                for entry in psf_root_path.iterdir()
+                                if entry.is_dir()
+                                and re.fullmatch(r"psf_\d{3}\.ome\.zarr", entry.name)
+                            ],
+                            key=lambda p: int(p.name[len("psf_") : len("psf_") + 3]),
                         )
-                        psf_list.append(np.asarray(psf_array, dtype=np.float32))
-                    self._psfs = psf_list
-            except (OSError, ZarrError, ValueError, AttributeError):
-                print("Calibration psfs missing.")
+                    else:
+                        psf_dirs = []
+
+                    if len(psf_dirs) > 0:
+                        psf_list = []
+                        for psf_dir in psf_dirs:
+                            psf_array = self._load_from_zarr_array(
+                                kvstore=self._get_kvstore_key(psf_dir),
+                                spec=self._zarrv2_spec.copy(),
+                                return_future=False,
+                            )
+                            psf_list.append(np.asarray(psf_array, dtype=np.float32))
+                        self._psfs = psf_list
+                except (OSError, ZarrError, ValueError, AttributeError):
+                    print("Calibration psfs missing.")
 
             # current_local_zarr_path = str(
             #     self._calibrations_zarr_path / Path("noise_map")
@@ -1902,7 +2077,7 @@ class qi2labDataStore:
             #     print("Calibration noise map missing.")
 
         # validate fiducial and readout bits data
-        if self._datastore_state["Corrected"]:
+        if self._datastore_state["Corrected"] and validate:
             if not (self._fiducial_root_path.exists()):
                 raise FileNotFoundError("fiducial directory not initialized")
             else:
@@ -1996,7 +2171,7 @@ class qi2labDataStore:
                     print("Corrected readout data missing.")
 
         # check and validate local registered data
-        if self._datastore_state["LocalRegistered"]:
+        if self._datastore_state["LocalRegistered"] and validate:
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
                 entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
                 if round_id != self._round_ids[0]:
@@ -2116,7 +2291,7 @@ class qi2labDataStore:
                     )
 
         # check and validate global registered data
-        if self._datastore_state["GlobalRegistered"]:
+        if self._datastore_state["GlobalRegistered"] and validate:
             for tile_id in self._tile_ids:
                 entity_root = (
                     self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
@@ -2130,7 +2305,7 @@ class qi2labDataStore:
                         raise KeyError("Global registration missing")
 
         # check and validate fused
-        if self._datastore_state["Fused"]:
+        if self._datastore_state["Fused"] and validate:
             fused_image_path = self._fused_root_path / Path(
                 f"fused_{self.fiducial_folder_name}_iso_zyx"
             )
@@ -2153,7 +2328,7 @@ class qi2labDataStore:
                 print("Fused data missing.")
 
         # check and validate cellpose segmentation
-        if self._datastore_state["SegmentedCells"]:
+        if self._datastore_state["SegmentedCells"] and validate:
             current_local_zarr_path = str(
                 self._segmentation_root_path
                 / Path("cellpose")
@@ -2178,7 +2353,7 @@ class qi2labDataStore:
                 raise FileNotFoundError("Cellpose cell outlines missing.")
 
         # check and validate decoded spots
-        if self._datastore_state["DecodedSpots"]:
+        if self._datastore_state["DecodedSpots"] and validate:
             for tile_id in self._tile_ids:
                 decoded_path = self._decoded_root_path / Path(
                     tile_id + "_decoded_features.parquet"
@@ -2188,7 +2363,7 @@ class qi2labDataStore:
                     raise FileNotFoundError(tile_id + " decoded spots missing.")
 
         # check and validate filtered decoded spots
-        if self._datastore_state["FilteredSpots"]:
+        if self._datastore_state["FilteredSpots"] and validate:
             filtered_path = self._decoded_root_path / Path(
                 "all_tiles_filtered_decoded_features.parquet"
             )
@@ -2196,7 +2371,7 @@ class qi2labDataStore:
             if not (filtered_path.exists()):
                 raise FileNotFoundError("filtered decoded spots missing.")
 
-        if self._datastore_state["RefinedSpots"]:
+        if self._datastore_state["RefinedSpots"] and validate:
             baysor_spots_path = (
                 self._segmentation_root_path / Path("baysor") / Path("segmentation.csv")
             )
@@ -2205,7 +2380,7 @@ class qi2labDataStore:
                 raise FileNotFoundError("Baysor filtered decoded spots missing.")
 
         # check and validate mtx
-        if self._datastore_state["mtxOutput"]:
+        if self._datastore_state["mtxOutput"] and validate:
             mtx_barcodes_path = self._mtx_output_root_path / Path("barcodes.tsv.gz")
             mtx_features_path = self._mtx_output_root_path / Path("features.tsv.gz")
             mtx_matrix_path = self._mtx_output_root_path / Path("matrix.tsv.gz")

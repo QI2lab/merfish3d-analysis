@@ -72,7 +72,7 @@ def decode_pixels(
         datastore_path = root_path / Path(r"qi2labdatastore")
     else:
         datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
-    datastore = qi2labDataStore(datastore_path)
+    datastore = qi2labDataStore(datastore_path, validate=False)
     print(f"Using datastore at {datastore_path}")
     if merfish_bits is None:
         merfish_bits = datastore.num_bits

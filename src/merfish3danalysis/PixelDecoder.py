@@ -77,7 +77,7 @@ def decode_tiles_worker(
     cp.cuda.Device(gpu_id).use()
     cp.cuda.Stream.null.synchronize()
 
-    local_datastore = qi2labDataStore(datastore_path)
+    local_datastore = qi2labDataStore(datastore_path, validate=False)
     local_decoder = PixelDecoder(
         datastore=local_datastore,
         use_mask=False,
@@ -143,7 +143,7 @@ def _optimize_norm_worker(
     cp.cuda.Device(gpu_id).use()
     cp.cuda.Stream.null.synchronize()
 
-    local_datastore = qi2labDataStore(datastore_path)
+    local_datastore = qi2labDataStore(datastore_path, validate=False)
     local_decoder = PixelDecoder(
         datastore=local_datastore,
         use_mask=False,
@@ -248,6 +248,10 @@ class PixelDecoder:
         self._blank_fraction_filter_results: dict[str, object] | None = None
         self._pixel_assignment_threshold = float(np.sqrt(2.0 - np.sqrt(2.0)))
         self._transcript_distance_threshold = float(np.sqrt(2.0 - 4.0 / np.sqrt(6.0)))
+        self._feature_predictor_bit_thresholds: np.ndarray | None = None
+        self._feature_predictor_threshold_refinement_results: dict[str, object] | None = (
+            None
+        )
 
     def _load_codebook(self) -> None:
         """Load the MERFISH codebook and remove one-bit rows from decoding."""
@@ -274,6 +278,210 @@ class PixelDecoder:
             .sum()
         )
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
+
+    def _resolve_feature_predictor_thresholds(
+        self, feature_predictor_threshold: float | None
+    ) -> np.ndarray:
+        """Resolve active per-bit predictor thresholds.
+
+        Uses datastore-calibrated per-bit thresholds when available and falls back
+        to a scalar threshold otherwise.
+        """
+
+        if self._feature_predictor_bit_thresholds is None:
+            datastore_thresholds = self._datastore.feature_predictor_bit_thresholds
+            if datastore_thresholds is not None and len(datastore_thresholds) >= int(
+                self._n_merfish_bits
+            ):
+                self._feature_predictor_bit_thresholds = np.asarray(
+                    datastore_thresholds[0 : self._n_merfish_bits], dtype=np.float32
+                )
+
+        if self._feature_predictor_bit_thresholds is not None:
+            return self._feature_predictor_bit_thresholds
+
+        threshold_value = (
+            0.1 if feature_predictor_threshold is None else float(feature_predictor_threshold)
+        )
+        return np.full(self._n_merfish_bits, threshold_value, dtype=np.float32)
+
+    def _predictor_calibration_tile_indices(self, maximum_tiles: int = 12) -> list[int]:
+        """Choose an evenly spaced tile subset for predictor-threshold refinement."""
+
+        n_tiles = len(self._datastore.tile_ids)
+        if n_tiles <= maximum_tiles:
+            return list(range(n_tiles))
+        indices = np.linspace(0, n_tiles - 1, num=maximum_tiles, dtype=int)
+        return list(np.unique(indices))
+
+    def _refine_feature_predictor_thresholds_by_blank_support(
+        self,
+        lowpass_sigma: Sequence[float],
+        magnitude_threshold: Sequence[float],
+        minimum_pixels: float,
+        feature_predictor_threshold: float | None,
+        gpu_id: int = 0,
+    ) -> None:
+        """Refine per-bit predictor thresholds using decoded support and blanks.
+
+        This uses a small decoded calibration subset together with the stored
+        predictor positive-fraction curves. Bits that are over-represented in
+        decoded support, especially among blank barcodes, are shifted to higher
+        thresholds; under-represented bits are shifted down.
+        """
+
+        if self._blank_count <= 0:
+            return
+
+        threshold_grid = self._datastore.feature_predictor_threshold_grid
+        fraction_curves = self._datastore.feature_predictor_positive_fraction_curves
+        if threshold_grid is None or fraction_curves is None:
+            return
+
+        threshold_grid = np.asarray(
+            threshold_grid[0 :], dtype=np.float32
+        )
+        fraction_curves = np.asarray(
+            fraction_curves[0 : self._n_merfish_bits], dtype=np.float32
+        )
+        if fraction_curves.shape[0] != self._n_merfish_bits:
+            return
+
+        active_thresholds = self._resolve_feature_predictor_thresholds(
+            feature_predictor_threshold
+        ).copy()
+        tile_indices = self._predictor_calibration_tile_indices()
+
+        self._load_global_normalization_vectors(gpu_id=gpu_id)
+        self._load_iterative_normalization_vectors(gpu_id=gpu_id)
+
+        calibration_frames = []
+        for tile_idx in tile_indices:
+            self.decode_one_tile(
+                tile_idx=tile_idx,
+                gpu_id=gpu_id,
+                display_results=False,
+                return_results=False,
+                lowpass_sigma=lowpass_sigma,
+                magnitude_threshold=magnitude_threshold,
+                minimum_pixels=minimum_pixels,
+                use_normalization=True,
+                feature_predictor_threshold=feature_predictor_threshold,
+            )
+            if hasattr(self, "_df_barcodes") and not self._df_barcodes.empty:
+                calibration_frames.append(self._df_barcodes.copy())
+            self._cleanup()
+
+        if not calibration_frames:
+            return
+
+        calibration_df = pd.concat(calibration_frames, ignore_index=True)
+        bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
+        support_counts = np.zeros(self._n_merfish_bits, dtype=np.float64)
+        blank_support_counts = np.zeros(self._n_merfish_bits, dtype=np.float64)
+
+        on_bits = calibration_df[bit_columns].to_numpy(dtype=np.int16, copy=False)
+        bit_values, bit_counts = np.unique(on_bits, return_counts=True)
+        support_counts[bit_values - 1] = bit_counts.astype(np.float64)
+
+        is_blank = (
+            calibration_df["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+            .to_numpy(dtype=bool, copy=False)
+        )
+        if np.any(is_blank):
+            blank_bits = calibration_df.loc[is_blank, bit_columns].to_numpy(
+                dtype=np.int16, copy=False
+            )
+            blank_values, blank_counts = np.unique(blank_bits, return_counts=True)
+            blank_support_counts[blank_values - 1] = blank_counts.astype(np.float64)
+
+        barcode_support_per_bit = self._codebook_matrix[
+            :, 0 : self._n_merfish_bits
+        ].sum(axis=0).astype(np.float64)
+        blank_codebook_mask = np.asarray(
+            [
+                str(gene_id).lower().startswith("blank")
+                for gene_id in self._gene_ids
+            ],
+            dtype=bool,
+        )
+        blank_support_per_bit = self._codebook_matrix[
+            blank_codebook_mask, 0 : self._n_merfish_bits
+        ].sum(axis=0).astype(np.float64)
+
+        support_per_barcode = support_counts / np.maximum(barcode_support_per_bit, 1.0)
+        blank_per_blank_barcode = np.divide(
+            blank_support_counts,
+            np.maximum(blank_support_per_bit, 1.0),
+            out=np.zeros_like(blank_support_counts),
+            where=blank_support_per_bit > 0,
+        )
+
+        support_target = float(np.median(support_per_barcode))
+        nonzero_blank = blank_per_blank_barcode[blank_support_per_bit > 0]
+        blank_target = float(np.median(nonzero_blank)) if nonzero_blank.size else 0.0
+
+        new_thresholds = active_thresholds.copy()
+        refinement_rows = []
+        for bit_idx in range(self._n_merfish_bits):
+            current_idx = int(
+                np.argmin(np.abs(threshold_grid - active_thresholds[bit_idx]))
+            )
+            current_fraction = float(fraction_curves[bit_idx, current_idx])
+            support_ratio = (
+                float(support_per_barcode[bit_idx] / support_target)
+                if support_target > 0
+                else 1.0
+            )
+            ratio = support_ratio
+            blank_ratio = 1.0
+            if blank_support_per_bit[bit_idx] > 0 and blank_target > 0:
+                blank_ratio = float(blank_per_blank_barcode[bit_idx] / blank_target)
+                ratio = max(ratio, blank_ratio)
+
+            ratio = float(np.clip(ratio, 0.5, 4.0))
+            desired_fraction = current_fraction / np.sqrt(ratio)
+            desired_fraction = float(
+                np.clip(
+                    desired_fraction,
+                    np.min(fraction_curves[bit_idx]),
+                    np.max(fraction_curves[bit_idx]),
+                )
+            )
+            proposed_idx = int(
+                np.argmin(np.abs(fraction_curves[bit_idx] - desired_fraction))
+            )
+            proposed_idx = int(
+                np.clip(proposed_idx, current_idx - 4, current_idx + 4)
+            )
+            new_thresholds[bit_idx] = float(threshold_grid[proposed_idx])
+            refinement_rows.append(
+                {
+                    "bit": bit_idx + 1,
+                    "current_threshold": float(active_thresholds[bit_idx]),
+                    "new_threshold": float(new_thresholds[bit_idx]),
+                    "current_fraction": current_fraction,
+                    "desired_fraction": desired_fraction,
+                    "support_per_barcode": float(support_per_barcode[bit_idx]),
+                    "support_ratio": support_ratio,
+                    "blank_per_blank_barcode": float(blank_per_blank_barcode[bit_idx]),
+                    "blank_ratio": blank_ratio,
+                }
+            )
+
+        self._datastore.feature_predictor_bit_thresholds = new_thresholds.astype(
+            np.float32
+        )
+        self._feature_predictor_bit_thresholds = new_thresholds.astype(np.float32)
+        self._feature_predictor_threshold_refinement_results = {
+            "tile_indices": tile_indices,
+            "support_target": support_target,
+            "blank_target": blank_target,
+            "refinement_table": pd.DataFrame(refinement_rows),
+        }
 
     def _normalize_codebook(
         self, gpu_id: int = 0, include_errors: bool = False
@@ -711,7 +919,9 @@ class PixelDecoder:
         Parameters
         ----------
         feature_predictor_threshold : float, default 0.1
-            Threshold for feature_predictor image.
+            Scalar fallback threshold for feature_predictor images. When
+            datastore-calibrated per-bit thresholds are available, those take
+            precedence automatically.
         """
 
         if self._verbose > 1:
@@ -730,9 +940,13 @@ class PixelDecoder:
         else:
             iterable_bits = self._datastore.bit_ids[0 : self._n_merfish_bits]
 
+        bit_thresholds = self._resolve_feature_predictor_thresholds(
+            feature_predictor_threshold
+        )
+
         images = []
         self._em_wvl = []
-        for bit_id in iterable_bits:
+        for bit_idx, bit_id in enumerate(iterable_bits):
             decon_image = self._datastore.load_local_registered_image(
                 tile=self._tile_idx,
                 bit=bit_id,
@@ -753,7 +967,7 @@ class PixelDecoder:
                 )
                 images.append(
                     np.where(
-                        current_mask > feature_predictor_threshold,
+                        current_mask > bit_thresholds[bit_idx],
                         np.asarray(
                             decon_image[
                                 self._z_range[0] : self._z_range[1], :
@@ -769,7 +983,7 @@ class PixelDecoder:
                 )
                 images.append(
                     np.where(
-                        current_mask > feature_predictor_threshold,
+                        current_mask > bit_thresholds[bit_idx],
                         np.asarray(decon_image.result(), dtype=np.float32),
                         0,
                     )
@@ -2709,7 +2923,8 @@ class PixelDecoder:
         minimum_pixels : float, default = 2.0
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default = 0.1
-            feature_predictor threshold.
+            Scalar fallback feature_predictor threshold. Stored per-bit thresholds
+            take precedence automatically when available.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Sequence[float], default = (0.9,10.0)
@@ -2819,7 +3034,8 @@ class PixelDecoder:
         minimum_pixels : float, default 2.0
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default 0.1
-            feature_predictor threshold.
+            Scalar fallback feature_predictor threshold. Stored per-bit thresholds
+            take precedence automatically when available.
         filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
             Downstream filter to apply after exact transcript calling.
         target_gross_misid_rate : float, default 0.05
@@ -2832,6 +3048,14 @@ class PixelDecoder:
             raise RuntimeError("No GPUs allocated.")
         all_tiles = list(range(len(self._datastore.tile_ids)))
         chunk_size = (len(all_tiles) + self._num_gpus - 1) // self._num_gpus
+
+        self._refine_feature_predictor_thresholds_by_blank_support(
+            lowpass_sigma=lowpass_sigma,
+            magnitude_threshold=magnitude_threshold,
+            minimum_pixels=minimum_pixels,
+            feature_predictor_threshold=feature_predictor_threshold,
+            gpu_id=0,
+        )
 
         processes = []
         for gpu in range(self._num_gpus):
