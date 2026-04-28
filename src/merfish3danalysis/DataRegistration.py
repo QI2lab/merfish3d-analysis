@@ -105,9 +105,11 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         deconvolution=True,
         round=dr._round_ids[0],
     )
-    print(
-        time_stamp(), f"Finished fiducial tile id: {dr._tile_id}; round id: round001."
-    )
+    if dr._verbose >= 1:
+        print(
+            time_stamp(),
+            f"Finished fiducial tile id: {dr._tile_id}; round id: round001.",
+        )
 
     del raw0, ref_image_decon
     gc.collect()
@@ -319,10 +321,11 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                     deconvolution=dr._decon_fiducial,
                     round=round_id,
                 )
-            print(
-                time_stamp(),
-                f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
-            )
+            if dr._verbose >= 1:
+                print(
+                    time_stamp(),
+                    f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
+                )
 
             del data_registered
             gc.collect()
@@ -491,14 +494,11 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             )
 
         if (not feature_predictor_on_disk) or dr._overwrite_registered:
-            predictor_input = dr._normalize_feature_predictor_input_image(
-                data_reg, bit_id
-            )
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
             ufish.load_weights_from_internet()
             feature_predictor_loc, feature_predictor_data = ufish.predict(
-                predictor_input, axes="zyx", blend_3d=False, batch_size=1
+                data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
 
             feature_predictor_loc = feature_predictor_loc.rename(
@@ -553,12 +553,13 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             dr._datastore.save_local_feature_predictor_spots(
                 feature_predictor_loc, tile=dr._tile_id, bit=bit_id
             )
-            print(
-                time_stamp(),
-                f"Finished readout tile id: {dr._tile_id}; bit id: {bit_id}.",
-            )
+            if dr._verbose >= 1:
+                print(
+                    time_stamp(),
+                    f"Finished readout tile id: {dr._tile_id}; bit id: {bit_id}.",
+                )
 
-            del predictor_input, data_reg, feature_predictor_data, feature_predictor_loc
+            del data_reg, feature_predictor_data, feature_predictor_loc
             gc.collect()
 
     try:
@@ -596,6 +597,8 @@ class DataRegistration:
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
         Crop size for deconvolution applied to both y and x dimensions.
+    verbose : int, default 1
+        Progress verbosity. Set to 0 to suppress routine progress prints.
     """
 
     def __init__(
@@ -609,6 +612,7 @@ class DataRegistration:
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
+        verbose: int = 1,
     ) -> None:
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
@@ -627,6 +631,7 @@ class DataRegistration:
         self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
         self._original_print = builtins.print
+        self._verbose = verbose
         self._feature_predictor_threshold_grid = np.round(
             np.arange(0.02, 0.31, 0.01), 2
         ).astype(np.float32)
@@ -854,72 +859,6 @@ class DataRegistration:
         return [self._tile_ids[int(idx)] for idx in np.unique(indices)]
 
     @staticmethod
-    def _sample_image_for_predictor_calibration(
-        image: np.ndarray, stride_xy: int = 16
-    ) -> np.ndarray:
-        """Subsample an image volume for robust predictor calibration statistics."""
-
-        return image[:, ::stride_xy, ::stride_xy].astype(np.float32, copy=False).ravel()
-
-    def _ensure_feature_predictor_input_calibration(
-        self,
-        recalculate: bool = False,
-        stride_xy: int = 16,
-    ) -> None:
-        """Estimate per-bit predictor-input normalization from many corrected tiles."""
-
-        if (
-            not recalculate
-            and self._datastore.feature_predictor_input_background_vector is not None
-            and self._datastore.feature_predictor_input_scale_vector is not None
-        ):
-            return
-
-        tile_ids = self._predictor_calibration_tile_ids()
-        backgrounds = np.zeros(len(self._bit_ids), dtype=np.float32)
-        scales = np.ones(len(self._bit_ids), dtype=np.float32)
-
-        for bit_idx, bit_id in enumerate(self._bit_ids):
-            q50_values = []
-            q999_values = []
-            for tile_id in tile_ids:
-                image = self._datastore.load_local_corrected_image(
-                    tile=tile_id, bit=bit_id, return_future=False
-                )
-                sample = self._sample_image_for_predictor_calibration(
-                    image, stride_xy=stride_xy
-                )
-                q50_values.append(float(np.quantile(sample, 0.50)))
-                q999_values.append(float(np.quantile(sample, 0.999)))
-                del image, sample
-                gc.collect()
-
-            bit_background = float(np.median(q50_values))
-            bit_scale = float(
-                np.median(np.asarray(q999_values) - np.asarray(q50_values))
-            )
-            backgrounds[bit_idx] = bit_background
-            scales[bit_idx] = max(bit_scale, 1.0)
-
-        self._datastore.feature_predictor_input_background_vector = backgrounds
-        self._datastore.feature_predictor_input_scale_vector = scales
-
-    def _normalize_feature_predictor_input_image(
-        self,
-        image: np.ndarray,
-        bit_id: str,
-    ) -> np.ndarray:
-        """Normalize a registered readout image before U-FISH prediction."""
-
-        background_vector = self._datastore.feature_predictor_input_background_vector
-        scale_vector = self._datastore.feature_predictor_input_scale_vector
-        bit_idx = self._bit_ids.index(bit_id)
-        background = float(background_vector[bit_idx])
-        scale = float(max(scale_vector[bit_idx], 1.0))
-        normalized = (image.astype(np.float32, copy=False) - background) / scale
-        return np.clip(normalized, 0.0, 8.0).astype(np.float32, copy=False)
-
-    @staticmethod
     def _tail_fraction_curve(
         image: np.ndarray,
         threshold_grid: np.ndarray,
@@ -955,6 +894,12 @@ class DataRegistration:
             (len(self._bit_ids), len(threshold_grid)), dtype=np.float32
         )
 
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                f"Calibrating feature predictor bit thresholds using {len(tile_ids)} tiles.",
+            )
+
         for bit_idx, bit_id in enumerate(self._bit_ids):
             per_tile_curves = []
             for tile_id in tile_ids:
@@ -973,6 +918,11 @@ class DataRegistration:
             fraction_curves[bit_idx] = np.median(
                 np.stack(per_tile_curves, axis=0), axis=0
             )
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    f"Finished feature predictor threshold calibration for bit id: {bit_id}.",
+                )
 
         reference_idx = int(
             np.argmin(
@@ -989,12 +939,11 @@ class DataRegistration:
         self._datastore.feature_predictor_threshold_grid = threshold_grid
         self._datastore.feature_predictor_positive_fraction_curves = fraction_curves
         self._datastore.feature_predictor_bit_thresholds = bit_thresholds
+        if self._verbose >= 1:
+            print(time_stamp(), "Saved feature predictor bit thresholds.")
 
     def register_all_tiles(self) -> None:
         """Helper function to register all tiles."""
-        self._ensure_feature_predictor_input_calibration(
-            recalculate=self._overwrite_registered
-        )
         tile_ids = list(self._datastore.tile_ids)
         start_idx = 0
         if not self._overwrite_registered:
@@ -1008,17 +957,20 @@ class DataRegistration:
                 start_idx = len(tile_ids)
 
             if start_idx >= len(tile_ids):
-                print(
-                    time_stamp(), "All tiles already have complete registered outputs."
-                )
+                if self._verbose >= 1:
+                    print(
+                        time_stamp(),
+                        "All tiles already have complete registered outputs.",
+                    )
                 self._ensure_feature_predictor_thresholds(recalculate=False)
                 return
 
             if start_idx > 0:
-                print(
-                    time_stamp(),
-                    f"Resuming local registration at tile id: {tile_ids[start_idx]}.",
-                )
+                if self._verbose >= 1:
+                    print(
+                        time_stamp(),
+                        f"Resuming local registration at tile id: {tile_ids[start_idx]}.",
+                    )
 
         for tile_id in tile_ids[start_idx:]:
             self.tile_id = tile_id

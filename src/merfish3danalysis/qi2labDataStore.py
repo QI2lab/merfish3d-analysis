@@ -959,68 +959,6 @@ class qi2labDataStore:
         )
 
     @property
-    def feature_predictor_input_background_vector(self) -> ArrayLike | None:
-        """Per-bit background vector used to normalize predictor inputs."""
-
-        value = getattr(self, "_feature_predictor_input_background_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-            try:
-                value = np.asarray(
-                    calib_attrs["feature_predictor_input_background_vector"],
-                    dtype=np.float32,
-                )
-            except KeyError:
-                value = None
-            if value is None:
-                print("Feature predictor input background vector not calculated.")
-                return None
-            return value
-        return value
-
-    @feature_predictor_input_background_vector.setter
-    def feature_predictor_input_background_vector(self, value: ArrayLike) -> None:
-        """Set the per-bit background vector used to normalize predictor inputs."""
-
-        self._feature_predictor_input_background_vector = np.asarray(
-            value, dtype=np.float32
-        )
-        self._set_calibration_attribute(
-            "feature_predictor_input_background_vector",
-            self._feature_predictor_input_background_vector,
-        )
-
-    @property
-    def feature_predictor_input_scale_vector(self) -> ArrayLike | None:
-        """Per-bit scale vector used to normalize predictor inputs."""
-
-        value = getattr(self, "_feature_predictor_input_scale_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-            try:
-                value = np.asarray(
-                    calib_attrs["feature_predictor_input_scale_vector"],
-                    dtype=np.float32,
-                )
-            except KeyError:
-                value = None
-            if value is None:
-                print("Feature predictor input scale vector not calculated.")
-                return None
-            return value
-        return value
-
-    @feature_predictor_input_scale_vector.setter
-    def feature_predictor_input_scale_vector(self, value: ArrayLike) -> None:
-        """Set the per-bit scale vector used to normalize predictor inputs."""
-
-        self._feature_predictor_input_scale_vector = np.asarray(value, dtype=np.float32)
-        self._set_calibration_attribute(
-            "feature_predictor_input_scale_vector",
-            self._feature_predictor_input_scale_vector,
-        )
-
-    @property
     def feature_predictor_bit_thresholds(self) -> ArrayLike | None:
         """Per-bit thresholds applied to feature predictor probability images."""
 
@@ -1034,9 +972,6 @@ class qi2labDataStore:
                 )
             except KeyError:
                 value = None
-            if value is None:
-                print("Feature predictor bit thresholds not calculated.")
-                return None
             return value
         return value
 
@@ -1064,9 +999,6 @@ class qi2labDataStore:
                 )
             except KeyError:
                 value = None
-            if value is None:
-                print("Feature predictor threshold grid not calculated.")
-                return None
             return value
         return value
 
@@ -1094,9 +1026,6 @@ class qi2labDataStore:
                 )
             except KeyError:
                 value = None
-            if value is None:
-                print("Feature predictor positive-fraction curves not calculated.")
-                return None
             return value
         return value
 

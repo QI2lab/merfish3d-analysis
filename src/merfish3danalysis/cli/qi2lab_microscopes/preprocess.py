@@ -30,6 +30,7 @@ def local_register_data(
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
     zstride_level: int = 0,
+    verbose: int = 1,
 ) -> None:
     """Preprocess and register each tile across rounds in local coordinates.
 
@@ -56,6 +57,8 @@ def local_register_data(
         size of tile for GPU deconvolution.
     zstride_level: int, default = 0
         look for a skip z dataset.
+    verbose : int, default = 1
+        progress verbosity. Set to 0 to suppress routine progress prints.
 
     """
     from merfish3danalysis.DataRegistration import DataRegistration
@@ -79,6 +82,7 @@ def local_register_data(
         save_all_fiducial_registered=save_all_fiducial,
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
+        verbose=verbose,
     )
 
     # run local registration across rounds
