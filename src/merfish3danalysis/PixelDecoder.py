@@ -314,7 +314,7 @@ class PixelDecoder:
         if n_tiles <= maximum_tiles:
             return list(range(n_tiles))
         indices = np.linspace(0, n_tiles - 1, num=maximum_tiles, dtype=int)
-        return list(np.unique(indices))
+        return [int(idx) for idx in np.unique(indices).tolist()]
 
     def _refine_feature_predictor_thresholds_by_blank_support(
         self,
