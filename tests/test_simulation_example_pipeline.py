@@ -525,7 +525,9 @@ def _prepare_preprocessed_magnitude_case(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
     default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(axial_spacing_um)
+    default_magnitude_threshold = _default_standard_magnitude_threshold(
+        axial_spacing_um
+    )
 
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
@@ -716,7 +718,9 @@ def simulation_standard_case_result(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
     default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(axial_spacing_um)
+    default_magnitude_threshold = _default_standard_magnitude_threshold(
+        axial_spacing_um
+    )
 
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
@@ -823,7 +827,9 @@ def simulation_full_case_result(
     preprocess_mode = case_spec["preprocess_mode"]
     decon_readout = case_spec["decon_readout"]
     default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(axial_spacing_um)
+    default_magnitude_threshold = _default_standard_magnitude_threshold(
+        axial_spacing_um
+    )
 
     sweep_results: list[dict[str, Any]] = []
     for feature_predictor_threshold in FEATURE_PREDICTOR_THRESHOLDS:
@@ -904,13 +910,16 @@ def test_simulation_standard_matrix(
     assert datastore_path.exists()
     assert isinstance(simulation_standard_case_result["f1_results"], dict)
     assert RESULT_KEYS.issubset(simulation_standard_case_result["f1_results"])
-    assert (
-        simulation_standard_case_result["performance_metrics"]["f1_score"]
-        == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
-    )
+    assert simulation_standard_case_result["performance_metrics"][
+        "f1_score"
+    ] == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
     assert simulation_standard_case_result["performance_metrics"]["true_positives"] >= 0
-    assert simulation_standard_case_result["performance_metrics"]["false_positives"] >= 0
-    assert simulation_standard_case_result["performance_metrics"]["false_negatives"] >= 0
+    assert (
+        simulation_standard_case_result["performance_metrics"]["false_positives"] >= 0
+    )
+    assert (
+        simulation_standard_case_result["performance_metrics"]["false_negatives"] >= 0
+    )
 
 
 @pytest.mark.simulation_exhaustive

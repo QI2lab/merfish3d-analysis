@@ -23,9 +23,7 @@ def pytest_collection_modifyitems(
     if config.getoption("--run-simulation-exhaustive"):
         return
 
-    skip_exhaustive = pytest.mark.skip(
-        reason="requires --run-simulation-exhaustive"
-    )
+    skip_exhaustive = pytest.mark.skip(reason="requires --run-simulation-exhaustive")
     for item in items:
         if "simulation_exhaustive" in item.keywords:
             item.add_marker(skip_exhaustive)
