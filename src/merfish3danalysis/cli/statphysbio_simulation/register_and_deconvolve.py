@@ -44,6 +44,7 @@ def local_register_data(root_path: Path) -> None:
         bkd_subtract_fiducial=False,
         overwrite_registered=True,
         save_all_fiducial_registered=False,
+        decon_readout=True,
     )
 
     # run local registration across rounds

@@ -53,3 +53,59 @@ We are working to add [Proseg](https://github.com/dcjones/proseg) interoperabili
 ## Documentation
 
 To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.
+
+## Testing
+
+The canonical test coverage for this repository is the local simulation integration matrix in
+[tests/test_simulation_example_pipeline.py](tests/test_simulation_example_pipeline.py). These tests exercise a end-to-end simulation workflow:
+
+- convert simulation data into a fake acquisition
+- convert the acquisition into a datastore
+- preprocess with registration and optional readout deconvolution
+- decode transcripts
+- calculate F1 against the simulation ground truth
+
+The simulation dataset root is configured directly in the test file:
+
+```python
+LOCAL_SIMULATION_DATA_ROOT = Path("/media/dps/data/merfish3d_analysis-simulation")
+```
+
+If your local simulation data lives elsewhere, update that constant before running the tests.
+
+### Standard integration matrix
+
+Run the required standard matrix with:
+
+```bash
+python -m pytest tests/test_simulation_example_pipeline.py -q
+```
+
+This runs the default simulation policy across:
+
+- `cells` and `uniform`
+- axial spacings `0.315`, `1.0`, and `1.5`
+- `decon=True`
+- `feature_predictor_threshold=0.5`
+
+The default decode policy is locked to:
+
+- `minimum_pixels_per_rna = 28` for `0.315` simulations
+- `minimum_pixels_per_rna = 7` for `1.0` and `1.5` simulations
+- sampling-aware magnitude threshold defaults:
+  - `0.315` -> `0.9`
+  - `1.0` -> `0.7`
+  - `1.5` -> `0.2`
+
+### Exhaustive regression matrix
+
+Run the optional exhaustive regression matrix with:
+
+```bash
+python -m pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+```
+
+This expands the matrix to include:
+
+- `decon` and `no-decon`
+- feature predictor thresholds `0.1`, `0.2`, `0.3`, `0.4`, and `0.5`

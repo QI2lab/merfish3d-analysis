@@ -632,10 +632,6 @@ class DataRegistration:
         self._decon_readout = decon_readout
         self._original_print = builtins.print
         self._verbose = verbose
-        self._feature_predictor_threshold_grid = np.round(
-            np.arange(0.02, 0.31, 0.01), 2
-        ).astype(np.float32)
-        self._feature_predictor_reference_threshold = 0.10
 
     # -----------------------------------
     # property access for class variables
@@ -843,105 +839,6 @@ class DataRegistration:
 
         return True
 
-    def _predictor_calibration_tile_ids(
-        self,
-        minimum_count: int = 32,
-        maximum_count: int = 64,
-    ) -> list[str]:
-        """Choose a broad tile subset for feature-predictor calibration."""
-
-        n_tiles = len(self._tile_ids)
-        if n_tiles <= maximum_count:
-            return list(self._tile_ids)
-
-        target_count = min(maximum_count, max(minimum_count, self._num_gpus * 8))
-        indices = np.linspace(0, n_tiles - 1, num=target_count, dtype=int)
-        return [self._tile_ids[int(idx)] for idx in np.unique(indices)]
-
-    @staticmethod
-    def _tail_fraction_curve(
-        image: np.ndarray,
-        threshold_grid: np.ndarray,
-        stride_xy: int = 16,
-    ) -> np.ndarray:
-        """Compute the positive-fraction curve for a predictor image on a threshold grid."""
-
-        sample = image[:, ::stride_xy, ::stride_xy].astype(np.float32, copy=False)
-        max_edge = max(float(sample.max()), float(threshold_grid[-1]) + 1e-6)
-        edges = np.concatenate(([-1e-6], threshold_grid.astype(np.float64), [max_edge]))
-        counts, _ = np.histogram(sample, bins=edges)
-        tail_counts = np.cumsum(counts[::-1])[::-1][1:]
-        return tail_counts.astype(np.float32) / float(sample.size)
-
-    def _ensure_feature_predictor_thresholds(
-        self,
-        recalculate: bool = False,
-        stride_xy: int = 16,
-    ) -> None:
-        """Calibrate per-bit predictor thresholds from many predictor images."""
-
-        if (
-            not recalculate
-            and self._datastore.feature_predictor_bit_thresholds is not None
-            and self._datastore.feature_predictor_threshold_grid is not None
-            and self._datastore.feature_predictor_positive_fraction_curves is not None
-        ):
-            return
-
-        tile_ids = self._predictor_calibration_tile_ids()
-        threshold_grid = self._feature_predictor_threshold_grid.copy()
-        fraction_curves = np.zeros(
-            (len(self._bit_ids), len(threshold_grid)), dtype=np.float32
-        )
-
-        if self._verbose >= 1:
-            print(
-                time_stamp(),
-                f"Calibrating feature predictor bit thresholds using {len(tile_ids)} tiles.",
-            )
-
-        for bit_idx, bit_id in enumerate(self._bit_ids):
-            per_tile_curves = []
-            for tile_id in tile_ids:
-                image = self._datastore.load_local_feature_predictor_image(
-                    tile=tile_id, bit=bit_id, return_future=False
-                )
-                per_tile_curves.append(
-                    self._tail_fraction_curve(
-                        image=image,
-                        threshold_grid=threshold_grid,
-                        stride_xy=stride_xy,
-                    )
-                )
-                del image
-                gc.collect()
-            fraction_curves[bit_idx] = np.median(
-                np.stack(per_tile_curves, axis=0), axis=0
-            )
-            if self._verbose >= 1:
-                print(
-                    time_stamp(),
-                    f"Finished feature predictor threshold calibration for bit id: {bit_id}.",
-                )
-
-        reference_idx = int(
-            np.argmin(
-                np.abs(
-                    threshold_grid
-                    - np.float32(self._feature_predictor_reference_threshold)
-                )
-            )
-        )
-        target_fraction = float(np.median(fraction_curves[:, reference_idx]))
-        threshold_indices = np.argmin(np.abs(fraction_curves - target_fraction), axis=1)
-        bit_thresholds = threshold_grid[threshold_indices]
-
-        self._datastore.feature_predictor_threshold_grid = threshold_grid
-        self._datastore.feature_predictor_positive_fraction_curves = fraction_curves
-        self._datastore.feature_predictor_bit_thresholds = bit_thresholds
-        if self._verbose >= 1:
-            print(time_stamp(), "Saved feature predictor bit thresholds.")
-
     def register_all_tiles(self) -> None:
         """Helper function to register all tiles."""
         tile_ids = list(self._datastore.tile_ids)
@@ -962,7 +859,6 @@ class DataRegistration:
                         time_stamp(),
                         "All tiles already have complete registered outputs.",
                     )
-                self._ensure_feature_predictor_thresholds(recalculate=False)
                 return
 
             if start_idx > 0:
@@ -976,10 +872,6 @@ class DataRegistration:
             self.tile_id = tile_id
             self._generate_registrations()
             self._apply_registration_to_bits()
-
-        self._ensure_feature_predictor_thresholds(
-            recalculate=self._overwrite_registered
-        )
 
     def register_one_tile(self, tile_id: int | str) -> None:
         """Helper function to register one tile.
