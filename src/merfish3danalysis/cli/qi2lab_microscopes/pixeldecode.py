@@ -17,14 +17,45 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
+QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
+QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
+    3.0: 0.7,
+    5.0: 0.2,
+}
+QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
+
+
+def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
+    """Return the default minimum-pixel threshold for qi2lab decoding."""
+
+    return 7 if datastore.microscope_type == "2D" else 28
+
+
+def _default_qi2lab_magnitude_threshold(
+    datastore: qi2labDataStore,
+) -> tuple[float, float]:
+    """Return the sampling-aware default magnitude threshold for qi2lab decoding."""
+
+    if datastore.microscope_type != "2D":
+        return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
+
+    z_step_um = float(datastore.voxel_size_zyx_um[0])
+    nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
+    nearest_multiple = min(
+        QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
+        key=lambda value: abs(value - nyquist_multiple),
+    )
+    lower_threshold = QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
+    return (lower_threshold, QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD[1])
+
 
 @app.command()
 def decode_pixels(
     root_path: Path,
     num_gpus: int = 1,
-    minimum_pixels_per_RNA: int = 3,
-    feature_predictor_threshold: float = 0.25,
-    magnitude_threshold: tuple[float, float] = [0.9, 10.0],
+    minimum_pixels_per_RNA: int | None = None,
+    feature_predictor_threshold: float = 0.5,
+    magnitude_threshold: tuple[float, float] | None = None,
     filter_method: str = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
     lr_fdr_target: float = 0.05,
@@ -42,12 +73,16 @@ def decode_pixels(
         path to experiment
     num_gpus : int
         number of gpus to use. Default = 1.
-    minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 3.
+    minimum_pixels_per_RNA : int, optional
+        minimum pixels with same barcode ID required to call a spot.
+        Defaults to 7 for 2D data and 28 for 3D data.
     feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.25
-    magnitude_threshold : tuple[float,float]. Default = [0.9,10.0]
-        list of two floats [min, max] magnitude thresholds to accept a decoded pixel.
+        threshold to accept feature_predictor prediction. Default = 0.5
+    magnitude_threshold : tuple[float,float], optional
+        list of two floats [min, max] magnitude thresholds to accept a decoded
+        pixel. Defaults to (0.9, 10.0) for 3D data and a 2D lookup keyed by
+        axial sampling relative to the 0.315 um Nyquist reference:
+        ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
     filter_method : str, default "blank_fraction"
         downstream transcript filter. Supported values are "blank_fraction" and "lr".
     target_gross_misid_rate : float
@@ -76,6 +111,10 @@ def decode_pixels(
     print(f"Using datastore at {datastore_path}")
     if merfish_bits is None:
         merfish_bits = datastore.num_bits
+    if minimum_pixels_per_RNA is None:
+        minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(datastore)
+    if magnitude_threshold is None:
+        magnitude_threshold = _default_qi2lab_magnitude_threshold(datastore)
 
     # initialize decodor class
     decoder = PixelDecoder(

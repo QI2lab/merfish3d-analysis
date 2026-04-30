@@ -22,7 +22,7 @@ app.pretty_exceptions_enable = False
 def local_register_data(
     root_path: Path,
     num_gpus: int = 1,
-    decon: bool = False,
+    decon: bool = True,
     opticalflow: bool = True,
     decon_allfiducial: bool = True,
     bkdsubtract_all_fiducial: bool = False,
@@ -40,7 +40,7 @@ def local_register_data(
         path to experiment
     num_gpus: int, Default = 1
         number of gpus available.
-    decon: bool, Default = False
+    decon: bool, Default = True
         perform readout deconvolution. If False, corrected data are re-saved for
         compatibility instead of deconvolved readouts.
     opticalflow: bool, Default = True
