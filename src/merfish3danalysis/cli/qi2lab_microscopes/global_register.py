@@ -186,14 +186,13 @@ def global_register_data(
         output_chunksize=fused_chunk_size,
         output_zarr_url=output_zarr_path,
         zarr_options={"ome_zarr": True},
-        # batch_options={
-        #     # "batch_func": misc_utils.process_batch_using_ray,
-        #     "batch_func": batch_using_joblib,
-        #     "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
-        #     "batch_func_kwargs": {
-        #         "n_jobs": n_jobs  # (note the change in parameter name)
-        #     },
-        # },
+        batch_options={
+            "batch_func": batch_using_joblib,
+            "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
+            "batch_func_kwargs": {
+                "n_jobs": n_jobs  # (note the change in parameter name)
+            },
+        },
     )
 
     fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
