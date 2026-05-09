@@ -2132,22 +2132,16 @@ class PixelDecoder:
                         min_value - 0.5, max_value + 1.5, 1.0, dtype=float
                     )
                 else:
-                    quantiles = np.quantile(
-                        values, np.linspace(0.0, 1.0, num_bins + 1)
-                    )
+                    quantiles = np.quantile(values, np.linspace(0.0, 1.0, num_bins + 1))
                     quantile_edges = np.unique(np.floor(quantiles).astype(float))
                     if quantile_edges.size == 0:
                         quantile_edges = np.array(
                             [float(min_value), float(max_value + 1)]
                         )
                     if quantile_edges[0] > min_value:
-                        quantile_edges = np.insert(
-                            quantile_edges, 0, float(min_value)
-                        )
+                        quantile_edges = np.insert(quantile_edges, 0, float(min_value))
                     if quantile_edges[-1] <= max_value:
-                        quantile_edges = np.append(
-                            quantile_edges, float(max_value + 1)
-                        )
+                        quantile_edges = np.append(quantile_edges, float(max_value + 1))
                     edges = quantile_edges - 0.5
             else:
                 edges = np.unique(
@@ -2329,7 +2323,9 @@ class PixelDecoder:
         intensity_values = valid["voxel_intensity"].to_numpy(dtype=float, copy=False)
         voxel_count_values = valid["voxel_number"].to_numpy(dtype=float, copy=False)
         distance_values = valid["vector_distance"].to_numpy(dtype=float, copy=False)
-        bit_penalty_values = valid["blank_bit_penalty"].to_numpy(dtype=float, copy=False)
+        bit_penalty_values = valid["blank_bit_penalty"].to_numpy(
+            dtype=float, copy=False
+        )
 
         if intensity_bins is not None:
             intensity_edges = np.unique(np.asarray(intensity_bins, dtype=float))
@@ -2351,9 +2347,7 @@ class PixelDecoder:
                 )
             voxel_number_edges[-1] = np.nextafter(voxel_number_edges[-1], np.inf)
         else:
-            voxel_number_edges = _normalize_edges(
-                voxel_count_values, 11, discrete=True
-            )
+            voxel_number_edges = _normalize_edges(voxel_count_values, 11, discrete=True)
 
         if vector_distance_bins is not None:
             vector_distance_edges = np.unique(
@@ -2366,9 +2360,7 @@ class PixelDecoder:
                 raise ValueError(
                     "Explicit histogram edges must contain at least two finite values."
                 )
-            vector_distance_edges[-1] = np.nextafter(
-                vector_distance_edges[-1], np.inf
-            )
+            vector_distance_edges[-1] = np.nextafter(vector_distance_edges[-1], np.inf)
         else:
             vector_distance_edges = _normalize_edges(distance_values, 10)
 
@@ -2388,26 +2380,38 @@ class PixelDecoder:
         diagnostics["vector_distance_bins"] = vector_distance_edges
         diagnostics["bit_penalty_bins"] = penalty_edges
 
-        intensity_idx = np.searchsorted(
-            intensity_edges,
-            annotated["voxel_intensity"].to_numpy(dtype=float, copy=False),
-            side="right",
-        ) - 1
-        voxel_idx = np.searchsorted(
-            voxel_number_edges,
-            annotated["voxel_number"].to_numpy(dtype=float, copy=False),
-            side="right",
-        ) - 1
-        distance_idx = np.searchsorted(
-            vector_distance_edges,
-            annotated["vector_distance"].to_numpy(dtype=float, copy=False),
-            side="right",
-        ) - 1
-        penalty_idx = np.searchsorted(
-            penalty_edges,
-            annotated["blank_bit_penalty"].to_numpy(dtype=float, copy=False),
-            side="right",
-        ) - 1
+        intensity_idx = (
+            np.searchsorted(
+                intensity_edges,
+                annotated["voxel_intensity"].to_numpy(dtype=float, copy=False),
+                side="right",
+            )
+            - 1
+        )
+        voxel_idx = (
+            np.searchsorted(
+                voxel_number_edges,
+                annotated["voxel_number"].to_numpy(dtype=float, copy=False),
+                side="right",
+            )
+            - 1
+        )
+        distance_idx = (
+            np.searchsorted(
+                vector_distance_edges,
+                annotated["vector_distance"].to_numpy(dtype=float, copy=False),
+                side="right",
+            )
+            - 1
+        )
+        penalty_idx = (
+            np.searchsorted(
+                penalty_edges,
+                annotated["blank_bit_penalty"].to_numpy(dtype=float, copy=False),
+                side="right",
+            )
+            - 1
+        )
 
         histogram_shape = (
             len(intensity_edges) - 1,
@@ -2447,7 +2451,9 @@ class PixelDecoder:
         all_histogram = np.bincount(
             flat_bins[in_range], minlength=int(np.prod(histogram_shape))
         ).reshape(histogram_shape)
-        blank_in_range = in_range & annotated["is_blank"].to_numpy(dtype=bool, copy=False)
+        blank_in_range = in_range & annotated["is_blank"].to_numpy(
+            dtype=bool, copy=False
+        )
         blank_histogram = np.bincount(
             flat_bins[blank_in_range], minlength=int(np.prod(histogram_shape))
         ).reshape(histogram_shape)
@@ -2474,8 +2480,10 @@ class PixelDecoder:
         blank_flags = annotated["is_blank"].to_numpy(dtype=bool, copy=False)
         for threshold in thresholds:
             current_keep = in_range & (fraction_values <= float(threshold))
-            if self._blank_count <= 0 or self._barcode_count <= 0 or not np.any(
-                current_keep
+            if (
+                self._blank_count <= 0
+                or self._barcode_count <= 0
+                or not np.any(current_keep)
             ):
                 gross_misid = np.inf
             else:
@@ -3296,7 +3304,9 @@ class PixelDecoder:
         feature_predictor_threshold: float | None = 0.1,
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
-        filter_method: Literal["blank_fraction", "blank_bit_enrichment", "lr"] = "blank_fraction",
+        filter_method: Literal[
+            "blank_fraction", "blank_bit_enrichment", "lr"
+        ] = "blank_fraction",
         target_gross_misid_rate: float = 0.05,
         lr_fdr_target: float = 0.05,
     ) -> None:
@@ -3465,7 +3475,9 @@ class PixelDecoder:
         prep_for_baysor: bool = True,
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
-        filter_method: Literal["blank_fraction", "blank_bit_enrichment", "lr"] = "blank_fraction",
+        filter_method: Literal[
+            "blank_fraction", "blank_bit_enrichment", "lr"
+        ] = "blank_fraction",
         target_gross_misid_rate: float = 0.05,
         lr_fdr_target: float = 0.05,
     ) -> None:
