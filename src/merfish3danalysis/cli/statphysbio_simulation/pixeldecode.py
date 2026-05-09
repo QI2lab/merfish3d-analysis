@@ -41,6 +41,37 @@ def _default_simulation_magnitude_threshold(
     return (lower_threshold, 10.0)
 
 
+def _validate_filter_arguments(
+    filter_method: str,
+    target_gross_misid_rate: float,
+    lr_fdr_target: float,
+) -> None:
+    """Validate that the selected filter uses the matching control parameter."""
+
+    if filter_method in ("blank_fraction", "blank_bit_enrichment"):
+        if lr_fdr_target != 0.05:
+            raise typer.BadParameter(
+                "--lr-fdr-target only applies with --filter-method lr. "
+                "Use --target-gross-misid-rate with --filter-method "
+                "blank_fraction or blank_bit_enrichment."
+            )
+        return
+
+    if filter_method == "lr":
+        if target_gross_misid_rate != 0.05:
+            raise typer.BadParameter(
+                "--target-gross-misid-rate only applies with "
+                "--filter-method blank_fraction. Use --lr-fdr-target with "
+                "--filter-method lr."
+            )
+        return
+
+    raise typer.BadParameter(
+        "filter_method must be one of 'blank_fraction', "
+        "'blank_bit_enrichment', or 'lr'."
+    )
+
+
 @app.command()
 def decode_pixels(
     root_path: Path,
@@ -80,7 +111,8 @@ def decode_pixels(
     duplicate_radius_z : float, optional
         override Z radius, in microns, for within-tile duplicate collapse.
     filter_method : str, default "blank_fraction"
-        downstream transcript filter. Supported values are "blank_fraction" and "lr".
+        downstream transcript filter. Supported values are "blank_fraction",
+        "blank_bit_enrichment", and "lr".
     target_gross_misid_rate : float, default .05
         gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float, default .05
@@ -103,6 +135,11 @@ def decode_pixels(
         minimum_pixels_per_RNA = 7 if datastore.microscope_type == "2D" else 28
     if magnitude_threshold is None:
         magnitude_threshold = _default_simulation_magnitude_threshold(datastore)
+    _validate_filter_arguments(
+        filter_method=filter_method,
+        target_gross_misid_rate=target_gross_misid_rate,
+        lr_fdr_target=lr_fdr_target,
+    )
 
     if not skip_optimization:
         decoder.optimize_normalization_by_decoding(
