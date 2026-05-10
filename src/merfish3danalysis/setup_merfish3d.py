@@ -33,7 +33,6 @@ BASE_PIP_DEPS = [
     "roifile",
     "imbalanced-learn",
     "scikit-learn",
-    "anndata",
     "yaozarrs[write-tensorstore,io]>=0.3",
     "matplotlib",
 ]

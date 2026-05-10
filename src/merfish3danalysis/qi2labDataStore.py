@@ -14,7 +14,6 @@ History:
 
 import json
 import re
-from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import TimeoutError
 from itertools import product
@@ -24,8 +23,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from roifile import ROI_TYPE, ImagejRoi, roiread, roiwrite
-from shapely.geometry import Point, Polygon
+from roifile import roiread
 
 try:
     from zarr.errors import ZarrError
@@ -706,91 +704,6 @@ class qi2labDataStore:
         self._set_calibration_attribute("voxel_size_zyx_um", value)
 
     @property
-    def baysor_path(self) -> Path | str:
-        """Baysor path
-
-        Returns
-        -------
-        baysor_path : Union[Path,str]
-            Baysor path.
-        """
-
-        return getattr(self, "_baysor_path", None)
-
-    @baysor_path.setter
-    def baysor_path(self, value: Path | str) -> None:
-        """Set the baysor path.
-
-        Parameters
-        ----------
-        value : Union[Path,str]
-            New baysor path.
-        """
-
-        if value is None:
-            self._baysor_path = None
-            self._datastore_state["BaysorPath"] = None
-        else:
-            self._baysor_path = Path(value)
-            self._datastore_state["BaysorPath"] = str(self._baysor_path)
-        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
-
-    @property
-    def baysor_options(self) -> Path | str:
-        """Baysor options
-
-        Returns
-        -------
-        baysor_options : Union[Path,str]
-            Baysor options.
-        """
-        return getattr(self, "_baysor_options", None)
-
-    @baysor_options.setter
-    def baysor_options(self, value: Path | str) -> None:
-        """Set the baysor options.
-
-        Parameters
-        ----------
-        value : Union[Path,str]
-            New baysor options.
-        """
-
-        if value is None:
-            self._baysor_path = None
-            self._datastore_state["BaysorPath"] = None
-        else:
-            self._baysor_options = Path(value)
-            self._datastore_state["BaysorOptions"] = str(self._baysor_options)
-        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
-
-    @property
-    def julia_threads(self) -> int:
-        """Julia thread number
-
-        Returns
-        -------
-        julia_threads : int
-            Julia thread number.
-        """
-
-        return getattr(self, "_julia_threads", None)
-
-    @julia_threads.setter
-    def julia_threads(self, value: int) -> None:
-        """Set the julia thread number.
-
-        Parameters
-        ----------
-        value : int
-            New julia thread number.
-        """
-
-        self._julia_threads = value
-        self._datastore_state["JuliaThreads"] = str(self._julia_threads)
-        self._save_to_json(self._datastore_state, self._datastore_state_json_path)
-
-    @property
     def global_normalization_vector(self) -> ArrayLike | None:
         """Global normalization vector.
 
@@ -1022,11 +935,6 @@ class qi2labDataStore:
         self._fused_root_path.mkdir()
         self._segmentation_root_path = self._datastore_path / Path(r"segmentation")
         self._segmentation_root_path.mkdir()
-        self._mtx_output_root_path = self._datastore_path / Path(r"mtx_output")
-        self._mtx_output_root_path.mkdir()
-        self._baysor_path = r""
-        self._baysor_options = r""
-        self._julia_threads = 0
 
         # initialize datastore state
         self._datastore_state_json_path = self._datastore_path / Path(
@@ -1043,11 +951,6 @@ class qi2labDataStore:
             "SegmentedCells": False,
             "DecodedSpots": False,
             "FilteredSpots": False,
-            "RefinedSpots": False,
-            "mtxOutput": False,
-            "BaysorPath": str(self._baysor_path),
-            "BaysorOptions": str(self._baysor_options),
-            "JuliaThreads": str(self._julia_threads),
         }
 
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
@@ -1801,6 +1704,20 @@ class qi2labDataStore:
 
         df.to_parquet(parquet_path, engine="fastparquet", index=False)
 
+    @staticmethod
+    def _save_to_csv_gz(df: pd.DataFrame, csv_gz_path: Path | str) -> None:
+        """Save dataframe to gzipped CSV.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Dataframe to save.
+        csv_gz_path : Union[Path, str]
+            Path to gzipped CSV file.
+        """
+
+        df.to_csv(csv_gz_path, index=False, compression="gzip")
+
     def _parse_datastore(self, validate: bool = True) -> None:
         """Parse datastore to discover available components."""
 
@@ -1827,7 +1744,6 @@ class qi2labDataStore:
         self._decoded_root_path = self._datastore_path / Path(r"decoded")
         self._fused_root_path = self._datastore_path / Path(r"fused")
         self._segmentation_root_path = self._datastore_path / Path(r"segmentation")
-        self._mtx_output_root_path = self._datastore_path / Path(r"mtx_output")
 
         # validate calibrations
         if self._datastore_state["Calibrations"]:
@@ -2215,36 +2131,6 @@ class qi2labDataStore:
 
             if not (filtered_path.exists()):
                 raise FileNotFoundError("filtered decoded spots missing.")
-
-        if self._datastore_state["RefinedSpots"] and validate:
-            baysor_spots_path = (
-                self._segmentation_root_path / Path("baysor") / Path("segmentation.csv")
-            )
-
-            if not (baysor_spots_path.exists()):
-                raise FileNotFoundError("Baysor filtered decoded spots missing.")
-
-        # check and validate mtx
-        if self._datastore_state["mtxOutput"] and validate:
-            mtx_barcodes_path = self._mtx_output_root_path / Path("barcodes.tsv.gz")
-            mtx_features_path = self._mtx_output_root_path / Path("features.tsv.gz")
-            mtx_matrix_path = self._mtx_output_root_path / Path("matrix.tsv.gz")
-
-            if (
-                not (mtx_barcodes_path.exists())
-                or not (mtx_features_path.exists())
-                or not (mtx_matrix_path.exists())
-            ):
-                raise FileNotFoundError("mtx output missing.")
-
-        try:
-            self._baysor_path = Path(str(self._datastore_state["BaysorPath"]))
-            self._baysor_options = Path(str(self._datastore_state["BaysorOptions"]))
-            self._julia_threads = int(self._datastore_state["JuliaThreads"])
-        except KeyError:
-            self._baysor_path = r""
-            self._baysor_options = r""
-            self._julia_threads = 1
 
     def load_codebook_parsed(
         self,
@@ -4363,8 +4249,14 @@ class qi2labDataStore:
         current_global_filtered_decoded_path = (
             current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
         )
+        current_global_filtered_decoded_csv_gz_path = (
+            current_global_filtered_decoded_dir_path / Path("decoded_features.csv.gz")
+        )
 
         self._save_to_parquet(filtered_decoded_df, current_global_filtered_decoded_path)
+        self._save_to_csv_gz(
+            filtered_decoded_df, current_global_filtered_decoded_csv_gz_path
+        )
 
     def load_global_cellpose_outlines(
         self,
@@ -4468,345 +4360,3 @@ class qi2labDataStore:
         except (OSError, TimeoutError):
             print("Error saving Cellpose image.")
             return None
-
-    def save_spots_prepped_for_baysor(
-        self, prepped_for_baysor_df: pd.DataFrame
-    ) -> None:
-        """Save spots prepped for Baysor.
-
-        Parameters
-        ----------
-        prepped_for_baysor_df : pd.DataFrame
-            Spots prepped for Baysor.
-        """
-
-        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
-            "all_tiles_filtered_decoded_features"
-        )
-
-        if not current_global_filtered_decoded_dir_path.exists():
-            current_global_filtered_decoded_dir_path.mkdir()
-
-        current_global_filtered_decoded_path = (
-            current_global_filtered_decoded_dir_path / Path("transcripts.parquet")
-        )
-
-        self._save_to_parquet(
-            prepped_for_baysor_df, current_global_filtered_decoded_path
-        )
-
-    def run_baysor(self) -> None:
-        """Run Baysor"
-
-        Assumes that spots are prepped for Baysor and the Baysor path and options are set.
-        Reformats ROIs into ImageJ style ROIs for later use.
-        """
-
-        import subprocess
-
-        baysor_input_path = (
-            self._datastore_path
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("transcripts.parquet")
-        )
-        baysor_output_path = self._segmentation_root_path / Path("baysor")
-        baysor_output_path.mkdir(exist_ok=True)
-
-        julia_threading = r"JULIA_NUM_THREADS=" + str(self._julia_threads) + " "
-        preview_baysor_options = r"preview -c " + str(self._baysor_options)
-        command = (
-            julia_threading
-            + str(self._baysor_path)
-            + " "
-            + preview_baysor_options
-            + " "
-            + str(baysor_input_path)
-            + " -o "
-            + str(baysor_output_path)
-        )
-
-        try:
-            result = subprocess.run(command, shell=True, check=True)
-            print("Baysor finished with return code:", result.returncode)
-        except subprocess.CalledProcessError as e:
-            print("Baysor failed with:", e)
-
-        # first try to run Baysor assuming that prior segmentations are present
-        try:
-            run_baysor_options = r"run -p -c " + str(self._baysor_options)
-            command = (
-                julia_threading
-                + str(self._baysor_path)
-                + " "
-                + run_baysor_options
-                + " "
-                + str(baysor_input_path)
-                + " -o "
-                + str(baysor_output_path)
-                + " --polygon-format GeometryCollectionLegacy --count-matrix-format tsv :cell_id"
-            )
-            result = subprocess.run(command, shell=True, check=True)
-            print("Baysor finished with return code:", result.returncode)
-        except subprocess.CalledProcessError:
-            # then fall back and run without prior segmentations.
-            # IMPORTANT: the .toml file has to be defined correctly for this to work!
-            try:
-                run_baysor_options = r"run -p -c " + str(self._baysor_options)
-                command = (
-                    julia_threading
-                    + str(self._baysor_path)
-                    + " "
-                    + run_baysor_options
-                    + " "
-                    + str(baysor_input_path)
-                    + " -o "
-                    + str(baysor_output_path)
-                    + " --count-matrix-format tsv"
-                )
-                result = subprocess.run(command, shell=True, check=True)
-                print("Baysor finished with return code:", result.returncode)
-            except subprocess.CalledProcessError as e:
-                print("Baysor failed with:", e)
-
-    def reformat_baysor_3D_oultines(self) -> None:
-        """Reformat baysor 3D json file into ImageJ ROIs."""
-        import re
-
-        # Load the JSON file
-        baysor_output_path = self._segmentation_root_path / Path("baysor")
-        baysor_segmentation = baysor_output_path / Path(
-            r"segmentation_polygons_3d.json"
-        )
-        with open(baysor_segmentation) as file:
-            data = json.load(file)
-
-        # Dictionary to group polygons by cell ID
-        cell_polygons = defaultdict(list)
-
-        def parse_z_range(z_range):  # noqa
-            cleaned_range = re.sub(
-                r"[^\d.,-]", "", z_range
-            )  # Remove non-numeric, non-period, non-comma, non-dash characters
-            return map(float, cleaned_range.split(","))
-
-        # Iterate through each z-plane and corresponding polygons
-        for z_range, details in data.items():
-            z_start, z_end = parse_z_range(z_range)
-
-            for geometry in details["geometries"]:
-                coordinates = geometry["coordinates"][
-                    0
-                ]  # Assuming the outer ring of the polygon
-                cell_id = geometry["cell"]  # Get the cell ID
-
-                # Store the polygon with its z-range
-                cell_polygons[cell_id].append(
-                    {"z_start": z_start, "z_end": z_end, "coordinates": coordinates}
-                )
-
-        rois = []
-
-        # Process each cell ID to create 3D ROIs
-        for cell_id, polygons in cell_polygons.items():
-            for _idx, polygon in enumerate(polygons):
-                x_coords = [point[0] for point in polygon["coordinates"]]
-                y_coords = [point[1] for point in polygon["coordinates"]]
-
-                z_start = polygon["z_start"]
-                z_end = polygon["z_end"]
-
-                try:
-                    # Create an ImageJRoi object for the polygon using frompoints
-                    coords = list(
-                        zip(x_coords, y_coords, strict=False)
-                    )  # List of (x, y) tuples
-                    roi = ImagejRoi.frompoints(coords)
-                    roi.roitype = ROI_TYPE.POLYGON  # Set the ROI type to Polygon
-                    roi.coordinates = coords  # Explicitly assign coordinates to the ROI
-                    roi.name = f"cell_{cell_id!s}_zstart_{z_start!s}_zend_{z_end!s}"  # Ensure unique name
-                    rois.append(roi)
-                except Exception as e:
-                    print(f"Error while creating ROI for cell ID {cell_id}: {e}")
-
-        # Write all ROIs to a ZIP file
-        output_file = baysor_output_path / Path(r"3d_cell_rois.zip")
-        roiwrite(output_file, rois, mode="w")
-
-    def load_global_baysor_filtered_spots(
-        self,
-    ) -> pd.DataFrame | None:
-        """Load Baysor re-assigned decoded RNA.
-
-        Assumes Baysor has been run.
-
-        Returns
-        -------
-        baysor_filtered_genes : Optional[pd.DataFrame]
-            Baysor re-assigned decoded RNA.
-        """
-
-        current_baysor_spots_path = (
-            self._segmentation_root_path / Path("baysor") / Path("segmentation.csv")
-        )
-
-        if not current_baysor_spots_path.exists():
-            print("Baysor filtered genes not found.")
-            return None
-        else:
-            baysor_filtered_genes = self._load_from_csv(current_baysor_spots_path)
-            return baysor_filtered_genes
-
-    def load_global_baysor_outlines(
-        self,
-    ) -> dict | None:
-        """Load Baysor cell outlines.
-
-        Assumes Baysor has been run.
-
-        Returns
-        -------
-        baysor_outlines : Optional[dict]
-            Baysor cell outlines.
-        """
-
-        current_baysor_outlines_path = (
-            self._segmentation_root_path / Path("baysor") / Path(r"3d_cell_rois.zip")
-        )
-
-        if not current_baysor_outlines_path.exists():
-            print("Baysor outlines not found.")
-            return None
-        else:
-            baysor_rois = roiread(current_baysor_outlines_path)
-            return baysor_rois
-
-    @staticmethod
-    def _roi_to_shapely(roi):  # noqa
-        return Polygon(roi.subpixel_coordinates[:, ::-1])
-
-    def reprocess_and_save_filtered_spots_with_baysor_outlines(self) -> None:
-        """Reprocess filtered spots using baysor cell outlines, then save.
-
-        Loads the 3D cell outlines from Baysor, checks all points to see what
-        (if any) cell outline that the spot falls within, and then saves the
-        data back to the datastore.
-        """
-        import re
-
-        from rtree import index
-
-        rois = self.load_global_baysor_outlines()
-        filtered_spots_df = self.load_global_filtered_decoded_spots()
-
-        parsed_spots_df = filtered_spots_df[
-            [
-                "gene_id",
-                "global_z",
-                "global_y",
-                "global_x",
-                "cell_id",
-                "tile_idx",
-            ]
-        ].copy()
-        parsed_spots_df.rename(
-            columns={
-                "global_x": "x",
-                "global_y": "y",
-                "global_z": "z",
-                "gene_id": "gene",
-                "cell_id": "cell",
-            },
-            inplace=True,
-        )
-        parsed_spots_df["transcript_id"] = pd.util.hash_pandas_object(
-            parsed_spots_df, index=False
-        )
-
-        parsed_spots_df["assignment_confidence"] = 1.0
-
-        # Create spatial index for ROIs
-        roi_index = index.Index()
-        roi_map = {}  # Map index IDs to ROIs
-
-        for idx, roi in enumerate(rois):
-            # Ensure roi.coordinates contains the polygon points
-            coords = roi.coordinates()
-
-            # Insert the polygon bounds into the spatial index
-            polygon = Polygon(coords)
-            roi_index.insert(idx, polygon.bounds)  # Use polygon bounds for indexing
-            roi_map[idx] = roi
-
-        # Function to check a single point
-        def point_in_roi(row: pd.Series) -> str | float:
-            """Determine if point is within ROI.
-
-            Parameters
-            ----------
-            row: pd.Series
-                current point to check
-
-            Returns
-            -------
-            name: str | float
-                cell_id or -1
-            """
-            point = Point(row["x"], row["y"])
-            candidate_indices = list(
-                roi_index.intersection(point.bounds)
-            )  # Search spatial index
-            for idx in candidate_indices:
-                roi = roi_map[idx]
-                match = re.search(r"zstart_([-\d.]+)_zend_([-\d.]+)", roi.name)
-                if match:
-                    z_start = float(match.group(1))
-                    z_end = float(match.group(2))
-                    if z_start <= row["z"] <= z_end:
-                        polygon = Polygon(roi.coordinates())
-                        if polygon.contains(point):
-                            return str(roi.name.split("_")[1])
-            return -1
-
-        # Apply optimized spatial lookup
-        parsed_spots_df["cell"] = parsed_spots_df.apply(point_in_roi, axis=1)
-        parsed_spots_df = parsed_spots_df.loc[parsed_spots_df["cell"] != -1]
-
-        current_global_filtered_decoded_path = (
-            self._datastore_path
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("refined_transcripts.parquet")
-        )
-
-        self._save_to_parquet(parsed_spots_df, current_global_filtered_decoded_path)
-
-    def save_mtx(self, spots_source: str = "baysor") -> None:
-        """Save mtx file for downstream analysis. Assumes Baysor has been run.
-
-        Parameters
-        ----------
-        spots_source: str, default "baysor"
-            source of spots. "baysor" or "resegmented".
-        """
-
-        from merfish3danalysis.utils.dataio import create_mtx
-
-        if spots_source == "baysor":
-            spots_path = (
-                self._datastore_path
-                / Path("segmentation")
-                / Path("baysor")
-                / Path("segmentation.csv")
-            )
-        elif spots_source == "resegmented":
-            spots_path = (
-                self._datastore_path
-                / Path("all_tiles_filtered_decoded_features")
-                / Path("refined_transcripts.parquet")
-            )
-
-        mtx_output_path = self._datastore_path / Path("mtx_output")
-
-        create_mtx(
-            spots_path=spots_path,
-            output_dir_path=mtx_output_path,
-        )

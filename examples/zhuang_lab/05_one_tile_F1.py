@@ -185,9 +185,9 @@ def calculate_F1_with_radius(
 
 def decode_pixels(
     root_path: Path,
-    minimum_pixels_per_RNA: int = 2,
-    feature_predictor_threshold: float = 0.1,
-    magnitude_threshold: float = (0.5, 10.0),
+    minimum_pixels_per_RNA: int = 7,
+    feature_predictor_threshold: float = 0.5,
+    magnitude_threshold: tuple[float, float] = (0.2, 10.0),
 ) -> None:
     """Perform pixel decoding.
 
@@ -195,20 +195,17 @@ def decode_pixels(
     ----------
     root_path: Path
         path to experiment
-    merfish_bits : int
-        number of bits in codebook
     minimum_pixels_per_RNA : int
-        minimum pixels with same barcode ID required to call a spot. Default = 9.
+        minimum pixels with same barcode ID required to call a spot. Default = 7.
     feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.1
-    magnitude_threshold: tuple[float,float], default = (1.,5.)
-        lower and upper magnitude threshold to accept a spot. We allow for >2 on upper because
-        spots are normalized to median spot value, not maximum.
+        threshold to accept feature_predictor prediction. Default = 0.5
+    magnitude_threshold: tuple[float,float], default = (0.2, 10.0)
+        lower and upper magnitude threshold to accept a spot.
     """
 
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
-    datastore = qi2labDataStore(datastore_path)
+    datastore = qi2labDataStore(datastore_path, validate=False)
     merfish_bits = 22
 
     # initialize decodor class
@@ -230,7 +227,7 @@ def decode_pixels(
         minimum_pixels=minimum_pixels_per_RNA,
         use_normalization=True,
         feature_predictor_threshold=feature_predictor_threshold,
-        lowpass_sigma=(0, 0, 0),
+        lowpass_sigma=(3, 1, 1),
     )
     _stage_zyx_um, _affine_xform_um = datastore.load_local_stage_position_zyx_um(
         round=0, tile=tile_idx
@@ -289,11 +286,11 @@ def decode_pixels(
     qi2lab_gene_ids = decoded_spots_filter["gene_id"].to_numpy()
     # qi2lab_coords[:,0] = qi2lab_coords[:,0] * 1.5
 
-    # fiducial_image = datastore.load_local_registered_image(
-    #     tile=tile_idx,
-    #     round=0,
-    #     return_future=False
-    # )
+    fiducial_image = datastore.load_local_registered_image(
+        tile=tile_idx,
+        round=0,
+        return_future=False
+    )
 
     decoded_spots = decoder._df_barcodes
     qi2lab_coords = decoded_spots[["tile_z", "tile_y", "tile_x"]].to_numpy()
@@ -321,11 +318,11 @@ def decode_pixels(
     #     # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
     #     # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
     # )
-    # viewer.add_image(
-    #     fiducial_image,
-    #     scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-    #     translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    # )
+    viewer.add_image(
+        fiducial_image,
+        # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
+        # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
+    )
     viewer.add_image(
         mag,
         # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],

@@ -153,7 +153,6 @@ def decode_pixels(
 
     decoder.decode_all_tiles(
         assign_to_cells=False,
-        prep_for_baysor=False,
         lowpass_sigma=lowpass_sigma,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,

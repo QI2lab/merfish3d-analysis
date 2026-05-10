@@ -90,7 +90,6 @@ def decode_pixels(
     filter_method: str = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
     lr_fdr_target: float = 0.05,
-    run_baysor: bool = False,
     merfish_bits: int | None = None,
     skip_optimization: bool = False,
     reprocess_existing: bool = False,
@@ -121,8 +120,6 @@ def decode_pixels(
         gross misidentification-rate target for blank-fraction filtering. Default = .05
     lr_fdr_target : float
         false discovery rate target for LR filtering. Default = .05
-    run_baysor : bool
-        flag to run Baysor segmentation. Default = False
     merfish_bits : int. default = None
         number of bits in codebook. By default uses all bits in codebook.
     skip_optimization: bool, default = False
@@ -176,7 +173,6 @@ def decode_pixels(
         # decode all tiles using iterative normalization weights
         decoder.decode_all_tiles(
             assign_to_cells=True,
-            prep_for_baysor=True,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
             feature_predictor_threshold=feature_predictor_threshold,
@@ -188,16 +184,10 @@ def decode_pixels(
         decoder._verbose = 2
         decoder.optimize_filtering(
             assign_to_cells=True,
-            prep_for_baysor=True,
             filter_method=filter_method,
             target_gross_misid_rate=target_gross_misid_rate,
             lr_fdr_target=lr_fdr_target,
         )
-
-    # resegment data using baysor and cellpose prior assignments
-    if run_baysor:
-        datastore.run_baysor()
-        datastore.save_mtx()
 
 
 def main() -> None:

@@ -59,9 +59,6 @@ def convert_data(
     root_path: Path,
     use_illuminations: bool = False,
     save_illuminations: bool = True,
-    baysor_binary_path: Path | None = None,
-    baysor_options_path: Path | None = None,
-    julia_threads: int = 1,
     channel_names: list[str] | None = None,
     hot_pixel_image_path: Path | None = None,
     output_path: Path | None = None,
@@ -78,12 +75,6 @@ def convert_data(
         whether to apply illumination correction. This requires that there is a "illuminations.ome.tif" file in the root_path.
     save_illuminations: bool, default True
         if illuminations are calculated, save them to disk in "illuminations.ome.tif" in the root_path for future use.
-    baysor_binary_path: Path
-        path to baysor binary
-    baysor_options_path: Path
-        path to baysor options toml
-    julia_threads: int
-        number of threads to use for Julia
     channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
     hot_pixel_image_path: Optional[Path], default None
@@ -331,9 +322,6 @@ def convert_data(
     if not (existing_store):
         # required user parameters
         datastore.channels_in_data = channel_names
-        datastore.baysor_path = baysor_binary_path
-        datastore.baysor_options = baysor_options_path
-        datastore.julia_threads = julia_threads
 
         # parameters from qi2lab microscope metadata
         datastore.num_rounds = num_rounds

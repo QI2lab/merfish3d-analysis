@@ -279,7 +279,6 @@ def decode_pixels(
 
     decoder.decode_all_tiles(
         assign_to_cells=False,
-        prep_for_baysor=False,
         minimum_pixels=minimum_pixels,
         magnitude_threshold=mag_threshold,
         feature_predictor_threshold=feature_predictor_threshold,

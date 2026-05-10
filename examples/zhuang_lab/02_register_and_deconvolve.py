@@ -39,6 +39,7 @@ def local_register_data(root_path: Path) -> None:
     registration_factory = DataRegistration(
         datastore=datastore,
         bkd_subtract_fiducial=False,
+        decon_readout=True,
         perform_optical_flow=False,
         overwrite_registered=True,
         save_all_fiducial_registered=False,
@@ -79,7 +80,7 @@ def global_register_data(
     datastore = qi2labDataStore(datastore_path)
 
     # load tile positions
-    for _, tile_id in enumerate(datastore.tile_ids[0:60]):
+    for _, tile_id in enumerate(datastore.tile_ids):
         round_id = datastore.round_ids[0]
         tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
             tile_id, round_id
@@ -87,7 +88,7 @@ def global_register_data(
 
     # convert local tiles from first round to multiscale spatial images
     msims = []
-    for _, tile_id in enumerate(tqdm(datastore.tile_ids[0:60], desc="tile")):
+    for _, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
         round_id = datastore.round_ids[0]
 
         voxel_zyx_um = datastore.voxel_size_zyx_um
@@ -261,5 +262,5 @@ def global_register_data(
 
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data/zhuang")
-    # local_register_data(root_path)
+    #local_register_data(root_path)
     global_register_data(root_path, create_max_proj_tiff=True)

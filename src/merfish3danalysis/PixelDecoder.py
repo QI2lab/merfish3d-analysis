@@ -1541,58 +1541,6 @@ class PixelDecoder:
                     self._df_filtered_barcodes
                 )
 
-    def _reformat_barcodes_for_baysor(self) -> None:
-        """Reformat barcodes for Baysor and save to datastore."""
-
-        if self._barcodes_filtered:
-            missing_columns = [
-                col
-                for col in [
-                    "gene_id",
-                    "global_z",
-                    "global_y",
-                    "global_x",
-                    "cell_id",
-                    "tile_idx",
-                    "distance_min",
-                ]
-                if col not in self._df_filtered_barcodes.columns
-            ]
-            if missing_columns:
-                print(f"The following columns are missing: {missing_columns}")
-            baysor_df = self._df_filtered_barcodes[
-                [
-                    "gene_id",
-                    "global_z",
-                    "global_y",
-                    "global_x",
-                    "cell_id",
-                    "tile_idx",
-                    "distance_min",
-                ]
-            ].copy()
-            baysor_df.rename(
-                columns={
-                    "gene_id": "feature_name",
-                    "global_x": "x_location",
-                    "global_y": "y_location",
-                    "global_z": "z_location",
-                    "barcode_id": "codeword_index",
-                    "tile_idx": "fov_name",
-                    "distance_min": "qv",
-                },
-                inplace=True,
-            )
-
-            baysor_df["cell_id"] = baysor_df["cell_id"] + 1
-            baysor_df["transcript_id"] = pd.util.hash_pandas_object(
-                baysor_df, index=False
-            )
-            baysor_df["is_gene"] = ~baysor_df[
-                "feature_name"
-            ].str.lower().str.startswith("blank", na=False)
-            self._datastore.save_spots_prepped_for_baysor(baysor_df)
-
     def _load_all_barcodes(self) -> None:
         """Load all barcodes from datastore."""
 
@@ -3297,7 +3245,6 @@ class PixelDecoder:
     def decode_all_tiles(
         self,
         assign_to_cells: bool = True,
-        prep_for_baysor: bool = True,
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
@@ -3316,8 +3263,6 @@ class PixelDecoder:
         ----------
         assign_to_cells: bool, default = True
             Assign codewords to cells
-        prep_for_baysor: bool, default = True
-            Create a baysor-compatible .parquet file
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Sequence[float], default = (0.9, 10.0)
@@ -3472,7 +3417,6 @@ class PixelDecoder:
     def optimize_filtering(
         self,
         assign_to_cells: bool = True,
-        prep_for_baysor: bool = True,
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
         filter_method: Literal[
@@ -3487,8 +3431,6 @@ class PixelDecoder:
         ----------
         assign_to_cells : bool, default False
             Assign barcodes to cells.
-        prep_for_baysor : bool, default True
-            Prepare barcodes for Baysor.
         duplicate_radius_xy : float, optional
             Override XY radius, in microns, for within-tile duplicate collapse.
         duplicate_radius_z : float, optional
@@ -3553,8 +3495,6 @@ class PixelDecoder:
         self._save_barcodes()
         if self._verbose >= 1:
             print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
-        if prep_for_baysor:
-            self._reformat_barcodes_for_baysor()
 
 
 def time_stamp() -> str:

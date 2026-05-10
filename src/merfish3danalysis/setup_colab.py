@@ -34,7 +34,6 @@ BASE_PIP_DEPS = [
     "roifile",
     "imbalanced-learn",
     "scikit-learn",
-    "anndata",
     "pandas",
     "roifile",
     "shapely",
