@@ -47,8 +47,21 @@ This will automatically setup the correct CUDA libraries and other packages in t
 
 The `merfish3d-stitcher` environment is only used when individual tiles are registered into a global coordinate system. The code automatically invokes this second environment, but it is important to note that the current install strategy does create a new conda/mamba environment beyond what you as the user creates. As soon as the dependency issue is solved, we will remove this work around.
 
-### (Coming soon) Proseg installation and use
-We are working to add [Proseg](https://github.com/dcjones/proseg) interoperability.
+### Proseg segmentation optimization
+
+Follow the installation instructions at [proseg](https://github.com/dcjones/proseg).
+
+Example calls to proseg:
+
+2D segmentation optimization (ignore z coordinate)
+```bash
+/path/to/proseg --gene-column gene_id -x global_x -y global_y -z global_z --fov-column tile_idx --cell-id-column cell_id --cell-id-unassigned 0 --excluded-genes ^[Bb]lank.*$ --ignore-z-coord --density-bins 1 --burnin-samples 1000 --samples 2000 --voxel-size 1.0 --burnin-voxel-size 4.0 --enforce-connectivity --output-spatialdata /path/to/data/qi2labdatastore/proseg/spatialdata_2D.zarr --output-counts /path/to/data/qi2labdatastore/proseg/counts_2D.mtx.gz --output-cell-polygons /path/to/data/qi2labdatastore/proseg/cell_polygons_2D.geojson.gz --output-transcript-metadata /path/to/data/qi2labdatastore/proseg/transcript_metadata_2D.csv.gz /path/to/data/qi2labdatastore/all_tiles_filtered_decoded_features/decoded_features.csv.gz
+```
+
+3D segmentation optimization. Here `--voxel-layers` should be roughly set to the height of the imaged volume in microns. For example, a 15 micron thick sample should have `--voxel-layers 15`.
+```bash
+/path/to/proseg --gene-column gene_id -x global_x -y global_y -z global_z --fov-column tile_idx --cell-id-column cell_id --cell-id-unassigned 0 --excluded-genes ^[Bb]lank.*$ --voxel-layers 15 --density-bins 1 --burnin-samples 1000 --samples 2000 --voxel-size 1.0 --burnin-voxel-size 4.0 --enforce-connectivity --output-spatialdata /path/to/data/qi2labdatastore/proseg/spatialdata_3D.zarr --output-counts /path/to/data/qi2labdatastore/proseg/counts_3D.mtx.gz --output-cell-polygons-layers /path/to/data/qi2labdatastore/proseg/cell_polygons_3D.geojson.gz --output-transcript-metadata /path/to/data/qi2labdatastore/proseg/transcript_metadata_3D.csv.gz /path/to/data/qi2labdatastore/all_tiles_filtered_decoded_features/decoded_features.csv.gz
+```
 
 ## Documentation
 
@@ -56,7 +69,7 @@ To build the documentation, install using `pip install .[docs]`. Then execute `m
 
 ## Testing
 
-The canonical test coverage for this repository is the local simulation integration matrix in
+The test coverage for this repository is the local simulation integration matrix in
 [tests/test_simulation_example_pipeline.py](tests/test_simulation_example_pipeline.py). These tests exercise a end-to-end simulation workflow:
 
 - convert simulation data into a fake acquisition
