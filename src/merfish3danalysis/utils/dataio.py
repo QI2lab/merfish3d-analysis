@@ -153,8 +153,6 @@ def time_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-
-
 def write_sparse_mtx(
     output_dir_path: Path | str,
     matrix: ArrayLike,

@@ -262,5 +262,5 @@ def global_register_data(
 
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data/zhuang")
-    #local_register_data(root_path)
+    # local_register_data(root_path)
     global_register_data(root_path, create_max_proj_tiff=True)

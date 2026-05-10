@@ -83,7 +83,9 @@ def calculate_F1_with_radius(
     pair_g_idx_all: list[np.ndarray] = []
     pair_dist_all: list[np.ndarray] = []
 
-    common_genes = np.intersect1d(np.unique(qi2lab_gene_ids), np.unique(merlin_gene_ids))
+    common_genes = np.intersect1d(
+        np.unique(qi2lab_gene_ids), np.unique(merlin_gene_ids)
+    )
     for gene in common_genes:
         q_idx = np.flatnonzero(qi2lab_gene_ids == gene)
         g_idx = np.flatnonzero(merlin_gene_ids == gene)
@@ -208,8 +210,7 @@ def resolve_qi2lab_transcripts_path(specified_dir: Path) -> Path:
         return csv_gz_path
 
     raise FileNotFoundError(
-        "Could not find filtered decoded features at "
-        f"{parquet_path} or {csv_gz_path}"
+        f"Could not find filtered decoded features at {parquet_path} or {csv_gz_path}"
     )
 
 

@@ -23,7 +23,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from roifile import roiread
 
 try:
     from zarr.errors import ZarrError

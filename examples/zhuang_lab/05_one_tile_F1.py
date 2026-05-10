@@ -287,9 +287,7 @@ def decode_pixels(
     # qi2lab_coords[:,0] = qi2lab_coords[:,0] * 1.5
 
     fiducial_image = datastore.load_local_registered_image(
-        tile=tile_idx,
-        round=0,
-        return_future=False
+        tile=tile_idx, round=0, return_future=False
     )
 
     decoded_spots = decoder._df_barcodes
