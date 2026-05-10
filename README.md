@@ -47,7 +47,7 @@ This will automatically setup the correct CUDA libraries and other packages in t
 
 The `merfish3d-stitcher` environment is only used when individual tiles are registered into a global coordinate system. The code automatically invokes this second environment, but it is important to note that the current install strategy does create a new conda/mamba environment beyond what you as the user creates. As soon as the dependency issue is solved, we will remove this work around.
 
-### Proseg segmentation optimization
+## Proseg segmentation optimization
 
 Follow the installation instructions at [proseg](https://github.com/dcjones/proseg).
 
