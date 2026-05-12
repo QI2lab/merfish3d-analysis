@@ -1,6 +1,6 @@
 """
 Perform registration on qi2labdatastore. By default creates a max
-projection downsampled polyDT OME-TIFF for cellpose parameter optimization.
+projection downsampled fiducial OME-TIFF for cellpose parameter optimization.
 
 Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - rework for multiple GPU support.
@@ -38,8 +38,12 @@ def batch_using_joblib(
     n_jobs
         Number of parallel workers (joblib semantics).
     """
-    Parallel(n_jobs=n_jobs)(delayed(func)(block_id) for block_id in block_ids)
-    return
+    Parallel(
+        n_jobs=n_jobs,
+        prefer="threads",
+        require="sharedmem",
+        pre_dispatch=n_jobs,
+    )(delayed(func)(block_id) for block_id in block_ids)
 
 
 @app.command()
@@ -49,6 +53,7 @@ def global_register_data(
     n_jobs: int = 16,
     swap_yx: bool = False,
     create_max_proj_tiff: bool = True,
+    zstride_level: int = 0,
 ) -> None:
     """Register all tiles in first round in global coordinates.
 
@@ -64,6 +69,8 @@ def global_register_data(
         swap y and x coordinates when loading stage positions.
     create_max_proj_tiff: bool, default = True
         create max projection tiff in the segmentation/cellpose directory.
+    zstride_level: int, default = 0
+        look for a skip z dataset.
     """
 
     import dask.array as da
@@ -72,8 +79,12 @@ def global_register_data(
     from multiview_stitcher import spatial_image_utils as si_utils
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    if zstride_level == 0:
+        datastore_path = root_path / Path(r"qi2labdatastore")
+    else:
+        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
     datastore = qi2labDataStore(datastore_path)
+    print(f"Using datastore at {datastore_path}")
 
     # convert local tiles from first round to multiscale spatial images
     msims = []
@@ -162,7 +173,7 @@ def global_register_data(
 
     # perform and save downsampled fusion
 
-    output_zarr_path = datastore._fused_root_path / Path("fused_raw.zarr")
+    output_zarr_path = datastore._fused_root_path / Path("fused.ome.zarr")
 
     fused_sim = fusion.fuse(
         [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
@@ -174,9 +185,8 @@ def global_register_data(
         },
         output_chunksize=fused_chunk_size,
         output_zarr_url=output_zarr_path,
-        zarr_options={"ome_zarr": False},
+        zarr_options={"ome_zarr": True},
         batch_options={
-            # "batch_func": misc_utils.process_batch_using_ray,
             "batch_func": batch_using_joblib,
             "n_batch": n_jobs,  # number of chunk fusions to schedule / submit at a time
             "batch_func_kwargs": {
@@ -216,16 +226,16 @@ def global_register_data(
 
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
-        # load downsampled, fused polyDT image and coordinates
-        polyDT_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
+        # load downsampled, fused fiducial image and coordinates
+        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
             return_future=False
         )
 
         # create max projection
-        polyDT_max_projection = np.max(np.squeeze(polyDT_fused), axis=0)
-        del polyDT_fused
+        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+        del fiducial_fused
 
-        filename = "polyDT_max_projection.ome.tiff"
+        filename = "fiducial_max_projection.ome.tiff"
         cellpose_path = (
             datastore._datastore_path / Path("segmentation") / Path("cellpose")
         )
@@ -253,7 +263,7 @@ def global_register_data(
                 "resolutionunit": "CENTIMETER",
             }
             tif.write(
-                polyDT_max_projection,
+                fiducial_max_projection,
                 resolution=(
                     1e4 / float(spacing_zyx_um[2]),
                     1e4 / float(spacing_zyx_um[1]),

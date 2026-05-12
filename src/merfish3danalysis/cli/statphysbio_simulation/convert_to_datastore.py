@@ -42,9 +42,6 @@ app.pretty_exceptions_enable = False
 @app.command()
 def convert_data(
     root_path: Path,
-    baysor_binary_path: str = r"/path/to/baysor",
-    baysor_options_path: str = r"/path/to/baysor_options.toml",
-    julia_threads: int = 20,
     channel_names: list[str] | None = None,
     hot_pixel_image_path: Path | None = None,
     output_path: Path | None = None,
@@ -57,12 +54,6 @@ def convert_data(
     ----------
     root_path: Path
         path to dataset
-    baysor_binary_path: Path
-        path to baysor binary
-    baysor_options_path: Path
-        path to baysor options toml
-    julia_threads: int
-        number of threads to use for Julia
     channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
     hot_pixel_image_path: Optional[Path], default None
@@ -154,9 +145,6 @@ def convert_data(
 
     # required user parameters
     datastore.channels_in_data = channel_names
-    datastore.baysor_path = baysor_binary_path
-    datastore.baysor_options = baysor_options_path
-    datastore.julia_threads = julia_threads
 
     # parameters from qi2lab microscope metadata
     datastore.num_rounds = num_rounds
@@ -216,7 +204,6 @@ def convert_data(
             ).astype(np.float32)
             # psf = psf / np.sum(psf, axis=(0, 1, 2))
             channel_psfs.append(psf)
-    channel_psfs = np.asarray(channel_psfs, dtype=np.float32)
     datastore.channel_psfs = channel_psfs
 
     # Update datastore state to note that calibrations are done

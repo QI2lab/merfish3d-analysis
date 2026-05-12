@@ -23,14 +23,9 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 def convert_data(
     root_path: Path,
-    baysor_binary_path: Path,
-    baysor_options_path: Path,
-    julia_threads: int,
     channel_names: list[str] | None = None,
-    hot_pixel_image_path: Path | None = None,
     output_path: Path | None = None,
     codebook_path: Path | None = None,
-    bit_order_path: Path | None = None,
 ) -> None:
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -38,31 +33,21 @@ def convert_data(
     ----------
     root_path: Path
         path to dataset
-    baysor_binary_path: Path
-        path to baysor binary
-    baysor_options_path: Path
-        path to baysor options toml
-    julia_threads: int
-        number of threads to use for Julia
     channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Optional[Path], default None
-        path to hot pixel map. Default of `None` will set it to all zeros.
     output_path: Optional[Path], default None
-        path to output directory. Default of `None` and will be created
-        within the root_path
+        path to output datastore. Default of `None` writes
+        ``root_path.parents[1] / "qi2labdatastore"``.
     codebook_path: Optional[Path], default None
-        path to codebook. Default of `None` assumes the file is in
-        the root_path.
-    bit_order_path: Optional[Path], default None
-        path to bit order file. This file defines what bits are present in each
-        imaging round, in channel order. Default of `None` assumes
-        the file is in the root_path.
+        path to codebook. Default of `None` uses
+        ``root_path / "additional_files" / "codebook.csv"``.
     """
 
     # codebook
     if channel_names is None:
         channel_names = ["alexa488", "atto565", "alexa647"]
+    if codebook_path is None:
+        codebook_path = root_path / Path("additional_files") / Path("codebook.csv")
     codebook = pd.read_csv(codebook_path)
     codebook.drop(columns=["id"], inplace=True)
     codebook.rename(columns={"name": "gene_id"}, inplace=True)
@@ -73,7 +58,7 @@ def convert_data(
     }
     codebook.rename(columns=bit_mapping, inplace=True)
 
-    # experimental order. 19 rounds with two readouts per round. The 20th round is polyDT and DAPI.
+    # experimental order. 19 rounds with two readouts per round. The 20th round is fiducial and DAPI.
     # The actual experiment is more complicated, but the BIL dataset has already parsed the data.
     experiment_order = np.zeros((19, 3))
     for i in range(19):
@@ -124,12 +109,15 @@ def convert_data(
             ni=ri,
             wvl=wavelengths_um[psf_idx, 1],
         )
-        psf = psf / np.sum(psf, axis=(0, 1))
+        psf = psf / np.sum(psf)
         psfs.append(psf)
     psfs = np.asarray(psfs, dtype=np.float32)
 
     # initialize datastore
-    datastore_path = root_path.parents[1] / Path("qi2labdatastore")
+    if output_path is None:
+        datastore_path = root_path.parents[1] / Path("qi2labdatastore")
+    else:
+        datastore_path = output_path
 
     # setup global datastore properties
     datastore = qi2labDataStore(datastore_path)
@@ -151,9 +139,6 @@ def convert_data(
     )  # unknown flatfield. set shading value to one.
     datastore.channel_psfs = psfs
     datastore.voxel_size_zyx_um = voxel_zyx_um
-    datastore.baysor_path = baysor_binary_path
-    datastore.baysor_options = baysor_options_path
-    datastore.julia_threads = julia_threads
 
     # Update datastore state to note that calibrations are done
     datastore_state = datastore.datastore_state
@@ -189,8 +174,8 @@ def convert_data(
         raw_image = (raw_image * e_per_ADU).astype(np.uint16)
 
         # write fidicual data first.
-        # Write the same polyDT for each round, as the data is already locally registered.
-        # The metadata tells us polyDT is the 39th entry
+        # Write the same fiducial for each round, as the data is already locally registered.
+        # The metadata tells us fiducial is the 39th entry
         # The Zhuang data is both transposed and flipped, which we fix when writing the data
         psf_idx = 0
         for _round_idx, round_id in enumerate(
@@ -251,22 +236,9 @@ def convert_data(
 
 if __name__ == "__main__":
     root_path = Path(r"/media/dps/data/zhuang/mop/mouse_sample1_raw")
-    baysor_binary_path = Path(
-        r"/home/qi2lab/Documents/github/Baysor/bin/baysor/bin/./baysor"
-    )
-    baysor_options_path = Path(
-        r"/home/qi2lab/Documents/github/merfish3d-analysis/examples/human_olfactorybulb/qi2lab_humanOB.toml"
-    )
-    julia_threads = 20
-
-    hot_pixel_image_path = None
 
     convert_data(
         root_path=root_path,
-        baysor_binary_path=baysor_binary_path,
-        baysor_options_path=baysor_options_path,
-        julia_threads=julia_threads,
         channel_names=["alexa488", "cy5", "alexa750"],
-        hot_pixel_image_path=hot_pixel_image_path,
         codebook_path=root_path / Path("additional_files") / Path("codebook.csv"),
     )

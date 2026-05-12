@@ -47,16 +47,82 @@ This will automatically setup the correct CUDA libraries and other packages in t
 
 The `merfish3d-stitcher` environment is only used when individual tiles are registered into a global coordinate system. The code automatically invokes this second environment, but it is important to note that the current install strategy does create a new conda/mamba environment beyond what you as the user creates. As soon as the dependency issue is solved, we will remove this work around.
 
-### (Optional) Baysor installation and use
-If you plan on re-segmenting cells using [Baysor](https://github.com/kharchenkolab/Baysor), please follow the [Baysor installation instructions](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation). Our package will automatically call Baysor if installed correctly.
+## Proseg segmentation optimization
 
-### (Coming soon) Proseg installation and use
-We are working to add [Proseg](https://github.com/dcjones/proseg) interoperability.
+Follow the installation instructions at [proseg](https://github.com/dcjones/proseg).
+
+Example calls to proseg:
+
+2D segmentation optimization (ignore z coordinate)
+```bash
+mkdir /path/to/qi2labdatastore/proseg/3D
+
+/path/to/proseg --gene-column gene_id -x global_x -y global_y -z global_z --fov-column tile_idx --cell-id-column cell_id --cell-id-unassigned 0 --excluded-genes ^[Bb]lank.*$ --ignore-z-coord --density-bins 1 --burnin-samples 1000 --samples 2000 --voxel-size 1.0 --burnin-voxel-size 4.0 --enforce-connectivity --output-spatialdata /path/to/data/qi2labdatastore/proseg/2D/spatialdata_2D.zarr --output-counts /path/to/data/qi2labdatastore/proseg/2D/counts_2D.mtx.gz --output-cell-polygons /path/to/data/qi2labdatastore/proseg/2D/cell_polygons_2D.geojson.gz --output-transcript-metadata /path/to/data/qi2labdatastore/proseg/2D/transcript_metadata_2D.csv.gz /path/to/data/qi2labdatastore/all_tiles_filtered_decoded_features/decoded_features.csv.gz
+```
+
+3D segmentation optimization. Here `--voxel-layers` should be roughly set to the height of the imaged volume in microns. For example, a 15 micron thick sample should have `--voxel-layers 15`.
+```bash
+mkdir /path/to/qi2labdatastore/proseg/3D
+
+/path/to/proseg --gene-column gene_id -x global_x -y global_y -z global_z --fov-column tile_idx --cell-id-column cell_id --cell-id-unassigned 0 --excluded-genes ^[Bb]lank.*$ --voxel-layers 15 --density-bins 1 --burnin-samples 1000 --samples 2000 --voxel-size 1.0 --burnin-voxel-size 4.0 --enforce-connectivity --output-spatialdata /path/to/data/qi2labdatastore/proseg/3D/spatialdata_3D.zarr --output-counts /path/to/data/qi2labdatastore/proseg/3D/counts_3D.mtx.gz --output-cell-polygons-layers /path/to/data/qi2labdatastore/proseg/3D/cell_polygons_3D.geojson.gz --output-transcript-metadata /path/to/data/qi2labdatastore/proseg/3D/transcript_metadata_3D.csv.gz /path/to/data/qi2labdatastore/all_tiles_filtered_decoded_features/decoded_features.csv.gz
+```
 
 ## Documentation
 
 To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
+## Testing
 
+The test coverage for this repository is the local simulation integration matrix in
+[tests/test_simulation_example_pipeline.py](tests/test_simulation_example_pipeline.py). These tests exercise a end-to-end simulation workflow:
 
+- convert simulation data into a fake acquisition
+- convert the acquisition into a datastore
+- preprocess with registration and optional readout deconvolution
+- decode transcripts
+- calculate F1 against the simulation ground truth
 
+The simulation dataset root is configured directly in the test file:
+
+```python
+LOCAL_SIMULATION_DATA_ROOT = Path("/media/dps/data/merfish3d_analysis-simulation")
+```
+
+If your local simulation data lives elsewhere, update that constant before running the tests.
+
+### Standard integration matrix
+
+Run the required standard matrix with:
+
+```bash
+python -m pytest tests/test_simulation_example_pipeline.py -q
+```
+
+This runs the default simulation policy across:
+
+- `cells` and `uniform`
+- axial spacings `0.315`, `1.0`, and `1.5`
+- `decon=True`
+- `feature_predictor_threshold=0.5`
+
+The default decode policy is locked to:
+
+- `minimum_pixels_per_rna = 28` for `0.315` simulations
+- `minimum_pixels_per_rna = 7` for `1.0` and `1.5` simulations
+- sampling-aware magnitude threshold defaults:
+  - `0.315` -> `0.9`
+  - `1.0` -> `0.7`
+  - `1.5` -> `0.2`
+
+### Exhaustive regression matrix
+
+Run the optional exhaustive regression matrix with:
+
+```bash
+python -m pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+```
+
+This expands the matrix to include:
+
+- `decon` and `no-decon`
+- feature predictor thresholds `0.1`, `0.2`, `0.3`, `0.4`, and `0.5`
