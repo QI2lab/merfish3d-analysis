@@ -11,19 +11,19 @@ repos:
       - id: validate-pyproject
 
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.11
+    rev: v1.7.12
     hooks:
       - id: actionlint
         args: ["-ignore", 'label ".+" is unknown']
 
   - repo: https://github.com/adhtruong/mirrors-typos
-    rev: v1.44.0
+    rev: v1.46.0
     hooks:
       - id: typos
         args: ["--force-exclude", "--write-changes"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.4
+    rev: v0.15.12
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
