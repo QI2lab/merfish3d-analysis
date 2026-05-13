@@ -202,7 +202,9 @@ def synthetic_datastore(tmp_path: Path) -> SyntheticDatastore:
 
 
 @pytest.fixture
-def partial_datastore(synthetic_datastore: SyntheticDatastore) -> PartiallyCompleteDatastore:
+def partial_datastore(
+    synthetic_datastore: SyntheticDatastore,
+) -> PartiallyCompleteDatastore:
     return PartiallyCompleteDatastore(synthetic_datastore._datastore_path)
 
 

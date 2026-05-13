@@ -377,12 +377,7 @@ def _draw_line_2d(image: np.ndarray, start_yx: np.ndarray, end_yx: np.ndarray) -
     y_max = max(start_yx[0], end_yx[0])
     x_min = min(start_yx[1], end_yx[1])
     x_max = max(start_yx[1], end_yx[1])
-    if (
-        y_max < 0
-        or y_min >= image.shape[0]
-        or x_max < 0
-        or x_min >= image.shape[1]
-    ):
+    if y_max < 0 or y_min >= image.shape[0] or x_max < 0 or x_min >= image.shape[1]:
         return
 
     y0, x0 = np.round(start_yx).astype(int)
@@ -640,11 +635,13 @@ def run_viewer(initial_path: Path | None = None) -> None:
 
             control_layout.addWidget(QtWidgets.QLabel("Bits"))
             self.bit_list = QtWidgets.QListWidget()
-            selection_mode = (getattr(
+            selection_mode = (
+                getattr(
                     QtWidgets.QAbstractItemView,
                     "SelectionMode",
                     QtWidgets.QAbstractItemView,
-                )).NoSelection
+                )
+            ).NoSelection
             self.bit_list.setSelectionMode(selection_mode)
             control_layout.addWidget(self.bit_list)
 
@@ -917,7 +914,9 @@ def run_viewer(initial_path: Path | None = None) -> None:
                     )
 
             if not channels:
-                raise ValueError("No selected image channels were available to display.")
+                raise ValueError(
+                    "No selected image channels were available to display."
+                )
 
             shape = channels[0].shape
             if any(channel.shape != shape for channel in channels):

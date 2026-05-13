@@ -258,8 +258,7 @@ unset _CONDA_JAVA_LIBJVM
         pip_deps = [
             d
             for d in BASE_PIP_DEPS
-            if not d.startswith(("napari[", "cellpose[", "ndv["))
-            and d != "qtpy"
+            if not d.startswith(("napari[", "cellpose[", "ndv[")) and d != "qtpy"
         ]
     else:
         pip_deps = BASE_PIP_DEPS
