@@ -20,6 +20,8 @@ BASE_PIP_DEPS = [
     "onnx",
     "onnxruntime-gpu",
     "napari[pyqt6]",
+    "ndv[vispy,pyqt]",
+    "qtpy",
     "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
@@ -35,6 +37,7 @@ BASE_PIP_DEPS = [
     "scikit-learn",
     "yaozarrs[write-tensorstore,io]>=0.3",
     "matplotlib",
+    "xarray",
 ]
 
 # CUDA conda pkgs (Linux)
@@ -255,7 +258,8 @@ unset _CONDA_JAVA_LIBJVM
         pip_deps = [
             d
             for d in BASE_PIP_DEPS
-            if not d.startswith("napari[") and not d.startswith("cellpose[")
+            if not d.startswith(("napari[", "cellpose[", "ndv["))
+            and d != "qtpy"
         ]
     else:
         pip_deps = BASE_PIP_DEPS
