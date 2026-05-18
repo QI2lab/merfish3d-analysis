@@ -92,6 +92,7 @@ def decode_pixels(
     lr_fdr_target: float = 0.05,
     merfish_bits: int | None = None,
     skip_optimization: bool = False,
+    normalization_method: str = "iterative",
     reprocess_existing: bool = False,
     zstride_level: int = 0,
 ) -> None:
@@ -124,6 +125,8 @@ def decode_pixels(
         number of bits in codebook. By default uses all bits in codebook.
     skip_optimization: bool, default = False
         skip running iterative optimization.
+    normalization_method : {"iterative", "global", "none"}, default "iterative"
+        normalization source for pixel decoding.
     reprocess_existing : bool, default = False
         flag to reprocess existing exact-called decoded data. Legacy decoded
         parquet files from the old caller are not supported.
@@ -149,6 +152,10 @@ def decode_pixels(
         target_gross_misid_rate=target_gross_misid_rate,
         lr_fdr_target=lr_fdr_target,
     )
+    if normalization_method not in {"iterative", "global", "none"}:
+        raise typer.BadParameter(
+            "normalization_method must be one of 'iterative', 'global', or 'none'."
+        )
 
     # initialize decodor class
     decoder = PixelDecoder(
@@ -176,6 +183,7 @@ def decode_pixels(
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
             feature_predictor_threshold=feature_predictor_threshold,
+            normalization_method=normalization_method,
             filter_method=filter_method,
             target_gross_misid_rate=target_gross_misid_rate,
             lr_fdr_target=lr_fdr_target,

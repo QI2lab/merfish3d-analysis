@@ -210,7 +210,11 @@ def _normalize_psf_to_2d(psf: np.ndarray) -> np.ndarray:
         psf_arr = psf_arr[psf_arr.shape[0] // 2]
     if psf_arr.ndim != 2:
         raise ValueError(f"Expected a 2D or 3D PSF, got shape {psf_arr.shape}")
-    return psf_arr
+
+    psf_sum = float(np.sum(psf_arr))
+    if psf_sum <= 0:
+        raise ValueError("2D PSF must have positive total intensity.")
+    return (psf_arr / psf_sum).astype(np.float32, copy=False)
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:

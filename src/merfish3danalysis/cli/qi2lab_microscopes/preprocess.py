@@ -29,6 +29,7 @@ def local_register_data(
     save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
+    ufish_model: str | None = None,
     zstride_level: int = 0,
     verbose: int = 1,
 ) -> None:
@@ -55,6 +56,10 @@ def local_register_data(
         overwrite existing registered data.
     crop_yx_decon: int, default = 1024
         size of tile for GPU deconvolution.
+    ufish_model: Optional[str], default = None
+        U-FISH model used for feature prediction. None uses the package default.
+        Known aliases include simfish/smfish, merfish, seqfish, deepspot, and exseq.
+        A local .onnx/.pth path or HuggingFace weights filename may also be used.
     zstride_level: int, default = 0
         look for a skip z dataset.
     verbose : int, default = 1
@@ -82,6 +87,7 @@ def local_register_data(
         save_all_fiducial_registered=save_all_fiducial,
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
+        ufish_model=ufish_model,
         verbose=verbose,
     )
 

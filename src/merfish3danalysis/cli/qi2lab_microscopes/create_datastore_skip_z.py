@@ -214,7 +214,9 @@ def convert_data_skip_z(
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
-        voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
+        dz_eff = float(metadata["z_step_um"]) * z_step
+        yx_pixel_um = float(metadata["yx_pixel_um"])
+        voxel_size_zyx_um = [dz_eff, yx_pixel_um, yx_pixel_um]
     except Exception:
         yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
         next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
@@ -296,6 +298,7 @@ def convert_data_skip_z(
             z=1,
             nx=51,
             dxy=voxel_size_zyx_um[1],
+            dz=voxel_size_zyx_um[0],
             NA=na,
             wvl=em_wavelengths_um[channel_id],
             ns=1.47,

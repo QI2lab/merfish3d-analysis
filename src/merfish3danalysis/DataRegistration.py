@@ -50,6 +50,56 @@ import SimpleITK as sitk
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
+UFISH_MODEL_ALIASES = {
+    "default": None,
+    "alldata": None,
+    "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
+    "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
+    "simfish": "finetune_models/v1.0.1-simfish_model.onnx",
+    "smfish": "finetune_models/v1.0.1-simfish_model.onnx",
+    "deepspot": "finetune_models/v1.0.1-deepspot_model.onnx",
+    "exseq": "finetune_models/v1.0.1-ExSeq_model.onnx",
+}
+
+
+def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
+    """Resolve a U-FISH model alias or path without requiring U-FISH imports."""
+
+    if model is None:
+        return None
+
+    model_str = str(model).strip()
+    if not model_str or model_str.lower() in {"default", "alldata"}:
+        return None
+
+    model_path = Path(model_str).expanduser()
+    if model_path.exists():
+        return model_path
+
+    weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
+    if weights_file is None:
+        return None
+
+    local_path = Path.home() / ".ufish" / weights_file
+    if local_path.exists():
+        return local_path
+
+    return weights_file
+
+
+def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
+    """Load default U-FISH weights, a local weights path, or a HuggingFace file."""
+
+    weights = _resolve_ufish_weights_path(model)
+    if weights is None:
+        ufish.load_weights_from_internet()
+        return
+
+    if isinstance(weights, Path):
+        ufish.load_weights_from_path(weights)
+    else:
+        ufish.load_weights(weights_file=weights)
+
 
 def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     """Fetch PSF by index from uniform or ragged channel PSF storage."""
@@ -496,7 +546,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if (not feature_predictor_on_disk) or dr._overwrite_registered:
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
-            ufish.load_weights_from_internet()
+            _load_ufish_model(ufish, dr._ufish_model)
             feature_predictor_loc, feature_predictor_data = ufish.predict(
                 data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
@@ -597,6 +647,11 @@ class DataRegistration:
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
         Crop size for deconvolution applied to both y and x dimensions.
+    ufish_model: Optional[str | Path], default None
+        U-FISH model to use for feature prediction. ``None`` keeps the default
+        U-FISH model. Known aliases include ``simfish``, ``smfish``, ``merfish``,
+        ``seqfish``, ``deepspot``, and ``exseq``. A local ``.onnx``/``.pth`` path
+        or HuggingFace weights filename can also be supplied.
     verbose : int, default 1
         Progress verbosity. Set to 0 to suppress routine progress prints.
     """
@@ -612,6 +667,7 @@ class DataRegistration:
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
+        ufish_model: str | Path | None = None,
         verbose: int = 1,
     ) -> None:
         self._datastore = datastore
@@ -630,6 +686,7 @@ class DataRegistration:
         self._overwrite_registered = overwrite_registered
         self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
+        self._ufish_model = ufish_model
         self._original_print = builtins.print
         self._verbose = verbose
 
@@ -884,6 +941,16 @@ class DataRegistration:
 
         self.tile_id = tile_id
         self._generate_registrations()
+        self._apply_registration_to_bits()
+
+    def apply_registration_to_one_tile(self, tile_id: int | str) -> None:
+        """Apply existing local registrations to readout bits for one tile.
+
+        This uses the rigid and optical-flow transforms already stored in the
+        datastore. It does not estimate or overwrite fiducial registrations.
+        """
+
+        self.tile_id = tile_id
         self._apply_registration_to_bits()
 
     def _load_raw_data(self) -> None:
