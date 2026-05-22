@@ -22,7 +22,12 @@ QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
     5.0: 0.2,
 }
+QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST = {
+    3.0: 0.3,
+    5.0: 0.2,
+}
 QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
+QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
 def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
@@ -47,6 +52,43 @@ def _default_qi2lab_magnitude_threshold(
     )
     lower_threshold = QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
     return (lower_threshold, QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD[1])
+
+
+def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
+    """Return whether registered readout data were saved after deconvolution."""
+
+    tile_ids = datastore.tile_ids
+    bit_ids = datastore.bit_ids
+    if tile_ids is None or bit_ids is None:
+        return False
+    tile_ids = list(tile_ids)
+    bit_ids = list(bit_ids)
+    if not tile_ids or not bit_ids:
+        return False
+
+    entity_root = datastore._readouts_root_path / tile_ids[0] / bit_ids[0]
+    attributes = datastore._load_entity_attributes(
+        entity_root,
+        image_names=("registered_decon_data",),
+    )
+    return bool(attributes.get("deconvolution", False))
+
+
+def _default_qi2lab_feature_predictor_threshold(
+    datastore: qi2labDataStore,
+) -> float:
+    """Return the sampling-aware default U-FISH mask threshold."""
+
+    if datastore.microscope_type != "2D" or not _readouts_are_deconvolved(datastore):
+        return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
+
+    z_step_um = float(datastore.voxel_size_zyx_um[0])
+    nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
+    nearest_multiple = min(
+        QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
+        key=lambda value: abs(value - nyquist_multiple),
+    )
+    return QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
 
 
 def _validate_filter_arguments(
@@ -85,7 +127,7 @@ def decode_pixels(
     root_path: Path,
     num_gpus: int = 1,
     minimum_pixels_per_RNA: int | None = None,
-    feature_predictor_threshold: float = 0.5,
+    feature_predictor_threshold: float | None = None,
     magnitude_threshold: tuple[float, float] | None = None,
     filter_method: str = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
@@ -107,8 +149,10 @@ def decode_pixels(
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
         Defaults to 7 for 2D data and 28 for 3D data.
-    feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.5
+    feature_predictor_threshold : float, optional
+        threshold to accept feature_predictor prediction. Defaults to 0.5, except
+        2D deconvolved readouts use an axial-sampling-aware default:
+        ~3x Nyquist -> 0.3 and ~5x Nyquist -> 0.2.
     magnitude_threshold : tuple[float,float], optional
         list of two floats [min, max] magnitude thresholds to accept a decoded
         pixel. Defaults to (0.9, 10.0) for 3D data and a 2D lookup keyed by
@@ -145,6 +189,10 @@ def decode_pixels(
         merfish_bits = datastore.num_bits
     if minimum_pixels_per_RNA is None:
         minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(datastore)
+    if feature_predictor_threshold is None:
+        feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
+            datastore
+        )
     if magnitude_threshold is None:
         magnitude_threshold = _default_qi2lab_magnitude_threshold(datastore)
     _validate_filter_arguments(

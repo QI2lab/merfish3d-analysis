@@ -38,7 +38,6 @@ BASE_PIP_DEPS = [
     "roifile",
     "shapely",
     "fastparquet",
-    "pyimagej",
     "rtree",
     "numpy==1.26.4",
 ]

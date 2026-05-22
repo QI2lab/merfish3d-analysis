@@ -41,7 +41,6 @@ def local_register_data(root_path: Path) -> None:
     registration_factory = DataRegistration(
         datastore=datastore,
         perform_optical_flow=False,
-        bkd_subtract_fiducial=False,
         overwrite_registered=True,
         save_all_fiducial_registered=False,
         decon_readout=True,
