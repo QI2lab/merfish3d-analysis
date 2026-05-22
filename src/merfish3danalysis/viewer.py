@@ -17,9 +17,19 @@ class ChannelStack:
     labels: list[str]
 
 
+@dataclass(frozen=True)
+class GlobalChannelStack:
+    """Global channel stack with micron coordinate metadata."""
+
+    stack: ChannelStack
+    origin_zyx_um: np.ndarray
+    spacing_zyx_um: np.ndarray
+
+
 def stack_with_micron_coords(
     stack: ChannelStack,
     voxel_size_zyx_um: Any,
+    origin_zyx_um: Any | None = None,
 ) -> Any:
     """Attach zyx micron coordinates to a channel stack for ndv display."""
 
@@ -27,17 +37,24 @@ def stack_with_micron_coords(
 
     data = stack.data.astype(np.float32, copy=False)
     voxel = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    origin = (
+        np.zeros(3, dtype=np.float32)
+        if origin_zyx_um is None
+        else np.asarray(origin_zyx_um, dtype=np.float32)
+    )
     if data.ndim != 4 or voxel.shape[0] != 3:
         raise ValueError("Expected channel stack shape (c, z, y, x).")
+    if origin.shape[0] != 3:
+        raise ValueError("Expected origin shape (3,).")
 
     return xr.DataArray(
         data,
         dims=("c", "z_um", "y_um", "x_um"),
         coords={
             "c": np.arange(data.shape[0]),
-            "z_um": np.arange(data.shape[1], dtype=np.float32) * voxel[0],
-            "y_um": np.arange(data.shape[2], dtype=np.float32) * voxel[1],
-            "x_um": np.arange(data.shape[3], dtype=np.float32) * voxel[2],
+            "z_um": origin[0] + np.arange(data.shape[1], dtype=np.float32) * voxel[0],
+            "y_um": origin[1] + np.arange(data.shape[2], dtype=np.float32) * voxel[1],
+            "x_um": origin[2] + np.arange(data.shape[3], dtype=np.float32) * voxel[2],
         },
         attrs={"z_spacing_um": float(voxel[0])},
     )
@@ -147,6 +164,38 @@ def cell_outlines_available(datastore: Any) -> bool:
         / "imagej_rois"
         / "global_coords_rois.zip"
     ).exists()
+
+
+def global_fused_available(datastore: Any) -> bool:
+    """Return whether a fused global polyDT image appears to be available."""
+
+    if component_summary(datastore)["Fused"]:
+        return True
+
+    datastore_path = _datastore_path(datastore)
+    if datastore_path is None:
+        return False
+
+    fiducial_name = getattr(datastore, "fiducial_folder_name", "polyDT")
+    fused_path = datastore_path / "fused" / f"fused_{fiducial_name}_iso_zyx"
+    return fused_path.exists()
+
+
+def global_cellpose_segmentation_available(datastore: Any) -> bool:
+    """Return whether a global polyDT Cellpose segmentation image is available."""
+
+    if component_summary(datastore)["SegmentedCells"]:
+        return True
+
+    datastore_path = _datastore_path(datastore)
+    if datastore_path is None:
+        return False
+
+    fiducial_name = getattr(datastore, "fiducial_folder_name", "polyDT")
+    masks_path = (
+        datastore_path / "segmentation" / "cellpose" / f"masks_{fiducial_name}_iso_zyx"
+    )
+    return masks_path.exists()
 
 
 def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
@@ -331,6 +380,40 @@ def rasterize_decoded_spots(
     return overlay
 
 
+def rasterize_global_decoded_spots(
+    decoded_spots: Any,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+    genes: list[str] | None = None,
+    radius: int = 1,
+) -> np.ndarray:
+    """Rasterize decoded spots with global micron XY coordinates into an overlay."""
+
+    overlay = np.zeros(shape_zyx, dtype=np.float32)
+    if decoded_spots is None or len(decoded_spots) == 0:
+        return overlay
+
+    required_columns = {"global_y", "global_x", "gene_id"}
+    if not required_columns.issubset(decoded_spots.columns):
+        return overlay
+
+    spots = decoded_spots
+    if genes:
+        genes_set = {gene.strip() for gene in genes if gene.strip()}
+        if genes_set:
+            spots = spots.loc[spots["gene_id"].astype(str).isin(genes_set)]
+
+    origin = np.asarray(origin_zyx_um, dtype=float)
+    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    coords_um = spots[["global_y", "global_x"]].to_numpy(dtype=float, copy=False)
+    coords_yx = (coords_um - origin[1:]) / spacing[1:]
+    for yx in coords_yx:
+        _paint_point(overlay, np.asarray([0.0, yx[0], yx[1]], dtype=float), radius)
+
+    return overlay
+
+
 def decoded_overlay_for_tile(
     datastore: Any,
     tile: str,
@@ -368,6 +451,31 @@ def decoded_overlay_for_tile(
         return rasterize_decoded_spots(decoded_spots, shape_zyx, genes=genes)
 
     return None
+
+
+def global_decoded_overlay(
+    datastore: Any,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+    genes: list[str] | None = None,
+) -> np.ndarray | None:
+    """Load and rasterize globally decoded spots on the fused global canvas."""
+
+    if not decoded_available(datastore):
+        return None
+
+    decoded_spots = datastore.load_global_filtered_decoded_spots()
+    if decoded_spots is None:
+        return None
+
+    return rasterize_global_decoded_spots(
+        decoded_spots,
+        shape_zyx=shape_zyx,
+        origin_zyx_um=origin_zyx_um,
+        spacing_zyx_um=spacing_zyx_um,
+        genes=genes,
+    )
 
 
 def _draw_line_2d(image: np.ndarray, start_yx: np.ndarray, end_yx: np.ndarray) -> None:
@@ -445,6 +553,39 @@ def rasterize_cell_outlines(
     return np.repeat(overlay_2d[np.newaxis, :, :], shape_zyx[0], axis=0)
 
 
+def rasterize_global_cell_outlines(
+    outlines: dict[Any, np.ndarray] | None,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+) -> np.ndarray:
+    """Rasterize global Cellpose outlines directly onto the fused global canvas."""
+
+    overlay_2d = np.zeros(shape_zyx[1:], dtype=np.float32)
+    if not outlines:
+        return np.zeros(shape_zyx, dtype=np.float32)
+
+    origin = np.asarray(origin_zyx_um, dtype=float)
+    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    for outline in outlines.values():
+        global_xy = np.asarray(outline, dtype=float)
+        if global_xy.ndim != 2 or global_xy.shape[0] < 2 or global_xy.shape[1] != 2:
+            continue
+        global_yx = global_xy[:, ::-1]
+        local_yx = (global_yx - origin[1:]) / spacing[1:]
+        if (
+            local_yx[:, 0].max() < 0
+            or local_yx[:, 0].min() >= overlay_2d.shape[0]
+            or local_yx[:, 1].max() < 0
+            or local_yx[:, 1].min() >= overlay_2d.shape[1]
+        ):
+            continue
+        for idx in range(local_yx.shape[0]):
+            _draw_line_2d(overlay_2d, local_yx[idx - 1], local_yx[idx])
+
+    return np.repeat(overlay_2d[np.newaxis, :, :], shape_zyx[0], axis=0)
+
+
 def _load_global_cellpose_roi_zip(datastore: Any) -> dict[int, np.ndarray] | None:
     """Load existing global Cellpose ROI zip when the JSON loader is unavailable."""
 
@@ -508,6 +649,83 @@ def cell_outline_overlay_for_tile(
         affine_zyx_um=np.asarray(affine, dtype=float),
         origin_zyx_um=np.asarray(origin, dtype=float),
         spacing_zyx_um=np.asarray(spacing, dtype=float),
+    )
+
+
+def global_cell_outline_overlay(
+    datastore: Any,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+) -> np.ndarray | None:
+    """Load and rasterize Cellpose outlines on the fused global canvas."""
+
+    if not cell_outlines_available(datastore):
+        return None
+
+    outlines = _load_global_cellpose_roi_zip(datastore)
+    if not outlines:
+        outlines = datastore.load_global_cellpose_outlines()
+    if outlines is None:
+        return None
+
+    return rasterize_global_cell_outlines(
+        outlines,
+        shape_zyx=shape_zyx,
+        origin_zyx_um=origin_zyx_um,
+        spacing_zyx_um=spacing_zyx_um,
+    )
+
+
+def _match_global_overlay_shape(
+    overlay: np.ndarray,
+    shape_zyx: tuple[int, int, int],
+) -> np.ndarray:
+    """Convert a 2D or single-plane global overlay to the fused image shape."""
+
+    overlay_zyx = _as_zyx(overlay)
+    if overlay_zyx.shape == shape_zyx:
+        return overlay_zyx.astype(np.float32, copy=False)
+    if overlay_zyx.shape[0] == 1 and overlay_zyx.shape[1:] == shape_zyx[1:]:
+        return np.repeat(overlay_zyx, shape_zyx[0], axis=0).astype(
+            np.float32, copy=False
+        )
+    raise ValueError("Global overlay shape does not match fused global image.")
+
+
+def load_global_image_channels(
+    datastore: Any,
+    include_segmentation: bool = True,
+) -> GlobalChannelStack:
+    """Load fused global polyDT image and optional global segmentation image."""
+
+    loaded = datastore.load_global_fidicual_image(return_future=False)
+    if loaded is None:
+        raise ValueError("No fused global polyDT image was available to display.")
+
+    fused_image, _affine, origin_zyx_um, spacing_zyx_um = loaded
+    fused_zyx = _as_zyx(fused_image)
+    fused_projection = np.max(fused_zyx, axis=0, keepdims=True).astype(
+        np.float32, copy=False
+    )
+    channels = [fused_projection]
+    labels = ["global polyDT max projection"]
+
+    if include_segmentation and global_cellpose_segmentation_available(datastore):
+        segmentation = datastore.load_global_cellpose_segmentation_image(
+            return_future=False
+        )
+        if segmentation is not None:
+            segmentation_zyx = _match_global_overlay_shape(
+                segmentation, fused_projection.shape
+            )
+            channels.append(segmentation_zyx)
+            labels.append("global polyDT segmentation")
+
+    return GlobalChannelStack(
+        stack=ChannelStack(data=np.stack(channels, axis=0), labels=labels),
+        origin_zyx_um=np.asarray(origin_zyx_um, dtype=np.float32),
+        spacing_zyx_um=np.asarray(spacing_zyx_um, dtype=np.float32),
     )
 
 
@@ -613,6 +831,9 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.component_label.setWordWrap(True)
             control_layout.addWidget(self.component_label)
 
+            self.global_view_checkbox = QtWidgets.QCheckBox("global fused view")
+            control_layout.addWidget(self.global_view_checkbox)
+
             control_layout.addWidget(QtWidgets.QLabel("Tile"))
             self.tile_combo = QtWidgets.QComboBox()
             control_layout.addWidget(self.tile_combo)
@@ -646,14 +867,19 @@ def run_viewer(initial_path: Path | None = None) -> None:
             control_layout.addWidget(self.bit_list)
 
             self.decoded_checkbox = QtWidgets.QCheckBox("decoded codebook words")
-            self.gene_combo = QtWidgets.QComboBox()
-            self.gene_combo.setEditable(False)
-            self.gene_combo.activated.connect(self._on_gene_selected)
+            self.gene_list = QtWidgets.QListWidget()
+            self.gene_list.setSelectionMode(selection_mode)
+            self.gene_list.itemChanged.connect(self._on_gene_checked)
             self.cells_checkbox = QtWidgets.QCheckBox("cell outlines")
+            self.global_segmentation_checkbox = QtWidgets.QCheckBox(
+                "polyDT segmentation"
+            )
+            self.global_segmentation_checkbox.setChecked(True)
             control_layout.addWidget(self.decoded_checkbox)
-            control_layout.addWidget(QtWidgets.QLabel("Decoded gene"))
-            control_layout.addWidget(self.gene_combo)
+            control_layout.addWidget(QtWidgets.QLabel("RNA identities"))
+            control_layout.addWidget(self.gene_list)
             control_layout.addWidget(self.cells_checkbox)
+            control_layout.addWidget(self.global_segmentation_checkbox)
 
             self.display_button = QtWidgets.QPushButton("Display")
             self.display_button.clicked.connect(self.display_selection)
@@ -729,18 +955,20 @@ def run_viewer(initial_path: Path | None = None) -> None:
 
             self.bit_list.clear()
             self.gene_to_bits = codebook_gene_bits(self.datastore)
-            self.gene_combo.setUpdatesEnabled(False)
-            self.gene_combo.blockSignals(True)
-            self.gene_combo.clear()
-            self.gene_combo.addItem("All decoded genes")
-            for gene_id in sorted(self.gene_to_bits):
-                self.gene_combo.addItem(gene_id)
-            self.gene_combo.blockSignals(False)
-            self.gene_combo.setUpdatesEnabled(True)
-
+            self.gene_list.setUpdatesEnabled(False)
+            self.gene_list.blockSignals(True)
+            self.gene_list.clear()
             item_flag = getattr(QtCore.Qt, "ItemFlag", QtCore.Qt).ItemIsUserCheckable
             checked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Checked
             unchecked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Unchecked
+            for gene_id in sorted(self.gene_to_bits):
+                item = QtWidgets.QListWidgetItem(gene_id)
+                item.setFlags(item.flags() | item_flag)
+                item.setCheckState(checked_state)
+                self.gene_list.addItem(item)
+            self.gene_list.blockSignals(False)
+            self.gene_list.setUpdatesEnabled(True)
+
             for idx, bit_id in enumerate(self.datastore.bit_ids or []):
                 item = QtWidgets.QListWidgetItem(str(bit_id))
                 item.setFlags(item.flags() | item_flag)
@@ -767,13 +995,18 @@ def run_viewer(initial_path: Path | None = None) -> None:
             )
             self.decoded_checkbox.setEnabled(decoded_available(self.datastore))
             self.cells_checkbox.setEnabled(cell_outlines_available(self.datastore))
+            self.global_view_checkbox.setEnabled(global_fused_available(self.datastore))
+            self.global_segmentation_checkbox.setEnabled(
+                global_cellpose_segmentation_available(self.datastore)
+            )
 
-        def _on_gene_selected(self, _index: int) -> None:
-            gene_id = self.gene_combo.currentText().strip()
-            if gene_id not in self.gene_to_bits:
+        def _on_gene_checked(self, _item: Any) -> None:
+            selected_genes = self._selected_decoded_genes()
+            if not selected_genes:
                 return
-
-            bit_set = set(self.gene_to_bits[gene_id])
+            bit_set = set().union(
+                *(set(self.gene_to_bits[gene_id]) for gene_id in selected_genes)
+            )
             checked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Checked
             unchecked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Unchecked
             self.bit_list.blockSignals(True)
@@ -813,10 +1046,13 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return sources
 
         def _selected_decoded_genes(self) -> list[str]:
-            gene_id = self.gene_combo.currentText().strip()
-            if gene_id and gene_id != "All decoded genes":
-                return [gene_id]
-            return []
+            selected: list[str] = []
+            checked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Checked
+            for row in range(self.gene_list.count()):
+                item = self.gene_list.item(row)
+                if item.checkState() == checked_state:
+                    selected.append(item.text())
+            return selected
 
         def _apply_lut_names(self, labels: list[str]) -> None:
             if self.array_viewer is None:
@@ -924,10 +1160,98 @@ def run_viewer(initial_path: Path | None = None) -> None:
 
             return ChannelStack(data=np.stack(channels, axis=0), labels=labels), step
 
+        def display_global_selection(self) -> None:
+            """Display fused global polyDT data and global overlays."""
+
+            selected_genes = self._selected_decoded_genes()
+            total_steps = 2
+            if (
+                self.global_segmentation_checkbox.isChecked()
+                and self.global_segmentation_checkbox.isEnabled()
+            ):
+                total_steps += 1
+            if self.decoded_checkbox.isChecked():
+                total_steps += 1
+            if self.cells_checkbox.isChecked():
+                total_steps += 1
+
+            self._start_progress(total_steps, "Loading global fused data...")
+            step = 0
+            global_stack = load_global_image_channels(
+                self.datastore,
+                include_segmentation=(
+                    self.global_segmentation_checkbox.isChecked()
+                    and self.global_segmentation_checkbox.isEnabled()
+                ),
+            )
+            stack = global_stack.stack
+            step += 1 + int("global polyDT segmentation" in stack.labels)
+            self._advance_progress(step, "Loaded global fused data")
+
+            if self.decoded_checkbox.isChecked():
+                decoded_overlay = global_decoded_overlay(
+                    self.datastore,
+                    shape_zyx=stack.data.shape[1:],
+                    origin_zyx_um=global_stack.origin_zyx_um,
+                    spacing_zyx_um=global_stack.spacing_zyx_um,
+                    genes=selected_genes,
+                )
+                decoded_label = (
+                    "global decoded " + ", ".join(selected_genes)
+                    if selected_genes
+                    else "global decoded codebook words"
+                )
+                stack = append_overlay_channel(stack, decoded_overlay, decoded_label)
+                step += 1
+                self._advance_progress(step, f"Loaded {decoded_label}")
+
+            if self.cells_checkbox.isChecked():
+                cell_overlay = global_cell_outline_overlay(
+                    self.datastore,
+                    shape_zyx=stack.data.shape[1:],
+                    origin_zyx_um=global_stack.origin_zyx_um,
+                    spacing_zyx_um=global_stack.spacing_zyx_um,
+                )
+                stack = append_overlay_channel(
+                    stack, cell_overlay, "global cell outlines"
+                )
+                step += 1
+                self._advance_progress(step, "Loaded global cell outlines")
+
+            self.channel_labels = stack.labels
+            self._reset_array_viewer(
+                stack_with_micron_coords(
+                    stack,
+                    global_stack.spacing_zyx_um,
+                    origin_zyx_um=global_stack.origin_zyx_um,
+                )
+            )
+            step += 1
+            self._advance_progress(step, "Updated viewer")
+            self._apply_lut_names(self.channel_labels)
+            QtCore.QTimer.singleShot(
+                50, lambda labels=stack.labels: self._apply_lut_names(labels)
+            )
+            QtCore.QTimer.singleShot(
+                250, lambda labels=stack.labels: self._apply_lut_names(labels)
+            )
+            self.status_label.setText("Displayed: " + ", ".join(stack.labels))
+
         def display_selection(self) -> None:
             if self.datastore is None:
                 self.status_label.setText("Select a datastore first.")
                 return
+            if self.global_view_checkbox.isChecked():
+                try:
+                    self.display_global_selection()
+                except ValueError as exc:
+                    self.status_label.setText(unavailable_data_message(exc))
+                except Exception as exc:
+                    self.status_label.setText(str(exc))
+                finally:
+                    self._finish_progress(self.status_label.text())
+                return
+
             tile = self.tile_combo.currentText()
             if not tile:
                 self.status_label.setText("No tile available.")

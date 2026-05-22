@@ -15,9 +15,14 @@ from merfish3danalysis.viewer import (
     component_summary,
     decoded_available,
     decoded_overlay_for_tile,
+    global_cell_outline_overlay,
+    global_decoded_overlay,
+    global_fused_available,
+    load_global_image_channels,
     load_image_channels,
     normalize_datastore_path,
     rasterize_cell_outlines,
+    rasterize_global_decoded_spots,
     selected_image_channel_count,
     stack_with_micron_coords,
     unavailable_data_message,
@@ -63,7 +68,12 @@ class FakeDatastore:
             "FilteredSpots": True,
         }
         self.image = np.arange(27, dtype=np.uint16).reshape(3, 3, 3)
+        self.global_image = np.arange(3 * 8 * 10, dtype=np.uint16).reshape(3, 8, 10)
+        self.global_segmentation = np.arange(8 * 10, dtype=np.uint16).reshape(8, 10)
         self.voxel_size_zyx_um = np.asarray([0.5, 0.108, 0.108], dtype=np.float32)
+        self.global_origin_zyx_um = np.asarray([10.0, 20.0, 30.0], dtype=np.float32)
+        self.global_spacing_zyx_um = np.asarray([0.5, 1.0, 2.0], dtype=np.float32)
+        self.fiducial_folder_name = "polyDT"
 
     def load_local_corrected_image(
         self,
@@ -101,6 +111,9 @@ class FakeDatastore:
                 "tile_z": [1, 3],
                 "tile_y": [1, 3],
                 "tile_x": [1, 3],
+                "global_z": [10.5, 11.0],
+                "global_y": [22.0, 99.0],
+                "global_x": [34.0, 99.0],
                 "gene_id": ["GeneA", "GeneB"],
             }
         )
@@ -110,7 +123,7 @@ class FakeDatastore:
         return pd.DataFrame()
 
     def load_global_cellpose_outlines(self) -> dict[int, np.ndarray]:
-        return {1: np.asarray([[0, 0], [2, 0], [2, 2], [0, 2]], dtype=float)}
+        return {1: np.asarray([[32, 22], [36, 22], [36, 25], [32, 25]], dtype=float)}
 
     def load_global_coord_xforms_um(
         self, tile: str
@@ -121,6 +134,25 @@ class FakeDatastore:
     def load_codebook_parsed(self) -> tuple[list[str], np.ndarray]:
         return ["GeneA", "GeneB"], np.asarray([[1, 0], [1, 1]], dtype=int)
 
+    def load_global_fidicual_image(
+        self,
+        return_future: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        del return_future
+        return (
+            self.global_image,
+            np.eye(4, dtype=np.float32),
+            self.global_origin_zyx_um,
+            self.global_spacing_zyx_um,
+        )
+
+    def load_global_cellpose_segmentation_image(
+        self,
+        return_future: bool = False,
+    ) -> np.ndarray:
+        del return_future
+        return self.global_segmentation
+
 
 class SyntheticDatastore(FakeDatastore):
     def __init__(self, datastore_path: Path) -> None:
@@ -130,6 +162,7 @@ class SyntheticDatastore(FakeDatastore):
         self.datastore_state["FilteredSpots"] = False
         self.datastore_state["DecodedSpots"] = False
         self.datastore_state["SegmentedCells"] = False
+        self.datastore_state["Fused"] = True
         self.image = np.arange(3 * 12 * 16, dtype=np.uint16).reshape(3, 12, 16)
         self.decoded_spots = pd.DataFrame(
             {
@@ -137,6 +170,9 @@ class SyntheticDatastore(FakeDatastore):
                 "tile_z": [1, 1, 1],
                 "tile_y": [3, 8, 4],
                 "tile_x": [4, 10, 5],
+                "global_z": [10.5, 10.5, 10.5],
+                "global_y": [23.0, 28.0, 24.0],
+                "global_x": [38.0, 50.0, 40.0],
                 "gene_id": ["GeneA", "GeneB", "GeneA"],
             }
         )
@@ -197,6 +233,8 @@ def synthetic_datastore(tmp_path: Path) -> SyntheticDatastore:
     )
     off_tile_roi.name = "cell_0000002"
     roiwrite(roi_dir / "global_coords_rois.zip", [in_tile_roi, off_tile_roi])
+    masks_dir = datastore_path / "segmentation" / "cellpose" / "masks_polyDT_iso_zyx"
+    masks_dir.mkdir(parents=True)
 
     return SyntheticDatastore(datastore_path)
 
@@ -235,6 +273,7 @@ def test_viewer_detects_decoded_and_cell_outputs_when_state_is_stale(
 ) -> None:
     assert decoded_available(synthetic_datastore) is True
     assert cell_outlines_available(synthetic_datastore) is True
+    assert global_fused_available(synthetic_datastore) is True
 
 
 def test_codebook_gene_bits_maps_genes_to_existing_bit_ids(
@@ -409,6 +448,85 @@ def test_cell_outline_overlay_loads_synthetic_roi_zip(
     projected_outline_yx = np.argwhere(overlay.max(axis=0) > 0)
     np.testing.assert_array_equal(projected_outline_yx.min(axis=0), [2, 2])
     np.testing.assert_array_equal(projected_outline_yx.max(axis=0), [6, 7])
+
+
+def test_load_global_image_channels_includes_fused_polydt_and_segmentation(
+    synthetic_datastore: SyntheticDatastore,
+) -> None:
+    stack = load_global_image_channels(
+        synthetic_datastore,
+        include_segmentation=True,
+    )
+
+    assert stack.stack.data.shape == (2, 1, 8, 10)
+    assert stack.stack.labels == [
+        "global polyDT max projection",
+        "global polyDT segmentation",
+    ]
+    np.testing.assert_allclose(stack.origin_zyx_um, [10.0, 20.0, 30.0])
+    np.testing.assert_allclose(stack.spacing_zyx_um, [0.5, 1.0, 2.0])
+    np.testing.assert_array_equal(
+        stack.stack.data[1],
+        synthetic_datastore.global_segmentation[np.newaxis, :, :],
+    )
+    np.testing.assert_array_equal(
+        stack.stack.data[0],
+        np.max(synthetic_datastore.global_image, axis=0, keepdims=True),
+    )
+
+
+def test_global_decoded_overlay_uses_global_coordinates(
+    synthetic_datastore: SyntheticDatastore,
+) -> None:
+    overlay = global_decoded_overlay(
+        synthetic_datastore,
+        shape_zyx=(1, 8, 10),
+        origin_zyx_um=synthetic_datastore.global_origin_zyx_um,
+        spacing_zyx_um=synthetic_datastore.global_spacing_zyx_um,
+        genes=["GeneA"],
+    )
+
+    assert overlay is not None
+    assert overlay[0, 3, 4] == 1.0
+    assert overlay[0, 8 - 1, 10 - 1] == 0.0
+
+
+def test_global_cell_outline_overlay_draws_global_roi_zip(
+    synthetic_datastore: SyntheticDatastore,
+) -> None:
+    overlay = global_cell_outline_overlay(
+        synthetic_datastore,
+        shape_zyx=(3, 12, 16),
+        origin_zyx_um=np.zeros(3),
+        spacing_zyx_um=np.ones(3),
+    )
+
+    assert overlay is not None
+    projected_outline_yx = np.argwhere(overlay.max(axis=0) > 0)
+    np.testing.assert_array_equal(projected_outline_yx.min(axis=0), [2, 2])
+    np.testing.assert_array_equal(projected_outline_yx.max(axis=0), [6, 7])
+
+
+def test_rasterize_global_decoded_spots_filters_gene_and_maps_um_to_pixels() -> None:
+    decoded_spots = pd.DataFrame(
+        {
+            "global_y": [12.0, 14.0],
+            "global_x": [24.0, 28.0],
+            "gene_id": ["GeneA", "GeneB"],
+        }
+    )
+
+    overlay = rasterize_global_decoded_spots(
+        decoded_spots,
+        shape_zyx=(1, 6, 6),
+        origin_zyx_um=[0.0, 10.0, 20.0],
+        spacing_zyx_um=[1.0, 1.0, 2.0],
+        genes=["GeneA"],
+        radius=0,
+    )
+
+    assert overlay[0, 2, 2] == 1.0
+    assert overlay[0, 4, 4] == 0.0
 
 
 def test_rasterize_cell_outlines_skips_off_tile_outlines() -> None:
