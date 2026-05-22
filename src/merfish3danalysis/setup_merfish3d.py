@@ -55,8 +55,6 @@ LINUX_CONDA_CUDA_PKGS = [
     "cutensor",
     "nccl",
     "pyopengl",
-    "pyimagej",
-    "openjdk=11",
     "'numpy=1.26.4'",
     "'scipy=1.12.0'",
     "shapely",
@@ -166,7 +164,7 @@ def setup_cuda(
     Linux-only setup:
 
     1) Install CUDA packages via conda/mamba (rapidsai + conda-forge + nvidia).
-    2) Write activation hooks exporting CUDA_PATH and JAVA_HOME for this env.
+    2) Write activation hooks exporting CUDA_PATH for this env.
     3) (Optional) Prep CURRENT env: torch/vision cu128, BASE_PIP_DEPS, jax local CUDA.
     4) Create NEW env 'merfish3d-stitcher' (Python 3.12) and pip-install useful deps.
     """
@@ -190,11 +188,9 @@ def setup_cuda(
     channels = "-c rapidsai -c conda-forge -c nvidia"
     run(f"{installer} install -y {channels} {' '.join(LINUX_CONDA_CUDA_PKGS)}")
 
-    # 2) Activation / deactivation hooks
+    # 2) Activation hooks
     activate_dir = Path(prefix) / "etc" / "conda" / "activate.d"
-    deactivate_dir = Path(prefix) / "etc" / "conda" / "deactivate.d"
     activate_dir.mkdir(parents=True, exist_ok=True)
-    deactivate_dir.mkdir(parents=True, exist_ok=True)
 
     # CUDA hook (kept; no longer deletes other hooks)
     sh_cuda = activate_dir / "cuda_override.sh"
@@ -217,38 +213,6 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
         encoding="utf-8",
     )
     sh_cuda.chmod(sh_cuda.stat().st_mode | stat.S_IEXEC)
-
-    # NEW: Java hook — ensure JPype/pyimagej can see libjvm.so
-    sh_java = activate_dir / "java_openjdk.sh"
-    sh_java.write_text(
-        """#!/usr/bin/env sh
-# Point JAVA_HOME at the env's OpenJDK so JPype/scyjava can find libjvm.so
-export JAVA_HOME="${CONDA_PREFIX}"
-export PATH="$JAVA_HOME/bin:$PATH"
-
-# Helpful for debugging: remember the resolved libjvm path
-if [ -f "$JAVA_HOME/lib/server/libjvm.so" ]; then
-  export _CONDA_JAVA_LIBJVM="$JAVA_HOME/lib/server/libjvm.so"
-else
-  # Fallback for nonstandard layouts
-  _ALT_JVM="$(command -v find >/dev/null 2>&1 && find "$JAVA_HOME" -type f -name libjvm.so 2>/dev/null | head -n1)"
-  [ -n "$_ALT_JVM" ] && export _CONDA_JAVA_LIBJVM="$_ALT_JVM"
-fi
-""",
-        encoding="utf-8",
-    )
-    sh_java.chmod(sh_java.stat().st_mode | stat.S_IEXEC)
-
-    # Deactivation: clean up JAVA_HOME (leave PATH/LD_LIBRARY_PATH alone to avoid tricky string surgery)
-    sh_java_deact = deactivate_dir / "java_openjdk.sh"
-    sh_java_deact.write_text(
-        """#!/usr/bin/env sh
-unset JAVA_HOME
-unset _CONDA_JAVA_LIBJVM
-""",
-        encoding="utf-8",
-    )
-    sh_java_deact.chmod(sh_java_deact.stat().st_mode | stat.S_IEXEC)
 
     # 3) (Optional) Prep CURRENT env
     run(

@@ -25,10 +25,10 @@ def local_register_data(
     decon: bool = True,
     opticalflow: bool = True,
     decon_allfiducial: bool = True,
-    bkdsubtract_all_fiducial: bool = False,
     save_all_fiducial: bool = False,
     overwrite: bool = True,
     crop_yx_decon: int = 1024,
+    ufish_model: str | None = None,
     zstride_level: int = 0,
     verbose: int = 1,
 ) -> None:
@@ -47,14 +47,17 @@ def local_register_data(
         perform optical flow based registration.
     decon_allfiducial: bool, Default = True
         perform deconvolution prior to registration for fiducials beyond the first round.
-    bkdsubtract_all_fiducial: bool, Default = False
-        perform background subtraction prior to registration.
     save_all_fiducial: bool, Default = False
         save all registered fiducial images.
     overwrite: bool, Default = True
         overwrite existing registered data.
     crop_yx_decon: int, default = 1024
         size of tile for GPU deconvolution.
+    ufish_model: Optional[str], default = None
+        U-FISH model used for feature prediction. If omitted or None, use the
+        package default model, simfish. Known aliases include simfish/smfish,
+        merfish, seqfish, deepspot, and exseq. A local .onnx/.pth path or
+        HuggingFace weights filename may also be used.
     zstride_level: int, default = 0
         look for a skip z dataset.
     verbose : int, default = 1
@@ -76,12 +79,12 @@ def local_register_data(
         datastore=datastore,
         decon_fiducial=decon_allfiducial,
         decon_readout=decon,
-        bkd_subtract_fiducial=bkdsubtract_all_fiducial,
         perform_optical_flow=opticalflow,
         overwrite_registered=overwrite,
         save_all_fiducial_registered=save_all_fiducial,
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
+        ufish_model=ufish_model,
         verbose=verbose,
     )
 

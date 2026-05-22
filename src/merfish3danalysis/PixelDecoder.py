@@ -68,6 +68,7 @@ def decode_tiles_worker(
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
     feature_predictor_threshold: float,
+    normalization_method: Literal["iterative", "global", "none"],
 ) -> None:
     """Worker that runs decode_one_tile on a subset of tiles under one GPU."""
     import cupy as cp
@@ -105,7 +106,7 @@ def decode_tiles_worker(
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
             feature_predictor_threshold=feature_predictor_threshold,
-            use_normalization=True,
+            normalization_method=normalization_method,
             gpu_id=gpu_id,
         )
 
@@ -156,7 +157,7 @@ def _optimize_norm_worker(
     local_decoder._optimize_normalization_weights = True
     local_decoder._temp_dir = temp_dir
 
-    # if iteration==0, skip use_normalization
+    # Seed the first iteration from global normalization, then refine iteratively.
     use_norm = iteration > 0
     for tile_idx in tile_indices:
         local_decoder.decode_one_tile(
@@ -167,7 +168,7 @@ def _optimize_norm_worker(
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
             feature_predictor_threshold=feature_predictor_threshold,
-            use_normalization=use_norm,
+            normalization_method="iterative" if use_norm else "global",
             gpu_id=gpu_id,
         )
         local_decoder._save_barcodes()
@@ -345,7 +346,10 @@ class PixelDecoder:
                 return cp.asnumpy(all_barcodes)
 
     def _load_global_normalization_vectors(
-        self, gpu_id: int = 0, recalculate: bool = False
+        self,
+        gpu_id: int = 0,
+        recalculate: bool = False,
+        tile_indices: Sequence[int] | None = None,
     ) -> None:
         """Load or calculate global normalization and background vectors.
 
@@ -356,6 +360,8 @@ class PixelDecoder:
         recalculate : bool, default False
             Recompute global normalization/background vectors instead of
             reusing cached datastore values.
+        tile_indices : Sequence[int], optional
+            Explicit tile indices to use when recalculating.
         """
         with cp.cuda.Device(gpu_id):
             normalization_vector = self._datastore.global_normalization_vector
@@ -369,7 +375,9 @@ class PixelDecoder:
                 self._global_background_vector = cp.asarray(background_vector)
                 self._global_normalization_loaded = True
             else:
-                self._global_normalization_vectors(gpu_id=gpu_id)
+                self._global_normalization_vectors(
+                    gpu_id=gpu_id, tile_indices=tile_indices
+                )
 
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
@@ -381,6 +389,7 @@ class PixelDecoder:
         high_percentile_cut: float = 90.0,
         hot_pixel_threshold: int = 50000,
         gpu_id: int = 0,
+        tile_indices: Sequence[int] | None = None,
     ) -> None:
         """Calculate global normalization and background vectors.
 
@@ -394,10 +403,17 @@ class PixelDecoder:
             Threshold for hot pixel removal.
         gpu_id: int, default = 0
             GPU identifier
+        tile_indices : Sequence[int], optional
+            Explicit tile indices to use. If omitted, up to five random tiles
+            are sampled from the datastore.
         """
 
         with cp.cuda.Device(gpu_id):
-            if len(self._datastore.tile_ids) > 5:
+            if tile_indices is not None:
+                random_tiles = [
+                    self._datastore.tile_ids[tile_idx] for tile_idx in tile_indices
+                ]
+            elif len(self._datastore.tile_ids) > 5:
                 random_tiles = sample(self._datastore.tile_ids, 5)
             else:
                 random_tiles = self._datastore.tile_ids
@@ -770,24 +786,23 @@ class PixelDecoder:
             )
 
             if self._z_crop:
+                feature_predictor_array = feature_predictor_image.result()
+                decon_array = decon_image.result()
                 current_mask = np.asarray(
-                    feature_predictor_image[
-                        self._z_range[0] : self._z_range[1], :
-                    ].result(),
+                    feature_predictor_array[self._z_range[0] : self._z_range[1], :],
                     dtype=np.float32,
                 )
                 images.append(
                     np.where(
                         current_mask > feature_predictor_threshold,
                         np.asarray(
-                            decon_image[
-                                self._z_range[0] : self._z_range[1], :
-                            ].result(),
+                            decon_array[self._z_range[0] : self._z_range[1], :],
                             dtype=np.float32,
                         ),
                         0,
                     )
                 )
+                del feature_predictor_array, decon_array
             else:
                 current_mask = np.asarray(
                     feature_predictor_image.result(), dtype=np.float32
@@ -1540,6 +1555,52 @@ class PixelDecoder:
                 self._datastore.save_global_filtered_decoded_spots(
                     self._df_filtered_barcodes
                 )
+
+    @property
+    def decoded_barcodes(self) -> pd.DataFrame:
+        """Decoded barcodes from the most recent ``decode_one_tile`` call."""
+
+        if not hasattr(self, "_df_barcodes"):
+            return pd.DataFrame()
+        return self._df_barcodes.copy()
+
+    @property
+    def decoded_image(self) -> np.ndarray:
+        """Decoded pixel-label image from the most recent ``decode_one_tile`` call."""
+
+        if not hasattr(self, "_decoded_image"):
+            return np.empty((0,), dtype=np.int16)
+        return self._decoded_image.copy()
+
+    def save_decoded_barcodes(self) -> None:
+        """Save decoded barcodes from the most recent decoding/filtering step."""
+
+        self._save_barcodes()
+
+    def _prepare_normalization_state(
+        self,
+        normalization_method: Literal["iterative", "global", "none"] | None,
+        use_normalization: bool | None,
+        gpu_id: int = 0,
+    ) -> None:
+        """Select and load the normalization state used by pixel decoding."""
+
+        if normalization_method is None:
+            normalization_method = "iterative" if use_normalization else "none"
+
+        if normalization_method == "iterative":
+            self._load_iterative_normalization_vectors(gpu_id=gpu_id)
+        elif normalization_method == "global":
+            self._iterative_normalization_loaded = False
+            self._load_global_normalization_vectors(gpu_id=gpu_id)
+        elif normalization_method == "none":
+            self._iterative_normalization_loaded = False
+            self._global_normalization_loaded = False
+        elif normalization_method is not None:
+            raise ValueError(
+                "normalization_method must be one of 'iterative', 'global', "
+                f"'none', or None. Got {normalization_method!r}."
+            )
 
     def _load_all_barcodes(self) -> None:
         """Load all barcodes from datastore."""
@@ -3062,6 +3123,7 @@ class PixelDecoder:
         magnitude_threshold: list[float, float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
         use_normalization: bool | None = True,
+        normalization_method: Literal["iterative", "global", "none"] | None = None,
         feature_predictor_threshold: float | None = 0.1,
     ) -> tuple[np.ndarray, ...] | None:
         """Decode one tile.
@@ -3085,7 +3147,12 @@ class PixelDecoder:
         minimum_pixels : float, default 2.0
             Minimum number of pixels for a barcode.
         use_normalization : bool, default True
-            Use normalization.
+            Use iterative normalization when ``normalization_method`` is not set.
+            This legacy argument is kept for compatibility.
+        normalization_method : {"iterative", "global", "none"}, optional
+            Normalization source for pixel traces. ``iterative`` uses cached or
+            calculated iterative normalization, ``global`` uses global
+            normalization, and ``none`` decodes unnormalized traces.
         feature_predictor_threshold : float, default 0.1
             feature_predictor threshold.
 
@@ -3101,12 +3168,18 @@ class PixelDecoder:
         """
 
         with cp.cuda.Device(gpu_id):
-            if use_normalization:
-                self._load_iterative_normalization_vectors(gpu_id=gpu_id)
+            self._prepare_normalization_state(
+                normalization_method=normalization_method,
+                use_normalization=use_normalization,
+                gpu_id=gpu_id,
+            )
 
             self._tile_idx = tile_idx
             self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
-            if not (np.any(lowpass_sigma == 0)):
+            self._filter_type = "raw"
+            if lowpass_sigma is not None and not np.any(
+                np.asarray(lowpass_sigma, dtype=float) == 0
+            ):
                 self._lp_filter(sigma=lowpass_sigma, gpu_id=gpu_id)
             self._decode_pixels(
                 magnitude_threshold=magnitude_threshold,
@@ -3146,6 +3219,7 @@ class PixelDecoder:
         feature_predictor_threshold: float | None = 0.1,
         lowpass_sigma: Sequence[float] | None = (3, 1, 1),
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
+        tile_indices: Sequence[int] | None = None,
     ) -> None:
         """Iteratively refine normalization vectors using exact-called transcripts.
 
@@ -3158,12 +3232,14 @@ class PixelDecoder:
         minimum_pixels : float, default = 2.0
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default = 0.1
-            Scalar fallback feature_predictor threshold. Stored per-bit thresholds
-            take precedence automatically when available.
+            feature_predictor threshold.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
         magnitude_threshold: Sequence[float], default = (0.9,10.0)
             L2-norm threshold
+        tile_indices : Sequence[int], optional
+            Explicit tile indices to use for normalization. If omitted, a random
+            subset of ``n_random_tiles`` is used.
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
@@ -3174,12 +3250,16 @@ class PixelDecoder:
         self._iterative_normalization_vector = None
         self._global_background_vector = None
         self._optimize_normalization_weights = True
-        self._load_global_normalization_vectors(gpu_id=0, recalculate=True)
+        self._load_global_normalization_vectors(
+            gpu_id=0, recalculate=True, tile_indices=tile_indices
+        )
         temp_dir = Path(tempfile.mkdtemp())
         self._temp_dir = temp_dir
 
-        # split the same set of random tiles each iteration
-        if len(all_tiles) > n_random_tiles:
+        # split the same set of tiles each iteration
+        if tile_indices is not None:
+            random_tiles = list(tile_indices)
+        elif len(all_tiles) > n_random_tiles:
             random_tiles = sample(all_tiles, n_random_tiles)
         else:
             random_tiles = all_tiles
@@ -3249,6 +3329,7 @@ class PixelDecoder:
         magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
         minimum_pixels: float | None = 2.0,
         feature_predictor_threshold: float | None = 0.1,
+        normalization_method: Literal["iterative", "global", "none"] = "iterative",
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
         filter_method: Literal[
@@ -3270,8 +3351,9 @@ class PixelDecoder:
         minimum_pixels : float, default 2.0
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default 0.1
-            Scalar fallback feature_predictor threshold. Stored per-bit thresholds
-            take precedence automatically when available.
+            feature_predictor threshold.
+        normalization_method : {"iterative", "global", "none"}, default "iterative"
+            Normalization source for pixel traces.
         duplicate_radius_xy : float, optional
             Override XY radius, in microns, for within-tile duplicate collapse.
         duplicate_radius_z : float, optional
@@ -3313,6 +3395,7 @@ class PixelDecoder:
                     magnitude_threshold,
                     minimum_pixels,
                     feature_predictor_threshold,
+                    normalization_method,
                 ),
             )
             p.start()

@@ -18,7 +18,6 @@ import timeit
 import cupy as cp
 import numpy as np
 from cupy import ElementwiseKernel
-from ryomen import Slicer
 
 # -----------------------------------------------------------------------------
 # CUDA kernel: multiplicative RL step gated by consensus (reference-accurate)
@@ -210,7 +209,11 @@ def _normalize_psf_to_2d(psf: np.ndarray) -> np.ndarray:
         psf_arr = psf_arr[psf_arr.shape[0] // 2]
     if psf_arr.ndim != 2:
         raise ValueError(f"Expected a 2D or 3D PSF, got shape {psf_arr.shape}")
-    return psf_arr
+
+    psf_sum = float(np.sum(psf_arr))
+    if psf_sum <= 0:
+        raise ValueError("2D PSF must have positive total intensity.")
+    return (psf_arr / psf_sum).astype(np.float32, copy=False)
 
 
 def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
@@ -265,7 +268,7 @@ def _resolve_tiled_axis_geometry(
     psf_support: int,
     axis_name: str,
 ) -> tuple[int, int]:
-    """Resolve retained crop size and hidden PSF halo for one tiled axis."""
+    """Resolve retained crop size and discarded processing halo for one axis."""
 
     if requested_crop <= 0:
         raise ValueError(f"{axis_name} must be greater than 0 for tiled 3D RLGC.")
@@ -274,8 +277,22 @@ def _resolve_tiled_axis_geometry(
     if retained_size >= image_size:
         return retained_size, 0
 
-    tile_pad = int(psf_support) // 2
+    tile_pad = int(psf_support)
     return retained_size, tile_pad
+
+
+def _axis_retained_bounds(retained_size: int, image_size: int) -> list[tuple[int, int]]:
+    """Return non-overlapping retained tile bounds that exactly cover one axis."""
+
+    if retained_size <= 0:
+        raise ValueError("retained_size must be greater than 0.")
+    bounds = []
+    start = 0
+    while start < image_size:
+        stop = min(start + retained_size, image_size)
+        bounds.append((start, stop))
+        start = stop
+    return bounds
 
 
 def rlgc_biggs_ba(
@@ -284,7 +301,7 @@ def rlgc_biggs_ba(
     gpu_id: int = 0,
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
-    init_value: float = 1,
+    init_value: float | None = None,
     limit: float = 0.01,
     max_delta: float = 0.001,
     pad_yx: bool = True,
@@ -311,8 +328,9 @@ def rlgc_biggs_ba(
         Scale factor in the automatic small-update stop threshold
         ``auto_delta_scale / max(image)``. Smaller values make this stop
         criterion more permissive.
-    init_value : float, default=1
-        Constant initializer value for the reconstruction.
+    init_value : float or None, default=None
+        Constant initializer value for the reconstruction. If None, use the
+        reference RLGC initializer ``mean(image)`` for each solver call.
     limit : float, default=0.01
         Minimum fraction of pixels that must be updated per iteration before
         early stopping is triggered.
@@ -386,7 +404,10 @@ def rlgc_biggs_ba(
     num_pixels = z * y * x
     image_peak = cp.maximum(cp.max(image_gpu), cp.float32(1.0))
 
-    recon = cp.full((z, y, x), cp.float32(init_value), dtype=cp.float32)
+    resolved_init_value = (
+        cp.mean(image_gpu) if init_value is None else cp.float32(init_value)
+    )
+    recon = cp.full((z, y, x), resolved_init_value, dtype=cp.float32)
     previous_recon = recon.copy()
 
     # Pre-allocations
@@ -430,12 +451,7 @@ def rlgc_biggs_ba(
         kld2 = kl_div(Hu, split2)
 
         if safe_mode:
-            if (
-                (kld1 > prev_kld1)
-                or (kld2 > prev_kld2)
-                or (kld1 < 1e-4)
-                or (kld2 < 1e-4)
-            ):
+            if (kld1 > prev_kld1) or (kld2 > prev_kld2):
                 recon[...] = previous_recon
                 if logging_enabled:
                     logger.info(
@@ -451,11 +467,7 @@ def rlgc_biggs_ba(
                     )
                 break
         else:
-            if (
-                ((kld1 > prev_kld1) and (kld2 > prev_kld2))
-                or (kld1 < 1e-4)
-                or (kld2 < 1e-4)
-            ):
+            if (kld1 > prev_kld1) and (kld2 > prev_kld2):
                 recon[...] = previous_recon
                 if logging_enabled:
                     logger.info(
@@ -487,7 +499,7 @@ def rlgc_biggs_ba(
         HTratio2 = fft_conv(
             cp.divide(split2, ratio_denom, dtype=cp.float32), otfT, shape
         )
-        HTratio = 0.5 * (HTratio1 + HTratio2)
+        HTratio = HTratio1 + HTratio2
 
         # Consensus: H^T H * ((HTratio1 - 1)*(HTratio2 - 1))
         consensus_map = fft_conv(
@@ -594,7 +606,7 @@ def rlgc_biggs_ba_2d_batched(
     gpu_id: int = 0,
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
-    init_value: float | np.ndarray = 1,
+    init_value: float | np.ndarray | None = None,
     limit: float = 0.01,
     max_delta: float = 0.001,
     pad_yx: bool = True,
@@ -611,12 +623,14 @@ def rlgc_biggs_ba_2d_batched(
     """
 
     image_arr = np.asarray(image)
-    init_arr = np.asarray(init_value)
 
     if image_arr.ndim == 2:
-        plane_init_value = (
-            float(init_arr.ravel()[0]) if init_arr.ndim > 0 else float(init_arr)
-        )
+        init_arr = None if init_value is None else np.asarray(init_value)
+        plane_init_value = None
+        if init_arr is not None:
+            plane_init_value = (
+                float(init_arr.ravel()[0]) if init_arr.ndim > 0 else float(init_arr)
+            )
         return rlgc_biggs_ba(
             image=image_arr,
             psf=_normalize_psf_to_2d(psf),
@@ -643,26 +657,31 @@ def rlgc_biggs_ba_2d_batched(
             tuple(int(v) for v in image_arr.shape),
             tuple(int(v) for v in psf_2d.shape),
         )
-    if init_arr.ndim == 0:
-        plane_init_values = np.full(
-            image_arr.shape[0], float(init_arr), dtype=np.float32
-        )
+    if init_value is None:
+        plane_init_values = [None] * image_arr.shape[0]
     else:
-        plane_init_values = np.asarray(init_arr, dtype=np.float32).reshape(-1)
-        if plane_init_values.size != image_arr.shape[0]:
-            raise ValueError(
-                "Batched 2D RLGC expected one init value per z plane or a scalar; "
-                f"got shape {init_arr.shape} for {image_arr.shape[0]} planes."
+        init_arr = np.asarray(init_value)
+        if init_arr.ndim == 0:
+            plane_init_values = np.full(
+                image_arr.shape[0], float(init_arr), dtype=np.float32
             )
+        else:
+            plane_init_values = np.asarray(init_arr, dtype=np.float32).reshape(-1)
+            if plane_init_values.size != image_arr.shape[0]:
+                raise ValueError(
+                    "Batched 2D RLGC expected one init value per z plane or a scalar; "
+                    f"got shape {init_arr.shape} for {image_arr.shape[0]} planes."
+                )
     output = np.zeros_like(image_arr, dtype=np.float32)
     for z_idx in range(image_arr.shape[0]):
+        plane_init_value = plane_init_values[z_idx]
         output[z_idx] = rlgc_biggs_ba(
             image=image_arr[z_idx],
             psf=psf_2d,
             gpu_id=gpu_id,
             safe_mode=safe_mode,
             auto_delta_scale=auto_delta_scale,
-            init_value=float(plane_init_values[z_idx]),
+            init_value=(None if plane_init_value is None else float(plane_init_value)),
             limit=limit,
             max_delta=max_delta,
             pad_yx=pad_yx,
@@ -684,6 +703,8 @@ def chunked_rlgc(
     crop_z: int | None = None,
     safe_mode: bool = True,
     auto_delta_scale: float = 5.0,
+    limit: float = 0.01,
+    max_delta: float = 0.001,
     verbose: int = 0,
     release_memory: bool = True,
     logger: logging.Logger | None = None,
@@ -702,19 +723,25 @@ def chunked_rlgc(
     gpu_id : int, default=0
         Which GPU to use.
     crop_yx : int, default=1500
-        Retained tile size in Y and X. A hidden PSF halo is added internally
-        around each lateral tile before deconvolution.
+        Retained tile size in Y and X. A discarded processing halo is added
+        internally around each lateral tile before deconvolution.
     crop_z : int or None, default=None
-        Total tile size in Z for chunked 3D deconvolution, including the hidden
-        PSF halo used by each z tile. If ``None``, the tiled 3D path uses the
-        full z-extent and only subdivides laterally. This is ignored for the 2D
-        batched path.
+        Total tile size in Z for chunked 3D deconvolution, including the
+        discarded processing halo used by each z tile. If ``None``, the tiled
+        3D path uses the full z-extent and only subdivides laterally. This is
+        ignored for the 2D batched path.
     safe_mode : bool, default=True
         RLGC stopping: play-it-safe if True.
     auto_delta_scale : float, default=5.0
         Scale factor in the automatic small-update stop threshold
         ``auto_delta_scale / max(image)``. Smaller values make this stop
         criterion more permissive.
+    limit : float, default=0.01
+        Minimum fraction of pixels that must be updated per iteration before
+        early stopping is triggered.
+    max_delta : float, default=0.001
+        Maximum allowed relative update magnitude before early stopping is
+        triggered.
     verbose : int, default=0
         If ≥ 1, show a progress bar over subtiles.
     release_memory : bool, default=True
@@ -758,18 +785,14 @@ def chunked_rlgc(
                 tuple(int(v) for v in image_arr.shape),
                 tuple(int(v) for v in np.asarray(psf).shape),
             )
-        init_value = (
-            _median_init_planes(image_arr)
-            if image_arr.ndim == 3
-            else _median_init_scalar(image_arr)
-        )
         output = rlgc_biggs_ba_2d_batched(
             image_arr,
             psf,
             gpu_id,
             safe_mode=safe_mode,
             auto_delta_scale=auto_delta_scale,
-            init_value=init_value,
+            limit=limit,
+            max_delta=max_delta,
             pad_yx=True,
             release_memory=False,
             logger=logger,
@@ -802,7 +825,8 @@ def chunked_rlgc(
             gpu_id,
             safe_mode=safe_mode,
             auto_delta_scale=auto_delta_scale,
-            init_value=_median_init_scalar(image_arr),
+            limit=limit,
+            max_delta=max_delta,
             pad_yx=True,
             release_memory=False,
             logger=logger,
@@ -811,21 +835,22 @@ def chunked_rlgc(
         if original_ndim == 2 and output.ndim == 3 and output.shape[0] == 1:
             output = np.squeeze(output, axis=0)
 
-    # Tiled 3D deconvolution with hidden PSF halo and halo-discard stitching
+    # Tiled 3D deconvolution with discarded processing halos. The halo is wider
+    # than a single convolution radius because RLGC is iterative, so boundary
+    # influence can propagate farther than one PSF half-width.
     else:
         full_shape = image_work.shape
         if effective_crop_z >= full_shape[0]:
             retained_z = full_shape[0]
             tile_pad_z = 0
         else:
-            psf_half_z = int(psf_arr.shape[0]) // 2
-            if effective_crop_z <= 2 * psf_half_z:
+            tile_pad_z = int(psf_arr.shape[0])
+            if effective_crop_z <= 2 * tile_pad_z:
                 raise ValueError(
-                    "crop_z must be larger than twice the axial PSF half-width "
-                    f"({2 * psf_half_z} for PSF support {int(psf_arr.shape[0])})."
+                    "crop_z must be larger than twice the axial processing halo "
+                    f"({2 * tile_pad_z} for PSF support {int(psf_arr.shape[0])})."
                 )
-            retained_z = int(effective_crop_z) - 2 * psf_half_z
-            tile_pad_z = psf_half_z
+            retained_z = int(effective_crop_z) - 2 * tile_pad_z
         retained_y, tile_pad_y = _resolve_tiled_axis_geometry(
             crop_yx,
             full_shape[1],
@@ -838,27 +863,28 @@ def chunked_rlgc(
             int(psf_arr.shape[-1]),
             "crop_yx",
         )
-        init_value = _median_init_scalar(image_work)
+        init_value = float(np.mean(image_work))
         output = np.zeros_like(image_work, dtype=np.float32)
 
-        crop_size = (
-            retained_z + 2 * tile_pad_z,
-            retained_y + 2 * tile_pad_y,
-            retained_x + 2 * tile_pad_x,
-        )
-        overlap = (tile_pad_z, tile_pad_y, tile_pad_x)
-        slices = Slicer(image_work, crop_size=crop_size, overlap=overlap, pad=True)
-        num_tiles = len(slices)
+        retained_bounds_z = _axis_retained_bounds(retained_z, full_shape[0])
+        retained_bounds_y = _axis_retained_bounds(retained_y, full_shape[1])
+        retained_bounds_x = _axis_retained_bounds(retained_x, full_shape[2])
+        tile_bounds = [
+            (z_bounds, y_bounds, x_bounds)
+            for x_bounds in retained_bounds_x
+            for y_bounds in retained_bounds_y
+            for z_bounds in retained_bounds_z
+        ]
+        num_tiles = len(tile_bounds)
 
         if logger is not None and logger.isEnabledFor(logging.INFO):
             logger.info(
-                "%spath=3d_tiled image_shape=%s psf_shape=%s retained_shape=%s crop_size=%s overlap=%s num_tiles=%d",
+                "%spath=3d_tiled image_shape=%s psf_shape=%s retained_shape=%s processing_halo=%s num_tiles=%d",
                 f"{log_prefix} " if log_prefix else "",
                 tuple(int(v) for v in image_work.shape),
                 tuple(int(v) for v in psf_arr.shape),
                 (retained_z, retained_y, retained_x),
-                crop_size,
-                overlap,
+                (tile_pad_z, tile_pad_y, tile_pad_x),
                 num_tiles,
             )
 
@@ -866,15 +892,31 @@ def chunked_rlgc(
             from rich.progress import track
 
             iterator = track(
-                enumerate(slices),
+                enumerate(tile_bounds),
                 description="Chunks",
                 total=num_tiles,
                 transient=True,
             )
         else:
-            iterator = enumerate(slices)
+            iterator = enumerate(tile_bounds)
 
-        for tile_idx, (crop, source, destination) in iterator:
+        for tile_idx, (
+            (z_dest_start, z_dest_stop),
+            (y_dest_start, y_dest_stop),
+            (x_dest_start, x_dest_stop),
+        ) in iterator:
+            z_crop_start = max(z_dest_start - tile_pad_z, 0)
+            z_crop_stop = min(z_dest_stop + tile_pad_z, full_shape[0])
+            y_crop_start = max(y_dest_start - tile_pad_y, 0)
+            y_crop_stop = min(y_dest_stop + tile_pad_y, full_shape[1])
+            x_crop_start = max(x_dest_start - tile_pad_x, 0)
+            x_crop_stop = min(x_dest_stop + tile_pad_x, full_shape[2])
+
+            crop = image_work[
+                z_crop_start:z_crop_stop,
+                y_crop_start:y_crop_stop,
+                x_crop_start:x_crop_stop,
+            ]
             crop_array = rlgc_biggs_ba(
                 crop,
                 psf,
@@ -882,6 +924,8 @@ def chunked_rlgc(
                 safe_mode=safe_mode,
                 auto_delta_scale=auto_delta_scale,
                 init_value=init_value,
+                limit=limit,
+                max_delta=max_delta,
                 release_memory=False,
                 logger=logger,
                 log_prefix=_child_log_prefix(
@@ -889,43 +933,12 @@ def chunked_rlgc(
                 ),
             )
 
-            def resolve_slice(s: slice, dim: int) -> tuple[int, int]:
-                start = s.start if s.start is not None else 0
-                stop = s.stop if s.stop is not None else dim
-                if stop < 0:
-                    stop = dim + stop
-                return start, stop
-
-            crop_shape = crop.shape[-3:]
-            image_shape = image_work.shape[-3:]
-            source_slices = source[-3:]
-            destination_slices = destination[-3:]
-            source_bounds = [
-                resolve_slice(source_slices[axis], crop_shape[axis])
-                for axis in range(3)
-            ]
-            destination_bounds = [
-                resolve_slice(destination_slices[axis], image_shape[axis])
-                for axis in range(3)
-            ]
-
-            (
-                (z_source_start, z_source_stop),
-                (y_source_start, y_source_stop),
-                (
-                    x_source_start,
-                    x_source_stop,
-                ),
-            ) = source_bounds
-            (
-                (z_dest_start, z_dest_stop),
-                (y_dest_start, y_dest_stop),
-                (
-                    x_dest_start,
-                    x_dest_stop,
-                ),
-            ) = destination_bounds
-
+            z_source_start = z_dest_start - z_crop_start
+            z_source_stop = z_source_start + (z_dest_stop - z_dest_start)
+            y_source_start = y_dest_start - y_crop_start
+            y_source_stop = y_source_start + (y_dest_stop - y_dest_start)
+            x_source_start = x_dest_start - x_crop_start
+            x_source_stop = x_source_start + (x_dest_stop - x_dest_start)
             crop_sub = crop_array[
                 z_source_start:z_source_stop,
                 y_source_start:y_source_stop,

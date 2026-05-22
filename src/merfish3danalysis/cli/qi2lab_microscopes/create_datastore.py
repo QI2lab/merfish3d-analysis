@@ -212,7 +212,9 @@ def convert_data(
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
-        voxel_size_zyx_um = [metadata["z_step_um"], metadata["yx_pixel_um"]]
+        z_pixel_um = float(metadata["z_step_um"])
+        yx_pixel_um = float(metadata["yx_pixel_um"])
+        voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
     except Exception:
         yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
         next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)

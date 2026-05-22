@@ -5,9 +5,7 @@ This module enables the registration of MERFISH datasets by utilizing
 cross-correlation and optical flow techniques.
 
 History:
----------
-- **2025/29**:
-    - Refactored to move background subtraction out of deconvolution step.
+--------
 - **2025/07**:
     - Implement anistropic downsampling for registration.
     - Implement RLGC deconvolution.
@@ -50,6 +48,54 @@ import SimpleITK as sitk
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
+UFISH_MODEL_ALIASES = {
+    "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
+    "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
+    "simfish": "finetune_models/v1.0.1-simfish_model.onnx",
+    "smfish": "finetune_models/v1.0.1-simfish_model.onnx",
+    "deepspot": "finetune_models/v1.0.1-deepspot_model.onnx",
+    "exseq": "finetune_models/v1.0.1-ExSeq_model.onnx",
+}
+DEFAULT_UFISH_MODEL = "simfish"
+
+
+def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
+    """Resolve a U-FISH model alias or path without requiring U-FISH imports."""
+
+    if model is None:
+        model = DEFAULT_UFISH_MODEL
+
+    model_str = str(model).strip()
+    if not model_str:
+        model_str = DEFAULT_UFISH_MODEL
+
+    model_path = Path(model_str).expanduser()
+    if model_path.exists():
+        return model_path
+
+    weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
+    if weights_file is None:
+        return None
+
+    local_path = Path.home() / ".ufish" / weights_file
+    if local_path.exists():
+        return local_path
+
+    return weights_file
+
+
+def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
+    """Load configured U-FISH weights from an alias, local path, or weights file."""
+
+    weights = _resolve_ufish_weights_path(model)
+    if weights is None:
+        raise ValueError("Resolved U-FISH weights cannot be None.")
+
+    if isinstance(weights, Path):
+        ufish.load_weights_from_path(weights)
+    else:
+        ufish.load_weights(weights_file=weights)
+
 
 def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     """Fetch PSF by index from uniform or ragged channel PSF storage."""
@@ -78,21 +124,9 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     raw0 = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=0, return_future=False
     )
-    ij = None
-
-    if dr._bkd_subtract_fiducial:
-        from merfish3danalysis.utils.imageprocessing import (
-            initialize_imagej,
-            subtract_background_imagej,
-        )
-
-        ij = initialize_imagej()
-        bkd_image = subtract_background_imagej(raw0, 200, ij=ij)
-    else:
-        bkd_image = raw0.copy()
 
     ref_image_decon = chunked_rlgc(
-        image=bkd_image,
+        image=raw0,
         psf=_resolve_psf(dr._psfs, 0),
         gpu_id=0,
         crop_yx=dr._crop_yx_decon,
@@ -113,10 +147,6 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
 
     del raw0, ref_image_decon
     gc.collect()
-    if ij is not None:
-        ij.dispose()
-        del ij
-        gc.collect()
     clear_rlgc_caches(clear_memory_pool=False)
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
@@ -151,12 +181,6 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
     )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
-    ij = None
-    if dr._bkd_subtract_fiducial:
-        from merfish3danalysis.utils.imageprocessing import initialize_imagej
-
-        ij = initialize_imagej()
-
     for _r_idx, round_id in enumerate(round_list):
         has_reg_decon_data = dr._has_valid_registered_image(round_id=round_id)
 
@@ -169,48 +193,32 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 ref_image = dr._datastore.load_local_corrected_image(
                     tile=dr._tile_id, round=dr._round_ids[0], return_future=False
                 )
-                if dr._bkd_subtract_fiducial:
-                    from merfish3danalysis.utils.imageprocessing import (
-                        subtract_background_imagej,
-                    )
-
-                    ref_image_decon_float = subtract_background_imagej(
-                        ref_image, 200, ij=ij
-                    )
-                else:
-                    ref_image_decon_float = ref_image.copy().astype(np.float32)
-                    del ref_image
+                ref_image_decon_float = ref_image.copy().astype(np.float32)
+                del ref_image
 
             raw = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id, round=round_id, return_future=False
             )
 
             if dr._decon_fiducial:
-                if dr._bkd_subtract_fiducial:
-                    from merfish3danalysis.utils.imageprocessing import (
-                        subtract_background_imagej,
-                    )
-
-                    bkd_image = subtract_background_imagej(raw, 200, ij=ij)
-                else:
-                    bkd_image = raw.copy()
+                fiducial_image = raw.copy()
                 del raw
 
                 if dr._datastore.microscope_type == "2D":
                     mov_image_decon = chunked_rlgc(
-                        image=bkd_image,
+                        image=fiducial_image,
                         psf=_resolve_psf(dr._psfs, 0),
                         gpu_id=gpu_id,
-                        crop_yx=bkd_image.shape[-1],
+                        crop_yx=fiducial_image.shape[-1],
                         release_memory=False,
                     )
                     mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
                         np.uint16
                     )
-                    del bkd_image
+                    del fiducial_image
                 else:
                     mov_image_decon = chunked_rlgc(
-                        image=bkd_image,
+                        image=fiducial_image,
                         psf=_resolve_psf(dr._psfs, 0),
                         gpu_id=gpu_id,
                         crop_yx=dr._crop_yx_decon,
@@ -219,19 +227,10 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                     mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
                         np.uint16
                     )
-                    del bkd_image
+                    del fiducial_image
             else:
-                if dr._bkd_subtract_fiducial:
-                    from merfish3danalysis.utils.imageprocessing import (
-                        subtract_background_imagej,
-                    )
-
-                    bkd_image = subtract_background_imagej(raw, 200, ij=ij)
-                else:
-                    bkd_image = raw.copy()
-
-                mov_image_decon = bkd_image.copy().astype(np.uint16)
-                del raw, bkd_image
+                mov_image_decon = raw.copy().astype(np.uint16)
+                del raw
 
             mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
             del mov_image_decon
@@ -330,10 +329,6 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
             del data_registered
             gc.collect()
     try:
-        if ij is not None:
-            ij.dispose()
-            del ij
-            gc.collect()
         clear_rlgc_caches(clear_memory_pool=False)
         cp.cuda.Stream.null.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
@@ -496,7 +491,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if (not feature_predictor_on_disk) or dr._overwrite_registered:
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
-            ufish.load_weights_from_internet()
+            _load_ufish_model(ufish, dr._ufish_model)
             feature_predictor_loc, feature_predictor_data = ufish.predict(
                 data_reg, axes="zyx", blend_3d=False, batch_size=1
             )
@@ -585,18 +580,22 @@ class DataRegistration:
         stitching.
     decon_readout: bool, default False
         Deconvolve readout images before registration to fiducials.
-    bkd_subtract_fiducial: bool, default False
-        Background subtraction ALL fiducial rounds.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
     perform_optical_flow: bool, default False
         Perform optical flow registration
     save_all_fiducial_registered: bool, default True
-        Save fidicual fiducial rounds > 1. These are not used for analysis.
+        Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 1024
         Crop size for deconvolution applied to both y and x dimensions.
+    ufish_model: str or pathlib.Path or None, default None
+        U-FISH model to use for feature prediction. If omitted or ``None``, use
+        the package default model, ``simfish``. Known aliases include
+        ``simfish``, ``smfish``, ``merfish``, ``seqfish``, ``deepspot``, and
+        ``exseq``. A local ``.onnx``/``.pth`` path or HuggingFace weights
+        filename can also be supplied.
     verbose : int, default 1
         Progress verbosity. Set to 0 to suppress routine progress prints.
     """
@@ -606,12 +605,12 @@ class DataRegistration:
         datastore: qi2labDataStore,
         decon_fiducial: bool = True,
         decon_readout: bool = False,
-        bkd_subtract_fiducial: bool = False,
         overwrite_registered: bool = False,
         perform_optical_flow: bool = True,
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 1024,
+        ufish_model: str | Path | None = None,
         verbose: int = 1,
     ) -> None:
         self._datastore = datastore
@@ -622,14 +621,13 @@ class DataRegistration:
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
-        self._bkd_subtract_fiducial = bkd_subtract_fiducial
-
         self._perform_optical_flow = perform_optical_flow
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
+        self._ufish_model = ufish_model
         self._original_print = builtins.print
         self._verbose = verbose
 
@@ -884,6 +882,16 @@ class DataRegistration:
 
         self.tile_id = tile_id
         self._generate_registrations()
+        self._apply_registration_to_bits()
+
+    def apply_registration_to_one_tile(self, tile_id: int | str) -> None:
+        """Apply existing local registrations to readout bits for one tile.
+
+        This uses the rigid and optical-flow transforms already stored in the
+        datastore. It does not estimate or overwrite fiducial registrations.
+        """
+
+        self.tile_id = tile_id
         self._apply_registration_to_bits()
 
     def _load_raw_data(self) -> None:
