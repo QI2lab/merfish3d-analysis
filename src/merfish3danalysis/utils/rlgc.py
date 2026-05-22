@@ -681,9 +681,7 @@ def rlgc_biggs_ba_2d_batched(
             gpu_id=gpu_id,
             safe_mode=safe_mode,
             auto_delta_scale=auto_delta_scale,
-            init_value=(
-                None if plane_init_value is None else float(plane_init_value)
-            ),
+            init_value=(None if plane_init_value is None else float(plane_init_value)),
             limit=limit,
             max_delta=max_delta,
             pad_yx=pad_yx,

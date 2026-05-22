@@ -80,9 +80,7 @@ def _default_simulation_feature_predictor_threshold(
         SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
         key=lambda value: abs(value - nyquist_multiple),
     )
-    return SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[
-        nearest_multiple
-    ]
+    return SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
 
 
 def _validate_filter_arguments(
@@ -180,8 +178,8 @@ def decode_pixels(
     if minimum_pixels_per_RNA is None:
         minimum_pixels_per_RNA = 7 if datastore.microscope_type == "2D" else 28
     if feature_predictor_threshold is None:
-        feature_predictor_threshold = (
-            _default_simulation_feature_predictor_threshold(datastore)
+        feature_predictor_threshold = _default_simulation_feature_predictor_threshold(
+            datastore
         )
     if magnitude_threshold is None:
         magnitude_threshold = _default_simulation_magnitude_threshold(datastore)
