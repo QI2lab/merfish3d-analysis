@@ -470,9 +470,7 @@ def rlgc(
         HTratio = HTratio1 + HTratio2
         del Hu
 
-        consensus_map = fft_conv(
-            (HTratio1 - 1) * (HTratio2 - 1), otfotfT, recon.shape
-        )
+        consensus_map = fft_conv((HTratio1 - 1) * (HTratio2 - 1), otfotfT, recon.shape)
 
         previous_recon = recon
         recon = filter_update(recon, HTratio, consensus_map)

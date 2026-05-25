@@ -54,7 +54,9 @@ app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 
-def _first_stack_path(root_path: Path, root_name: str, round_idx: int, tile_idx: int) -> Path:
+def _first_stack_path(
+    root_path: Path, root_name: str, round_idx: int, tile_idx: int
+) -> Path:
     base = f"{root_name}_r{round_idx + 1:04d}_tile{tile_idx:04d}"
     image_path_1 = root_path / Path(f"{base}_1") / Path(f"{base}_NDTiffStack.tif")
     image_path_2 = root_path / Path(f"{base}_2") / Path(f"{base}_NDTiffStack.tif")
