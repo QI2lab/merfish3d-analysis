@@ -204,30 +204,15 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 fiducial_image = raw.copy()
                 del raw
 
-                if dr._datastore.microscope_type == "2D":
-                    mov_image_decon = chunked_rlgc(
-                        image=fiducial_image,
-                        psf=_resolve_psf(dr._psfs, 0),
-                        gpu_id=gpu_id,
-                        crop_yx=fiducial_image.shape[-1],
-                        release_memory=False,
-                    )
-                    mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del fiducial_image
-                else:
-                    mov_image_decon = chunked_rlgc(
-                        image=fiducial_image,
-                        psf=_resolve_psf(dr._psfs, 0),
-                        gpu_id=gpu_id,
-                        crop_yx=dr._crop_yx_decon,
-                        release_memory=False,
-                    )
-                    mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del fiducial_image
+                mov_image_decon = chunked_rlgc(
+                    image=fiducial_image,
+                    psf=_resolve_psf(dr._psfs, 0),
+                    gpu_id=gpu_id,
+                    crop_yx=dr._crop_yx_decon,
+                    release_memory=False,
+                )
+                mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(np.uint16)
+                del fiducial_image
             else:
                 mov_image_decon = raw.copy().astype(np.uint16)
                 del raw
@@ -412,24 +397,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
 
             # deconvolution
             if dr._decon_readout:
-                if dr._datastore.microscope_type == "2D":
-                    decon_image = chunked_rlgc(
-                        image=corrected_image,
-                        psf=_resolve_psf(dr._psfs, psf_idx),
-                        gpu_id=gpu_id,
-                        crop_yx=corrected_image.shape[-1],
-                        release_memory=False,
-                    )
-                    decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
-                else:
-                    decon_image = chunked_rlgc(
-                        image=corrected_image,
-                        psf=_resolve_psf(dr._psfs, psf_idx),
-                        gpu_id=gpu_id,
-                        crop_yx=dr._crop_yx_decon,
-                        release_memory=False,
-                    )
-                    decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
+                decon_image = chunked_rlgc(
+                    image=corrected_image,
+                    psf=_resolve_psf(dr._psfs, psf_idx),
+                    gpu_id=gpu_id,
+                    crop_yx=dr._crop_yx_decon,
+                    release_memory=False,
+                )
+                decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
             else:
                 decon_image = corrected_image.copy()
 
@@ -588,7 +563,7 @@ class DataRegistration:
         Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
         Number of GPUs to use for registration.
-    crop_yx_decon: int, default 1024
+    crop_yx_decon: int, default 2048
         Crop size for deconvolution applied to both y and x dimensions.
     ufish_model: str or pathlib.Path or None, default None
         U-FISH model to use for feature prediction. If omitted or ``None``, use
@@ -609,7 +584,7 @@ class DataRegistration:
         perform_optical_flow: bool = True,
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
-        crop_yx_decon: int = 1024,
+        crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
         verbose: int = 1,
     ) -> None:
