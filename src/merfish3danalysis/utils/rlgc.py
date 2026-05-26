@@ -11,6 +11,7 @@ https://colab.research.google.com/drive/1mfVNSCaYHz1g56g92xBkIoa8190XNJpJ
 import gc
 import logging
 import timeit
+from collections.abc import Callable
 
 import cupy as cp
 import numpy as np
@@ -780,6 +781,7 @@ def chunked_rlgc(
     release_memory: bool = True,
     logger: logging.Logger | None = None,
     log_prefix: str = "",
+    on_successful_crop_yx: Callable[[int], None] | None = None,
 ) -> np.ndarray:
     """
     Chunked RLGC deconvolution with automatic lateral chunk fallback.
@@ -787,7 +789,8 @@ def chunked_rlgc(
     The solver first attempts the requested ``crop_yx``. If CUDA memory
     allocation fails, it retries with lateral chunks reduced by 128 pixels at a
     time. Axial chunking is not used by this fallback; Z is always processed as
-    a full stack.
+    a full stack. If provided, ``on_successful_crop_yx`` is called with the
+    crop size that completed successfully.
     """
 
     if crop_z is not None:
@@ -807,7 +810,7 @@ def chunked_rlgc(
 
     while True:
         try:
-            return _chunked_rlgc_once(
+            output = _chunked_rlgc_once(
                 image=image_arr,
                 psf=psf,
                 gpu_id=gpu_id,
@@ -824,6 +827,9 @@ def chunked_rlgc(
                 logger=logger,
                 log_prefix=log_prefix,
             )
+            if on_successful_crop_yx is not None:
+                on_successful_crop_yx(attempted_crop_yx)
+            return output
         except Exception as exc:
             if not _is_gpu_memory_error(exc):
                 raise

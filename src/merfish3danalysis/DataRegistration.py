@@ -115,6 +115,36 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     return np.asarray(psf_array[psf_idx], dtype=np.float32)
 
 
+def _run_chunked_rlgc_remembering_crop(
+    dr: Any,
+    chunked_rlgc: Any,
+    image: np.ndarray,
+    psf: np.ndarray,
+    gpu_id: int,
+) -> np.ndarray:
+    """Run RLGC and remember the lateral chunk size that succeeds in this worker."""
+
+    def _remember_successful_crop(successful_crop_yx: int) -> None:
+        previous_crop_yx = int(dr._crop_yx_decon)
+        dr._crop_yx_decon = int(successful_crop_yx)
+        if successful_crop_yx < previous_crop_yx and dr._verbose >= 1:
+            print(
+                time_stamp(),
+                "RLGC reduced crop_yx after GPU memory fallback: "
+                f"{previous_crop_yx} -> {successful_crop_yx}.",
+            )
+
+    return chunked_rlgc(
+        image=image,
+        psf=psf,
+        gpu_id=gpu_id,
+        crop_yx=dr._crop_yx_decon,
+        crop_z=None,
+        release_memory=False,
+        on_successful_crop_yx=_remember_successful_crop,
+    )
+
+
 def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
     import cupy as cp
 
@@ -125,12 +155,12 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         tile=dr._tile_id, round=0, return_future=False
     )
 
-    ref_image_decon = chunked_rlgc(
+    ref_image_decon = _run_chunked_rlgc_remembering_crop(
+        dr=dr,
+        chunked_rlgc=chunked_rlgc,
         image=raw0,
         psf=_resolve_psf(dr._psfs, 0),
         gpu_id=0,
-        crop_yx=dr._crop_yx_decon,
-        release_memory=False,
     )
 
     dr._datastore.save_local_registered_image(
@@ -204,12 +234,12 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 fiducial_image = raw.copy()
                 del raw
 
-                mov_image_decon = chunked_rlgc(
+                mov_image_decon = _run_chunked_rlgc_remembering_crop(
+                    dr=dr,
+                    chunked_rlgc=chunked_rlgc,
                     image=fiducial_image,
                     psf=_resolve_psf(dr._psfs, 0),
                     gpu_id=gpu_id,
-                    crop_yx=dr._crop_yx_decon,
-                    release_memory=False,
                 )
                 mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(np.uint16)
                 del fiducial_image
@@ -397,12 +427,12 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
 
             # deconvolution
             if dr._decon_readout:
-                decon_image = chunked_rlgc(
+                decon_image = _run_chunked_rlgc_remembering_crop(
+                    dr=dr,
+                    chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
                     psf=_resolve_psf(dr._psfs, psf_idx),
                     gpu_id=gpu_id,
-                    crop_yx=dr._crop_yx_decon,
-                    release_memory=False,
                 )
                 decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
             else:
