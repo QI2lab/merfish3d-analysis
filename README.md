@@ -163,7 +163,15 @@ This expands the matrix to include:
 
 ### Exhaustive U-FISH Model Sweep
 
-These F1 scores are from `python -m pytest --run-simulation-exhaustive -W always -ra` using the locally cached U-FISH model weights. `simfish` is the package default and also covers the `smfish` alias because both resolve to `v1.0.1-simfish_model.onnx`.
+These F1 scores are from the local exhaustive simulation matrix:
+
+```bash
+python -m pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+```
+
+The matrix writes `tests/data/simulation_performance.json`. The regression baselines in `tests/test_simulation_example_pipeline.py` are generated from the same results.
+
+`simfish` is the package default and also covers the `smfish` alias because both resolve to `v1.0.1-simfish_model.onnx`.
 
 Values are rounded to three decimal places. The bold value marks the selected best model and threshold for that simulation condition and deconvolution state; ties after rounding prefer `simfish`, then `merfish`.
 
@@ -178,24 +186,24 @@ Values are rounded to three decimal places. The bold value marks the selected be
 | simfish | 0.994 | 0.992 | 0.995 | 0.995 | 0.996 |
 | deepspot | 0.994 | 0.996 | 0.996 | 0.995 | 0.996 |
 | exseq | 0.992 | 0.992 | 0.994 | 0.996 | 0.995 |
-| dnafish | 0.993 | 0.994 | 0.991 | 0.989 | 0.982 |
-| rca | 0.991 | 0.994 | 0.995 | 0.995 | **0.998** |
+| dnafish | 0.992 | 0.994 | 0.991 | 0.989 | 0.982 |
+| rca | 0.991 | 0.994 | 0.995 | 0.995 | **0.997** |
 | deepblink | 0.992 | 0.992 | 0.991 | 0.994 | 0.993 |
-| suntag | 0.993 | 0.995 | 0.996 | 0.996 | 0.995 |
+| suntag | 0.992 | 0.995 | 0.996 | 0.996 | 0.995 |
 
 ##### Deconvolution
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.981 | 0.988 | 0.992 | 0.994 | 0.994 |
-| seqfish | 0.982 | 0.991 | 0.993 | 0.992 | 0.993 |
-| simfish | 0.941 | 0.978 | 0.993 | 0.992 | 0.994 |
-| deepspot | 0.983 | 0.989 | 0.994 | 0.993 | 0.991 |
-| exseq | 0.982 | 0.989 | 0.988 | 0.993 | 0.995 |
-| dnafish | 0.987 | 0.988 | 0.990 | 0.991 | 0.985 |
-| rca | 0.906 | 0.978 | 0.992 | 0.997 | **0.998** |
-| deepblink | 0.937 | 0.946 | 0.962 | 0.977 | 0.979 |
-| suntag | 0.984 | 0.992 | 0.991 | 0.990 | 0.991 |
+| merfish | 0.991 | 0.994 | 0.993 | 0.995 | **0.998** |
+| seqfish | 0.991 | 0.993 | 0.993 | 0.996 | 0.997 |
+| simfish | 0.992 | 0.994 | 0.993 | 0.995 | 0.993 |
+| deepspot | 0.994 | 0.992 | 0.994 | 0.997 | 0.996 |
+| exseq | 0.991 | 0.994 | 0.994 | 0.996 | 0.998 |
+| dnafish | 0.996 | 0.994 | 0.995 | 0.993 | 0.995 |
+| rca | 0.992 | 0.994 | 0.995 | 0.996 | 0.998 |
+| deepblink | 0.964 | 0.981 | 0.977 | 0.967 | 0.934 |
+| suntag | 0.995 | 0.993 | 0.996 | 0.997 | 0.997 |
 
 #### cells, axial spacing 1.0 um
 
@@ -206,7 +214,7 @@ Values are rounded to three decimal places. The bold value marks the selected be
 | merfish | 0.714 | 0.767 | 0.779 | 0.823 | 0.854 |
 | seqfish | 0.759 | 0.786 | 0.831 | 0.862 | 0.877 |
 | simfish | 0.780 | 0.835 | 0.886 | 0.920 | 0.951 |
-| deepspot | 0.786 | 0.820 | 0.851 | 0.879 | 0.926 |
+| deepspot | 0.786 | 0.819 | 0.851 | 0.879 | 0.926 |
 | exseq | 0.745 | 0.785 | 0.815 | 0.852 | 0.877 |
 | dnafish | 0.891 | 0.912 | 0.919 | 0.914 | 0.902 |
 | rca | 0.834 | 0.874 | 0.910 | 0.935 | 0.969 |
@@ -217,15 +225,15 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.913 | 0.938 | 0.967 | 0.969 | 0.969 |
-| seqfish | 0.907 | 0.923 | 0.928 | 0.933 | 0.936 |
-| simfish | 0.922 | 0.962 | 0.964 | 0.978 | 0.978 |
-| deepspot | 0.908 | 0.927 | 0.920 | 0.911 | 0.878 |
-| exseq | 0.936 | 0.943 | 0.968 | 0.971 | 0.971 |
-| dnafish | 0.910 | 0.897 | 0.877 | 0.861 | 0.838 |
-| rca | 0.942 | 0.968 | **0.984** | 0.976 | 0.981 |
-| deepblink | 0.729 | 0.516 | 0.425 | 0.383 | 0.344 |
-| suntag | 0.966 | 0.968 | 0.969 | 0.956 | 0.932 |
+| merfish | 0.948 | 0.956 | 0.968 | 0.975 | 0.973 |
+| seqfish | 0.891 | 0.922 | 0.926 | 0.922 | 0.918 |
+| simfish | 0.964 | 0.972 | 0.979 | **0.982** | 0.971 |
+| deepspot | 0.949 | 0.966 | 0.962 | 0.968 | 0.954 |
+| exseq | 0.951 | 0.969 | 0.973 | 0.967 | 0.975 |
+| dnafish | 0.957 | 0.966 | 0.968 | 0.971 | 0.960 |
+| rca | 0.944 | 0.965 | 0.969 | 0.982 | 0.982 |
+| deepblink | 0.560 | 0.556 | 0.550 | 0.536 | 0.527 |
+| suntag | 0.956 | 0.974 | 0.976 | 0.979 | 0.979 |
 
 #### cells, axial spacing 1.5 um
 
@@ -236,8 +244,8 @@ Values are rounded to three decimal places. The bold value marks the selected be
 | merfish | 0.828 | 0.856 | 0.878 | 0.899 | 0.922 |
 | seqfish | 0.901 | 0.924 | 0.943 | 0.947 | 0.957 |
 | simfish | 0.921 | 0.938 | 0.963 | 0.971 | **0.974** |
-| deepspot | 0.941 | 0.951 | 0.958 | 0.955 | 0.965 |
-| exseq | 0.891 | 0.914 | 0.928 | 0.936 | 0.940 |
+| deepspot | 0.940 | 0.951 | 0.958 | 0.955 | 0.965 |
+| exseq | 0.891 | 0.914 | 0.928 | 0.937 | 0.940 |
 | dnafish | 0.901 | 0.875 | 0.850 | 0.829 | 0.788 |
 | rca | 0.970 | 0.971 | 0.969 | 0.959 | 0.935 |
 | deepblink | 0.891 | 0.890 | 0.883 | 0.884 | 0.879 |
@@ -247,15 +255,15 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.903 | 0.941 | 0.953 | 0.957 | 0.950 |
-| seqfish | 0.958 | 0.950 | 0.944 | 0.934 | 0.913 |
-| simfish | 0.936 | 0.959 | 0.969 | **0.974** | 0.968 |
-| deepspot | 0.939 | 0.930 | 0.920 | 0.894 | 0.862 |
-| exseq | 0.946 | 0.944 | 0.942 | 0.930 | 0.922 |
-| dnafish | 0.698 | 0.688 | 0.669 | 0.660 | 0.626 |
-| rca | 0.947 | 0.939 | 0.922 | 0.903 | 0.886 |
-| deepblink | 0.788 | 0.612 | 0.509 | 0.444 | 0.390 |
-| suntag | 0.840 | 0.827 | 0.804 | 0.782 | 0.763 |
+| merfish | 0.581 | 0.630 | **0.663** | 0.657 | 0.646 |
+| seqfish | 0.633 | 0.636 | 0.603 | 0.552 | 0.503 |
+| simfish | 0.594 | 0.578 | 0.538 | 0.495 | 0.429 |
+| deepspot | 0.628 | 0.626 | 0.626 | 0.613 | 0.568 |
+| exseq | 0.623 | 0.635 | 0.655 | 0.627 | 0.588 |
+| dnafish | 0.429 | 0.337 | 0.269 | 0.196 | 0.167 |
+| rca | 0.634 | 0.663 | 0.642 | 0.572 | 0.438 |
+| deepblink | 0.534 | 0.588 | 0.602 | 0.602 | 0.619 |
+| suntag | 0.303 | 0.222 | 0.188 | 0.130 | 0.086 |
 
 #### uniform, axial spacing 0.315 um
 
@@ -265,27 +273,27 @@ Values are rounded to three decimal places. The bold value marks the selected be
 | --- | --- | --- | --- | --- | --- |
 | merfish | 0.993 | 0.996 | 0.996 | 0.997 | 0.996 |
 | seqfish | 0.995 | 0.997 | 0.996 | 0.997 | 0.996 |
-| simfish | 0.995 | 0.997 | 0.996 | 0.996 | **0.998** |
+| simfish | 0.995 | **0.997** | 0.996 | 0.996 | 0.997 |
 | deepspot | 0.995 | 0.996 | 0.995 | 0.997 | 0.996 |
 | exseq | 0.995 | 0.997 | 0.996 | 0.997 | 0.997 |
 | dnafish | 0.997 | 0.997 | 0.996 | 0.995 | 0.993 |
 | rca | 0.995 | 0.997 | 0.995 | 0.997 | 0.997 |
 | deepblink | 0.995 | 0.995 | 0.995 | 0.995 | 0.995 |
-| suntag | 0.996 | 0.996 | 0.997 | 0.995 | 0.998 |
+| suntag | 0.996 | 0.996 | 0.997 | 0.995 | 0.997 |
 
 ##### Deconvolution
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.990 | 0.993 | 0.994 | 0.995 | **0.996** |
-| seqfish | 0.991 | 0.993 | 0.993 | 0.995 | 0.996 |
-| simfish | 0.989 | 0.991 | 0.991 | 0.995 | 0.995 |
-| deepspot | 0.991 | 0.992 | 0.991 | 0.992 | 0.993 |
-| exseq | 0.990 | 0.993 | 0.993 | 0.994 | 0.995 |
-| dnafish | 0.993 | 0.993 | 0.994 | 0.990 | 0.986 |
-| rca | 0.989 | 0.993 | 0.994 | 0.995 | 0.996 |
-| deepblink | 0.936 | 0.976 | 0.980 | 0.987 | 0.988 |
-| suntag | 0.992 | 0.993 | 0.994 | 0.996 | 0.994 |
+| merfish | 0.994 | 0.994 | 0.995 | 0.996 | 0.995 |
+| seqfish | 0.992 | 0.993 | 0.993 | 0.995 | 0.988 |
+| simfish | 0.994 | 0.994 | 0.994 | 0.995 | 0.995 |
+| deepspot | 0.987 | 0.981 | 0.960 | 0.920 | 0.786 |
+| exseq | 0.993 | 0.994 | **0.997** | 0.996 | 0.995 |
+| dnafish | 0.995 | 0.993 | 0.992 | 0.985 | 0.970 |
+| rca | 0.994 | 0.994 | 0.995 | 0.997 | 0.996 |
+| deepblink | 0.898 | 0.925 | 0.840 | 0.716 | 0.468 |
+| suntag | 0.993 | 0.993 | 0.993 | 0.992 | 0.989 |
 
 #### uniform, axial spacing 1.0 um
 
@@ -293,8 +301,8 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.810 | 0.858 | 0.883 | 0.910 | 0.943 |
-| seqfish | 0.834 | 0.875 | 0.882 | 0.904 | 0.935 |
+| merfish | 0.810 | 0.858 | 0.883 | 0.911 | 0.943 |
+| seqfish | 0.834 | 0.874 | 0.882 | 0.904 | 0.935 |
 | simfish | 0.815 | 0.865 | 0.905 | 0.945 | 0.958 |
 | deepspot | 0.862 | 0.900 | 0.911 | 0.942 | 0.957 |
 | exseq | 0.831 | 0.874 | 0.886 | 0.916 | 0.936 |
@@ -307,15 +315,15 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.969 | 0.979 | 0.988 | 0.985 | 0.983 |
-| seqfish | 0.922 | 0.941 | 0.944 | 0.942 | 0.937 |
-| simfish | 0.972 | 0.979 | 0.983 | 0.979 | 0.986 |
-| deepspot | 0.901 | 0.861 | 0.797 | 0.671 | 0.445 |
-| exseq | 0.978 | 0.987 | **0.990** | 0.987 | 0.986 |
-| dnafish | 0.821 | 0.800 | 0.777 | 0.759 | 0.724 |
-| rca | 0.978 | 0.983 | 0.988 | 0.982 | 0.985 |
-| deepblink | 0.720 | 0.527 | 0.438 | 0.403 | 0.338 |
-| suntag | 0.982 | 0.981 | 0.973 | 0.961 | 0.936 |
+| merfish | 0.967 | 0.968 | 0.976 | 0.981 | 0.983 |
+| seqfish | 0.825 | 0.802 | 0.761 | 0.680 | 0.600 |
+| simfish | 0.958 | 0.974 | 0.977 | 0.980 | 0.981 |
+| deepspot | 0.872 | 0.810 | 0.729 | 0.609 | 0.418 |
+| exseq | 0.963 | 0.965 | 0.975 | 0.975 | 0.983 |
+| dnafish | 0.968 | 0.974 | 0.953 | 0.916 | 0.827 |
+| rca | 0.963 | 0.976 | 0.976 | 0.981 | **0.986** |
+| deepblink | 0.592 | 0.494 | 0.468 | 0.446 | 0.419 |
+| suntag | 0.977 | 0.971 | 0.964 | 0.941 | 0.904 |
 
 #### uniform, axial spacing 1.5 um
 
@@ -323,11 +331,11 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.831 | 0.866 | 0.894 | 0.918 | 0.935 |
+| merfish | 0.831 | 0.866 | 0.894 | 0.918 | 0.936 |
 | seqfish | 0.877 | 0.899 | 0.913 | 0.940 | 0.956 |
 | simfish | 0.899 | 0.932 | 0.959 | 0.976 | 0.979 |
-| deepspot | 0.929 | 0.939 | 0.951 | 0.963 | 0.974 |
-| exseq | 0.865 | 0.885 | 0.912 | 0.932 | 0.948 |
+| deepspot | 0.929 | 0.939 | 0.951 | 0.962 | 0.974 |
+| exseq | 0.865 | 0.885 | 0.912 | 0.933 | 0.948 |
 | dnafish | 0.958 | 0.963 | 0.946 | 0.923 | 0.885 |
 | rca | 0.960 | 0.972 | 0.979 | **0.986** | 0.980 |
 | deepblink | 0.851 | 0.854 | 0.842 | 0.831 | 0.818 |
@@ -337,12 +345,12 @@ Values are rounded to three decimal places. The bold value marks the selected be
 
 | U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.969 | 0.979 | 0.981 | 0.979 | 0.972 |
-| seqfish | 0.941 | 0.960 | 0.964 | 0.959 | 0.955 |
-| simfish | 0.958 | 0.975 | 0.978 | 0.982 | 0.978 |
-| deepspot | 0.795 | 0.750 | 0.683 | 0.568 | 0.393 |
-| exseq | 0.968 | **0.984** | 0.980 | 0.979 | 0.970 |
-| dnafish | 0.718 | 0.688 | 0.662 | 0.637 | 0.610 |
-| rca | 0.977 | 0.971 | 0.966 | 0.960 | 0.957 |
-| deepblink | 0.865 | 0.740 | 0.675 | 0.638 | 0.606 |
-| suntag | 0.899 | 0.885 | 0.872 | 0.854 | 0.838 |
+| merfish | 0.632 | 0.642 | 0.669 | 0.684 | 0.689 |
+| seqfish | 0.658 | 0.689 | **0.716** | 0.709 | 0.685 |
+| simfish | 0.676 | 0.695 | 0.701 | 0.672 | 0.632 |
+| deepspot | 0.689 | 0.713 | 0.709 | 0.701 | 0.670 |
+| exseq | 0.619 | 0.638 | 0.667 | 0.680 | 0.665 |
+| dnafish | 0.512 | 0.427 | 0.355 | 0.289 | 0.209 |
+| rca | 0.686 | 0.696 | 0.700 | 0.710 | 0.673 |
+| deepblink | 0.627 | 0.655 | 0.663 | 0.655 | 0.663 |
+| suntag | 0.534 | 0.437 | 0.358 | 0.256 | 0.178 |
