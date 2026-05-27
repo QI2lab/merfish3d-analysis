@@ -20,6 +20,8 @@ BASE_PIP_DEPS = [
     "onnx",
     "onnxruntime-gpu",
     "napari[pyqt6]",
+    "ndv[vispy,pyqt]",
+    "qtpy",
     "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
     "warpfield @ git+https://github.com/QI2lab/warpfield.git@qi2lab-working",
@@ -35,6 +37,7 @@ BASE_PIP_DEPS = [
     "scikit-learn",
     "yaozarrs[write-tensorstore,io]>=0.3",
     "matplotlib",
+    "xarray",
 ]
 
 # CUDA conda pkgs (Linux)
@@ -84,6 +87,21 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
 
 
 def run(command: str, *, cwd: Path | None = None) -> None:
+    """
+    Run.
+
+    Parameters
+    ----------
+    command : str
+        Function argument.
+    cwd : Path | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     typer.echo(f"$ {command}")
     subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
 
@@ -219,7 +237,7 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
         pip_deps = [
             d
             for d in BASE_PIP_DEPS
-            if not d.startswith("napari[") and not d.startswith("cellpose[")
+            if not d.startswith(("napari[", "cellpose[", "ndv[")) and d != "qtpy"
         ]
     else:
         pip_deps = BASE_PIP_DEPS
@@ -256,6 +274,14 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

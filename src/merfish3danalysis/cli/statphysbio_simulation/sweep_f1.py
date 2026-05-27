@@ -382,6 +382,14 @@ def sweep_decode_params(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

@@ -60,7 +60,19 @@ DEFAULT_UFISH_MODEL = "simfish"
 
 
 def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
-    """Resolve a U-FISH model alias or path without requiring U-FISH imports."""
+    """
+    Resolve a U-FISH model alias or path without requiring U-FISH imports.
+
+    Parameters
+    ----------
+    model : str | Path | None
+        Function argument.
+
+    Returns
+    -------
+    Path | str | None
+        Function result.
+    """
 
     if model is None:
         model = DEFAULT_UFISH_MODEL
@@ -85,7 +97,21 @@ def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
 
 
 def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
-    """Load configured U-FISH weights from an alias, local path, or weights file."""
+    """
+    Load configured U-FISH weights from an alias, local path, or weights file.
+
+    Parameters
+    ----------
+    ufish : Any
+        Function argument.
+    model : str | Path | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     weights = _resolve_ufish_weights_path(model)
     if weights is None:
@@ -98,7 +124,21 @@ def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
 
 
 def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
-    """Fetch PSF by index from uniform or ragged channel PSF storage."""
+    """
+    Fetch PSF by index from uniform or ragged channel PSF storage.
+
+    Parameters
+    ----------
+    psfs : Any
+        Function argument.
+    psf_idx : int
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     if isinstance(psfs, list):
         if psf_idx < 0 or psf_idx >= len(psfs):
@@ -115,7 +155,85 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     return np.asarray(psf_array[psf_idx], dtype=np.float32)
 
 
+def _run_chunked_rlgc_remembering_crop(
+    dr: Any,
+    chunked_rlgc: Any,
+    image: np.ndarray,
+    psf: np.ndarray,
+    gpu_id: int,
+) -> np.ndarray:
+    """
+    Run RLGC and remember the lateral chunk size that succeeds in this worker.
+
+    Parameters
+    ----------
+    dr : Any
+        Function argument.
+    chunked_rlgc : Any
+        Function argument.
+    image : np.ndarray
+        Function argument.
+    psf : np.ndarray
+        Function argument.
+    gpu_id : int
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
+
+    def _remember_successful_crop(successful_crop_yx: int) -> None:
+        """
+        Remember successful crop.
+
+        Parameters
+        ----------
+        successful_crop_yx : int
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
+        previous_crop_yx = int(dr._crop_yx_decon)
+        dr._crop_yx_decon = int(successful_crop_yx)
+        if successful_crop_yx < previous_crop_yx and dr._verbose >= 1:
+            print(
+                time_stamp(),
+                "RLGC reduced crop_yx after GPU memory fallback: "
+                f"{previous_crop_yx} -> {successful_crop_yx}.",
+            )
+
+    return chunked_rlgc(
+        image=image,
+        psf=psf,
+        gpu_id=gpu_id,
+        crop_yx=dr._crop_yx_decon,
+        crop_z=None,
+        release_memory=False,
+        on_successful_crop_yx=_remember_successful_crop,
+    )
+
+
 def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
+    """
+    Apply first fiducial on gpu.
+
+    Parameters
+    ----------
+    dr : Any
+        Function argument.
+    gpu_id : int
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
     import cupy as cp
 
     cp.cuda.Device(gpu_id).use()
@@ -125,12 +243,12 @@ def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
         tile=dr._tile_id, round=0, return_future=False
     )
 
-    ref_image_decon = chunked_rlgc(
+    ref_image_decon = _run_chunked_rlgc_remembering_crop(
+        dr=dr,
+        chunked_rlgc=chunked_rlgc,
         image=raw0,
         psf=_resolve_psf(dr._psfs, 0),
         gpu_id=0,
-        crop_yx=dr._crop_yx_decon,
-        release_memory=False,
     )
 
     dr._datastore.save_local_registered_image(
@@ -204,30 +322,15 @@ def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # no
                 fiducial_image = raw.copy()
                 del raw
 
-                if dr._datastore.microscope_type == "2D":
-                    mov_image_decon = chunked_rlgc(
-                        image=fiducial_image,
-                        psf=_resolve_psf(dr._psfs, 0),
-                        gpu_id=gpu_id,
-                        crop_yx=fiducial_image.shape[-1],
-                        release_memory=False,
-                    )
-                    mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del fiducial_image
-                else:
-                    mov_image_decon = chunked_rlgc(
-                        image=fiducial_image,
-                        psf=_resolve_psf(dr._psfs, 0),
-                        gpu_id=gpu_id,
-                        crop_yx=dr._crop_yx_decon,
-                        release_memory=False,
-                    )
-                    mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del fiducial_image
+                mov_image_decon = _run_chunked_rlgc_remembering_crop(
+                    dr=dr,
+                    chunked_rlgc=chunked_rlgc,
+                    image=fiducial_image,
+                    psf=_resolve_psf(dr._psfs, 0),
+                    gpu_id=gpu_id,
+                )
+                mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(np.uint16)
+                del fiducial_image
             else:
                 mov_image_decon = raw.copy().astype(np.uint16)
                 del raw
@@ -412,24 +515,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
 
             # deconvolution
             if dr._decon_readout:
-                if dr._datastore.microscope_type == "2D":
-                    decon_image = chunked_rlgc(
-                        image=corrected_image,
-                        psf=_resolve_psf(dr._psfs, psf_idx),
-                        gpu_id=gpu_id,
-                        crop_yx=corrected_image.shape[-1],
-                        release_memory=False,
-                    )
-                    decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
-                else:
-                    decon_image = chunked_rlgc(
-                        image=corrected_image,
-                        psf=_resolve_psf(dr._psfs, psf_idx),
-                        gpu_id=gpu_id,
-                        crop_yx=dr._crop_yx_decon,
-                        release_memory=False,
-                    )
-                    decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
+                decon_image = _run_chunked_rlgc_remembering_crop(
+                    dr=dr,
+                    chunked_rlgc=chunked_rlgc,
+                    image=corrected_image,
+                    psf=_resolve_psf(dr._psfs, psf_idx),
+                    gpu_id=gpu_id,
+                )
+                decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
             else:
                 decon_image = corrected_image.copy()
 
@@ -509,6 +602,23 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
+                """
+                Sum pixels in roi.
+
+                Parameters
+                ----------
+                row : Any
+                    Function argument.
+                image : Any
+                    Function argument.
+                roi_dims : Any
+                    Function argument.
+
+                Returns
+                -------
+                Any
+                    Function result.
+                """
                 z, y, x = row["z"], row["y"], row["x"]
                 rz, ry, rx = roi_dims
                 zmin = max(0, z - rz // 2)
@@ -588,7 +698,7 @@ class DataRegistration:
         Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
         Number of GPUs to use for registration.
-    crop_yx_decon: int, default 1024
+    crop_yx_decon: int, default 2048
         Crop size for deconvolution applied to both y and x dimensions.
     ufish_model: str or pathlib.Path or None, default None
         U-FISH model to use for feature prediction. If omitted or ``None``, use
@@ -609,10 +719,36 @@ class DataRegistration:
         perform_optical_flow: bool = True,
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
-        crop_yx_decon: int = 1024,
+        crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
         verbose: int = 1,
     ) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        datastore : qi2labDataStore
+            Function argument.
+        decon_fiducial : bool
+            Function argument.
+        decon_readout : bool
+            Function argument.
+        overwrite_registered : bool
+            Function argument.
+        perform_optical_flow : bool
+            Function argument.
+        save_all_fiducial_registered : bool
+            Function argument.
+        num_gpus : int
+            Function argument.
+        crop_yx_decon : int
+            Function argument.
+        ufish_model : str | Path | None
+            Function argument.
+        verbose : int
+            Function argument.
+        """
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
         self._tile_ids = self._datastore.tile_ids
@@ -757,6 +893,23 @@ class DataRegistration:
         round_id: str | None = None,
         bit_id: str | None = None,
     ) -> Path:
+        """
+        Entity root.
+
+        Parameters
+        ----------
+        tile_id : str
+            Function argument.
+        round_id : str | None
+            Function argument.
+        bit_id : str | None
+            Function argument.
+
+        Returns
+        -------
+        Path
+            Function result.
+        """
         if (round_id is None and bit_id is None) or (
             round_id is not None and bit_id is not None
         ):
@@ -772,6 +925,23 @@ class DataRegistration:
         round_id: str | None = None,
         bit_id: str | None = None,
     ) -> bool:
+        """
+        Has valid registered image.
+
+        Parameters
+        ----------
+        tile_id : str | None
+            Function argument.
+        round_id : str | None
+            Function argument.
+        bit_id : str | None
+            Function argument.
+
+        Returns
+        -------
+        bool
+            Function result.
+        """
         tile_id = self._tile_id if tile_id is None else tile_id
         entity_root = self._entity_root(
             tile_id=tile_id, round_id=round_id, bit_id=bit_id
@@ -789,6 +959,21 @@ class DataRegistration:
         tile_id: str | None = None,
         bit_id: str | None = None,
     ) -> bool:
+        """
+        Has valid feature predictor outputs.
+
+        Parameters
+        ----------
+        tile_id : str | None
+            Function argument.
+        bit_id : str | None
+            Function argument.
+
+        Returns
+        -------
+        bool
+            Function result.
+        """
         tile_id = self._tile_id if tile_id is None else tile_id
         if bit_id is None:
             raise ValueError("bit_id is required for feature predictor outputs.")
@@ -817,6 +1002,19 @@ class DataRegistration:
         )
 
     def _is_tile_complete(self, tile_id: str) -> bool:
+        """
+        Is tile complete.
+
+        Parameters
+        ----------
+        tile_id : str
+            Function argument.
+
+        Returns
+        -------
+        bool
+            Function result.
+        """
         if not self._has_valid_registered_image(
             tile_id=tile_id, round_id=self._round_ids[0]
         ):
@@ -838,7 +1036,14 @@ class DataRegistration:
         return True
 
     def register_all_tiles(self) -> None:
-        """Helper function to register all tiles."""
+        """
+        Helper function to register all tiles.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         tile_ids = list(self._datastore.tile_ids)
         start_idx = 0
         if not self._overwrite_registered:
@@ -895,7 +1100,14 @@ class DataRegistration:
         self._apply_registration_to_bits()
 
     def _load_raw_data(self) -> None:
-        """Load raw data across rounds for one tile."""
+        """
+        Load raw data across rounds for one tile.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         self._data_raw = []
         stage_positions = []
@@ -919,7 +1131,14 @@ class DataRegistration:
         gc.collect()
 
     def _generate_registrations(self) -> None:
-        """Generate registered, deconvolved fiducial data and save to datastore."""
+        """
+        Generate registered, deconvolved fiducial data and save to datastore.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         has_reg_decon_data = self._has_valid_registered_image(
             round_id=self._round_ids[0]
         )
@@ -969,7 +1188,14 @@ class DataRegistration:
             p.join()
 
     def _apply_registration_to_bits(self) -> None:
-        """Generate feature_predictor + deconvolved, registered readout data and save to datastore."""
+        """
+        Generate feature_predictor + deconvolved, registered readout data and save to datastore.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(
@@ -1024,4 +1250,12 @@ def no_op(*args: Any, **kwargs: Any) -> None:
 
 
 def time_stamp() -> str:
+    """
+    Time stamp.
+
+    Returns
+    -------
+    str
+        Function result.
+    """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

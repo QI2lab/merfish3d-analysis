@@ -54,6 +54,40 @@ app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 
+def _first_stack_path(
+    root_path: Path, root_name: str, round_idx: int, tile_idx: int
+) -> Path:
+    """
+    First stack path.
+
+    Parameters
+    ----------
+    root_path : Path
+        Function argument.
+    root_name : str
+        Function argument.
+    round_idx : int
+        Function argument.
+    tile_idx : int
+        Function argument.
+
+    Returns
+    -------
+    Path
+        Function result.
+    """
+    base = f"{root_name}_r{round_idx + 1:04d}_tile{tile_idx:04d}"
+    image_path_1 = root_path / Path(f"{base}_1") / Path(f"{base}_NDTiffStack.tif")
+    image_path_2 = root_path / Path(f"{base}_2") / Path(f"{base}_NDTiffStack.tif")
+    if image_path_1.exists():
+        return image_path_1
+    if image_path_2.exists():
+        return image_path_2
+    raise FileNotFoundError(
+        f"Could not find raw image at either path:\n- {image_path_1}\n- {image_path_2}"
+    )
+
+
 @app.command()
 def convert_data(
     root_path: Path,
@@ -289,10 +323,16 @@ def convert_data(
 
     # generate PSFs
     # --------------
+    raw_image = imread(_first_stack_path(root_path, root_name, 0, 0))
+    if camera == "orcav3":
+        raw_image = np.swapaxes(raw_image, 0, 1)
+    psf_z = int(raw_image.shape[1]) if raw_image.ndim == 4 else 1
+    del raw_image
+
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
-            z=51,
+            z=psf_z,
             nx=51,
             dxy=voxel_size_zyx_um[1],
             dz=voxel_size_zyx_um[0],
@@ -350,8 +390,8 @@ def convert_data(
         datastore._shading_maps = np.ones(
             (3, 2048, 2048), dtype=np.float32
         )  # not used yet
-        datastore.channel_psfs = channel_psfs
         datastore.voxel_size_zyx_um = voxel_size_zyx_um
+        datastore.channel_psfs = channel_psfs
 
         # Update datastore state to note that calibrations are done
         datastore_state = datastore.datastore_state
@@ -764,6 +804,14 @@ def convert_data(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

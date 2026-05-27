@@ -109,7 +109,7 @@ def convert_simulation(root_path: Path) -> None:
         {
             "root_name": str(root_name),
             "scan_type": "synthetic",
-            "exp_type": "3D",
+            "experiment_type": "3D" if float(z_pixel_um) < 0.5 else "2D",
             "camera": "simulated",
             "channels_reversed": True,
             "stage_flipped_x": False,
@@ -152,6 +152,14 @@ def convert_simulation(root_path: Path) -> None:
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

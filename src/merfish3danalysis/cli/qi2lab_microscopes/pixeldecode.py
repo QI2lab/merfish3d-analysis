@@ -31,7 +31,19 @@ QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
 def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
-    """Return the default minimum-pixel threshold for qi2lab decoding."""
+    """
+    Return the default minimum-pixel threshold for qi2lab decoding.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Function argument.
+
+    Returns
+    -------
+    int
+        Function result.
+    """
 
     return 7 if datastore.microscope_type == "2D" else 28
 
@@ -39,7 +51,19 @@ def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
 def _default_qi2lab_magnitude_threshold(
     datastore: qi2labDataStore,
 ) -> tuple[float, float]:
-    """Return the sampling-aware default magnitude threshold for qi2lab decoding."""
+    """
+    Return the sampling-aware default magnitude threshold for qi2lab decoding.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Function argument.
+
+    Returns
+    -------
+    tuple[float, float]
+        Function result.
+    """
 
     if datastore.microscope_type != "2D":
         return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
@@ -55,7 +79,19 @@ def _default_qi2lab_magnitude_threshold(
 
 
 def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
-    """Return whether registered readout data were saved after deconvolution."""
+    """
+    Return whether registered readout data were saved after deconvolution.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
 
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
@@ -77,7 +113,19 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
 def _default_qi2lab_feature_predictor_threshold(
     datastore: qi2labDataStore,
 ) -> float:
-    """Return the sampling-aware default U-FISH mask threshold."""
+    """
+    Return the sampling-aware default U-FISH mask threshold.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Function argument.
+
+    Returns
+    -------
+    float
+        Function result.
+    """
 
     if datastore.microscope_type != "2D" or not _readouts_are_deconvolved(datastore):
         return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
@@ -96,7 +144,23 @@ def _validate_filter_arguments(
     target_gross_misid_rate: float,
     lr_fdr_target: float,
 ) -> None:
-    """Validate that the selected filter uses the matching control parameter."""
+    """
+    Validate that the selected filter uses the matching control parameter.
+
+    Parameters
+    ----------
+    filter_method : str
+        Function argument.
+    target_gross_misid_rate : float
+        Function argument.
+    lr_fdr_target : float
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     if filter_method in ("blank_fraction", "blank_bit_enrichment"):
         if lr_fdr_target != 0.05:
@@ -247,6 +311,14 @@ def decode_pixels(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

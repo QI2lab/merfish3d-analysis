@@ -244,6 +244,14 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> None:
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

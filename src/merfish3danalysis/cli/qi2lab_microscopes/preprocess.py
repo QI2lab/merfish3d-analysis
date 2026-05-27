@@ -27,7 +27,7 @@ def local_register_data(
     decon_allfiducial: bool = True,
     save_all_fiducial: bool = False,
     overwrite: bool = True,
-    crop_yx_decon: int = 1024,
+    crop_yx_decon: int = 2048,
     ufish_model: str | None = None,
     zstride_level: int = 0,
     verbose: int = 1,
@@ -51,7 +51,7 @@ def local_register_data(
         save all registered fiducial images.
     overwrite: bool, Default = True
         overwrite existing registered data.
-    crop_yx_decon: int, default = 1024
+    crop_yx_decon: int, default = 2048
         size of tile for GPU deconvolution.
     ufish_model: Optional[str], default = None
         U-FISH model used for feature prediction. If omitted or None, use the
@@ -98,6 +98,14 @@ def local_register_data(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

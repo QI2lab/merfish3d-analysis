@@ -172,38 +172,23 @@ def convert_data(
 
     # generate PSFs
     # --------------
+    psf_z = int(num_z)
     channel_psfs = []
     for channel_id in channels_in_data:
-        if datastore.microscope_type == "3D":
-            psf = make_psf(
-                z=num_z,
-                nx=51,
-                dxy=voxel_size_zyx_um[1],
-                dz=voxel_size_zyx_um[0],
-                NA=na,
-                wvl=em_wavelengths_um[channel_id],
-                ns=1.47,
-                ni=ri,
-                ni0=ri,
-                model="vectorial",
-            ).astype(np.float32)
-            # psf = psf / np.sum(psf, axis=(0, 1, 2))
-            channel_psfs.append(psf)
-        else:
-            psf = make_psf(
-                z=1,
-                nx=51,
-                dxy=voxel_size_zyx_um[1],
-                dz=voxel_size_zyx_um[0],
-                NA=na,
-                wvl=em_wavelengths_um[channel_id],
-                ns=1.47,
-                ni=ri,
-                ni0=ri,
-                model="vectorial",
-            ).astype(np.float32)
-            # psf = psf / np.sum(psf, axis=(0, 1, 2))
-            channel_psfs.append(psf)
+        psf = make_psf(
+            z=psf_z,
+            nx=51,
+            dxy=voxel_size_zyx_um[1],
+            dz=voxel_size_zyx_um[0],
+            NA=na,
+            wvl=em_wavelengths_um[channel_id],
+            ns=1.47,
+            ni=ri,
+            ni0=ri,
+            model="vectorial",
+        ).astype(np.float32)
+        psf = psf / np.sum(psf, axis=(0, 1, 2))
+        channel_psfs.append(psf)
     datastore.channel_psfs = channel_psfs
 
     # Update datastore state to note that calibrations are done
@@ -372,6 +357,14 @@ def convert_data(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

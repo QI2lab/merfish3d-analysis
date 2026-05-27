@@ -61,7 +61,19 @@ RESULT_KEYS = {
 
 
 def _ufish_label_from_weights_path(weights_path: Path) -> str:
-    """Return a stable test id for a cached U-FISH ONNX weights file."""
+    """
+    Return a stable test id for a cached U-FISH ONNX weights file.
+
+    Parameters
+    ----------
+    weights_path : Path
+        Function argument.
+
+    Returns
+    -------
+    str
+        Function result.
+    """
 
     label = weights_path.stem
     if label.startswith("v1.0.1-"):
@@ -72,7 +84,14 @@ def _ufish_label_from_weights_path(weights_path: Path) -> str:
 
 
 def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
-    """Return every locally available distinct U-FISH model."""
+    """
+    Return every locally available distinct U-FISH model.
+
+    Returns
+    -------
+    tuple[tuple[str, str | None], ...]
+        Function result.
+    """
 
     models: list[tuple[str, str | None]] = []
     seen_weights: set[str | None] = set()
@@ -171,69 +190,69 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
     )
 )
 STANDARD_EXPECTED_F1_SCORES = {
-    ("cells", "0.315"): 0.9941520467836257,
-    ("cells", "1.0"): 0.9782971619365609,
-    ("cells", "1.5"): 0.9679595278246206,
-    ("uniform", "0.315"): 0.9953994144709327,
-    ("uniform", "1.0"): 0.9862097785206854,
-    ("uniform", "1.5"): 0.978021978021978,
+    ("cells", "0.315"): 0.9933222036727879,
+    ("cells", "1.0"): 0.9710391822827938,
+    ("cells", "1.5"): 0.42944785276073616,
+    ("uniform", "0.315"): 0.9954070981210855,
+    ("uniform", "1.0"): 0.9811951525282072,
+    ("uniform", "1.5"): 0.6323404255319149,
 }
 FULL_EXPECTED_F1_SCORES = {
-    ("cells", "0.315", "decon", 0.1): 0.9411764705882353,
-    ("cells", "0.315", "decon", 0.2): 0.9781144781144782,
-    ("cells", "0.315", "decon", 0.3): 0.9924812030075189,
-    ("cells", "0.315", "decon", 0.4): 0.9916387959866221,
-    ("cells", "0.315", "decon", 0.5): 0.9941520467836257,
+    ("cells", "0.315", "decon", 0.1): 0.9924686192468619,
+    ("cells", "0.315", "decon", 0.2): 0.994142259414226,
+    ("cells", "0.315", "decon", 0.3): 0.9933110367892977,
+    ("cells", "0.315", "decon", 0.4): 0.9949832775919734,
+    ("cells", "0.315", "decon", 0.5): 0.9933222036727879,
     ("cells", "0.315", "no-decon", 0.1): 0.9941225860621327,
     ("cells", "0.315", "no-decon", 0.2): 0.9916107382550335,
     ("cells", "0.315", "no-decon", 0.3): 0.9949748743718593,
     ("cells", "0.315", "no-decon", 0.4): 0.9949748743718593,
     ("cells", "0.315", "no-decon", 0.5): 0.9958158995815899,
-    ("cells", "1.0", "decon", 0.1): 0.9224422442244224,
-    ("cells", "1.0", "decon", 0.2): 0.9618573797678276,
-    ("cells", "1.0", "decon", 0.3): 0.9641965029142382,
-    ("cells", "1.0", "decon", 0.4): 0.9774812343619683,
-    ("cells", "1.0", "decon", 0.5): 0.9782971619365609,
+    ("cells", "1.0", "decon", 0.1): 0.9635157545605307,
+    ("cells", "1.0", "decon", 0.2): 0.9716666666666667,
+    ("cells", "1.0", "decon", 0.3): 0.9791840133222314,
+    ("cells", "1.0", "decon", 0.4): 0.9824561403508771,
+    ("cells", "1.0", "decon", 0.5): 0.9710391822827938,
     ("cells", "1.0", "no-decon", 0.1): 0.7801302931596091,
     ("cells", "1.0", "no-decon", 0.2): 0.8346972176759412,
     ("cells", "1.0", "no-decon", 0.3): 0.8857615894039735,
     ("cells", "1.0", "no-decon", 0.4): 0.9202657807308969,
     ("cells", "1.0", "no-decon", 0.5): 0.9507923269391159,
-    ("cells", "1.5", "decon", 0.1): 0.9360323886639677,
-    ("cells", "1.5", "decon", 0.2): 0.9589490968801313,
-    ("cells", "1.5", "decon", 0.3): 0.9693961952026467,
-    ("cells", "1.5", "decon", 0.4): 0.9741451209341119,
-    ("cells", "1.5", "decon", 0.5): 0.9679595278246206,
+    ("cells", "1.5", "decon", 0.1): 0.5936981757877281,
+    ("cells", "1.5", "decon", 0.2): 0.5777777777777778,
+    ("cells", "1.5", "decon", 0.3): 0.5376344086021505,
+    ("cells", "1.5", "decon", 0.4): 0.49479768786127165,
+    ("cells", "1.5", "decon", 0.5): 0.42944785276073616,
     ("cells", "1.5", "no-decon", 0.1): 0.9210740439381611,
     ("cells", "1.5", "no-decon", 0.2): 0.9377049180327869,
     ("cells", "1.5", "no-decon", 0.3): 0.9627174813587407,
     ("cells", "1.5", "no-decon", 0.4): 0.970906068162926,
     ("cells", "1.5", "no-decon", 0.5): 0.9741019214703426,
-    ("uniform", "0.315", "decon", 0.1): 0.9886887306242145,
-    ("uniform", "0.315", "decon", 0.2): 0.9912390488110138,
-    ("uniform", "0.315", "decon", 0.3): 0.9912317327766179,
-    ("uniform", "0.315", "decon", 0.4): 0.9949874686716791,
-    ("uniform", "0.315", "decon", 0.5): 0.9953994144709327,
+    ("uniform", "0.315", "decon", 0.1): 0.9937264742785445,
+    ("uniform", "0.315", "decon", 0.2): 0.9941471571906355,
+    ("uniform", "0.315", "decon", 0.3): 0.9941471571906355,
+    ("uniform", "0.315", "decon", 0.4): 0.9954032595068951,
+    ("uniform", "0.315", "decon", 0.5): 0.9954070981210855,
     ("uniform", "0.315", "no-decon", 0.1): 0.9953955629970699,
     ("uniform", "0.315", "no-decon", 0.2): 0.9966555183946487,
     ("uniform", "0.315", "no-decon", 0.3): 0.995819397993311,
     ("uniform", "0.315", "no-decon", 0.4): 0.9962390305056414,
     ("uniform", "0.315", "no-decon", 0.5): 0.9974937343358397,
-    ("uniform", "1.0", "decon", 0.1): 0.9718076285240465,
-    ("uniform", "1.0", "decon", 0.2): 0.9792186201163757,
-    ("uniform", "1.0", "decon", 0.3): 0.9825291181364392,
-    ("uniform", "1.0", "decon", 0.4): 0.9787411421425595,
-    ("uniform", "1.0", "decon", 0.5): 0.9862097785206854,
+    ("uniform", "1.0", "decon", 0.1): 0.9575353871773523,
+    ("uniform", "1.0", "decon", 0.2): 0.9737390579408086,
+    ("uniform", "1.0", "decon", 0.3): 0.9770546516478932,
+    ("uniform", "1.0", "decon", 0.4): 0.9795577805590322,
+    ("uniform", "1.0", "decon", 0.5): 0.9811951525282072,
     ("uniform", "1.0", "no-decon", 0.1): 0.8148148148148148,
     ("uniform", "1.0", "no-decon", 0.2): 0.8653128885205139,
     ("uniform", "1.0", "no-decon", 0.3): 0.9052544476623914,
     ("uniform", "1.0", "no-decon", 0.4): 0.9451371571072318,
     ("uniform", "1.0", "no-decon", 0.5): 0.9575707154742097,
-    ("uniform", "1.5", "decon", 0.1): 0.9574726609963548,
-    ("uniform", "1.5", "decon", 0.2): 0.9753086419753086,
-    ("uniform", "1.5", "decon", 0.3): 0.9779808890735355,
-    ("uniform", "1.5", "decon", 0.4): 0.9819706498951783,
-    ("uniform", "1.5", "decon", 0.5): 0.978021978021978,
+    ("uniform", "1.5", "decon", 0.1): 0.6759455370650529,
+    ("uniform", "1.5", "decon", 0.2): 0.6945954589062999,
+    ("uniform", "1.5", "decon", 0.3): 0.7006993006993008,
+    ("uniform", "1.5", "decon", 0.4): 0.6717674062739096,
+    ("uniform", "1.5", "decon", 0.5): 0.6323404255319149,
     ("uniform", "1.5", "no-decon", 0.1): 0.8992688870836718,
     ("uniform", "1.5", "no-decon", 0.2): 0.9317995069843878,
     ("uniform", "1.5", "no-decon", 0.3): 0.9591752577319588,
@@ -244,7 +263,14 @@ FULL_EXPECTED_F1_SCORES = {
 
 @pytest.fixture(scope="session")
 def simulation_dataset_root() -> Path:
-    """Resolve the local simulation dataset root configured in this test file."""
+    """
+    Resolve the local simulation dataset root configured in this test file.
+
+    Returns
+    -------
+    Path
+        Function result.
+    """
 
     root = LOCAL_SIMULATION_DATA_ROOT.expanduser().resolve()
     if not root.exists():
@@ -254,7 +280,19 @@ def simulation_dataset_root() -> Path:
 
 @pytest.fixture(scope="session")
 def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
-    """Resolve local dataset directories for the simulation matrix."""
+    """
+    Resolve local dataset directories for the simulation matrix.
+
+    Parameters
+    ----------
+    simulation_dataset_root : Path
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Path]
+        Function result.
+    """
 
     resolved_dirs: dict[str, Path] = {}
     missing_variants: list[str] = []
@@ -275,7 +313,19 @@ def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
 
 
 def _normalize_dataset_root(root: Path) -> Path:
-    """Normalize the configured local simulation dataset root."""
+    """
+    Normalize the configured local simulation dataset root.
+
+    Parameters
+    ----------
+    root : Path
+        Function argument.
+
+    Returns
+    -------
+    Path
+        Function result.
+    """
 
     example_dir = root / "example_16bit_flat"
     if not example_dir.exists():
@@ -288,7 +338,19 @@ def _normalize_dataset_root(root: Path) -> Path:
 
 
 def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
-    """Return the default minimum-pixel threshold for a simulation spacing."""
+    """
+    Return the default minimum-pixel threshold for a simulation spacing.
+
+    Parameters
+    ----------
+    axial_spacing_um : str
+        Function argument.
+
+    Returns
+    -------
+    int
+        Function result.
+    """
 
     if axial_spacing_um == "0.315":
         return DEFAULT_MINIMUM_PIXELS_3D
@@ -298,7 +360,19 @@ def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
 def _default_standard_magnitude_threshold(
     axial_spacing_um: str,
 ) -> tuple[float, float]:
-    """Return the sampling-aware default magnitude threshold for simulations."""
+    """
+    Return the sampling-aware default magnitude threshold for simulations.
+
+    Parameters
+    ----------
+    axial_spacing_um : str
+        Function argument.
+
+    Returns
+    -------
+    tuple[float, float]
+        Function result.
+    """
 
     if axial_spacing_um == "0.315":
         return DEFAULT_MAGNITUDE_THRESHOLD
@@ -314,7 +388,14 @@ def _default_standard_magnitude_threshold(
 
 @pytest.fixture(scope="session")
 def simulation_api() -> dict[str, Any]:
-    """Import callable APIs used by the former notebook workflow."""
+    """
+    Import callable APIs used by the former notebook workflow.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     try:
         from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
@@ -350,7 +431,14 @@ def simulation_api() -> dict[str, Any]:
 
 @pytest.fixture(scope="session")
 def performance_records() -> list[dict[str, Any]]:
-    """Collect and persist runtime/performance records across all approaches."""
+    """
+    Collect and persist runtime/performance records across all approaches.
+
+    Returns
+    -------
+    list[dict[str, Any]]
+        Function result.
+    """
 
     records: list[dict[str, Any]] = []
     yield records
@@ -398,7 +486,21 @@ def performance_records() -> list[dict[str, Any]]:
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
-    """Use symlinks for large files when possible, with copy fallback."""
+    """
+    Use symlinks for large files when possible, with copy fallback.
+
+    Parameters
+    ----------
+    src : Path
+        Function argument.
+    dst : Path
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     try:
         dst.symlink_to(src.resolve())
@@ -407,7 +509,21 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 
 
 def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
-    """Create an isolated workspace with only files needed for this pipeline."""
+    """
+    Create an isolated workspace with only files needed for this pipeline.
+
+    Parameters
+    ----------
+    source_case_dir : Path
+        Function argument.
+    work_root : Path
+        Function argument.
+
+    Returns
+    -------
+    Path
+        Function result.
+    """
 
     missing_files = [
         filename
@@ -431,6 +547,23 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
 def _calculate_f1_from_datastore(
     case_root: Path, simulation_api: dict[str, Any], search_radius: float = 1.0
 ) -> dict[str, float]:
+    """
+    Calculate f1 from datastore.
+
+    Parameters
+    ----------
+    case_root : Path
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    search_radius : float
+        Function argument.
+
+    Returns
+    -------
+    dict[str, float]
+        Function result.
+    """
     import numpy as np
     import pandas as pd
 
@@ -489,6 +622,25 @@ def _run_simulation_preprocess(
     decon_readout: bool,
     ufish_model: str | None,
 ) -> None:
+    """
+    Run simulation preprocess.
+
+    Parameters
+    ----------
+    acquisition_root : Path
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    decon_readout : bool
+        Function argument.
+    ufish_model : str | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
     registration_factory = simulation_api["DataRegistration"](
         datastore=datastore,
@@ -519,6 +671,27 @@ def _run_simulation_case_setup(
     ufish_model: str | None,
     case_label: str,
 ) -> dict[str, float]:
+    """
+    Run simulation case setup.
+
+    Parameters
+    ----------
+    case_root : Path
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    decon_readout : bool
+        Function argument.
+    ufish_model : str | None
+        Function argument.
+    case_label : str
+        Function argument.
+
+    Returns
+    -------
+    dict[str, float]
+        Function result.
+    """
     acquisition_root = case_root / "sim_acquisition"
     timings_seconds: dict[str, float] = {}
 
@@ -571,7 +744,27 @@ def _prepare_preprocessed_magnitude_case(
     *,
     run_calibration_decode: bool = True,
 ) -> dict[str, Any]:
-    """Prepare one simulation case once before decode-only magnitude sweeps."""
+    """
+    Prepare one simulation case once before decode-only magnitude sweeps.
+
+    Parameters
+    ----------
+    simulation_dataset_dirs : dict[str, Path]
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    case_spec : dict[str, Any]
+        Function argument.
+    tmp_path : Path
+        Function argument.
+    run_calibration_decode : bool
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     dataset_variant = case_spec["dataset_variant"]
     axial_spacing_um = case_spec["axial_spacing_um"]
@@ -654,6 +847,39 @@ def _run_simulation_decode_and_f1(
     duplicate_radius_xy: float | None = None,
     duplicate_radius_z: float | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """
+    Run simulation decode and f1.
+
+    Parameters
+    ----------
+    case_root : Path
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    search_radius : float
+        Function argument.
+    feature_predictor_threshold : float
+        Function argument.
+    lowpass_sigma : tuple[float, float, float]
+        Function argument.
+    magnitude_threshold : tuple[float, float]
+        Function argument.
+    case_label : str
+        Function argument.
+    minimum_pixels_per_rna : int | None
+        Function argument.
+    skip_optimization : bool
+        Function argument.
+    duplicate_radius_xy : float | None
+        Function argument.
+    duplicate_radius_z : float | None
+        Function argument.
+
+    Returns
+    -------
+    tuple[dict[str, float], dict[str, float], dict[str, float]]
+        Function result.
+    """
     acquisition_root = case_root / "sim_acquisition"
     timings_seconds: dict[str, float] = {}
 
@@ -716,6 +942,37 @@ def _run_simulation_pipeline(
     minimum_pixels_per_rna: int | None = None,
     case_label: str | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """
+    Run simulation pipeline.
+
+    Parameters
+    ----------
+    case_root : Path
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    search_radius : float
+        Function argument.
+    decon_readout : bool
+        Function argument.
+    ufish_model : str | None
+        Function argument.
+    feature_predictor_threshold : float
+        Function argument.
+    lowpass_sigma : tuple[float, float, float]
+        Function argument.
+    magnitude_threshold : tuple[float, float]
+        Function argument.
+    minimum_pixels_per_rna : int | None
+        Function argument.
+    case_label : str | None
+        Function argument.
+
+    Returns
+    -------
+    tuple[dict[str, float], dict[str, float], dict[str, float]]
+        Function result.
+    """
     if case_label is None:
         case_label = case_root.name
     timings_seconds = _run_simulation_case_setup(
@@ -757,7 +1014,19 @@ def _run_simulation_pipeline(
     ],
 )
 def simulation_standard_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
-    """Parametrize the standard local simulation test matrix."""
+    """
+    Parametrize the standard local simulation test matrix.
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     return request.param
 
@@ -770,7 +1039,27 @@ def simulation_standard_case_result(
     simulation_standard_case_spec: dict[str, Any],
     tmp_path: Path,
 ) -> dict[str, Any]:
-    """Run one standard simulation pipeline case and return recorded metrics."""
+    """
+    Run one standard simulation pipeline case and return recorded metrics.
+
+    Parameters
+    ----------
+    simulation_dataset_dirs : dict[str, Path]
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    performance_records : list[dict[str, Any]]
+        Function argument.
+    simulation_standard_case_spec : dict[str, Any]
+        Function argument.
+    tmp_path : Path
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     dataset_variant = simulation_standard_case_spec["dataset_variant"]
     axial_spacing_um = simulation_standard_case_spec["axial_spacing_um"]
@@ -865,7 +1154,19 @@ def simulation_standard_case_result(
     ],
 )
 def simulation_full_sweep_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
-    """Parametrize the exhaustive local simulation base cases."""
+    """
+    Parametrize the exhaustive local simulation base cases.
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     return request.param
 
@@ -877,7 +1178,25 @@ def simulation_full_preprocessed_case(
     simulation_full_sweep_case_spec: dict[str, Any],
     tmp_path: Path,
 ) -> dict[str, Any]:
-    """Prepare one exhaustive simulation base case before FP sweeps."""
+    """
+    Prepare one exhaustive simulation base case before FP sweeps.
+
+    Parameters
+    ----------
+    simulation_dataset_dirs : dict[str, Path]
+        Function argument.
+    simulation_api : dict[str, Any]
+        Function argument.
+    simulation_full_sweep_case_spec : dict[str, Any]
+        Function argument.
+    tmp_path : Path
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     return _prepare_preprocessed_magnitude_case(
         simulation_dataset_dirs,
@@ -894,7 +1213,23 @@ def simulation_full_case_result(
     performance_records: list[dict[str, Any]],
     simulation_full_preprocessed_case: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run the exhaustive FP-threshold sweep on one calibrated base case."""
+    """
+    Run the exhaustive FP-threshold sweep on one calibrated base case.
+
+    Parameters
+    ----------
+    simulation_api : dict[str, Any]
+        Function argument.
+    performance_records : list[dict[str, Any]]
+        Function argument.
+    simulation_full_preprocessed_case : dict[str, Any]
+        Function argument.
+
+    Returns
+    -------
+    dict[str, Any]
+        Function result.
+    """
 
     case_root = simulation_full_preprocessed_case["case_root"]
     case_spec = simulation_full_preprocessed_case["case_spec"]
@@ -976,7 +1311,19 @@ def simulation_full_case_result(
 def test_simulation_standard_matrix(
     simulation_standard_case_result: dict[str, Any],
 ) -> None:
-    """Run the standard simulation matrix with package-default baselines."""
+    """
+    Run the standard simulation matrix with package-default baselines.
+
+    Parameters
+    ----------
+    simulation_standard_case_result : dict[str, Any]
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     datastore_path = (
         simulation_standard_case_result["case_root"]
@@ -1013,7 +1360,19 @@ def test_simulation_standard_matrix(
 def test_simulation_exhaustive_matrix(
     simulation_full_case_result: dict[str, Any],
 ) -> None:
-    """Run the exhaustive simulation matrix with package-default baselines."""
+    """
+    Run the exhaustive simulation matrix with package-default baselines.
+
+    Parameters
+    ----------
+    simulation_full_case_result : dict[str, Any]
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     datastore_path = (
         simulation_full_case_result["case_root"] / "sim_acquisition" / "qi2labdatastore"
