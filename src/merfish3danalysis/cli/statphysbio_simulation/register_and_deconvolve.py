@@ -20,6 +20,19 @@ app.pretty_exceptions_enable = False
 
 @app.command()
 def manage_data_registration_states(root_path: Path) -> None:
+    """
+    Manage data registration states.
+
+    Parameters
+    ----------
+    root_path : Path
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     local_register_data(root_path)
     global_register_data(root_path, create_max_proj_tiff=False)
 
@@ -151,6 +164,14 @@ def global_register_data(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

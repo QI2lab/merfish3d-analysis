@@ -436,6 +436,14 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

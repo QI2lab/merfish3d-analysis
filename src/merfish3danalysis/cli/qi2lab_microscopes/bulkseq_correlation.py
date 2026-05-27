@@ -27,6 +27,21 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 
 def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
+    """
+    Load file1.
+
+    Parameters
+    ----------
+    path : str
+        Function argument.
+    sep_override : str
+        Function argument.
+
+    Returns
+    -------
+    pd.DataFrame
+        Function result.
+    """
     p = Path(path)
     if not p.exists():
         typer.secho(f"ERROR: file1 not found: {p}", fg=typer.colors.RED)
@@ -53,6 +68,21 @@ def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
 
 
 def _load_file2_txt(path: str, sep_override: str) -> pd.DataFrame:
+    """
+    Load file2 txt.
+
+    Parameters
+    ----------
+    path : str
+        Function argument.
+    sep_override : str
+        Function argument.
+
+    Returns
+    -------
+    pd.DataFrame
+        Function result.
+    """
     p = Path(path)
     if not p.exists():
         typer.secho(f"ERROR: file2 not found: {p}", fg=typer.colors.RED)
@@ -216,6 +246,19 @@ def _counts_vs_fpkm(
 
 def _pearson_loglog_x_fpkm_y_counts(merged: pd.DataFrame) -> float:
     # Pearson correlation in log10 space with x=FPKM, y=counts
+    """
+    Pearson loglog x fpkm y counts.
+
+    Parameters
+    ----------
+    merged : pd.DataFrame
+        Function argument.
+
+    Returns
+    -------
+    float
+        Function result.
+    """
     x = merged["fpkm"].to_numpy(dtype=float)
     y = merged["count"].to_numpy(dtype=float)
     logx = np.log10(x)
@@ -311,6 +354,49 @@ def main(
     ),
 ) -> None:
     # Validate second dataset arguments
+    """
+    Main.
+
+    Parameters
+    ----------
+    file1a : str
+        Function argument.
+    file2 : str
+        Function argument.
+    gene_col1a : str
+        Function argument.
+    gene_col2 : str
+        Function argument.
+    fpkm_col : str
+        Function argument.
+    file1b : str | None
+        Function argument.
+    gene_col1b : str | None
+        Function argument.
+    plot_out : str
+        Function argument.
+    file1a_sep : str
+        Function argument.
+    file1b_sep : str
+        Function argument.
+    file2_sep : str
+        Function argument.
+    min_fpkm : float
+        Function argument.
+    only_cell_id_positive : bool
+        Function argument.
+    cellid_col1a : str
+        Function argument.
+    cellid_col1b : str
+        Function argument.
+    drop_prefix : list[str]
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     if file1b is not None and gene_col1b is None:
         typer.secho(
             "ERROR: --file1b was provided but --gene-col1b is missing.",

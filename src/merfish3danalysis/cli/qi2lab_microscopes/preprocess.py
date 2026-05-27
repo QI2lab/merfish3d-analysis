@@ -98,6 +98,14 @@ def local_register_data(
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

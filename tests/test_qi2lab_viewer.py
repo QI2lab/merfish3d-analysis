@@ -31,20 +31,57 @@ from merfish3danalysis.viewer import (
 
 class FakeLutView:
     def __init__(self) -> None:
+        """
+        Initialize the object.
+
+        Returns
+        -------
+        None
+            Initializes the instance in place.
+        """
         self.name = ""
 
     def set_channel_name(self, name: str) -> None:
+        """
+        Set channel name.
+
+        Parameters
+        ----------
+        name : str
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         self.name = name
 
 
 class FakeLutController:
     def __init__(self) -> None:
+        """
+        Initialize the object.
+
+        Returns
+        -------
+        None
+            Initializes the instance in place.
+        """
         self.lut_views = [FakeLutView()]
         self.lut_model = type("FakeLutModel", (), {"cmap": "green"})()
 
 
 class FakeArrayViewer:
     def __init__(self) -> None:
+        """
+        Initialize the object.
+
+        Returns
+        -------
+        None
+            Initializes the instance in place.
+        """
         self._lut_controllers = {
             0: FakeLutController(),
             1: FakeLutController(),
@@ -54,6 +91,14 @@ class FakeArrayViewer:
 
 class FakeDatastore:
     def __init__(self) -> None:
+        """
+        Initialize the object.
+
+        Returns
+        -------
+        None
+            Initializes the instance in place.
+        """
         self.tile_ids = ["tile0000", "tile0001"]
         self.round_ids = ["round001", "round002"]
         self.bit_ids = ["bit001", "bit002"]
@@ -82,6 +127,25 @@ class FakeDatastore:
         bit: str | None = None,
         return_future: bool = False,
     ) -> np.ndarray:
+        """
+        Load local corrected image.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+        round : str | None
+            Function argument.
+        bit : str | None
+            Function argument.
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        np.ndarray
+            Function result.
+        """
         del tile, round, bit, return_future
         return self.image
 
@@ -92,6 +156,25 @@ class FakeDatastore:
         bit: str | None = None,
         return_future: bool = False,
     ) -> np.ndarray:
+        """
+        Load local registered image.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+        round : str | None
+            Function argument.
+        bit : str | None
+            Function argument.
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        np.ndarray
+            Function result.
+        """
         del tile, round, bit, return_future
         return self.image + 1
 
@@ -101,10 +184,35 @@ class FakeDatastore:
         bit: str,
         return_future: bool = False,
     ) -> np.ndarray:
+        """
+        Load local feature predictor image.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+        bit : str
+            Function argument.
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        np.ndarray
+            Function result.
+        """
         del tile, bit, return_future
         return (self.image / self.image.max()).astype(np.float32)
 
     def load_global_filtered_decoded_spots(self) -> pd.DataFrame:
+        """
+        Load global filtered decoded spots.
+
+        Returns
+        -------
+        pd.DataFrame
+            Function result.
+        """
         return pd.DataFrame(
             {
                 "tile_idx": [0, 1],
@@ -119,25 +227,80 @@ class FakeDatastore:
         )
 
     def load_local_decoded_spots(self, tile: str) -> pd.DataFrame:
+        """
+        Load local decoded spots.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+
+        Returns
+        -------
+        pd.DataFrame
+            Function result.
+        """
         del tile
         return pd.DataFrame()
 
     def load_global_cellpose_outlines(self) -> dict[int, np.ndarray]:
+        """
+        Load global cellpose outlines.
+
+        Returns
+        -------
+        dict[int, np.ndarray]
+            Function result.
+        """
         return {1: np.asarray([[32, 22], [36, 22], [36, 25], [32, 25]], dtype=float)}
 
     def load_global_coord_xforms_um(
         self, tile: str
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Load global coord xforms um.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray, np.ndarray]
+            Function result.
+        """
         del tile
         return np.eye(4), np.zeros(3), np.ones(3)
 
     def load_codebook_parsed(self) -> tuple[list[str], np.ndarray]:
+        """
+        Load codebook parsed.
+
+        Returns
+        -------
+        tuple[list[str], np.ndarray]
+            Function result.
+        """
         return ["GeneA", "GeneB"], np.asarray([[1, 0], [1, 1]], dtype=int)
 
     def load_global_fidicual_image(
         self,
         return_future: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Load global fidicual image.
+
+        Parameters
+        ----------
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+            Function result.
+        """
         del return_future
         return (
             self.global_image,
@@ -150,12 +313,33 @@ class FakeDatastore:
         self,
         return_future: bool = False,
     ) -> np.ndarray:
+        """
+        Load global cellpose segmentation image.
+
+        Parameters
+        ----------
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        np.ndarray
+            Function result.
+        """
         del return_future
         return self.global_segmentation
 
 
 class SyntheticDatastore(FakeDatastore):
     def __init__(self, datastore_path: Path) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        datastore_path : Path
+            Function argument.
+        """
         super().__init__()
         self._datastore_path = datastore_path
         self.bit_ids = ["bit001", "bit002", "bit003"]
@@ -178,17 +362,49 @@ class SyntheticDatastore(FakeDatastore):
         )
 
     def load_global_filtered_decoded_spots(self) -> pd.DataFrame:
+        """
+        Load global filtered decoded spots.
+
+        Returns
+        -------
+        pd.DataFrame
+            Function result.
+        """
         return self.decoded_spots.copy()
 
     def load_global_cellpose_outlines(self) -> dict[int, np.ndarray]:
+        """
+        Load global cellpose outlines.
+
+        Returns
+        -------
+        dict[int, np.ndarray]
+            Function result.
+        """
         return {}
 
     def load_codebook_parsed(self) -> tuple[list[str], np.ndarray]:
+        """
+        Load codebook parsed.
+
+        Returns
+        -------
+        tuple[list[str], np.ndarray]
+            Function result.
+        """
         return ["GeneA", "GeneB"], np.asarray([[1, 0, 1], [0, 1, 1]], dtype=int)
 
 
 class PartiallyCompleteDatastore(SyntheticDatastore):
     def __init__(self, datastore_path: Path) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        datastore_path : Path
+            Function argument.
+        """
         super().__init__(datastore_path)
         self.datastore_state["LocalRegistered"] = False
 
@@ -199,6 +415,25 @@ class PartiallyCompleteDatastore(SyntheticDatastore):
         bit: str | None = None,
         return_future: bool = False,
     ) -> None:
+        """
+        Load local registered image.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+        round : str | None
+            Function argument.
+        bit : str | None
+            Function argument.
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         del tile, round, bit, return_future
         return None
 
@@ -208,12 +443,42 @@ class PartiallyCompleteDatastore(SyntheticDatastore):
         bit: str,
         return_future: bool = False,
     ) -> None:
+        """
+        Load local feature predictor image.
+
+        Parameters
+        ----------
+        tile : str
+            Function argument.
+        bit : str
+            Function argument.
+        return_future : bool
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         del tile, bit, return_future
         return None
 
 
 @pytest.fixture
 def synthetic_datastore(tmp_path: Path) -> SyntheticDatastore:
+    """
+    Synthetic datastore.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Function argument.
+
+    Returns
+    -------
+    SyntheticDatastore
+        Function result.
+    """
     datastore_path = tmp_path / "experiment" / "qi2labdatastore"
     datastore_path.mkdir(parents=True)
     (datastore_path / "datastore_state.json").write_text("{}", encoding="utf-8")
@@ -243,12 +508,38 @@ def synthetic_datastore(tmp_path: Path) -> SyntheticDatastore:
 def partial_datastore(
     synthetic_datastore: SyntheticDatastore,
 ) -> PartiallyCompleteDatastore:
+    """
+    Partial datastore.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    PartiallyCompleteDatastore
+        Function result.
+    """
     return PartiallyCompleteDatastore(synthetic_datastore._datastore_path)
 
 
 def test_normalize_datastore_path_accepts_direct_and_experiment_root(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test normalize datastore path accepts direct and experiment root.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     datastore = synthetic_datastore._datastore_path
 
     assert normalize_datastore_path(datastore) == datastore
@@ -256,11 +547,32 @@ def test_normalize_datastore_path_accepts_direct_and_experiment_root(
 
 
 def test_normalize_datastore_path_rejects_missing_datastore(tmp_path: Path) -> None:
+    """
+    Test normalize datastore path rejects missing datastore.
+
+    Parameters
+    ----------
+    tmp_path : Path
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     with pytest.raises(FileNotFoundError):
         normalize_datastore_path(tmp_path)
 
 
 def test_component_summary_uses_existing_datastore_state() -> None:
+    """
+    Test component summary uses existing datastore state.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     summary = component_summary(FakeDatastore())
 
     assert summary["Corrected"] is True
@@ -271,6 +583,19 @@ def test_component_summary_uses_existing_datastore_state() -> None:
 def test_viewer_detects_decoded_and_cell_outputs_when_state_is_stale(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test viewer detects decoded and cell outputs when state is stale.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     assert decoded_available(synthetic_datastore) is True
     assert cell_outlines_available(synthetic_datastore) is True
     assert global_fused_available(synthetic_datastore) is True
@@ -279,6 +604,19 @@ def test_viewer_detects_decoded_and_cell_outputs_when_state_is_stale(
 def test_codebook_gene_bits_maps_genes_to_existing_bit_ids(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test codebook gene bits maps genes to existing bit ids.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     gene_bits = codebook_gene_bits(synthetic_datastore)
 
     assert gene_bits == {
@@ -324,6 +662,25 @@ def test_load_image_channels_stacks_selected_synthetic_sources(
     bit_sources: list[str],
     expected_labels: list[str],
 ) -> None:
+    """
+    Test load image channels stacks selected synthetic sources.
+
+    Parameters
+    ----------
+    fiducial_sources : list[str]
+        Function argument.
+    bit_ids : list[str]
+        Function argument.
+    bit_sources : list[str]
+        Function argument.
+    expected_labels : list[str]
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     stack = load_image_channels(
         FakeDatastore(),
         tile="tile0000",
@@ -339,6 +696,19 @@ def test_load_image_channels_stacks_selected_synthetic_sources(
 def test_load_image_channels_skips_missing_partial_outputs(
     partial_datastore: PartiallyCompleteDatastore,
 ) -> None:
+    """
+    Test load image channels skips missing partial outputs.
+
+    Parameters
+    ----------
+    partial_datastore : PartiallyCompleteDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     stack = load_image_channels(
         partial_datastore,
         tile="tile0000",
@@ -354,6 +724,19 @@ def test_load_image_channels_skips_missing_partial_outputs(
 def test_load_image_channels_errors_when_all_partial_outputs_are_missing(
     partial_datastore: PartiallyCompleteDatastore,
 ) -> None:
+    """
+    Test load image channels errors when all partial outputs are missing.
+
+    Parameters
+    ----------
+    partial_datastore : PartiallyCompleteDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     with pytest.raises(
         ValueError, match="No selected image channels were available to display"
     ):
@@ -367,6 +750,14 @@ def test_load_image_channels_errors_when_all_partial_outputs_are_missing(
 
 
 def test_unavailable_data_message_is_user_facing() -> None:
+    """
+    Test unavailable data message is user facing.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     message = unavailable_data_message(
         ValueError("No selected image channels were available to display.")
     )
@@ -379,6 +770,19 @@ def test_unavailable_data_message_is_user_facing() -> None:
 def test_partial_datastore_reports_missing_registered_but_available_overlays(
     partial_datastore: PartiallyCompleteDatastore,
 ) -> None:
+    """
+    Test partial datastore reports missing registered but available overlays.
+
+    Parameters
+    ----------
+    partial_datastore : PartiallyCompleteDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     summary = component_summary(partial_datastore)
 
     assert summary["LocalRegistered"] is False
@@ -407,6 +811,27 @@ def test_selected_image_channel_count_matches_selected_arrays(
     has_fiducial_round: bool,
     expected_count: int,
 ) -> None:
+    """
+    Test selected image channel count matches selected arrays.
+
+    Parameters
+    ----------
+    fiducial_sources : list[str]
+        Function argument.
+    bit_ids : list[str]
+        Function argument.
+    bit_sources : list[str]
+        Function argument.
+    has_fiducial_round : bool
+        Function argument.
+    expected_count : int
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     assert (
         selected_image_channel_count(
             fiducial_sources=fiducial_sources,
@@ -421,6 +846,19 @@ def test_selected_image_channel_count_matches_selected_arrays(
 def test_decoded_overlay_uses_filtered_global_spots_for_selected_tile(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test decoded overlay uses filtered global spots for selected tile.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     overlay = decoded_overlay_for_tile(
         synthetic_datastore,
         tile="tile0000",
@@ -437,6 +875,19 @@ def test_decoded_overlay_uses_filtered_global_spots_for_selected_tile(
 def test_cell_outline_overlay_loads_synthetic_roi_zip(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test cell outline overlay loads synthetic roi zip.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     overlay = cell_outline_overlay_for_tile(
         synthetic_datastore,
         tile="tile0000",
@@ -453,6 +904,19 @@ def test_cell_outline_overlay_loads_synthetic_roi_zip(
 def test_load_global_image_channels_includes_fused_polydt_and_segmentation(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test load global image channels includes fused polydt and segmentation.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     stack = load_global_image_channels(
         synthetic_datastore,
         include_segmentation=True,
@@ -478,6 +942,19 @@ def test_load_global_image_channels_includes_fused_polydt_and_segmentation(
 def test_global_decoded_overlay_uses_global_coordinates(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test global decoded overlay uses global coordinates.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     overlay = global_decoded_overlay(
         synthetic_datastore,
         shape_zyx=(1, 8, 10),
@@ -494,6 +971,19 @@ def test_global_decoded_overlay_uses_global_coordinates(
 def test_global_cell_outline_overlay_draws_global_roi_zip(
     synthetic_datastore: SyntheticDatastore,
 ) -> None:
+    """
+    Test global cell outline overlay draws global roi zip.
+
+    Parameters
+    ----------
+    synthetic_datastore : SyntheticDatastore
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     overlay = global_cell_outline_overlay(
         synthetic_datastore,
         shape_zyx=(3, 12, 16),
@@ -508,6 +998,14 @@ def test_global_cell_outline_overlay_draws_global_roi_zip(
 
 
 def test_rasterize_global_decoded_spots_filters_gene_and_maps_um_to_pixels() -> None:
+    """
+    Test rasterize global decoded spots filters gene and maps um to pixels.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     decoded_spots = pd.DataFrame(
         {
             "global_y": [12.0, 14.0],
@@ -530,6 +1028,14 @@ def test_rasterize_global_decoded_spots_filters_gene_and_maps_um_to_pixels() -> 
 
 
 def test_rasterize_cell_outlines_skips_off_tile_outlines() -> None:
+    """
+    Test rasterize cell outlines skips off tile outlines.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     overlay = rasterize_cell_outlines(
         {
             1: np.asarray([[0, 0], [2, 0], [2, 2], [0, 2]], dtype=float),
@@ -547,6 +1053,14 @@ def test_rasterize_cell_outlines_skips_off_tile_outlines() -> None:
 
 
 def test_append_overlay_channel_preserves_labels() -> None:
+    """
+    Test append overlay channel preserves labels.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     stack = load_image_channels(
         FakeDatastore(),
         tile="tile0000",
@@ -563,6 +1077,14 @@ def test_append_overlay_channel_preserves_labels() -> None:
 
 
 def test_apply_lut_channel_labels_names_numeric_ndv_channels() -> None:
+    """
+    Test apply lut channel labels names numeric ndv channels.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     viewer = FakeArrayViewer()
 
     applied = apply_lut_channel_labels(viewer, ["first", "second"])
@@ -575,6 +1097,14 @@ def test_apply_lut_channel_labels_names_numeric_ndv_channels() -> None:
 
 
 def test_apply_lut_channel_labels_sets_fiducials_to_gray() -> None:
+    """
+    Test apply lut channel labels sets fiducials to gray.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     viewer = FakeArrayViewer()
 
     apply_lut_channel_labels(
@@ -590,6 +1120,14 @@ def test_apply_lut_channel_labels_sets_fiducials_to_gray() -> None:
 
 
 def test_stack_with_micron_coords_exposes_zyx_pixel_size() -> None:
+    """
+    Test stack with micron coords exposes zyx pixel size.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     stack = ChannelStack(
         data=np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5),
         labels=["a", "b"],

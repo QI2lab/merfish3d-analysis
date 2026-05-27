@@ -152,6 +152,14 @@ def convert_simulation(root_path: Path) -> None:
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

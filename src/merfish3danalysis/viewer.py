@@ -31,7 +31,23 @@ def stack_with_micron_coords(
     voxel_size_zyx_um: Any,
     origin_zyx_um: Any | None = None,
 ) -> Any:
-    """Attach zyx micron coordinates to a channel stack for ndv display."""
+    """
+    Attach zyx micron coordinates to a channel stack for ndv display.
+
+    Parameters
+    ----------
+    stack : ChannelStack
+        Function argument.
+    voxel_size_zyx_um : Any
+        Function argument.
+    origin_zyx_um : Any | None
+        Function argument.
+
+    Returns
+    -------
+    Any
+        Function result.
+    """
 
     import xarray as xr
 
@@ -61,7 +77,14 @@ def stack_with_micron_coords(
 
 
 def empty_micron_stack() -> Any:
-    """Return an empty micron-coordinate stack for initializing ndv axes."""
+    """
+    Return an empty micron-coordinate stack for initializing ndv axes.
+
+    Returns
+    -------
+    Any
+        Function result.
+    """
 
     return stack_with_micron_coords(
         ChannelStack(
@@ -73,7 +96,19 @@ def empty_micron_stack() -> Any:
 
 
 def normalize_datastore_path(path: Path) -> Path:
-    """Resolve an experiment root or direct datastore path to a datastore path."""
+    """
+    Resolve an experiment root or direct datastore path to a datastore path.
+
+    Parameters
+    ----------
+    path : Path
+        Function argument.
+
+    Returns
+    -------
+    Path
+        Function result.
+    """
 
     expanded = path.expanduser().resolve()
     direct_state_path = expanded / "datastore_state.json"
@@ -92,7 +127,19 @@ def normalize_datastore_path(path: Path) -> Path:
 
 
 def open_datastore(datastore_path: Path) -> Any:
-    """Open a qi2lab datastore without expensive validation."""
+    """
+    Open a qi2lab datastore without expensive validation.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Function argument.
+
+    Returns
+    -------
+    Any
+        Function result.
+    """
 
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -100,7 +147,19 @@ def open_datastore(datastore_path: Path) -> Any:
 
 
 def component_summary(datastore: Any) -> dict[str, bool]:
-    """Return datastore component availability from existing datastore state."""
+    """
+    Return datastore component availability from existing datastore state.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    dict[str, bool]
+        Function result.
+    """
 
     state = datastore.datastore_state or {}
     return {
@@ -116,14 +175,38 @@ def component_summary(datastore: Any) -> dict[str, bool]:
 
 
 def _datastore_path(datastore: Any) -> Path | None:
-    """Return datastore path from the existing datastore object if available."""
+    """
+    Return datastore path from the existing datastore object if available.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    Path | None
+        Function result.
+    """
 
     path = getattr(datastore, "_datastore_path", None)
     return Path(path) if path is not None else None
 
 
 def decoded_available(datastore: Any) -> bool:
-    """Return whether decoded spots are available without requiring fresh state flags."""
+    """
+    Return whether decoded spots are available without requiring fresh state flags.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
 
     state = component_summary(datastore)
     if state["DecodedSpots"] or state["FilteredSpots"]:
@@ -148,7 +231,19 @@ def decoded_available(datastore: Any) -> bool:
 
 
 def cell_outlines_available(datastore: Any) -> bool:
-    """Return whether cell outlines are available without requiring fresh state flags."""
+    """
+    Return whether cell outlines are available without requiring fresh state flags.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
 
     if component_summary(datastore)["SegmentedCells"]:
         return True
@@ -167,7 +262,19 @@ def cell_outlines_available(datastore: Any) -> bool:
 
 
 def global_fused_available(datastore: Any) -> bool:
-    """Return whether a fused global polyDT image appears to be available."""
+    """
+    Return whether a fused global polyDT image appears to be available.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
 
     if component_summary(datastore)["Fused"]:
         return True
@@ -182,7 +289,19 @@ def global_fused_available(datastore: Any) -> bool:
 
 
 def global_cellpose_segmentation_available(datastore: Any) -> bool:
-    """Return whether a global polyDT Cellpose segmentation image is available."""
+    """
+    Return whether a global polyDT Cellpose segmentation image is available.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    bool
+        Function result.
+    """
 
     if component_summary(datastore)["SegmentedCells"]:
         return True
@@ -199,7 +318,19 @@ def global_cellpose_segmentation_available(datastore: Any) -> bool:
 
 
 def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
-    """Map codebook genes to existing datastore bit IDs."""
+    """
+    Map codebook genes to existing datastore bit IDs.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        Function result.
+    """
 
     parsed = datastore.load_codebook_parsed()
     if parsed is None:
@@ -221,7 +352,19 @@ def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
 
 
 def _as_zyx(image: Any) -> np.ndarray:
-    """Convert a loaded image to a 3D zyx NumPy array."""
+    """
+    Convert a loaded image to a 3D zyx NumPy array.
+
+    Parameters
+    ----------
+    image : Any
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     array = np.asarray(image)
     array = np.squeeze(array)
@@ -238,7 +381,25 @@ def _append_channel(
     image: Any,
     label: str,
 ) -> None:
-    """Append one image channel if it loaded successfully."""
+    """
+    Append one image channel if it loaded successfully.
+
+    Parameters
+    ----------
+    channels : list[np.ndarray]
+        Function argument.
+    labels : list[str]
+        Function argument.
+    image : Any
+        Function argument.
+    label : str
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     if image is None:
         return
@@ -253,7 +414,27 @@ def load_image_channels(
     bit_ids: list[str],
     bit_sources: list[str],
 ) -> ChannelStack:
-    """Load selected datastore images through existing datastore methods."""
+    """
+    Load selected datastore images through existing datastore methods.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    tile : str
+        Function argument.
+    fiducial_sources : list[str]
+        Function argument.
+    bit_ids : list[str]
+        Function argument.
+    bit_sources : list[str]
+        Function argument.
+
+    Returns
+    -------
+    ChannelStack
+        Function result.
+    """
 
     channels: list[np.ndarray] = []
     labels: list[str] = []
@@ -325,20 +506,66 @@ def selected_image_channel_count(
     bit_sources: list[str],
     has_fiducial_round: bool,
 ) -> int:
-    """Return the number of image arrays selected for loading."""
+    """
+    Return the number of image arrays selected for loading.
+
+    Parameters
+    ----------
+    fiducial_sources : list[str]
+        Function argument.
+    bit_ids : list[str]
+        Function argument.
+    bit_sources : list[str]
+        Function argument.
+    has_fiducial_round : bool
+        Function argument.
+
+    Returns
+    -------
+    int
+        Function result.
+    """
 
     fiducial_count = len(fiducial_sources) if has_fiducial_round else 0
     return fiducial_count + len(bit_ids) * len(bit_sources)
 
 
 def unavailable_data_message(error: ValueError) -> str:
-    """Return a user-facing message for unavailable viewer data."""
+    """
+    Return a user-facing message for unavailable viewer data.
+
+    Parameters
+    ----------
+    error : ValueError
+        Function argument.
+
+    Returns
+    -------
+    str
+        Function result.
+    """
 
     return f"Data not available: {error}"
 
 
 def _paint_point(volume: np.ndarray, zyx: np.ndarray, radius: int) -> None:
-    """Paint one point into a volume."""
+    """
+    Paint one point into a volume.
+
+    Parameters
+    ----------
+    volume : np.ndarray
+        Function argument.
+    zyx : np.ndarray
+        Function argument.
+    radius : int
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     z, y, x = np.round(zyx).astype(int)
     z_min = max(0, z - radius)
@@ -357,7 +584,25 @@ def rasterize_decoded_spots(
     genes: list[str] | None = None,
     radius: int = 1,
 ) -> np.ndarray:
-    """Rasterize decoded spots with tile pixel coordinates into an overlay."""
+    """
+    Rasterize decoded spots with tile pixel coordinates into an overlay.
+
+    Parameters
+    ----------
+    decoded_spots : Any
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    genes : list[str] | None
+        Function argument.
+    radius : int
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     overlay = np.zeros(shape_zyx, dtype=np.float32)
     if decoded_spots is None or len(decoded_spots) == 0:
@@ -388,7 +633,29 @@ def rasterize_global_decoded_spots(
     genes: list[str] | None = None,
     radius: int = 1,
 ) -> np.ndarray:
-    """Rasterize decoded spots with global micron XY coordinates into an overlay."""
+    """
+    Rasterize decoded spots with global micron XY coordinates into an overlay.
+
+    Parameters
+    ----------
+    decoded_spots : Any
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    origin_zyx_um : Any
+        Function argument.
+    spacing_zyx_um : Any
+        Function argument.
+    genes : list[str] | None
+        Function argument.
+    radius : int
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     overlay = np.zeros(shape_zyx, dtype=np.float32)
     if decoded_spots is None or len(decoded_spots) == 0:
@@ -420,7 +687,25 @@ def decoded_overlay_for_tile(
     shape_zyx: tuple[int, int, int],
     genes: list[str] | None = None,
 ) -> np.ndarray | None:
-    """Load and rasterize decoded spots for one tile using existing datastore APIs."""
+    """
+    Load and rasterize decoded spots for one tile using existing datastore APIs.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    tile : str
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    genes : list[str] | None
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray | None
+        Function result.
+    """
 
     tile_ids = list(datastore.tile_ids or [])
     tile_idx = tile_ids.index(tile) if tile in tile_ids else None
@@ -460,7 +745,27 @@ def global_decoded_overlay(
     spacing_zyx_um: Any,
     genes: list[str] | None = None,
 ) -> np.ndarray | None:
-    """Load and rasterize globally decoded spots on the fused global canvas."""
+    """
+    Load and rasterize globally decoded spots on the fused global canvas.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    origin_zyx_um : Any
+        Function argument.
+    spacing_zyx_um : Any
+        Function argument.
+    genes : list[str] | None
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray | None
+        Function result.
+    """
 
     if not decoded_available(datastore):
         return None
@@ -479,7 +784,23 @@ def global_decoded_overlay(
 
 
 def _draw_line_2d(image: np.ndarray, start_yx: np.ndarray, end_yx: np.ndarray) -> None:
-    """Draw a line into a 2D image using integer interpolation."""
+    """
+    Draw a line into a 2D image using integer interpolation.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Function argument.
+    start_yx : np.ndarray
+        Function argument.
+    end_yx : np.ndarray
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     y_min = min(start_yx[0], end_yx[0])
     y_max = max(start_yx[0], end_yx[0])
@@ -505,7 +826,25 @@ def _global_xy_to_tile_yx(
     origin_zyx_um: np.ndarray,
     spacing_zyx_um: np.ndarray,
 ) -> np.ndarray:
-    """Transform global xy outline coordinates into local tile yx pixels."""
+    """
+    Transform global xy outline coordinates into local tile yx pixels.
+
+    Parameters
+    ----------
+    global_xy : np.ndarray
+        Function argument.
+    affine_zyx_um : np.ndarray
+        Function argument.
+    origin_zyx_um : np.ndarray
+        Function argument.
+    spacing_zyx_um : np.ndarray
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     inverse_affine = np.linalg.inv(np.asarray(affine_zyx_um, dtype=float))
     output = np.zeros((global_xy.shape[0], 2), dtype=float)
@@ -524,7 +863,27 @@ def rasterize_cell_outlines(
     origin_zyx_um: np.ndarray,
     spacing_zyx_um: np.ndarray,
 ) -> np.ndarray:
-    """Rasterize global Cellpose outlines into a selected local tile volume."""
+    """
+    Rasterize global Cellpose outlines into a selected local tile volume.
+
+    Parameters
+    ----------
+    outlines : dict[Any, np.ndarray] | None
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    affine_zyx_um : np.ndarray
+        Function argument.
+    origin_zyx_um : np.ndarray
+        Function argument.
+    spacing_zyx_um : np.ndarray
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     overlay_2d = np.zeros(shape_zyx[1:], dtype=np.float32)
     if not outlines:
@@ -559,7 +918,25 @@ def rasterize_global_cell_outlines(
     origin_zyx_um: Any,
     spacing_zyx_um: Any,
 ) -> np.ndarray:
-    """Rasterize global Cellpose outlines directly onto the fused global canvas."""
+    """
+    Rasterize global Cellpose outlines directly onto the fused global canvas.
+
+    Parameters
+    ----------
+    outlines : dict[Any, np.ndarray] | None
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    origin_zyx_um : Any
+        Function argument.
+    spacing_zyx_um : Any
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     overlay_2d = np.zeros(shape_zyx[1:], dtype=np.float32)
     if not outlines:
@@ -587,7 +964,19 @@ def rasterize_global_cell_outlines(
 
 
 def _load_global_cellpose_roi_zip(datastore: Any) -> dict[int, np.ndarray] | None:
-    """Load existing global Cellpose ROI zip when the JSON loader is unavailable."""
+    """
+    Load existing global Cellpose ROI zip when the JSON loader is unavailable.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+
+    Returns
+    -------
+    dict[int, np.ndarray] | None
+        Function result.
+    """
 
     datastore_path = _datastore_path(datastore)
     if datastore_path is None:
@@ -628,7 +1017,23 @@ def cell_outline_overlay_for_tile(
     tile: str,
     shape_zyx: tuple[int, int, int],
 ) -> np.ndarray | None:
-    """Load and rasterize Cellpose outlines using existing datastore APIs."""
+    """
+    Load and rasterize Cellpose outlines using existing datastore APIs.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    tile : str
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray | None
+        Function result.
+    """
 
     if not cell_outlines_available(datastore):
         return None
@@ -658,7 +1063,25 @@ def global_cell_outline_overlay(
     origin_zyx_um: Any,
     spacing_zyx_um: Any,
 ) -> np.ndarray | None:
-    """Load and rasterize Cellpose outlines on the fused global canvas."""
+    """
+    Load and rasterize Cellpose outlines on the fused global canvas.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+    origin_zyx_um : Any
+        Function argument.
+    spacing_zyx_um : Any
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray | None
+        Function result.
+    """
 
     if not cell_outlines_available(datastore):
         return None
@@ -681,7 +1104,21 @@ def _match_global_overlay_shape(
     overlay: np.ndarray,
     shape_zyx: tuple[int, int, int],
 ) -> np.ndarray:
-    """Convert a 2D or single-plane global overlay to the fused image shape."""
+    """
+    Convert a 2D or single-plane global overlay to the fused image shape.
+
+    Parameters
+    ----------
+    overlay : np.ndarray
+        Function argument.
+    shape_zyx : tuple[int, int, int]
+        Function argument.
+
+    Returns
+    -------
+    np.ndarray
+        Function result.
+    """
 
     overlay_zyx = _as_zyx(overlay)
     if overlay_zyx.shape == shape_zyx:
@@ -697,7 +1134,21 @@ def load_global_image_channels(
     datastore: Any,
     include_segmentation: bool = True,
 ) -> GlobalChannelStack:
-    """Load fused global polyDT image and optional global segmentation image."""
+    """
+    Load fused global polyDT image and optional global segmentation image.
+
+    Parameters
+    ----------
+    datastore : Any
+        Function argument.
+    include_segmentation : bool
+        Function argument.
+
+    Returns
+    -------
+    GlobalChannelStack
+        Function result.
+    """
 
     loaded = datastore.load_global_fidicual_image(return_future=False)
     if loaded is None:
@@ -734,7 +1185,23 @@ def append_overlay_channel(
     overlay: np.ndarray | None,
     label: str,
 ) -> ChannelStack:
-    """Append one overlay channel to an existing channel stack."""
+    """
+    Append one overlay channel to an existing channel stack.
+
+    Parameters
+    ----------
+    stack : ChannelStack
+        Function argument.
+    overlay : np.ndarray | None
+        Function argument.
+    label : str
+        Function argument.
+
+    Returns
+    -------
+    ChannelStack
+        Function result.
+    """
 
     if overlay is None:
         return stack
@@ -748,7 +1215,21 @@ def append_overlay_channel(
 
 
 def apply_lut_channel_labels(array_viewer: Any, labels: list[str]) -> int:
-    """Apply human-readable labels and stable fiducial colors to ndv LUT views."""
+    """
+    Apply human-readable labels and stable fiducial colors to ndv LUT views.
+
+    Parameters
+    ----------
+    array_viewer : Any
+        Function argument.
+    labels : list[str]
+        Function argument.
+
+    Returns
+    -------
+    int
+        Function result.
+    """
 
     controllers = getattr(array_viewer, "_lut_controllers", {})
     applied = 0
@@ -772,16 +1253,43 @@ class Qi2labViewer:
     """View-only ndv/PyQt GUI for qi2lab datastores."""
 
     def __init__(self, initial_path: Path | None = None) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        initial_path : Path | None
+            Function argument.
+        """
         self.initial_path = initial_path
 
     def run(self) -> None:
-        """Launch the viewer."""
+        """
+        Launch the viewer.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         run_viewer(self.initial_path)
 
 
 def run_viewer(initial_path: Path | None = None) -> None:
-    """Launch the view-only ndv/PyQt datastore viewer."""
+    """
+    Launch the view-only ndv/PyQt datastore viewer.
+
+    Parameters
+    ----------
+    initial_path : Path | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     try:
         import ndv
@@ -801,6 +1309,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
         """Small view-only Qt wrapper around ndv.ArrayViewer."""
 
         def __init__(self, path: Path | None = None) -> None:
+            """
+            Initialize the object.
+
+            Parameters
+            ----------
+            path : Path | None
+                Function argument.
+            """
             super().__init__()
             self.setWindowTitle("qi2lab datastore viewer")
             self.datastore: Any | None = None
@@ -815,6 +1331,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 self.load_path(path)
 
         def _build_ui(self) -> None:
+            """
+            Build ui.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             central = QtWidgets.QWidget()
             root_layout = QtWidgets.QHBoxLayout(central)
             control_panel = QtWidgets.QWidget()
@@ -903,7 +1427,19 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.setCentralWidget(central)
 
         def _reset_array_viewer(self, data: Any) -> None:
-            """Replace ndv's viewer to avoid stale axis/channel state."""
+            """
+            Replace ndv's viewer to avoid stale axis/channel state.
+
+            Parameters
+            ----------
+            data : Any
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
 
             if self.viewer_layout is not None:
                 while self.viewer_layout.count():
@@ -924,6 +1460,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 self.viewer_layout.addWidget(self.array_viewer.widget())
 
         def open_directory(self) -> None:
+            """
+            Open directory.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             selected = QtWidgets.QFileDialog.getExistingDirectory(
                 self,
                 "Select experiment root or qi2labdatastore",
@@ -933,6 +1477,19 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 self.load_path(Path(selected))
 
         def load_path(self, path: Path) -> None:
+            """
+            Load path.
+
+            Parameters
+            ----------
+            path : Path
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             try:
                 datastore_path = normalize_datastore_path(path)
                 self.datastore = open_datastore(datastore_path)
@@ -946,6 +1503,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.status_label.setText("Datastore loaded.")
 
         def _populate_controls(self) -> None:
+            """
+            Populate controls.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             if self.datastore is None:
                 return
 
@@ -1001,6 +1566,19 @@ def run_viewer(initial_path: Path | None = None) -> None:
             )
 
         def _on_gene_checked(self, _item: Any) -> None:
+            """
+            On gene checked.
+
+            Parameters
+            ----------
+            _item : Any
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             selected_genes = self._selected_decoded_genes()
             if not selected_genes:
                 return
@@ -1019,6 +1597,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.decoded_checkbox.setChecked(True)
 
         def _checked_bits(self) -> list[str]:
+            """
+            Checked bits.
+
+            Returns
+            -------
+            list[str]
+                Function result.
+            """
             checked: list[str] = []
             checked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Checked
             for row in range(self.bit_list.count()):
@@ -1028,6 +1614,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return checked
 
         def _fiducial_sources(self) -> list[str]:
+            """
+            Fiducial sources.
+
+            Returns
+            -------
+            list[str]
+                Function result.
+            """
             sources: list[str] = []
             if self.fiducial_corrected.isChecked():
                 sources.append("corrected")
@@ -1036,6 +1630,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return sources
 
         def _bit_sources(self) -> list[str]:
+            """
+            Bit sources.
+
+            Returns
+            -------
+            list[str]
+                Function result.
+            """
             sources: list[str] = []
             if self.bit_corrected.isChecked():
                 sources.append("corrected")
@@ -1046,6 +1648,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return sources
 
         def _selected_decoded_genes(self) -> list[str]:
+            """
+            Selected decoded genes.
+
+            Returns
+            -------
+            list[str]
+                Function result.
+            """
             selected: list[str] = []
             checked_state = getattr(QtCore.Qt, "CheckState", QtCore.Qt).Checked
             for row in range(self.gene_list.count()):
@@ -1055,17 +1665,60 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return selected
 
         def _apply_lut_names(self, labels: list[str]) -> None:
+            """
+            Apply lut names.
+
+            Parameters
+            ----------
+            labels : list[str]
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             if self.array_viewer is None:
                 return
             apply_lut_channel_labels(self.array_viewer, labels)
 
         def _set_loading(self, is_loading: bool, message: str) -> None:
+            """
+            Set loading.
+
+            Parameters
+            ----------
+            is_loading : bool
+                Function argument.
+            message : str
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             self.display_button.setEnabled(not is_loading)
             self.progress_bar.setVisible(is_loading)
             self.status_label.setText(message)
             QtWidgets.QApplication.processEvents()
 
         def _start_progress(self, total_steps: int, message: str) -> None:
+            """
+            Start progress.
+
+            Parameters
+            ----------
+            total_steps : int
+                Function argument.
+            message : str
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             self.display_button.setEnabled(False)
             self.progress_bar.setRange(0, max(total_steps, 1))
             self.progress_bar.setValue(0)
@@ -1074,11 +1727,39 @@ def run_viewer(initial_path: Path | None = None) -> None:
             QtWidgets.QApplication.processEvents()
 
         def _advance_progress(self, step: int, message: str) -> None:
+            """
+            Advance progress.
+
+            Parameters
+            ----------
+            step : int
+                Function argument.
+            message : str
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             self.progress_bar.setValue(step)
             self.status_label.setText(message)
             QtWidgets.QApplication.processEvents()
 
         def _finish_progress(self, message: str) -> None:
+            """
+            Finish progress.
+
+            Parameters
+            ----------
+            message : str
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             self.display_button.setEnabled(True)
             self.progress_bar.setVisible(False)
             self.status_label.setText(message)
@@ -1092,12 +1773,48 @@ def run_viewer(initial_path: Path | None = None) -> None:
             bit_sources: list[str],
             step: int,
         ) -> tuple[ChannelStack, int]:
+            """
+            Load image channels with progress.
+
+            Parameters
+            ----------
+            tile : str
+                Function argument.
+            fiducial_sources : list[str]
+                Function argument.
+            bit_ids : list[str]
+                Function argument.
+            bit_sources : list[str]
+                Function argument.
+            step : int
+                Function argument.
+
+            Returns
+            -------
+            tuple[ChannelStack, int]
+                Function result.
+            """
             channels: list[np.ndarray] = []
             labels: list[str] = []
             round_ids = list(self.datastore.round_ids or [])
             round_id = round_ids[0] if round_ids else None
 
             def append_loaded(image: Any, label: str) -> None:
+                """
+                Append loaded.
+
+                Parameters
+                ----------
+                image : Any
+                    Function argument.
+                label : str
+                    Function argument.
+
+                Returns
+                -------
+                None
+                    Function result.
+                """
                 nonlocal step
                 step += 1
                 if image is not None:
@@ -1161,7 +1878,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             return ChannelStack(data=np.stack(channels, axis=0), labels=labels), step
 
         def display_global_selection(self) -> None:
-            """Display fused global polyDT data and global overlays."""
+            """
+            Display fused global polyDT data and global overlays.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
 
             selected_genes = self._selected_decoded_genes()
             total_steps = 2
@@ -1238,6 +1962,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.status_label.setText("Displayed: " + ", ".join(stack.labels))
 
         def display_selection(self) -> None:
+            """
+            Display selection.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             if self.datastore is None:
                 self.status_label.setText("Select a datastore first.")
                 return

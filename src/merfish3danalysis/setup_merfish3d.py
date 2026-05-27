@@ -87,6 +87,21 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
 
 
 def run(command: str, *, cwd: Path | None = None) -> None:
+    """
+    Run.
+
+    Parameters
+    ----------
+    command : str
+        Function argument.
+    cwd : Path | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     typer.echo(f"$ {command}")
     subprocess.run(command, shell=True, check=True, cwd=str(cwd) if cwd else None)
 
@@ -259,6 +274,14 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

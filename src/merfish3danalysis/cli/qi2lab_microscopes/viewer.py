@@ -18,12 +18,32 @@ VIEW_PATH_ARGUMENT = typer.Argument(
 
 @app.command()
 def view(path: Path | None = VIEW_PATH_ARGUMENT) -> None:
-    """Open a view-only ndv GUI for a qi2lab datastore."""
+    """
+    Open a view-only ndv GUI for a qi2lab datastore.
+
+    Parameters
+    ----------
+    path : Path | None
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
 
     Qi2labViewer(path).run()
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     app()
 
 

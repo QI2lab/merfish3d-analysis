@@ -70,7 +70,37 @@ def decode_tiles_worker(
     feature_predictor_threshold: float,
     normalization_method: Literal["iterative", "global", "none"],
 ) -> None:
-    """Worker that runs decode_one_tile on a subset of tiles under one GPU."""
+    """
+    Worker that runs decode_one_tile on a subset of tiles under one GPU.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Function argument.
+    tile_indices : Sequence[int]
+        Function argument.
+    gpu_id : int
+        Function argument.
+    merfish_bits : int
+        Function argument.
+    verbose : int
+        Function argument.
+    lowpass_sigma : Sequence[float]
+        Function argument.
+    magnitude_threshold : Sequence[float]
+        Function argument.
+    minimum_pixels : float
+        Function argument.
+    feature_predictor_threshold : float
+        Function argument.
+    normalization_method : Literal['iterative', 'global', 'none']
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     import cupy as cp
     import torch
 
@@ -136,7 +166,37 @@ def _optimize_norm_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
 ) -> None:
-    """Worker that runs one iteration of normalization-by-decoding on a GPU."""
+    """
+    Worker that runs one iteration of normalization-by-decoding on a GPU.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Function argument.
+    tile_indices : Sequence[int]
+        Function argument.
+    gpu_id : int
+        Function argument.
+    merfish_bits : int
+        Function argument.
+    temp_dir : Path
+        Function argument.
+    iteration : int
+        Function argument.
+    lowpass_sigma : Sequence[float]
+        Function argument.
+    magnitude_threshold : Sequence[float]
+        Function argument.
+    minimum_pixels : float
+        Function argument.
+    feature_predictor_threshold : float
+        Function argument.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     import cupy as cp
     import torch
 
@@ -213,6 +273,24 @@ class PixelDecoder:
         use_mask: bool | None = False,
         z_range: Sequence[int] | None = None,
     ) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        datastore : qi2labDataStore
+            Function argument.
+        merfish_bits : int
+            Function argument.
+        num_gpus : int
+            Function argument.
+        verbose : int
+            Function argument.
+        use_mask : bool | None
+            Function argument.
+        z_range : Sequence[int] | None
+            Function argument.
+        """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
@@ -250,7 +328,14 @@ class PixelDecoder:
         self._blank_bit_enrichment_filter_results: dict[str, object] | None = None
 
     def _load_codebook(self) -> None:
-        """Load the MERFISH codebook and derive caller geometry from it."""
+        """
+        Load the MERFISH codebook and derive caller geometry from it.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         self._df_codebook = self._datastore.codebook.copy()
         self._df_codebook.fillna(0, inplace=True)
@@ -1534,7 +1619,14 @@ class PixelDecoder:
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
     def _save_barcodes(self) -> None:
-        """Save barcodes to datastore."""
+        """
+        Save barcodes to datastore.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if self._verbose > 1:
             print("save barcodes")
@@ -1558,7 +1650,14 @@ class PixelDecoder:
 
     @property
     def decoded_barcodes(self) -> pd.DataFrame:
-        """Decoded barcodes from the most recent ``decode_one_tile`` call."""
+        """
+        Decoded barcodes from the most recent ``decode_one_tile`` call.
+
+        Returns
+        -------
+        pd.DataFrame
+            Function result.
+        """
 
         if not hasattr(self, "_df_barcodes"):
             return pd.DataFrame()
@@ -1566,14 +1665,28 @@ class PixelDecoder:
 
     @property
     def decoded_image(self) -> np.ndarray:
-        """Decoded pixel-label image from the most recent ``decode_one_tile`` call."""
+        """
+        Decoded pixel-label image from the most recent ``decode_one_tile`` call.
+
+        Returns
+        -------
+        np.ndarray
+            Function result.
+        """
 
         if not hasattr(self, "_decoded_image"):
             return np.empty((0,), dtype=np.int16)
         return self._decoded_image.copy()
 
     def save_decoded_barcodes(self) -> None:
-        """Save decoded barcodes from the most recent decoding/filtering step."""
+        """
+        Save decoded barcodes from the most recent decoding/filtering step.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         self._save_barcodes()
 
@@ -1583,7 +1696,23 @@ class PixelDecoder:
         use_normalization: bool | None,
         gpu_id: int = 0,
     ) -> None:
-        """Select and load the normalization state used by pixel decoding."""
+        """
+        Select and load the normalization state used by pixel decoding.
+
+        Parameters
+        ----------
+        normalization_method : Literal['iterative', 'global', 'none'] | None
+            Function argument.
+        use_normalization : bool | None
+            Function argument.
+        gpu_id : int
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if normalization_method is None:
             normalization_method = "iterative" if use_normalization else "none"
@@ -1603,7 +1732,14 @@ class PixelDecoder:
             )
 
     def _load_all_barcodes(self) -> None:
-        """Load all barcodes from datastore."""
+        """
+        Load all barcodes from datastore.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
@@ -1656,7 +1792,25 @@ class PixelDecoder:
         voxel_number_bins: Sequence[float] | None = None,
         vector_distance_bins: Sequence[float] | None = None,
     ) -> None:
-        """Filter transcripts using blank-fraction histograms in feature space."""
+        """
+        Filter transcripts using blank-fraction histograms in feature space.
+
+        Parameters
+        ----------
+        target_gross_misid_rate : float
+            Function argument.
+        intensity_bins : Sequence[float] | None
+            Function argument.
+        voxel_number_bins : Sequence[float] | None
+            Function argument.
+        vector_distance_bins : Sequence[float] | None
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         required_columns = {"gene_id", "magnitude_mean", "area", "distance_min"}
         missing = sorted(required_columns.difference(self._df_barcodes_loaded.columns))
@@ -2102,7 +2256,27 @@ class PixelDecoder:
         vector_distance_bins: Sequence[float] | None = None,
         bit_penalty_bins: Sequence[float] | None = None,
     ) -> None:
-        """Filter transcripts using blank-fraction histograms plus bit enrichment."""
+        """
+        Filter transcripts using blank-fraction histograms plus bit enrichment.
+
+        Parameters
+        ----------
+        target_gross_misid_rate : float
+            Function argument.
+        intensity_bins : Sequence[float] | None
+            Function argument.
+        voxel_number_bins : Sequence[float] | None
+            Function argument.
+        vector_distance_bins : Sequence[float] | None
+            Function argument.
+        bit_penalty_bins : Sequence[float] | None
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if self._verbose > 1:
             print("blank bit enrichment: compute bit penalties")
@@ -2129,6 +2303,23 @@ class PixelDecoder:
             *,
             discrete: bool = False,
         ) -> np.ndarray:
+            """
+            Normalize edges.
+
+            Parameters
+            ----------
+            values : np.ndarray
+                Function argument.
+            num_bins : int
+                Function argument.
+            discrete : bool
+                Function argument.
+
+            Returns
+            -------
+            np.ndarray
+                Function result.
+            """
             values = values[np.isfinite(values)]
             if values.size == 0:
                 return np.array([-0.5, 0.5], dtype=float)
@@ -2776,10 +2967,30 @@ class PixelDecoder:
 
     @staticmethod
     def _roi_to_shapely(roi):  # noqa
+        """
+        Roi to shapely.
+
+        Parameters
+        ----------
+        roi : Any
+            Function argument.
+
+        Returns
+        -------
+        Any
+            Function result.
+        """
         return Polygon(roi.subpixel_coordinates[:, ::-1])
 
     def _assign_cells(self) -> None:
-        """Assign cells to barcodes using Cellpose ROIs."""
+        """
+        Assign cells to barcodes using Cellpose ROIs.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         cellpose_roi_path = (
             self._datastore._datastore_path
@@ -2936,12 +3147,46 @@ class PixelDecoder:
 
         # Union-Find (Disjoint Set)
         def uf_find(parent: np.ndarray, x: int) -> int:
+            """
+            Uf find.
+
+            Parameters
+            ----------
+            parent : np.ndarray
+                Function argument.
+            x : int
+                Function argument.
+
+            Returns
+            -------
+            int
+                Function result.
+            """
             while parent[x] != x:
                 parent[x] = parent[parent[x]]
                 x = parent[x]
             return x
 
         def uf_union(parent: np.ndarray, rank: np.ndarray, a: int, b: int) -> None:
+            """
+            Uf union.
+
+            Parameters
+            ----------
+            parent : np.ndarray
+                Function argument.
+            rank : np.ndarray
+                Function argument.
+            a : int
+                Function argument.
+            b : int
+                Function argument.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             ra, rb = uf_find(parent, a), uf_find(parent, b)
             if ra == rb:
                 return
@@ -3029,12 +3274,27 @@ class PixelDecoder:
             self._df_barcodes_loaded = df.copy()
 
     def _display_results(self) -> None:
-        """Display results using Napari."""
+        """
+        Display results using Napari.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         import napari
         from qtpy.QtWidgets import QApplication
 
         def on_close_callback() -> None:
+            """
+            On close callback.
+
+            Returns
+            -------
+            None
+                Function result.
+            """
             viewer.layers.clear()
             gc.collect()
 
@@ -3076,7 +3336,14 @@ class PixelDecoder:
         napari.run()
 
     def _cleanup(self) -> None:
-        """Cleanup memory."""
+        """
+        Cleanup memory.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         for gpu_id in range(self._num_gpus):
             cp.cuda.Device(gpu_id).use()
             cp.cuda.Device(gpu_id).synchronize()
@@ -3440,7 +3707,23 @@ class PixelDecoder:
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
-        """Validate that the selected downstream filter uses the matching target."""
+        """
+        Validate that the selected downstream filter uses the matching target.
+
+        Parameters
+        ----------
+        filter_method : Literal['blank_fraction', 'blank_bit_enrichment', 'lr']
+            Function argument.
+        target_gross_misid_rate : float
+            Function argument.
+        lr_fdr_target : float
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if filter_method in ("blank_fraction", "blank_bit_enrichment"):
             if lr_fdr_target != 0.05:
@@ -3471,7 +3754,23 @@ class PixelDecoder:
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
-        """Apply one supported downstream transcript filter to loaded barcodes."""
+        """
+        Apply one supported downstream transcript filter to loaded barcodes.
+
+        Parameters
+        ----------
+        filter_method : Literal['blank_fraction', 'blank_bit_enrichment', 'lr']
+            Function argument.
+        target_gross_misid_rate : float
+            Function argument.
+        lr_fdr_target : float
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if self._verbose > 1:
             print(f"apply filter_method={filter_method}")
@@ -3581,4 +3880,12 @@ class PixelDecoder:
 
 
 def time_stamp() -> str:
+    """
+    Time stamp.
+
+    Returns
+    -------
+    str
+        Function result.
+    """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

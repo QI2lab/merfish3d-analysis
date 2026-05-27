@@ -44,6 +44,16 @@ class qi2labDataStore:
     """
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
+        """
+        Initialize the object.
+
+        Parameters
+        ----------
+        datastore_path : str | Path
+            Function argument.
+        validate : bool
+            Function argument.
+        """
         compressor = {
             "id": "blosc",
             "cname": "zstd",
@@ -95,12 +105,26 @@ class qi2labDataStore:
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
 
     def _calibrations_attributes_path(self) -> Path:
-        """Path to calibrations metadata sidecar."""
+        """
+        Path to calibrations metadata sidecar.
+
+        Returns
+        -------
+        Path
+            Function result.
+        """
 
         return self._calibrations_zarr_path / Path("attributes.json")
 
     def _load_calibrations_attributes(self) -> dict[str, Any]:
-        """Load calibrations metadata sidecar."""
+        """
+        Load calibrations metadata sidecar.
+
+        Returns
+        -------
+        dict[str, Any]
+            Function result.
+        """
 
         attributes = self._load_from_json(self._calibrations_attributes_path())
         if not isinstance(attributes, dict):
@@ -108,7 +132,19 @@ class qi2labDataStore:
         return attributes
 
     def _save_calibrations_attributes(self, attributes: Mapping[str, Any]) -> None:
-        """Persist calibrations metadata sidecar."""
+        """
+        Persist calibrations metadata sidecar.
+
+        Parameters
+        ----------
+        attributes : Mapping[str, Any]
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         self._save_to_json(
             {str(k): self._to_json_compatible(v) for k, v in dict(attributes).items()},
@@ -116,7 +152,21 @@ class qi2labDataStore:
         )
 
     def _set_calibration_attribute(self, key: str, value: Any) -> None:
-        """Update one calibration metadata field."""
+        """
+        Update one calibration metadata field.
+
+        Parameters
+        ----------
+        key : str
+            Function argument.
+        value : Any
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         attributes = self._load_calibrations_attributes()
         attributes[str(key)] = self._to_json_compatible(value)
@@ -124,7 +174,23 @@ class qi2labDataStore:
 
     @staticmethod
     def _strict_id_sort_key(name: str, prefix: str, width: int) -> int:
-        """Validate and parse strict zero-padded identifiers."""
+        """
+        Validate and parse strict zero-padded identifiers.
+
+        Parameters
+        ----------
+        name : str
+            Function argument.
+        prefix : str
+            Function argument.
+        width : int
+            Function argument.
+
+        Returns
+        -------
+        int
+            Function result.
+        """
 
         match = re.fullmatch(rf"{re.escape(prefix)}(\d{{{width}}})", name)
         if match is None:
@@ -135,7 +201,23 @@ class qi2labDataStore:
 
     @classmethod
     def _collect_strict_ids(cls, parent: Path, prefix: str, width: int) -> list[str]:
-        """Collect and sort strict identifiers under a folder."""
+        """
+        Collect and sort strict identifiers under a folder.
+
+        Parameters
+        ----------
+        parent : Path
+            Function argument.
+        prefix : str
+            Function argument.
+        width : int
+            Function argument.
+
+        Returns
+        -------
+        list[str]
+            Function result.
+        """
 
         ids = [entry.name for entry in parent.iterdir() if entry.is_dir()]
         ids.sort(key=lambda value: cls._strict_id_sort_key(value, prefix, width))
@@ -601,7 +683,19 @@ class qi2labDataStore:
     def _coerce_experiment_order_dataframe(
         self, value: ArrayLike | pd.DataFrame
     ) -> pd.DataFrame:
-        """Normalize experiment order into the canonical DataFrame form."""
+        """
+        Normalize experiment order into the canonical DataFrame form.
+
+        Parameters
+        ----------
+        value : ArrayLike | pd.DataFrame
+            Function argument.
+
+        Returns
+        -------
+        pd.DataFrame
+            Function result.
+        """
 
         if isinstance(value, pd.DataFrame):
             return value
@@ -983,7 +1077,14 @@ class qi2labDataStore:
 
     @staticmethod
     def _import_yaozarrs() -> tuple[Any, Any, Any]:
-        """Import yaozarrs lazily so module import remains lightweight."""
+        """
+        Import yaozarrs lazily so module import remains lightweight.
+
+        Returns
+        -------
+        tuple[Any, Any, Any]
+            Function result.
+        """
 
         try:
             from yaozarrs import open_group, v05
@@ -997,7 +1098,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _extract_local_path_from_kvstore(kvstore: dict | Path | str) -> Path:
-        """Extract a local filesystem path from a kvstore-like input."""
+        """
+        Extract a local filesystem path from a kvstore-like input.
+
+        Parameters
+        ----------
+        kvstore : dict | Path | str
+            Function argument.
+
+        Returns
+        -------
+        Path
+            Function result.
+        """
 
         if isinstance(kvstore, (str, Path)):
             return Path(kvstore)
@@ -1021,7 +1134,33 @@ class qi2labDataStore:
         overwrite: bool,
         compression: str,
     ) -> Any:
-        """Create zarr3 arrays with qi2lab compression defaults via tensorstore."""
+        """
+        Create zarr3 arrays with qi2lab compression defaults via tensorstore.
+
+        Parameters
+        ----------
+        path : Path
+            Function argument.
+        shape : tuple[int, ...]
+            Function argument.
+        dtype : Any
+            Function argument.
+        chunks : tuple[int, ...]
+            Function argument.
+        shards : tuple[int, ...] | None
+            Function argument.
+        dimension_names : list[str] | None
+            Function argument.
+        overwrite : bool
+            Function argument.
+        compression : str
+            Function argument.
+
+        Returns
+        -------
+        Any
+            Function result.
+        """
 
         import tensorstore as ts
 
@@ -1095,7 +1234,23 @@ class qi2labDataStore:
     def _normalize_transform(
         values: Sequence[float] | None, ndim: int, fill: float
     ) -> list[float]:
-        """Normalize transform vectors to match array dimensionality."""
+        """
+        Normalize transform vectors to match array dimensionality.
+
+        Parameters
+        ----------
+        values : Sequence[float] | None
+            Function argument.
+        ndim : int
+            Function argument.
+        fill : float
+            Function argument.
+
+        Returns
+        -------
+        list[float]
+            Function result.
+        """
 
         if values is None:
             return [fill] * ndim
@@ -1108,7 +1263,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _default_chunks(array: np.ndarray) -> list[int]:
-        """Create sane default chunk sizes based on dimensionality."""
+        """
+        Create sane default chunk sizes based on dimensionality.
+
+        Parameters
+        ----------
+        array : np.ndarray
+            Function argument.
+
+        Returns
+        -------
+        list[int]
+            Function result.
+        """
 
         if array.ndim == 2:
             return [int(array.shape[0]), int(array.shape[1])]
@@ -1120,7 +1287,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
-        """Create chunk sizes tailored for large fused images only."""
+        """
+        Create chunk sizes tailored for large fused images only.
+
+        Parameters
+        ----------
+        array : np.ndarray
+            Function argument.
+
+        Returns
+        -------
+        list[int]
+            Function result.
+        """
 
         shape = [int(dim) for dim in array.shape]
         if array.ndim == 2:
@@ -1146,7 +1325,21 @@ class qi2labDataStore:
 
     @staticmethod
     def _build_axes(v05: Any, ndim: int) -> list[Any]:
-        """Build NGFF axes models for a given dimensionality."""
+        """
+        Build NGFF axes models for a given dimensionality.
+
+        Parameters
+        ----------
+        v05 : Any
+            Function argument.
+        ndim : int
+            Function argument.
+
+        Returns
+        -------
+        list[Any]
+            Function result.
+        """
 
         axis_names = ["t", "c", "z", "y", "x"][-ndim:]
         axes: list[Any] = []
@@ -1161,13 +1354,37 @@ class qi2labDataStore:
 
     @staticmethod
     def _entity_attributes_path(entity_root_path: Path | str) -> Path:
-        """Path to per-entity metadata sidecar."""
+        """
+        Path to per-entity metadata sidecar.
+
+        Parameters
+        ----------
+        entity_root_path : Path | str
+            Function argument.
+
+        Returns
+        -------
+        Path
+            Function result.
+        """
 
         return Path(entity_root_path) / Path("attributes.json")
 
     @staticmethod
     def _image_store_path(image_path: Path | str) -> Path:
-        """Normalize image path to the *.ome.zarr folder naming scheme."""
+        """
+        Normalize image path to the *.ome.zarr folder naming scheme.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Function argument.
+
+        Returns
+        -------
+        Path
+            Function result.
+        """
 
         path = Path(image_path)
         if path.name.endswith(".ome.zarr"):
@@ -1188,7 +1405,23 @@ class qi2labDataStore:
         extra_attributes: Mapping[str, Any],
         merge: bool = True,
     ) -> None:
-        """Persist extra attributes directly into zarr.json."""
+        """
+        Persist extra attributes directly into zarr.json.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Function argument.
+        extra_attributes : Mapping[str, Any]
+            Function argument.
+        merge : bool
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if not extra_attributes:
             return
@@ -1215,7 +1448,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _read_extra_attributes(image_path: Path | str) -> dict[str, Any]:
-        """Load extra attributes from zarr.json."""
+        """
+        Load extra attributes from zarr.json.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Function argument.
+
+        Returns
+        -------
+        dict[str, Any]
+            Function result.
+        """
 
         image_root = qi2labDataStore._image_store_path(image_path)
         zarr_json_path = image_root / Path("zarr.json")
@@ -1227,7 +1472,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _to_json_compatible(value: Any) -> Any:
-        """Convert numpy/scalar containers to JSON-compatible values."""
+        """
+        Convert numpy/scalar containers to JSON-compatible values.
+
+        Parameters
+        ----------
+        value : Any
+            Function argument.
+
+        Returns
+        -------
+        Any
+            Function result.
+        """
 
         if isinstance(value, np.ndarray):
             return value.tolist()
@@ -1245,7 +1502,19 @@ class qi2labDataStore:
 
     @staticmethod
     def _image_shape(image_path: Path | str) -> tuple[int, ...] | None:
-        """Read image shape without loading all pixels."""
+        """
+        Read image shape without loading all pixels.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Function argument.
+
+        Returns
+        -------
+        tuple[int, ...] | None
+            Function result.
+        """
 
         path = qi2labDataStore._image_store_path(image_path)
         if not path.exists():
@@ -1267,7 +1536,21 @@ class qi2labDataStore:
         entity_root_path: Path | str,
         image_names: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Load entity metadata from sidecar + image extra_attributes."""
+        """
+        Load entity metadata from sidecar + image extra_attributes.
+
+        Parameters
+        ----------
+        entity_root_path : Path | str
+            Function argument.
+        image_names : Sequence[str] | None
+            Function argument.
+
+        Returns
+        -------
+        dict[str, Any]
+            Function result.
+        """
 
         entity_root = Path(entity_root_path)
         merged = self._load_from_json(self._entity_attributes_path(entity_root))
@@ -1298,7 +1581,25 @@ class qi2labDataStore:
         target_image_name: str | None = None,
         image_names: Sequence[str] | None = None,
     ) -> None:
-        """Save metadata to image extra_attributes and entity sidecar."""
+        """
+        Save metadata to image extra_attributes and entity sidecar.
+
+        Parameters
+        ----------
+        entity_root_path : Path | str
+            Function argument.
+        updates : Mapping[str, Any]
+            Function argument.
+        target_image_name : str | None
+            Function argument.
+        image_names : Sequence[str] | None
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         if not updates:
             return
@@ -1349,7 +1650,23 @@ class qi2labDataStore:
         stage_zyx_um: Sequence[float] | None = None,
         extra_attributes: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Build write spec with OME transforms and extra attributes."""
+        """
+        Build write spec with OME transforms and extra attributes.
+
+        Parameters
+        ----------
+        dtype : str | None
+            Function argument.
+        stage_zyx_um : Sequence[float] | None
+            Function argument.
+        extra_attributes : Mapping[str, Any] | None
+            Function argument.
+
+        Returns
+        -------
+        dict[str, Any]
+            Function result.
+        """
 
         spec = self._zarrv2_spec.copy()
         spec["metadata"] = dict(self._zarrv2_spec.get("metadata", {}))
@@ -1374,7 +1691,23 @@ class qi2labDataStore:
         round_id: str | None = None,
         bit_id: str | None = None,
     ) -> list[float] | None:
-        """Resolve original tile stage position used for OME translation."""
+        """
+        Resolve original tile stage position used for OME translation.
+
+        Parameters
+        ----------
+        tile_id : str
+            Function argument.
+        round_id : str | None
+            Function argument.
+        bit_id : str | None
+            Function argument.
+
+        Returns
+        -------
+        list[float] | None
+            Function result.
+        """
 
         if round_id is not None:
             fiducial_entity = self._fiducial_root_path / Path(tile_id) / Path(round_id)
@@ -1411,7 +1744,23 @@ class qi2labDataStore:
         image_name: str,
         image: ArrayLike,
     ) -> None:
-        """Enforce corrected/registered/feature-predictor image shape consistency."""
+        """
+        Enforce corrected/registered/feature-predictor image shape consistency.
+
+        Parameters
+        ----------
+        entity_root_path : Path | str
+            Function argument.
+        image_name : str
+            Function argument.
+        image : ArrayLike
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         entity_root = Path(entity_root_path)
         shape = tuple(int(v) for v in np.asarray(image).shape)
@@ -1718,7 +2067,19 @@ class qi2labDataStore:
         df.to_csv(csv_gz_path, index=False, compression="gzip")
 
     def _parse_datastore(self, validate: bool = True) -> None:
-        """Parse datastore to discover available components."""
+        """
+        Parse datastore to discover available components.
+
+        Parameters
+        ----------
+        validate : bool
+            Function argument.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
 
         # directory structure as defined by qi2lab spec
         self._datastore_state_json_path = self._datastore_path / Path(

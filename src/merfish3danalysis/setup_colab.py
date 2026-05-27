@@ -67,6 +67,14 @@ def run(cmd: str, cwd: str | Path | None = None) -> None:
 
 
 def ensure_cuda_env() -> None:
+    """
+    Ensure cuda env.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     cuda_root = Path("/usr/local/cuda")
     if cuda_root.exists():
         os.environ["CUDA_HOME"] = str(cuda_root)
@@ -104,6 +112,14 @@ def build_colab_base_deps() -> list[str]:
 
 
 def setup_colab() -> None:
+    """
+    Setup colab.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     run("python -m pip install -U pip setuptools wheel numpy==1.26.4")
     ensure_cuda_env()
     run("python -m pip install cupy-cuda12x")  # CuPy for CUDA 12.x
@@ -131,6 +147,14 @@ def setup_colab() -> None:
 
 
 def main() -> None:
+    """
+    Main.
+
+    Returns
+    -------
+    None
+        Function result.
+    """
     setup_colab()
 
 
