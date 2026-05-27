@@ -26,10 +26,17 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
     - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
 - Iterative estimation of background and normalization vectors across codebook bits to remove subjective normalization by user that often leads to non-optimal decoding solutions.
 - Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Baysor](https://kharchenkolab.github.io/Baysor/dev/), and [U-FISH](https://github.com/UFISH-Team/U-FISH).
+- Read-only [NDV datastore viewer](viewer.md) for local tile inspection and fused
+  global overlays.
 
 ## Examples
 
 Multiple examples are provided with the library, including [qi2lab data](examples/qi2lab_human_olfactory_bulb.md), [Zhuang laboratory data](examples/zhuang_lab_mouse_brain.md), and [synthetic data](examples/statphysbio_synthetic.md).
+
+## Current API behavior
+
+The [current API notes](api.md) summarize the active RLGC, PSF generation,
+chunking, and U-FISH defaults used by the processing wrappers.
 
 ## API reference
 

@@ -74,6 +74,10 @@ decoded features, cell outlines, and the global polyDT segmentation image, enabl
 the global fused view to inspect the downsampled polyDT max projection with
 selected RNA identities on the global coordinate canvas.
 
+The documentation includes a [viewer guide with screenshots](https://qi2lab.github.io/merfish3d-analysis/viewer/)
+and a [current API notes](https://qi2lab.github.io/merfish3d-analysis/api/) page
+covering the current RLGC, PSF, and U-FISH defaults.
+
 ## Proseg segmentation optimization
 
 Follow the installation instructions at [proseg](https://github.com/dcjones/proseg).
