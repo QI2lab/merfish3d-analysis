@@ -11,12 +11,7 @@ For readout data, all tiles and bits are deconvolved plus u-fish predicted.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import gc
 from pathlib import Path
-
-import numpy as np
-from tifffile import TiffWriter
-from tqdm import tqdm
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -70,194 +65,17 @@ def global_register_data(
         Default = True
     """
 
-    import dask.array as da
-    import dask.diagnostics
-    from multiview_stitcher import fusion, msi_utils, registration
-    from multiview_stitcher import spatial_image_utils as si_utils
+    from merfish3danalysis.cli.qi2lab_microscopes.global_register import (
+        global_register_data as run_global_register_data,
+    )
 
-    # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
-    datastore = qi2labDataStore(datastore_path)
-
-    # load tile positions
-    for _, tile_id in enumerate(datastore.tile_ids):
-        round_id = datastore.round_ids[0]
-        tile_position_zyx_um = datastore.load_local_stage_position_zyx_um(
-            tile_id, round_id
-        )
-
-    # convert local tiles from first round to multiscale spatial images
-    msims = []
-    for _, tile_id in enumerate(tqdm(datastore.tile_ids, desc="tile")):
-        round_id = datastore.round_ids[0]
-
-        voxel_zyx_um = datastore.voxel_size_zyx_um
-
-        scale = {"z": voxel_zyx_um[0], "y": voxel_zyx_um[1], "x": voxel_zyx_um[2]}
-
-        tile_position_zyx_um, affine_zyx_px = (
-            datastore.load_local_stage_position_zyx_um(tile_id, round_id)
-        )
-
-        tile_grid_positions = {
-            "z": 0,
-            "y": np.round(tile_position_zyx_um[0], 2),
-            "x": np.round(tile_position_zyx_um[1], 2),
-        }
-
-        im_data = datastore.load_local_registered_image(
-            tile=tile_id, round=round_id, return_future=False
-        )
-
-        sim = si_utils.get_sim_from_array(
-            da.expand_dims(im_data, axis=0),
-            dims=("c", "z", "y", "x"),
-            scale=scale,
-            translation=tile_grid_positions,
-            affine=affine_zyx_px,
-            transform_key="stage_metadata",
-        )
-
-        msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
-        msims.append(msim)
-        del im_data
-        gc.collect()
-
-    # perform registration in three steps, from most downsampling to least.
-    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        with dask.diagnostics.ProgressBar():
-            _ = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="stage_metadata",
-                new_transform_key="affine_registered",
-                # pre_registration_pruning_method="keep_axis_aligned",
-                registration_binning={"z": 3, "y": 6, "x": 6},
-                post_registration_do_quality_filter=True,
-            )
-
-    # extract and save transformations into datastore
-    for tile_idx, msim in enumerate(msims):
-        affine = msi_utils.get_transform_from_msim(
-            msim, transform_key="affine_registered"
-        ).data.squeeze()
-        affine = np.round(affine, 2)
-        origin = si_utils.get_origin_from_sim(
-            msi_utils.get_sim_from_msim(msim), asarray=True
-        )
-        spacing = si_utils.get_spacing_from_sim(
-            msi_utils.get_sim_from_msim(msim), asarray=True
-        )
-
-        datastore.save_global_coord_xforms_um(
-            affine_zyx_um=affine,
-            origin_zyx_um=origin,
-            spacing_zyx_um=spacing,
-            tile=tile_idx,
-        )
-
-    # perform and save downsampled fusion
-    with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-        fused_sim = fusion.fuse(
-            [msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims],
-            transform_key="affine_registered",
-            output_spacing={
-                "z": voxel_zyx_um[0],
-                "y": voxel_zyx_um[1] * np.round(voxel_zyx_um[0] / voxel_zyx_um[1], 1),
-                "x": voxel_zyx_um[2] * np.round(voxel_zyx_um[0] / voxel_zyx_um[2], 1),
-            },
-            output_chunksize=512,
-            overlap_in_pixels=64,
-        )
-
-        fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
-        affine = msi_utils.get_transform_from_msim(
-            fused_msim, transform_key="affine_registered"
-        ).data.squeeze()
-        origin = si_utils.get_origin_from_sim(
-            msi_utils.get_sim_from_msim(fused_msim), asarray=True
-        )
-        spacing = si_utils.get_spacing_from_sim(
-            msi_utils.get_sim_from_msim(fused_msim), asarray=True
-        )
-
-        del fused_msim
-
-        # if the next step fails, you can try the following code instead
-        # it will take longer, but should limit memory usage. You still need
-        # enough memory to hold the result in RAM.
-        """
-        datastore.save_global_fidicual_image(
-            fused_image=fused_sim.data.compute(scheduler="single-threaded"),
-            affine_zyx_um=affine,
-            origin_zyx_um=origin,
-            spacing_zyx_um=spacing,
-        )
-
-        """
-        datastore.save_global_fidicual_image(
-            fused_image=fused_sim.data.compute(scheduler="threads", num_workers=12),
-            affine_zyx_um=affine,
-            origin_zyx_um=origin,
-            spacing_zyx_um=spacing,
-        )
-
-        del fused_sim
-        gc.collect()
-
-    # update datastore state
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"GlobalRegistered": True})
-    datastore_state.update({"Fused": True})
-    datastore.datastore_state = datastore_state
-
-    # write max projection OME-TIFF for cellpose GUI
-    if create_max_proj_tiff:
-        # load downsampled, fused fiducial image and coordinates
-        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
-            return_future=False
-        )
-
-        # create max projection
-        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-        del fiducial_fused
-
-        filename = "fiducial_max_projection.ome.tiff"
-        cellpose_path = (
-            datastore._datastore_path / Path("segmentation") / Path("cellpose")
-        )
-        cellpose_path.mkdir(exist_ok=True)
-        filename_path = (
-            datastore._datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path(filename)
-        )
-        with TiffWriter(filename_path, bigtiff=True) as tif:
-            metadata = {
-                "axes": "YX",
-                "SignificantBits": 16,
-                "PhysicalSizeX": spacing_zyx_um[2],
-                "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": spacing_zyx_um[1],
-                "PhysicalSizeYUnit": "µm",
-            }
-            options = {
-                "compression": "zlib",
-                "compressionargs": {"level": 8},
-                "predictor": True,
-                "photometric": "minisblack",
-                "resolutionunit": "CENTIMETER",
-            }
-            tif.write(
-                fiducial_max_projection,
-                resolution=(
-                    1e4 / float(spacing_zyx_um[1]),
-                    1e4 / float(spacing_zyx_um[2]),
-                ),
-                **options,
-                metadata=metadata,
-            )
+    run_global_register_data(
+        root_path=root_path,
+        fused_chunk_size=512,
+        create_max_proj_tiff=bool(create_max_proj_tiff),
+        use_gpu_fusion=True,
+        ngff_version="0.5",
+    )
 
 
 if __name__ == "__main__":

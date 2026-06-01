@@ -255,10 +255,11 @@ export CCCL_IGNORE_DEPRECATED_CPP_DIALECT="1"
         f"{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install -U pip setuptools wheel"
     )
 
-    # Install multiview-stitcher and minimal deps to use merfish3d-analysis datastore class
+    # Install the newest PyPI multiview-stitcher release with GPU support and
+    # minimal deps to use the merfish3d-analysis datastore class.
     run(
         f"""{installer} run -n {MVSTITCHER_ENV_NAME} python -m pip install \
-"multiview-stitcher @ git+https://github.com/multiview-stitcher/multiview-stitcher@main" \
+"multiview-stitcher[gpu-cuda12]" \
 "ngff-zarr[tensorstore]>=0.16.0" """
     )
     run(

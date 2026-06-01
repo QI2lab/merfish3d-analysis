@@ -8,6 +8,7 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from pathlib import Path
+from typing import Literal
 
 import typer
 
@@ -30,7 +31,37 @@ QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
 QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
-def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
+def _effective_decode_mode(
+    datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"],
+) -> Literal["2d", "3d"]:
+    """
+    Resolve the decode mode used for defaults and connected components.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Function argument.
+    decode_mode : {'auto', '2d', '3d'}
+        Requested decode mode.
+
+    Returns
+    -------
+    {'2d', '3d'}
+        Effective decode mode.
+    """
+
+    if decode_mode == "auto":
+        return "2d" if datastore.microscope_type == "2D" else "3d"
+    if decode_mode in {"2d", "3d"}:
+        return decode_mode
+    raise typer.BadParameter("decode_mode must be one of 'auto', '2d', or '3d'.")
+
+
+def _default_qi2lab_minimum_pixels(
+    datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
+) -> int:
     """
     Return the default minimum-pixel threshold for qi2lab decoding.
 
@@ -38,6 +69,8 @@ def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
     ----------
     datastore : qi2labDataStore
         Function argument.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
 
     Returns
     -------
@@ -45,11 +78,12 @@ def _default_qi2lab_minimum_pixels(datastore: qi2labDataStore) -> int:
         Function result.
     """
 
-    return 7 if datastore.microscope_type == "2D" else 28
+    return 7 if _effective_decode_mode(datastore, decode_mode) == "2d" else 28
 
 
 def _default_qi2lab_magnitude_threshold(
     datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> tuple[float, float]:
     """
     Return the sampling-aware default magnitude threshold for qi2lab decoding.
@@ -58,6 +92,8 @@ def _default_qi2lab_magnitude_threshold(
     ----------
     datastore : qi2labDataStore
         Function argument.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
 
     Returns
     -------
@@ -65,7 +101,7 @@ def _default_qi2lab_magnitude_threshold(
         Function result.
     """
 
-    if datastore.microscope_type != "2D":
+    if _effective_decode_mode(datastore, decode_mode) != "2d":
         return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
@@ -86,6 +122,8 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     ----------
     datastore : qi2labDataStore
         Function argument.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
 
     Returns
     -------
@@ -112,6 +150,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
 
 def _default_qi2lab_feature_predictor_threshold(
     datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> float:
     """
     Return the sampling-aware default U-FISH mask threshold.
@@ -120,6 +159,8 @@ def _default_qi2lab_feature_predictor_threshold(
     ----------
     datastore : qi2labDataStore
         Function argument.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
 
     Returns
     -------
@@ -127,7 +168,10 @@ def _default_qi2lab_feature_predictor_threshold(
         Function result.
     """
 
-    if datastore.microscope_type != "2D" or not _readouts_are_deconvolved(datastore):
+    if (
+        _effective_decode_mode(datastore, decode_mode) != "2d"
+        or not _readouts_are_deconvolved(datastore)
+    ):
         return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
@@ -201,6 +245,7 @@ def decode_pixels(
     normalization_method: str = "iterative",
     reprocess_existing: bool = False,
     zstride_level: int = 0,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> None:
     """Perform pixel decoding.
 
@@ -239,26 +284,37 @@ def decode_pixels(
         flag to reprocess existing exact-called decoded data. Legacy decoded
         parquet files from the old caller are not supported.
     zstride_level: int, default = 0
-        look for a skip z dataset.
+        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2
+        decode planes 0, N, 2N...
+    decode_mode : {"auto", "2d", "3d"}, default "auto"
+        Decode mode. ``auto`` follows the datastore microscope type; explicit
+        values control connected-component extraction and default thresholds.
     """
 
     # initialize datastore
-    if zstride_level == 0:
-        datastore_path = root_path / Path(r"qi2labdatastore")
-    else:
-        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
+    if zstride_level < 0:
+        raise typer.BadParameter("zstride_level must be greater than or equal to 0.")
+    datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path, validate=False)
+    _effective_decode_mode(datastore, decode_mode)
     print(f"Using datastore at {datastore_path}")
     if merfish_bits is None:
         merfish_bits = datastore.num_bits
     if minimum_pixels_per_RNA is None:
-        minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(datastore)
+        minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(
+            datastore,
+            decode_mode=decode_mode,
+        )
     if feature_predictor_threshold is None:
         feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
-            datastore
+            datastore,
+            decode_mode=decode_mode,
         )
     if magnitude_threshold is None:
-        magnitude_threshold = _default_qi2lab_magnitude_threshold(datastore)
+        magnitude_threshold = _default_qi2lab_magnitude_threshold(
+            datastore,
+            decode_mode=decode_mode,
+        )
     _validate_filter_arguments(
         filter_method=filter_method,
         target_gross_misid_rate=target_gross_misid_rate,
@@ -276,6 +332,8 @@ def decode_pixels(
         merfish_bits=merfish_bits,
         num_gpus=num_gpus,
         verbose=1,
+        zstride_level=zstride_level,
+        decode_mode=decode_mode,
     )
 
     if not (reprocess_existing):

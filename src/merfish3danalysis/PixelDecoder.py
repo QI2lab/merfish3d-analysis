@@ -64,6 +64,8 @@ def decode_tiles_worker(
     gpu_id: int,
     merfish_bits: int,
     verbose: int,
+    zstride_level: int,
+    decode_mode: Literal["auto", "2d", "3d"],
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
@@ -85,6 +87,10 @@ def decode_tiles_worker(
         Function argument.
     verbose : int
         Function argument.
+    zstride_level : int
+        Decode-time z stride.
+    decode_mode : Literal['auto', '2d', '3d']
+        Decode connected-component/filtering mode.
     lowpass_sigma : Sequence[float]
         Function argument.
     magnitude_threshold : Sequence[float]
@@ -115,6 +121,8 @@ def decode_tiles_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
+        zstride_level=zstride_level,
+        decode_mode=decode_mode,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
@@ -159,6 +167,8 @@ def _optimize_norm_worker(
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
+    zstride_level: int,
+    decode_mode: Literal["auto", "2d", "3d"],
     temp_dir: Path,
     iteration: int,
     lowpass_sigma: Sequence[float],
@@ -179,6 +189,10 @@ def _optimize_norm_worker(
         Function argument.
     merfish_bits : int
         Function argument.
+    zstride_level : int
+        Decode-time z stride.
+    decode_mode : Literal['auto', '2d', '3d']
+        Decode connected-component/filtering mode.
     temp_dir : Path
         Function argument.
     iteration : int
@@ -211,6 +225,8 @@ def _optimize_norm_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
+        zstride_level=zstride_level,
+        decode_mode=decode_mode,
     )
 
     local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
@@ -262,6 +278,12 @@ class PixelDecoder:
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.
+    zstride_level : int, default 0
+        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2 keep
+        planes 0, N, 2N...
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Connected-component and filtering mode. ``auto`` follows the datastore
+        microscope type.
     """
 
     def __init__(
@@ -272,6 +294,8 @@ class PixelDecoder:
         verbose: int = 1,
         use_mask: bool | None = False,
         z_range: Sequence[int] | None = None,
+        zstride_level: int = 0,
+        decode_mode: Literal["auto", "2d", "3d"] = "auto",
     ) -> None:
         """
         Initialize the object.
@@ -290,6 +314,10 @@ class PixelDecoder:
             Function argument.
         z_range : Sequence[int] | None
             Function argument.
+        zstride_level : int
+            Function argument.
+        decode_mode : Literal['auto', '2d', '3d']
+            Function argument.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -299,15 +327,38 @@ class PixelDecoder:
 
         self._n_merfish_bits = merfish_bits
 
-        if self._datastore.microscope_type == "2D":
+        if zstride_level < 0:
+            raise ValueError("zstride_level must be greater than or equal to 0.")
+        if decode_mode not in {"auto", "2d", "3d"}:
+            raise ValueError("decode_mode must be one of 'auto', '2d', or '3d'.")
+
+        self._decode_mode = decode_mode
+        self._zstride_level = int(zstride_level)
+        self._zstride = max(1, int(zstride_level))
+        if decode_mode == "auto":
+            effective_decode_mode = (
+                "2d" if self._datastore.microscope_type == "2D" else "3d"
+            )
+        else:
+            effective_decode_mode = decode_mode
+        self._effective_decode_mode = effective_decode_mode
+
+        if effective_decode_mode == "2d":
             self._is_3D = False
         else:
             self._is_3D = True
+        self._decode_run_key = (
+            None
+            if self._zstride <= 1 and decode_mode == "auto"
+            else f"zstride_{self._zstride:02d}_{effective_decode_mode}"
+        )
         if z_range is None:
             self._z_crop = False
+            self._z_range = [0, None]
         else:
             self._z_crop = True
             self._z_range = [z_range[0], z_range[1]]
+        self._z_slice = slice(self._z_range[0], self._z_range[1], self._zstride)
 
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
@@ -449,8 +500,11 @@ class PixelDecoder:
             Explicit tile indices to use when recalculating.
         """
         with cp.cuda.Device(gpu_id):
-            normalization_vector = self._datastore.global_normalization_vector
-            background_vector = self._datastore.global_background_vector
+            normalization_vector, background_vector = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "global"
+                )
+            )
             if (
                 not recalculate
                 and normalization_vector is not None
@@ -544,14 +598,11 @@ class PixelDecoder:
                     current_image[current_image > hot_pixel_threshold] = cp.median(
                         current_image[current_image.shape[0] // 2, :, :]
                     ).astype(cp.float32)
-                    if self._z_crop:
-                        all_images.append(
-                            cp.asnumpy(
-                                current_image[self._z_range[0] : self._z_range[1], :]
-                            ).astype(np.float32)
+                    all_images.append(
+                        cp.asnumpy(current_image[self._z_slice, :, :]).astype(
+                            np.float32
                         )
-                    else:
-                        all_images.append(cp.asnumpy(current_image).astype(np.float32))
+                    )
                     del current_image
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
@@ -625,11 +676,13 @@ class PixelDecoder:
                 cp.get_default_memory_pool().free_all_blocks()
                 gc.collect()
 
-            self._datastore.global_normalization_vector = (
-                cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-            )
-            self._datastore.global_background_vector = (
-                cp.asnumpy(background_vector).astype(np.float32).tolist()
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "global",
+                cp.asnumpy(normalization_vector).astype(np.float32),
+                cp.asnumpy(background_vector).astype(np.float32),
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             self._global_background_vector = background_vector
@@ -649,8 +702,11 @@ class PixelDecoder:
             GPU identifier
         """
         with cp.cuda.Device(gpu_id):
-            normalization_vector = self._datastore.iterative_normalization_vector
-            background_vector = self._datastore.iterative_background_vector
+            normalization_vector, background_vector = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "iterative"
+                )
+            )
 
             if normalization_vector is not None and background_vector is not None:
                 background_vector = np.nan_to_num(background_vector, 0.0)
@@ -714,11 +770,13 @@ class PixelDecoder:
             ]
 
             if df_barcodes_loaded_no_blanks.empty or not bit_columns:
-                self._datastore.iterative_background_vector = (
-                    old_iterative_background_vector.astype(np.float32)
-                )
-                self._datastore.iterative_normalization_vector = (
-                    old_iterative_normalization_vector.astype(np.float32)
+                self._datastore.save_decode_normalization_vectors(
+                    self._decode_run_key,
+                    "iterative",
+                    old_iterative_normalization_vector.astype(np.float32),
+                    old_iterative_background_vector.astype(np.float32),
+                    zstride_level=self._zstride,
+                    decode_mode=self._effective_decode_mode,
                 )
                 return
 
@@ -792,11 +850,13 @@ class PixelDecoder:
                 ),
                 1,
             )
-            self._datastore.iterative_background_vector = (
-                barcode_based_background_vector.astype(np.float32)
-            )
-            self._datastore.iterative_normalization_vector = (
-                barcode_based_normalization_vector.astype(np.float32)
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "iterative",
+                barcode_based_normalization_vector.astype(np.float32),
+                barcode_based_background_vector.astype(np.float32),
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             if self._verbose > 1:
@@ -813,11 +873,13 @@ class PixelDecoder:
 
             self._iterative_normalization_vector = barcode_based_normalization_vector
             self._iterative_background_vector = barcode_based_background_vector
-            self._datastore.iterative_normalization_vector = (
-                barcode_based_normalization_vector
-            )
-            self._datastore.iterative_background_vector = (
-                barcode_based_background_vector
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "iterative",
+                barcode_based_normalization_vector,
+                barcode_based_background_vector,
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             self._iterative_normalization_loaded = True
@@ -870,35 +932,20 @@ class PixelDecoder:
                 )
             )
 
-            if self._z_crop:
-                feature_predictor_array = feature_predictor_image.result()
-                decon_array = decon_image.result()
-                current_mask = np.asarray(
-                    feature_predictor_array[self._z_range[0] : self._z_range[1], :],
-                    dtype=np.float32,
+            feature_predictor_array = feature_predictor_image.result()
+            decon_array = decon_image.result()
+            current_mask = np.asarray(
+                feature_predictor_array[self._z_slice, :, :],
+                dtype=np.float32,
+            )
+            images.append(
+                np.where(
+                    current_mask > feature_predictor_threshold,
+                    np.asarray(decon_array[self._z_slice, :, :], dtype=np.float32),
+                    0,
                 )
-                images.append(
-                    np.where(
-                        current_mask > feature_predictor_threshold,
-                        np.asarray(
-                            decon_array[self._z_range[0] : self._z_range[1], :],
-                            dtype=np.float32,
-                        ),
-                        0,
-                    )
-                )
-                del feature_predictor_array, decon_array
-            else:
-                current_mask = np.asarray(
-                    feature_predictor_image.result(), dtype=np.float32
-                )
-                images.append(
-                    np.where(
-                        current_mask > feature_predictor_threshold,
-                        np.asarray(decon_image.result(), dtype=np.float32),
-                        0,
-                    )
-                )
+            )
+            del feature_predictor_array, decon_array
             self._em_wvl.append(
                 self._datastore.load_local_wavelengths_um(
                     tile=self._tile_idx,
@@ -907,6 +954,11 @@ class PixelDecoder:
             )
 
         self._image_data = np.stack(images, axis=0)
+        if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
+            raise ValueError(
+                "decode_mode='3d' requires at least two z planes after applying "
+                "z_range and zstride_level."
+            )
         voxel_size_zyx_um = self._datastore.voxel_size_zyx_um
         self._pixel_size = voxel_size_zyx_um[1]
         self._axial_step = voxel_size_zyx_um[0]
@@ -1335,6 +1387,23 @@ class PixelDecoder:
 
         return registered_space_point
 
+    def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
+        """
+        Map z coordinates from the strided decoding volume back to source planes.
+
+        Parameters
+        ----------
+        decoded_z : pandas.Series or numpy.ndarray
+            Z coordinate in the decoded image.
+
+        Returns
+        -------
+        pandas.Series
+            Z coordinate in the source image.
+        """
+
+        return float(self._z_range[0]) + decoded_z * float(self._zstride)
+
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
     ) -> None:
@@ -1543,8 +1612,8 @@ class PixelDecoder:
                 columns={"centroid-0": "z", "centroid-1": "y", "centroid-2": "x"}
             )
 
-            if self._z_crop:
-                df_barcode["z"] = df_barcode["z"] + self._z_range[0]
+            if self._z_crop or self._zstride != 1:
+                df_barcode["z"] = self._decoded_z_to_source_z(df_barcode["z"])
 
             df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
             df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
@@ -1641,11 +1710,14 @@ class PixelDecoder:
         else:
             if not (self._barcodes_filtered):
                 self._datastore.save_local_decoded_spots(
-                    self._df_barcodes, tile=self._tile_idx
+                    self._df_barcodes,
+                    tile=self._tile_idx,
+                    decode_run_key=self._decode_run_key,
                 )
             else:
                 self._datastore.save_global_filtered_decoded_spots(
-                    self._df_filtered_barcodes
+                    self._df_filtered_barcodes,
+                    decode_run_key=self._decode_run_key,
                 )
 
     @property
@@ -1759,11 +1831,18 @@ class PixelDecoder:
         elif self._load_tile_decoding:
             tile_data = []
             for tile_id in self._datastore.tile_ids:
-                tile_data.append(self._datastore.load_local_decoded_spots(tile_id))
+                tile_data.append(
+                    self._datastore.load_local_decoded_spots(
+                        tile_id,
+                        decode_run_key=self._decode_run_key,
+                    )
+                )
             self._df_barcodes_loaded = pd.concat(tile_data)
         else:
             self._df_filtered_barcodes = (
-                self._datastore.load_global_filtered_decoded_spots()
+                self._datastore.load_global_filtered_decoded_spots(
+                    decode_run_key=self._decode_run_key,
+                )
             )
             self._df_barcodes_loaded = self._df_filtered_barcodes.copy()
             self._barcodes_filtered = True
@@ -3520,7 +3599,11 @@ class PixelDecoder:
         self._load_global_normalization_vectors(
             gpu_id=0, recalculate=True, tile_indices=tile_indices
         )
-        temp_dir = Path(tempfile.mkdtemp())
+        if self._decode_run_key is None:
+            temp_dir = Path(tempfile.mkdtemp())
+        else:
+            temp_dir = self._datastore.decoded_temporary_dir(self._decode_run_key)
+            temp_dir.mkdir(parents=True, exist_ok=True)
         self._temp_dir = temp_dir
 
         # split the same set of tiles each iteration
@@ -3538,6 +3621,16 @@ class PixelDecoder:
             iterator = range(n_iterations)
 
         for iteration in iterator:
+            iteration_temp_dir = (
+                self._datastore.decoded_temporary_dir(
+                    self._decode_run_key,
+                    iteration=iteration,
+                )
+                if self._decode_run_key is not None
+                else temp_dir
+            )
+            iteration_temp_dir.mkdir(parents=True, exist_ok=True)
+            self._temp_dir = iteration_temp_dir
             # launch one process per GPU
             processes = []
             for gpu in range(self._num_gpus):
@@ -3553,7 +3646,9 @@ class PixelDecoder:
                         subset,
                         gpu,
                         self._n_merfish_bits,
-                        temp_dir,
+                        self._zstride_level,
+                        self._decode_mode,
+                        iteration_temp_dir,
                         iteration,
                         lowpass_sigma,
                         magnitude_threshold,
@@ -3587,7 +3682,8 @@ class PixelDecoder:
         # cleanup temp files, etc.
         self._cleanup()
         self._optimize_normalization_weights = False
-        shutil.rmtree(self._temp_dir)
+        if self._decode_run_key is None:
+            shutil.rmtree(temp_dir)
 
     def decode_all_tiles(
         self,
@@ -3658,6 +3754,8 @@ class PixelDecoder:
                     gpu,
                     self._n_merfish_bits,
                     self._verbose,
+                    self._zstride_level,
+                    self._decode_mode,
                     lowpass_sigma,
                     magnitude_threshold,
                     minimum_pixels,
