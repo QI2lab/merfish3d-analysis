@@ -145,7 +145,9 @@ def _get_scale0_sim_from_fusion_result(
     return msi_utils.get_sim_from_msim(fused, scale="scale0")
 
 
-def _get_fusion_backend_kwargs(fuse_func: Callable, use_gpu_fusion: bool) -> dict[str, Any]:
+def _get_fusion_backend_kwargs(
+    fuse_func: Callable, use_gpu_fusion: bool
+) -> dict[str, Any]:
     """
     Return GPU backend keyword arguments for supported multiview-stitcher versions.
 
@@ -374,7 +376,8 @@ def global_register_data(
     # perform and save downsampled fusion
 
     output_zarr_path = datastore._image_store_path(
-        datastore._fused_root_path / Path(f"fused_{datastore.fiducial_folder_name}_iso_zyx")
+        datastore._fused_root_path
+        / Path(f"fused_{datastore.fiducial_folder_name}_iso_zyx")
     )
     if output_zarr_path.exists():
         shutil.rmtree(output_zarr_path)

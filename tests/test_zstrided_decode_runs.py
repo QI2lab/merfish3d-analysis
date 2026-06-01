@@ -95,7 +95,9 @@ def test_pixel_decoder_maps_strided_decoded_z_to_source_z() -> None:
 
 
 def test_decode_mode_controls_cli_defaults() -> None:
-    datastore = SimpleNamespace(microscope_type="3D", voxel_size_zyx_um=[0.945, 0.1, 0.1])
+    datastore = SimpleNamespace(
+        microscope_type="3D", voxel_size_zyx_um=[0.945, 0.1, 0.1]
+    )
 
     assert _default_qi2lab_minimum_pixels(datastore, decode_mode="auto") == 28
     assert _default_qi2lab_minimum_pixels(datastore, decode_mode="2d") == 7

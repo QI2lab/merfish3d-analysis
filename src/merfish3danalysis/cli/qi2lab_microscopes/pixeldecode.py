@@ -168,10 +168,9 @@ def _default_qi2lab_feature_predictor_threshold(
         Function result.
     """
 
-    if (
-        _effective_decode_mode(datastore, decode_mode) != "2d"
-        or not _readouts_are_deconvolved(datastore)
-    ):
+    if _effective_decode_mode(
+        datastore, decode_mode
+    ) != "2d" or not _readouts_are_deconvolved(datastore):
         return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])

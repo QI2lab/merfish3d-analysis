@@ -4790,8 +4790,8 @@ class qi2labDataStore:
             All decoded and filtered spots.
         """
 
-        current_global_filtered_decoded_dir_path = (
-            self._global_filtered_decoded_root(decode_run_key)
+        current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
+            decode_run_key
         )
         current_global_filtered_decoded_path = (
             current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
@@ -4821,8 +4821,8 @@ class qi2labDataStore:
             Optional decoded-output run key.
         """
 
-        current_global_filtered_decoded_dir_path = (
-            self._global_filtered_decoded_root(decode_run_key)
+        current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
+            decode_run_key
         )
 
         if not current_global_filtered_decoded_dir_path.exists():
