@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run proseg max-projection resegmentation for every z-strided decode run.
+# Run proseg max-projection resegmentation for every decoded run.
 #
 # Defaults match the Bartelle control example. Override any setting at launch:
 #   DATASTORE=/path/to/qi2labdatastore \
 #   PROSEG_BIN=/path/to/proseg \
 #   scripts/run_proseg_max_proj_zstride_decode_runs.sh
 #
+# The default unstrided decoded table is treated as zstride_01_3d for output.
 # To run only selected decode runs, pass run keys as arguments:
-#   scripts/run_proseg_max_proj_zstride_decode_runs.sh zstride_02_3d zstride_06_3d
+#   scripts/run_proseg_max_proj_zstride_decode_runs.sh zstride_01_3d zstride_06_3d
 
 PROSEG_BIN="${PROSEG_BIN:-$HOME/Documents/github/proseg/target/release/proseg}"
 DATASTORE="${DATASTORE:-/media/dps/data2/bioprotean/20250513_Bartelle_MERFISH_control/qi2labdatastore}"
@@ -46,20 +47,27 @@ fi
 
 run_keys=("$@")
 if [[ ${#run_keys[@]} -eq 0 ]]; then
+  if [[ -f "$DECODED_ROOT/decoded_features.csv.gz" ]]; then
+    run_keys+=("zstride_01_3d")
+  fi
   while IFS= read -r run_dir; do
     run_keys+=("$(basename "$run_dir")")
   done < <(find "$DECODED_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'zstride_[0-9][0-9]_*' | sort)
 fi
 
 if [[ ${#run_keys[@]} -eq 0 ]]; then
-  echo "No z-strided decoded runs found under $DECODED_ROOT" >&2
+  echo "No decoded runs found under $DECODED_ROOT" >&2
   exit 1
 fi
 
 mkdir -p "$PROSEG_ROOT"
 
 for run_key in "${run_keys[@]}"; do
-  input_transcripts="$DECODED_ROOT/$run_key/decoded_features.csv.gz"
+  if [[ "$run_key" == "zstride_01_3d" ]]; then
+    input_transcripts="$DECODED_ROOT/decoded_features.csv.gz"
+  else
+    input_transcripts="$DECODED_ROOT/$run_key/decoded_features.csv.gz"
+  fi
   if [[ ! -f "$input_transcripts" ]]; then
     echo "Skipping $run_key: missing $input_transcripts" >&2
     continue
@@ -76,6 +84,11 @@ for run_key in "${run_keys[@]}"; do
   counts_out="$output_dir/counts_max_proj.mtx.gz"
   polygons_out="$output_dir/cell_polygons_max_proj.geojson.gz"
   transcript_metadata_out="$output_dir/transcript_metadata_max_proj.csv.gz"
+
+  if [[ -e "$spatialdata_out" ]]; then
+    echo "Skipping $run_key: max-projection datastore already exists at $spatialdata_out"
+    continue
+  fi
 
   cmd=(
     "$PROSEG_BIN"
