@@ -315,21 +315,27 @@ def _max_projection_cell_count_f1(
     reference_counts: dict[int, dict[str, int]],
     min_cell_iou: float,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    run_polygons = _load_polygons(run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz")
+    run_polygons = _load_polygons(
+        run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
+    )
     run_counts = _cell_gene_counts(
         run.path / "max_proj" / "transcript_metadata_max_proj.csv.gz"
     )
     matches = _match_polygons_by_iou(reference_polygons, run_polygons, min_cell_iou)
     count_metrics = _count_f1_from_matches(matches, reference_counts, run_counts)
 
-    matched_reference = set(matches["reference_cell"].astype(int)) if not matches.empty else set()
+    matched_reference = (
+        set(matches["reference_cell"].astype(int)) if not matches.empty else set()
+    )
     matched_run = set(matches["run_cell"].astype(int)) if not matches.empty else set()
     ious = matches["iou"].to_numpy(dtype=float) if not matches.empty else np.array([])
 
     metrics = {
         **count_metrics,
         "matched_cells": len(matches),
-        "unmatched_reference_cells": int(len(reference_polygons) - len(matched_reference)),
+        "unmatched_reference_cells": int(
+            len(reference_polygons) - len(matched_reference)
+        ),
         "unmatched_run_cells": int(len(run_polygons) - len(matched_run)),
         "mean_cell_iou": float(np.mean(ious)) if ious.size else 0.0,
         "median_cell_iou": float(np.median(ious)) if ious.size else 0.0,
@@ -372,7 +378,9 @@ def _print_summary(summary: pd.DataFrame) -> None:
         "matched_cells",
         "median_cell_iou",
     ]
-    printable = summary.loc[:, [col for col in columns if col in summary.columns]].copy()
+    printable = summary.loc[
+        :, [col for col in columns if col in summary.columns]
+    ].copy()
     float_cols = printable.select_dtypes(include=[float]).columns
     printable.loc[:, float_cols] = printable.loc[:, float_cols].round(4)
     print()
@@ -397,7 +405,9 @@ def main() -> None:
         )
 
     reference_run = runs_by_name[args.reference_run]
-    reference_df = _load_transcripts(reference_run.path / "transcript_metadata_3D.csv.gz")
+    reference_df = _load_transcripts(
+        reference_run.path / "transcript_metadata_3D.csv.gz"
+    )
     reference_polygons = _load_polygons(
         reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
     )
@@ -428,7 +438,11 @@ def main() -> None:
         )
         match_tables.append(matches)
 
-    summary = pd.DataFrame(rows).sort_values(["zstride", "decode_mode"]).reset_index(drop=True)
+    summary = (
+        pd.DataFrame(rows)
+        .sort_values(["zstride", "decode_mode"])
+        .reset_index(drop=True)
+    )
     all_matches = (
         pd.concat(match_tables, ignore_index=True)
         if match_tables
