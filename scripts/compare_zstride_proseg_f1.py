@@ -224,7 +224,9 @@ def _rna_f1(
     voxel_zyx_um: np.ndarray,
 ) -> dict[str, Any]:
     run_df = _load_decoded_features(datastore_root, run)
-    comparable_reference_df = _filter_reference_to_run_source_planes(reference_df, run_df)
+    comparable_reference_df = _filter_reference_to_run_source_planes(
+        reference_df, run_df
+    )
     base_z_step_um = float(voxel_zyx_um[0])
     effective_z_step_um = float(voxel_zyx_um[0]) * float(max(run.zstride, 1))
     xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
