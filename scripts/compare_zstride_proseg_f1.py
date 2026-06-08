@@ -20,6 +20,7 @@ from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 RUN_RE = re.compile(r"^zstride(?P<stride>\d+)_(?P<mode>2d|3d)$", re.IGNORECASE)
+RNA_F1_RADIUS_SPACING_MULTIPLIER = 3.0
 
 
 @dataclass(frozen=True)
@@ -183,26 +184,22 @@ def _load_decoded_features(datastore_root: Path, run: RunInfo) -> pd.DataFrame:
     return df
 
 
-def _filter_reference_to_run_source_planes(
-    reference_df: pd.DataFrame, run_df: pd.DataFrame
-) -> pd.DataFrame:
-    required = {"tile_idx", "tile_z"}
-    if required.issubset(reference_df.columns) and required.issubset(run_df.columns):
-        sampled_planes = run_df.loc[:, ["tile_idx", "tile_z"]].drop_duplicates()
-        filtered = reference_df.merge(
-            sampled_planes,
-            on=["tile_idx", "tile_z"],
-            how="inner",
-        )
-        return filtered
+def _gene_set(df: pd.DataFrame, gene_column: str) -> set[str]:
+    return set(df[gene_column].astype(str).dropna())
 
-    if "tile_z" in reference_df.columns and "tile_z" in run_df.columns:
-        sampled_z = set(pd.to_numeric(run_df["tile_z"], errors="coerce").dropna())
-        return reference_df.loc[
-            pd.to_numeric(reference_df["tile_z"], errors="coerce").isin(sampled_z)
-        ].copy()
 
-    return reference_df
+def _coordinate_extent_metrics(
+    prefix: str,
+    df: pd.DataFrame,
+    coordinate_columns: list[str],
+) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    for column in coordinate_columns:
+        values = pd.to_numeric(df[column], errors="coerce")
+        axis = column.removeprefix("global_")
+        metrics[f"{prefix}_{axis}_min"] = float(values.min())
+        metrics[f"{prefix}_{axis}_max"] = float(values.max())
+    return metrics
 
 
 def _scaled_rna_coords(
@@ -223,15 +220,18 @@ def _rna_f1(
     datastore_root: Path,
     voxel_zyx_um: np.ndarray,
 ) -> dict[str, Any]:
+    run_decoded_path = _decoded_features_path(datastore_root, run)
     run_df = _load_decoded_features(datastore_root, run)
-    comparable_reference_df = _filter_reference_to_run_source_planes(reference_df, run_df)
+    comparable_reference_df = reference_df
     base_z_step_um = float(voxel_zyx_um[0])
     effective_z_step_um = float(voxel_zyx_um[0]) * float(max(run.zstride, 1))
-    xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
-    if effective_z_step_um <= 0 or xy_radius_um <= 0:
+    base_xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
+    xy_radius_um = RNA_F1_RADIUS_SPACING_MULTIPLIER * base_xy_radius_um
+    z_radius_um = RNA_F1_RADIUS_SPACING_MULTIPLIER * effective_z_step_um
+    if z_radius_um <= 0 or xy_radius_um <= 0:
         raise ValueError(f"Invalid voxel metadata: {voxel_zyx_um!r}")
 
-    z_scale = xy_radius_um / effective_z_step_um
+    z_scale = xy_radius_um / z_radius_um
     coordinate_columns = ["global_z", "global_y", "global_x"]
     run_coords, run_genes = _scaled_rna_coords(
         run_df, z_scale, coordinate_columns, "gene_id"
@@ -246,6 +246,9 @@ def _rna_f1(
         gt_gene_ids=reference_genes,
         radius=xy_radius_um,
     )
+    run_genes_set = _gene_set(run_df, "gene_id")
+    reference_genes_set = _gene_set(comparable_reference_df, "gene_id")
+    shared_genes = run_genes_set & reference_genes_set
 
     return {
         "rna_f1": float(results["F1 Score"]),
@@ -255,12 +258,30 @@ def _rna_f1(
         "rna_false_positives": int(results["False Positives"]),
         "rna_false_negatives": int(results["False Negatives"]),
         "rna_xy_radius_um": xy_radius_um,
-        "rna_z_radius_um": effective_z_step_um,
+        "rna_z_radius_um": z_radius_um,
+        "rna_radius_spacing_multiplier": RNA_F1_RADIUS_SPACING_MULTIPLIER,
         "rna_effective_z_step_um": effective_z_step_um,
         "rna_z_scale": z_scale,
+        "rna_reference_plane_rule": "all",
         "run_rna_count": len(run_df),
         "reference_rna_count": len(reference_df),
         "comparable_reference_rna_count": len(comparable_reference_df),
+        "run_decoded_features_path": str(run_decoded_path),
+        "run_unique_genes": len(run_genes_set),
+        "reference_unique_genes": len(reference_genes_set),
+        "shared_unique_genes": len(shared_genes),
+        "run_gene_overlap_fraction": (
+            len(shared_genes) / len(run_genes_set) if run_genes_set else 0.0
+        ),
+        "reference_gene_overlap_fraction": (
+            len(shared_genes) / len(reference_genes_set)
+            if reference_genes_set
+            else 0.0
+        ),
+        **_coordinate_extent_metrics("run_rna", run_df, coordinate_columns),
+        **_coordinate_extent_metrics(
+            "reference_rna", comparable_reference_df, coordinate_columns
+        ),
     }
 
 
@@ -535,6 +556,7 @@ def main() -> None:
         )
 
     reference_run = runs_by_name[args.reference_run]
+    reference_decoded_path = _decoded_features_path(datastore_root, reference_run)
     reference_df = _load_decoded_features(datastore_root, reference_run)
     reference_polygons = _load_polygons(
         reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
@@ -560,6 +582,7 @@ def main() -> None:
                 "zstride": run.zstride,
                 "decode_mode": run.decode_mode,
                 "reference_run": reference_run.name,
+                "reference_decoded_features_path": str(reference_decoded_path),
                 "voxel_z_um": float(voxel_zyx_um[0]),
                 "voxel_y_um": float(voxel_zyx_um[1]),
                 "voxel_x_um": float(voxel_zyx_um[2]),
