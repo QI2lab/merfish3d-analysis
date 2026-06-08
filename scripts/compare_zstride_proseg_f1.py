@@ -183,6 +183,28 @@ def _load_decoded_features(datastore_root: Path, run: RunInfo) -> pd.DataFrame:
     return df
 
 
+def _filter_reference_to_run_source_planes(
+    reference_df: pd.DataFrame, run_df: pd.DataFrame
+) -> pd.DataFrame:
+    required = {"tile_idx", "tile_z"}
+    if required.issubset(reference_df.columns) and required.issubset(run_df.columns):
+        sampled_planes = run_df.loc[:, ["tile_idx", "tile_z"]].drop_duplicates()
+        filtered = reference_df.merge(
+            sampled_planes,
+            on=["tile_idx", "tile_z"],
+            how="inner",
+        )
+        return filtered
+
+    if "tile_z" in reference_df.columns and "tile_z" in run_df.columns:
+        sampled_z = set(pd.to_numeric(run_df["tile_z"], errors="coerce").dropna())
+        return reference_df.loc[
+            pd.to_numeric(reference_df["tile_z"], errors="coerce").isin(sampled_z)
+        ].copy()
+
+    return reference_df
+
+
 def _scaled_rna_coords(
     df: pd.DataFrame,
     z_scale: float,
@@ -202,6 +224,7 @@ def _rna_f1(
     voxel_zyx_um: np.ndarray,
 ) -> dict[str, Any]:
     run_df = _load_decoded_features(datastore_root, run)
+    comparable_reference_df = _filter_reference_to_run_source_planes(reference_df, run_df)
     base_z_step_um = float(voxel_zyx_um[0])
     effective_z_step_um = float(voxel_zyx_um[0]) * float(max(run.zstride, 1))
     xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
@@ -214,7 +237,7 @@ def _rna_f1(
         run_df, z_scale, coordinate_columns, "gene_id"
     )
     reference_coords, reference_genes = _scaled_rna_coords(
-        reference_df, z_scale, coordinate_columns, "gene_id"
+        comparable_reference_df, z_scale, coordinate_columns, "gene_id"
     )
     results, _, _, _ = calculate_F1_with_radius(
         qi2lab_coords=run_coords,
@@ -237,6 +260,7 @@ def _rna_f1(
         "rna_z_scale": z_scale,
         "run_rna_count": len(run_df),
         "reference_rna_count": len(reference_df),
+        "comparable_reference_rna_count": len(comparable_reference_df),
     }
 
 
@@ -470,6 +494,8 @@ def _print_summary(summary: pd.DataFrame) -> None:
         "rna_f1",
         "rna_precision",
         "rna_recall",
+        "run_rna_count",
+        "comparable_reference_rna_count",
         "max_proj_cell_count_f1",
         "max_proj_cell_count_precision",
         "max_proj_cell_count_recall",
