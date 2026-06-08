@@ -55,7 +55,20 @@ def _parse_args() -> argparse.Namespace:
         "--min-cell-iou",
         type=float,
         default=0.25,
-        help="Minimum 2D polygon IoU for max-projection cell matching.",
+        help=(
+            "Minimum 2D polygon IoU when --cell-match-mode=iou. Ignored for "
+            "the default cell-ID matching mode."
+        ),
+    )
+    parser.add_argument(
+        "--cell-match-mode",
+        choices=("id", "iou"),
+        default="id",
+        help=(
+            "How to match max-projection cells. Use 'id' when runs share the "
+            "same starting segmentation; use 'iou' only for independent "
+            "segmentations."
+        ),
     )
     parser.add_argument(
         "--output-prefix",
@@ -141,12 +154,13 @@ def _rna_f1(
     voxel_zyx_um: np.ndarray,
 ) -> dict[str, Any]:
     run_df = _load_transcripts(run.path / "transcript_metadata_3D.csv.gz")
+    base_z_step_um = float(voxel_zyx_um[0])
     effective_z_step_um = float(voxel_zyx_um[0]) * float(max(run.zstride, 1))
-    xy_step_um = float(max(voxel_zyx_um[1], voxel_zyx_um[2]))
-    if effective_z_step_um <= 0 or xy_step_um <= 0:
+    xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
+    if effective_z_step_um <= 0 or xy_radius_um <= 0:
         raise ValueError(f"Invalid voxel metadata: {voxel_zyx_um!r}")
 
-    z_scale = xy_step_um / effective_z_step_um
+    z_scale = xy_radius_um / effective_z_step_um
     run_coords, run_genes = _scaled_rna_coords(run_df, z_scale)
     reference_coords, reference_genes = _scaled_rna_coords(reference_df, z_scale)
     results, _, _, _ = calculate_F1_with_radius(
@@ -154,7 +168,7 @@ def _rna_f1(
         qi2lab_gene_ids=run_genes,
         gt_coords=reference_coords,
         gt_gene_ids=reference_genes,
-        radius=xy_step_um,
+        radius=xy_radius_um,
     )
 
     return {
@@ -164,7 +178,8 @@ def _rna_f1(
         "rna_true_positives": int(results["True Positives"]),
         "rna_false_positives": int(results["False Positives"]),
         "rna_false_negatives": int(results["False Negatives"]),
-        "rna_xy_radius_um": xy_step_um,
+        "rna_xy_radius_um": xy_radius_um,
+        "rna_z_radius_um": effective_z_step_um,
         "rna_effective_z_step_um": effective_z_step_um,
         "rna_z_scale": z_scale,
         "run_rna_count": len(run_df),
@@ -309,38 +324,66 @@ def _count_f1_from_matches(
     }
 
 
+def _match_cells_by_id(
+    reference_counts: dict[int, dict[str, int]],
+    run_counts: dict[int, dict[str, int]],
+) -> pd.DataFrame:
+    shared_cells = sorted(set(reference_counts) & set(run_counts))
+    return pd.DataFrame(
+        {
+            "reference_cell": shared_cells,
+            "run_cell": shared_cells,
+            "iou": np.nan,
+        }
+    )
+
+
 def _max_projection_cell_count_f1(
     run: RunInfo,
-    reference_polygons: dict[int, Any],
+    reference_polygons: dict[int, Any] | None,
     reference_counts: dict[int, dict[str, int]],
     min_cell_iou: float,
+    cell_match_mode: str,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    run_polygons = _load_polygons(
-        run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
-    )
     run_counts = _cell_gene_counts(
         run.path / "max_proj" / "transcript_metadata_max_proj.csv.gz"
     )
-    matches = _match_polygons_by_iou(reference_polygons, run_polygons, min_cell_iou)
+
+    run_polygons: dict[int, Any] = {}
+    if cell_match_mode == "id":
+        matches = _match_cells_by_id(reference_counts, run_counts)
+    elif cell_match_mode == "iou":
+        if reference_polygons is None:
+            raise ValueError("reference_polygons must be provided for IoU matching.")
+        run_polygons = _load_polygons(
+            run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
+        )
+        matches = _match_polygons_by_iou(reference_polygons, run_polygons, min_cell_iou)
+    else:
+        raise ValueError("cell_match_mode must be 'id' or 'iou'.")
+
     count_metrics = _count_f1_from_matches(matches, reference_counts, run_counts)
 
     matched_reference = (
         set(matches["reference_cell"].astype(int)) if not matches.empty else set()
     )
     matched_run = set(matches["run_cell"].astype(int)) if not matches.empty else set()
-    ious = matches["iou"].to_numpy(dtype=float) if not matches.empty else np.array([])
+    ious = (
+        matches["iou"].dropna().to_numpy(dtype=float)
+        if not matches.empty
+        else np.array([])
+    )
 
     metrics = {
         **count_metrics,
         "matched_cells": len(matches),
-        "unmatched_reference_cells": int(
-            len(reference_polygons) - len(matched_reference)
-        ),
-        "unmatched_run_cells": int(len(run_polygons) - len(matched_run)),
+        "unmatched_reference_cells": int(len(reference_counts) - len(matched_reference)),
+        "unmatched_run_cells": int(len(run_counts) - len(matched_run)),
         "mean_cell_iou": float(np.mean(ious)) if ious.size else 0.0,
         "median_cell_iou": float(np.median(ious)) if ious.size else 0.0,
-        "reference_cell_count": len(reference_polygons),
-        "run_cell_count": len(run_polygons),
+        "reference_cell_count": len(reference_counts),
+        "run_cell_count": len(run_counts),
+        "cell_match_mode": cell_match_mode,
     }
     matches = matches.copy()
     matches.insert(0, "run", run.name)
@@ -369,6 +412,7 @@ def _write_outputs(
 def _print_summary(summary: pd.DataFrame) -> None:
     columns = [
         "run",
+        "cell_match_mode",
         "rna_f1",
         "rna_precision",
         "rna_recall",
@@ -376,8 +420,11 @@ def _print_summary(summary: pd.DataFrame) -> None:
         "max_proj_cell_count_precision",
         "max_proj_cell_count_recall",
         "matched_cells",
-        "median_cell_iou",
+        "unmatched_reference_cells",
+        "unmatched_run_cells",
     ]
+    if "cell_match_mode" in summary.columns and (summary["cell_match_mode"] == "iou").any():
+        columns.append("median_cell_iou")
     printable = summary.loc[
         :, [col for col in columns if col in summary.columns]
     ].copy()
@@ -408,8 +455,12 @@ def main() -> None:
     reference_df = _load_transcripts(
         reference_run.path / "transcript_metadata_3D.csv.gz"
     )
-    reference_polygons = _load_polygons(
-        reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
+    reference_polygons = (
+        _load_polygons(
+            reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
+        )
+        if args.cell_match_mode == "iou"
+        else None
     )
     reference_counts = _cell_gene_counts(
         reference_run.path / "max_proj" / "transcript_metadata_max_proj.csv.gz"
@@ -420,7 +471,11 @@ def main() -> None:
     for run in runs:
         rna_metrics = _rna_f1(run, reference_df, voxel_zyx_um)
         cell_metrics, matches = _max_projection_cell_count_f1(
-            run, reference_polygons, reference_counts, args.min_cell_iou
+            run,
+            reference_polygons,
+            reference_counts,
+            args.min_cell_iou,
+            args.cell_match_mode,
         )
         rows.append(
             {
@@ -432,6 +487,7 @@ def main() -> None:
                 "voxel_y_um": float(voxel_zyx_um[1]),
                 "voxel_x_um": float(voxel_zyx_um[2]),
                 "min_cell_iou": float(args.min_cell_iou),
+                "cell_match_mode": args.cell_match_mode,
                 **rna_metrics,
                 **cell_metrics,
             }
