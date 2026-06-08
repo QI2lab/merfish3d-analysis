@@ -377,7 +377,9 @@ def _max_projection_cell_count_f1(
     metrics = {
         **count_metrics,
         "matched_cells": len(matches),
-        "unmatched_reference_cells": int(len(reference_counts) - len(matched_reference)),
+        "unmatched_reference_cells": int(
+            len(reference_counts) - len(matched_reference)
+        ),
         "unmatched_run_cells": int(len(run_counts) - len(matched_run)),
         "mean_cell_iou": float(np.mean(ious)) if ious.size else 0.0,
         "median_cell_iou": float(np.median(ious)) if ious.size else 0.0,
@@ -423,7 +425,10 @@ def _print_summary(summary: pd.DataFrame) -> None:
         "unmatched_reference_cells",
         "unmatched_run_cells",
     ]
-    if "cell_match_mode" in summary.columns and (summary["cell_match_mode"] == "iou").any():
+    if (
+        "cell_match_mode" in summary.columns
+        and (summary["cell_match_mode"] == "iou").any()
+    ):
         columns.append("median_cell_iou")
     printable = summary.loc[
         :, [col for col in columns if col in summary.columns]
