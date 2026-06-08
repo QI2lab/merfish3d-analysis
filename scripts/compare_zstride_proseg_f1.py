@@ -139,21 +139,69 @@ def _load_transcripts(path: Path) -> pd.DataFrame:
     return df
 
 
+def _decoded_run_key(run: RunInfo) -> str:
+    return f"zstride_{run.zstride:02d}_{run.decode_mode}"
+
+
+def _decoded_features_path(datastore_root: Path, run: RunInfo) -> Path:
+    decoded_root = datastore_root / "all_tiles_filtered_decoded_features"
+    if run.zstride <= 1:
+        default_csv = decoded_root / "decoded_features.csv.gz"
+        if default_csv.exists():
+            return default_csv
+        default_parquet = decoded_root / "decoded_features.parquet"
+        if default_parquet.exists():
+            return default_parquet
+
+    run_dir = decoded_root / _decoded_run_key(run)
+    run_csv = run_dir / "decoded_features.csv.gz"
+    if run_csv.exists():
+        return run_csv
+    run_parquet = run_dir / "decoded_features.parquet"
+    if run_parquet.exists():
+        return run_parquet
+
+    raise FileNotFoundError(
+        "Could not find decoded features for "
+        f"{run.name}. Checked default and {run_dir}."
+    )
+
+
+def _load_decoded_features(datastore_root: Path, run: RunInfo) -> pd.DataFrame:
+    path = _decoded_features_path(datastore_root, run)
+    if path.suffix == ".parquet":
+        df = pd.read_parquet(path)
+    else:
+        df = pd.read_csv(path)
+
+    required = {"global_x", "global_y", "global_z", "gene_id"}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"{path} is missing required columns: {sorted(missing)}")
+
+    df = df.loc[~_is_blank_gene(df["gene_id"])].copy()
+    return df
+
+
 def _scaled_rna_coords(
-    df: pd.DataFrame, z_scale: float
+    df: pd.DataFrame,
+    z_scale: float,
+    coordinate_columns: list[str],
+    gene_column: str,
 ) -> tuple[np.ndarray, np.ndarray]:
-    coords = df[["z", "y", "x"]].to_numpy(dtype=np.float64)
+    coords = df[coordinate_columns].to_numpy(dtype=np.float64)
     coords[:, 0] *= z_scale
-    genes = df["gene"].to_numpy()
+    genes = df[gene_column].to_numpy()
     return coords, genes
 
 
 def _rna_f1(
     run: RunInfo,
     reference_df: pd.DataFrame,
+    datastore_root: Path,
     voxel_zyx_um: np.ndarray,
 ) -> dict[str, Any]:
-    run_df = _load_transcripts(run.path / "transcript_metadata_3D.csv.gz")
+    run_df = _load_decoded_features(datastore_root, run)
     base_z_step_um = float(voxel_zyx_um[0])
     effective_z_step_um = float(voxel_zyx_um[0]) * float(max(run.zstride, 1))
     xy_radius_um = float(max(base_z_step_um, voxel_zyx_um[1], voxel_zyx_um[2]))
@@ -161,8 +209,13 @@ def _rna_f1(
         raise ValueError(f"Invalid voxel metadata: {voxel_zyx_um!r}")
 
     z_scale = xy_radius_um / effective_z_step_um
-    run_coords, run_genes = _scaled_rna_coords(run_df, z_scale)
-    reference_coords, reference_genes = _scaled_rna_coords(reference_df, z_scale)
+    coordinate_columns = ["global_z", "global_y", "global_x"]
+    run_coords, run_genes = _scaled_rna_coords(
+        run_df, z_scale, coordinate_columns, "gene_id"
+    )
+    reference_coords, reference_genes = _scaled_rna_coords(
+        reference_df, z_scale, coordinate_columns, "gene_id"
+    )
     results, _, _, _ = calculate_F1_with_radius(
         qi2lab_coords=run_coords,
         qi2lab_gene_ids=run_genes,
@@ -325,10 +378,10 @@ def _count_f1_from_matches(
 
 
 def _match_cells_by_id(
-    reference_counts: dict[int, dict[str, int]],
-    run_counts: dict[int, dict[str, int]],
+    reference_cell_ids: set[int],
+    run_cell_ids: set[int],
 ) -> pd.DataFrame:
-    shared_cells = sorted(set(reference_counts) & set(run_counts))
+    shared_cells = sorted(reference_cell_ids & run_cell_ids)
     return pd.DataFrame(
         {
             "reference_cell": shared_cells,
@@ -340,24 +393,21 @@ def _match_cells_by_id(
 
 def _max_projection_cell_count_f1(
     run: RunInfo,
-    reference_polygons: dict[int, Any] | None,
+    reference_polygons: dict[int, Any],
     reference_counts: dict[int, dict[str, int]],
     min_cell_iou: float,
     cell_match_mode: str,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
+    run_polygons = _load_polygons(
+        run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
+    )
     run_counts = _cell_gene_counts(
         run.path / "max_proj" / "transcript_metadata_max_proj.csv.gz"
     )
 
-    run_polygons: dict[int, Any] = {}
     if cell_match_mode == "id":
-        matches = _match_cells_by_id(reference_counts, run_counts)
+        matches = _match_cells_by_id(set(reference_polygons), set(run_polygons))
     elif cell_match_mode == "iou":
-        if reference_polygons is None:
-            raise ValueError("reference_polygons must be provided for IoU matching.")
-        run_polygons = _load_polygons(
-            run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
-        )
         matches = _match_polygons_by_iou(reference_polygons, run_polygons, min_cell_iou)
     else:
         raise ValueError("cell_match_mode must be 'id' or 'iou'.")
@@ -378,13 +428,15 @@ def _max_projection_cell_count_f1(
         **count_metrics,
         "matched_cells": len(matches),
         "unmatched_reference_cells": int(
-            len(reference_counts) - len(matched_reference)
+            len(reference_polygons) - len(matched_reference)
         ),
-        "unmatched_run_cells": int(len(run_counts) - len(matched_run)),
+        "unmatched_run_cells": int(len(run_polygons) - len(matched_run)),
         "mean_cell_iou": float(np.mean(ious)) if ious.size else 0.0,
         "median_cell_iou": float(np.median(ious)) if ious.size else 0.0,
-        "reference_cell_count": len(reference_counts),
-        "run_cell_count": len(run_counts),
+        "reference_cell_count": len(reference_polygons),
+        "run_cell_count": len(run_polygons),
+        "reference_cells_with_counts": len(reference_counts),
+        "run_cells_with_counts": len(run_counts),
         "cell_match_mode": cell_match_mode,
     }
     matches = matches.copy()
@@ -457,15 +509,9 @@ def main() -> None:
         )
 
     reference_run = runs_by_name[args.reference_run]
-    reference_df = _load_transcripts(
-        reference_run.path / "transcript_metadata_3D.csv.gz"
-    )
-    reference_polygons = (
-        _load_polygons(
-            reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
-        )
-        if args.cell_match_mode == "iou"
-        else None
+    reference_df = _load_decoded_features(datastore_root, reference_run)
+    reference_polygons = _load_polygons(
+        reference_run.path / "max_proj" / "cell_polygons_max_proj.geojson.gz"
     )
     reference_counts = _cell_gene_counts(
         reference_run.path / "max_proj" / "transcript_metadata_max_proj.csv.gz"
@@ -474,7 +520,7 @@ def main() -> None:
     rows: list[dict[str, Any]] = []
     match_tables: list[pd.DataFrame] = []
     for run in runs:
-        rna_metrics = _rna_f1(run, reference_df, voxel_zyx_um)
+        rna_metrics = _rna_f1(run, reference_df, datastore_root, voxel_zyx_um)
         cell_metrics, matches = _max_projection_cell_count_f1(
             run,
             reference_polygons,
