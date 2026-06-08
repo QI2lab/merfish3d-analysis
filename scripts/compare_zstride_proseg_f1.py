@@ -274,9 +274,7 @@ def _rna_f1(
             len(shared_genes) / len(run_genes_set) if run_genes_set else 0.0
         ),
         "reference_gene_overlap_fraction": (
-            len(shared_genes) / len(reference_genes_set)
-            if reference_genes_set
-            else 0.0
+            len(shared_genes) / len(reference_genes_set) if reference_genes_set else 0.0
         ),
         **_coordinate_extent_metrics("run_rna", run_df, coordinate_columns),
         **_coordinate_extent_metrics(
