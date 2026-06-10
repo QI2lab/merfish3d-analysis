@@ -18,7 +18,10 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
-QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
+QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD = (1.5, 10.0)
+QI2LAB_2D_DEFAULT_MINIMUM_PIXELS = 7
+QI2LAB_3D_DEFAULT_MINIMUM_PIXELS = 16
+QI2LAB_ZSTRIDE_3D_DEFAULT_MINIMUM_PIXELS = 10
 QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
     5.0: 0.2,
@@ -61,6 +64,7 @@ def _effective_decode_mode(
 def _default_qi2lab_minimum_pixels(
     datastore: qi2labDataStore,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
+    zstride_level: int = 0,
 ) -> int:
     """
     Return the default minimum-pixel threshold for qi2lab decoding.
@@ -71,6 +75,8 @@ def _default_qi2lab_minimum_pixels(
         Function argument.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Decode mode used for default selection.
+    zstride_level : int, default 0
+        Decode-time z stride.
 
     Returns
     -------
@@ -78,7 +84,11 @@ def _default_qi2lab_minimum_pixels(
         Function result.
     """
 
-    return 7 if _effective_decode_mode(datastore, decode_mode) == "2d" else 28
+    if _effective_decode_mode(datastore, decode_mode) == "2d":
+        return QI2LAB_2D_DEFAULT_MINIMUM_PIXELS
+    if zstride_level > 1:
+        return QI2LAB_ZSTRIDE_3D_DEFAULT_MINIMUM_PIXELS
+    return QI2LAB_3D_DEFAULT_MINIMUM_PIXELS
 
 
 def _default_qi2lab_magnitude_threshold(
@@ -256,14 +266,14 @@ def decode_pixels(
         number of gpus to use. Default = 1.
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
-        Defaults to 7 for 2D data and 28 for 3D data.
+        Defaults to 7 for 2D data, 16 for 3D data, and 10 for strided 3D data.
     feature_predictor_threshold : float, optional
-        threshold to accept feature_predictor prediction. Defaults to 0.5, except
-        2D deconvolved readouts use an axial-sampling-aware default:
-        ~3x Nyquist -> 0.3 and ~5x Nyquist -> 0.2.
+        Legacy option retained for compatibility. Readout images are now
+        weighted by the feature-predictor image before lowpass filtering rather
+        than thresholded by this value.
     magnitude_threshold : tuple[float,float], optional
         list of two floats [min, max] magnitude thresholds to accept a decoded
-        pixel. Defaults to (0.9, 10.0) for 3D data and a 2D lookup keyed by
+        pixel. Defaults to (1.5, 10.0) for 3D data and a 2D lookup keyed by
         axial sampling relative to the 0.315 um Nyquist reference:
         ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
     filter_method : str, default "blank_fraction"
@@ -303,6 +313,7 @@ def decode_pixels(
         minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(
             datastore,
             decode_mode=decode_mode,
+            zstride_level=zstride_level,
         )
     if feature_predictor_threshold is None:
         feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
