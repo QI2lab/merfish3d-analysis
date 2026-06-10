@@ -600,10 +600,9 @@ class PixelDecoder:
                         )
                     )
 
-                    current_image = (
-                        cp.asarray(decon_image, dtype=cp.float32)
-                        * cp.asarray(feature_predictor_image, dtype=cp.float32)
-                    )
+                    current_image = cp.asarray(
+                        decon_image, dtype=cp.float32
+                    ) * cp.asarray(feature_predictor_image, dtype=cp.float32)
                     current_image[current_image > hot_pixel_threshold] = cp.median(
                         current_image[current_image.shape[0] // 2, :, :]
                     ).astype(cp.float32)
