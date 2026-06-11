@@ -190,9 +190,9 @@ def decode_pixels(
         minimum pixels with same barcode ID required to call a spot.
         Defaults to 7 for 2D simulations and 28 for 3D simulations.
     feature_predictor_threshold : float, optional
-        threshold to accept feature_predictor prediction. Defaults to 0.5, except
-        2D deconvolved readouts use an axial-sampling-aware default:
-        ~3x Nyquist -> 0.3 and ~5x Nyquist -> 0.2.
+        Legacy option retained for compatibility. Readout images are now
+        weighted by the feature-predictor image before lowpass filtering rather
+        than thresholded by this value.
     lowpass_sigma : tuple[float, float, float], default (3.0, 1.0, 1.0)
         Gaussian lowpass sigma in z, y, x before decoding.
     magnitude_threshold: tuple[float,float], optional

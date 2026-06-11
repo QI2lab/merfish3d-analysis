@@ -71,6 +71,17 @@ python -m merfish3danalysis.cli.qi2lab_microscopes.preprocess \
   --ufish-model simfish
 ```
 
-For z-strided datastores, set `--zstride-level` to select the corresponding
-`qi2labdatastore_zstrideXX` directory.
+For z-strided datastores, preprocessing still uses `--zstride-level` to select
+the corresponding `qi2labdatastore_zstrideXX` directory.
 
+## Pixel Decoding CLI
+
+For decode-time z-striding, `qi2lab-decode --zstride-level N` reads the normal
+`qi2labdatastore` source data and decodes planes `0, N, 2N...`. Values `0` and
+`1` keep all planes. Non-default decode runs are written under decode subfolders
+such as `decoded/zstride_03_2d/` and
+`all_tiles_filtered_decoded_features/zstride_03_2d/`.
+
+Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
+datastore microscope type; explicit modes also select the matching default
+minimum-pixel, magnitude, and feature-predictor thresholds.
