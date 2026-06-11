@@ -49,6 +49,12 @@ from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
+DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
+DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
+DEFAULT_2D_MINIMUM_PIXELS = 7.0
+DEFAULT_3D_MINIMUM_PIXELS = 16.0
+DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS = 10.0
+
 # filter warning from skimage
 warnings.filterwarnings(
     "ignore",
@@ -64,6 +70,8 @@ def decode_tiles_worker(
     gpu_id: int,
     merfish_bits: int,
     verbose: int,
+    zstride_level: int,
+    decode_mode: Literal["auto", "2d", "3d"],
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
@@ -85,6 +93,10 @@ def decode_tiles_worker(
         Function argument.
     verbose : int
         Function argument.
+    zstride_level : int
+        Decode-time z stride.
+    decode_mode : Literal['auto', '2d', '3d']
+        Decode connected-component/filtering mode.
     lowpass_sigma : Sequence[float]
         Function argument.
     magnitude_threshold : Sequence[float]
@@ -115,9 +127,14 @@ def decode_tiles_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
+        zstride_level=zstride_level,
+        decode_mode=decode_mode,
     )
 
-    local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
+    local_decoder._load_global_normalization_vectors(
+        gpu_id=gpu_id,
+        lowpass_sigma=lowpass_sigma,
+    )
     local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
     local_decoder._optimize_normalization_weights = False
 
@@ -159,6 +176,8 @@ def _optimize_norm_worker(
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
+    zstride_level: int,
+    decode_mode: Literal["auto", "2d", "3d"],
     temp_dir: Path,
     iteration: int,
     lowpass_sigma: Sequence[float],
@@ -179,6 +198,10 @@ def _optimize_norm_worker(
         Function argument.
     merfish_bits : int
         Function argument.
+    zstride_level : int
+        Decode-time z stride.
+    decode_mode : Literal['auto', '2d', '3d']
+        Decode connected-component/filtering mode.
     temp_dir : Path
         Function argument.
     iteration : int
@@ -211,9 +234,14 @@ def _optimize_norm_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
+        zstride_level=zstride_level,
+        decode_mode=decode_mode,
     )
 
-    local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
+    local_decoder._load_global_normalization_vectors(
+        gpu_id=gpu_id,
+        lowpass_sigma=lowpass_sigma,
+    )
     local_decoder._optimize_normalization_weights = True
     local_decoder._temp_dir = temp_dir
 
@@ -262,6 +290,12 @@ class PixelDecoder:
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.
+    zstride_level : int, default 0
+        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2 keep
+        planes 0, N, 2N...
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Connected-component and filtering mode. ``auto`` follows the datastore
+        microscope type.
     """
 
     def __init__(
@@ -272,6 +306,8 @@ class PixelDecoder:
         verbose: int = 1,
         use_mask: bool | None = False,
         z_range: Sequence[int] | None = None,
+        zstride_level: int = 0,
+        decode_mode: Literal["auto", "2d", "3d"] = "auto",
     ) -> None:
         """
         Initialize the object.
@@ -290,6 +326,10 @@ class PixelDecoder:
             Function argument.
         z_range : Sequence[int] | None
             Function argument.
+        zstride_level : int
+            Function argument.
+        decode_mode : Literal['auto', '2d', '3d']
+            Function argument.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -299,15 +339,38 @@ class PixelDecoder:
 
         self._n_merfish_bits = merfish_bits
 
-        if self._datastore.microscope_type == "2D":
+        if zstride_level < 0:
+            raise ValueError("zstride_level must be greater than or equal to 0.")
+        if decode_mode not in {"auto", "2d", "3d"}:
+            raise ValueError("decode_mode must be one of 'auto', '2d', or '3d'.")
+
+        self._decode_mode = decode_mode
+        self._zstride_level = int(zstride_level)
+        self._zstride = max(1, int(zstride_level))
+        if decode_mode == "auto":
+            effective_decode_mode = (
+                "2d" if self._datastore.microscope_type == "2D" else "3d"
+            )
+        else:
+            effective_decode_mode = decode_mode
+        self._effective_decode_mode = effective_decode_mode
+
+        if effective_decode_mode == "2d":
             self._is_3D = False
         else:
             self._is_3D = True
+        self._decode_run_key = (
+            None
+            if self._zstride <= 1
+            else f"zstride_{self._zstride:02d}_{effective_decode_mode}"
+        )
         if z_range is None:
             self._z_crop = False
+            self._z_range = [0, None]
         else:
             self._z_crop = True
             self._z_range = [z_range[0], z_range[1]]
+        self._z_slice = slice(self._z_range[0], self._z_range[1], self._zstride)
 
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
@@ -435,6 +498,7 @@ class PixelDecoder:
         gpu_id: int = 0,
         recalculate: bool = False,
         tile_indices: Sequence[int] | None = None,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """Load or calculate global normalization and background vectors.
 
@@ -447,10 +511,16 @@ class PixelDecoder:
             reusing cached datastore values.
         tile_indices : Sequence[int], optional
             Explicit tile indices to use when recalculating.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma applied to ``data * prediction`` before estimating
+            the global background and foreground normalization vectors.
         """
         with cp.cuda.Device(gpu_id):
-            normalization_vector = self._datastore.global_normalization_vector
-            background_vector = self._datastore.global_background_vector
+            normalization_vector, background_vector = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "global"
+                )
+            )
             if (
                 not recalculate
                 and normalization_vector is not None
@@ -461,7 +531,9 @@ class PixelDecoder:
                 self._global_normalization_loaded = True
             else:
                 self._global_normalization_vectors(
-                    gpu_id=gpu_id, tile_indices=tile_indices
+                    gpu_id=gpu_id,
+                    tile_indices=tile_indices,
+                    lowpass_sigma=lowpass_sigma,
                 )
 
             cp.cuda.Stream.null.synchronize()
@@ -475,6 +547,7 @@ class PixelDecoder:
         hot_pixel_threshold: int = 50000,
         gpu_id: int = 0,
         tile_indices: Sequence[int] | None = None,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """Calculate global normalization and background vectors.
 
@@ -491,9 +564,13 @@ class PixelDecoder:
         tile_indices : Sequence[int], optional
             Explicit tile indices to use. If omitted, up to five random tiles
             are sampled from the datastore.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma applied to ``data * prediction`` before estimating
+            background and foreground normalization vectors.
         """
 
         with cp.cuda.Device(gpu_id):
+            effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
             if tile_indices is not None:
                 random_tiles = [
                     self._datastore.tile_ids[tile_idx] for tile_idx in tile_indices
@@ -536,22 +613,18 @@ class PixelDecoder:
                         )
                     )
 
-                    current_image = cp.where(
-                        cp.asarray(feature_predictor_image, dtype=cp.float32) > 0.1,
-                        cp.asarray(decon_image, dtype=cp.float32),
-                        0.0,
-                    )
+                    current_image = cp.asarray(
+                        decon_image, dtype=cp.float32
+                    ) * cp.asarray(feature_predictor_image, dtype=cp.float32)
                     current_image[current_image > hot_pixel_threshold] = cp.median(
                         current_image[current_image.shape[0] // 2, :, :]
                     ).astype(cp.float32)
-                    if self._z_crop:
-                        all_images.append(
-                            cp.asnumpy(
-                                current_image[self._z_range[0] : self._z_range[1], :]
-                            ).astype(np.float32)
-                        )
-                    else:
-                        all_images.append(cp.asnumpy(current_image).astype(np.float32))
+                    current_image = current_image[self._z_slice, :, :]
+                    current_image = self._lowpass_image(
+                        current_image,
+                        sigma=effective_lowpass_sigma,
+                    )
+                    all_images.append(cp.asnumpy(current_image).astype(np.float32))
                     del current_image
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
@@ -625,11 +698,13 @@ class PixelDecoder:
                 cp.get_default_memory_pool().free_all_blocks()
                 gc.collect()
 
-            self._datastore.global_normalization_vector = (
-                cp.asnumpy(normalization_vector).astype(np.float32).tolist()
-            )
-            self._datastore.global_background_vector = (
-                cp.asnumpy(background_vector).astype(np.float32).tolist()
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "global",
+                cp.asnumpy(normalization_vector).astype(np.float32),
+                cp.asnumpy(background_vector).astype(np.float32),
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             self._global_background_vector = background_vector
@@ -649,8 +724,11 @@ class PixelDecoder:
             GPU identifier
         """
         with cp.cuda.Device(gpu_id):
-            normalization_vector = self._datastore.iterative_normalization_vector
-            background_vector = self._datastore.iterative_background_vector
+            normalization_vector, background_vector = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "iterative"
+                )
+            )
 
             if normalization_vector is not None and background_vector is not None:
                 background_vector = np.nan_to_num(background_vector, 0.0)
@@ -714,11 +792,13 @@ class PixelDecoder:
             ]
 
             if df_barcodes_loaded_no_blanks.empty or not bit_columns:
-                self._datastore.iterative_background_vector = (
-                    old_iterative_background_vector.astype(np.float32)
-                )
-                self._datastore.iterative_normalization_vector = (
-                    old_iterative_normalization_vector.astype(np.float32)
+                self._datastore.save_decode_normalization_vectors(
+                    self._decode_run_key,
+                    "iterative",
+                    old_iterative_normalization_vector.astype(np.float32),
+                    old_iterative_background_vector.astype(np.float32),
+                    zstride_level=self._zstride,
+                    decode_mode=self._effective_decode_mode,
                 )
                 return
 
@@ -792,11 +872,13 @@ class PixelDecoder:
                 ),
                 1,
             )
-            self._datastore.iterative_background_vector = (
-                barcode_based_background_vector.astype(np.float32)
-            )
-            self._datastore.iterative_normalization_vector = (
-                barcode_based_normalization_vector.astype(np.float32)
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "iterative",
+                barcode_based_normalization_vector.astype(np.float32),
+                barcode_based_background_vector.astype(np.float32),
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             if self._verbose > 1:
@@ -813,11 +895,13 @@ class PixelDecoder:
 
             self._iterative_normalization_vector = barcode_based_normalization_vector
             self._iterative_background_vector = barcode_based_background_vector
-            self._datastore.iterative_normalization_vector = (
-                barcode_based_normalization_vector
-            )
-            self._datastore.iterative_background_vector = (
-                barcode_based_background_vector
+            self._datastore.save_decode_normalization_vectors(
+                self._decode_run_key,
+                "iterative",
+                barcode_based_normalization_vector,
+                barcode_based_background_vector,
+                zstride_level=self._zstride,
+                decode_mode=self._effective_decode_mode,
             )
 
             self._iterative_normalization_loaded = True
@@ -829,12 +913,13 @@ class PixelDecoder:
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
     def _load_bit_data(self, feature_predictor_threshold: float | None = 0.1) -> None:
-        """Load raw data for all bits in the tile.
+        """Load prediction-weighted readout data for all bits in the tile.
 
         Parameters
         ----------
         feature_predictor_threshold : float, default 0.1
-            Threshold to accept feature_predictor prediction.
+            Legacy argument kept for API compatibility. The loaded image is
+            weighted by the feature-predictor image rather than thresholded.
         """
 
         if self._verbose > 1:
@@ -853,9 +938,6 @@ class PixelDecoder:
         else:
             iterable_bits = self._datastore.bit_ids[0 : self._n_merfish_bits]
 
-        if feature_predictor_threshold is None:
-            feature_predictor_threshold = 0.1
-
         images = []
         self._em_wvl = []
         for bit_id in iterable_bits:
@@ -870,35 +952,18 @@ class PixelDecoder:
                 )
             )
 
-            if self._z_crop:
-                feature_predictor_array = feature_predictor_image.result()
-                decon_array = decon_image.result()
-                current_mask = np.asarray(
-                    feature_predictor_array[self._z_range[0] : self._z_range[1], :],
-                    dtype=np.float32,
-                )
-                images.append(
-                    np.where(
-                        current_mask > feature_predictor_threshold,
-                        np.asarray(
-                            decon_array[self._z_range[0] : self._z_range[1], :],
-                            dtype=np.float32,
-                        ),
-                        0,
-                    )
-                )
-                del feature_predictor_array, decon_array
-            else:
-                current_mask = np.asarray(
-                    feature_predictor_image.result(), dtype=np.float32
-                )
-                images.append(
-                    np.where(
-                        current_mask > feature_predictor_threshold,
-                        np.asarray(decon_image.result(), dtype=np.float32),
-                        0,
-                    )
-                )
+            feature_predictor_array = feature_predictor_image.result()
+            decon_array = decon_image.result()
+            prediction = np.asarray(
+                feature_predictor_array[self._z_slice, :, :],
+                dtype=np.float32,
+            )
+            registered_data = np.asarray(
+                decon_array[self._z_slice, :, :],
+                dtype=np.float32,
+            )
+            images.append(registered_data * prediction)
+            del feature_predictor_array, decon_array
             self._em_wvl.append(
                 self._datastore.load_local_wavelengths_um(
                     tile=self._tile_idx,
@@ -907,6 +972,11 @@ class PixelDecoder:
             )
 
         self._image_data = np.stack(images, axis=0)
+        if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
+            raise ValueError(
+                "decode_mode='3d' requires at least two z planes after applying "
+                "z_range and zstride_level."
+            )
         voxel_size_zyx_um = self._datastore.voxel_size_zyx_um
         self._pixel_size = voxel_size_zyx_um[1]
         self._axial_step = voxel_size_zyx_um[0]
@@ -936,7 +1006,46 @@ class PixelDecoder:
         del images
         gc.collect()
 
-    def _lp_filter(self, gpu_id: int = 0, sigma: Sequence[int] = (3, 1, 1)) -> None:
+    def _lowpass_image(
+        self,
+        image: cp.ndarray,
+        sigma: Sequence[float] | None,
+    ) -> cp.ndarray:
+        """
+        Apply lowpass filtering to one prediction-weighted bit image.
+
+        Parameters
+        ----------
+        image : cupy.ndarray
+            Prediction-weighted image in Z, Y, X order.
+        sigma : Sequence[float] or None
+            Lowpass sigma in the sampled image coordinates. If None or any
+            element is zero, the image is returned unchanged.
+
+        Returns
+        -------
+        cupy.ndarray
+            Filtered image. No post-filter intensity rescaling is applied.
+        """
+
+        if sigma is None or np.any(np.asarray(sigma, dtype=float) == 0):
+            return image
+        if self._is_3D:
+            return gaussian_filter(image, sigma=sigma)
+
+        filtered = cp.empty_like(image)
+        for z_idx in range(image.shape[0]):
+            filtered[z_idx, :, :] = gaussian_filter(
+                image[z_idx, :, :],
+                sigma=(sigma[1], sigma[2]),
+            )
+        return filtered
+
+    def _lp_filter(
+        self,
+        gpu_id: int = 0,
+        sigma: Sequence[float] = DEFAULT_DECODE_LOWPASS_SIGMA,
+    ) -> None:
         """Apply low-pass filter to the raw data.
 
         Parameters
@@ -963,45 +1072,10 @@ class PixelDecoder:
                 iterable_lp = range(self._image_data_lp.shape[0])
 
             for i in iterable_lp:
-                if self._is_3D:
-                    image_data_cp = cp.asarray(self._image_data[i, :], dtype=cp.float32)
-                    max_image_data = cp.asnumpy(
-                        cp.max(image_data_cp, axis=(0, 1, 2))
-                    ).astype(np.float32)
-                    if max_image_data == 0:
-                        self._image_data_lp[i, :, :, :] = 0
-                    else:
-                        self._image_data_lp[i, :, :, :] = cp.asnumpy(
-                            gaussian_filter(image_data_cp, sigma=sigma)
-                        ).astype(np.float32)
-                        max_image_data_lp = np.max(
-                            self._image_data_lp[i, :, :, :], axis=(0, 1, 2)
-                        )
-                        self._image_data_lp[i, :, :, :] = self._image_data_lp[
-                            i, :, :, :
-                        ] * (max_image_data / max_image_data_lp)
-                else:
-                    for z_idx in range(self._image_data.shape[1]):
-                        image_data_cp = cp.asarray(
-                            self._image_data[i, z_idx, :], dtype=cp.float32
-                        )
-                        max_image_data = cp.asnumpy(
-                            cp.max(image_data_cp, axis=(0, 1))
-                        ).astype(np.float32)
-                        if max_image_data == 0:
-                            self._image_data_lp[i, z_idx, :, :] = 0
-                        else:
-                            self._image_data_lp[i, z_idx, :, :] = cp.asnumpy(
-                                gaussian_filter(
-                                    image_data_cp, sigma=(sigma[1], sigma[2])
-                                )
-                            ).astype(np.float32)
-                            max_image_data_lp = np.max(
-                                self._image_data_lp[i, z_idx, :, :], axis=(0, 1)
-                            )
-                            self._image_data_lp[i, z_idx, :, :] = self._image_data_lp[
-                                i, z_idx, :, :
-                            ] * (max_image_data / max_image_data_lp)
+                image_data_cp = cp.asarray(self._image_data[i, :], dtype=cp.float32)
+                filtered_cp = self._lowpass_image(image_data_cp, sigma=sigma)
+                self._image_data_lp[i, :, :, :] = cp.asnumpy(filtered_cp)
+                del filtered_cp
 
             self._filter_type = "lp"
 
@@ -1011,6 +1085,35 @@ class PixelDecoder:
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
             cp.get_default_pinned_memory_pool().free_all_blocks()
+
+    def _effective_lowpass_sigma(
+        self, sigma: Sequence[float] | None
+    ) -> tuple[float, float, float] | None:
+        """
+        Resolve lowpass sigma in the sampled decoding volume.
+
+        Public decode arguments are expressed in source-image voxel units. For
+        strided 3D decoding, the sampled z axis has fewer planes, so the z sigma
+        must be divided by the stride to preserve the same physical smoothing.
+        """
+
+        if sigma is None:
+            return None
+        sigma_zyx = tuple(float(v) for v in sigma)
+        if len(sigma_zyx) != 3:
+            raise ValueError("lowpass_sigma must contain three values: z, y, x.")
+        if self._is_3D and self._zstride > 1:
+            sigma_zyx = (sigma_zyx[0] / float(self._zstride), *sigma_zyx[1:])
+        return sigma_zyx
+
+    def _default_minimum_pixels(self) -> float:
+        """Return the production connected-component size threshold."""
+
+        if not self._is_3D:
+            return DEFAULT_2D_MINIMUM_PIXELS
+        if self._zstride > 1:
+            return DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS
+        return DEFAULT_3D_MINIMUM_PIXELS
 
     @staticmethod
     def _scale_pixel_traces(
@@ -1335,6 +1438,23 @@ class PixelDecoder:
 
         return registered_space_point
 
+    def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
+        """
+        Map z coordinates from the strided decoding volume back to source planes.
+
+        Parameters
+        ----------
+        decoded_z : pandas.Series or numpy.ndarray
+            Z coordinate in the decoded image.
+
+        Returns
+        -------
+        pandas.Series
+            Z coordinate in the source image.
+        """
+
+        return float(self._z_range[0]) + decoded_z * float(self._zstride)
+
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
     ) -> None:
@@ -1543,8 +1663,8 @@ class PixelDecoder:
                 columns={"centroid-0": "z", "centroid-1": "y", "centroid-2": "x"}
             )
 
-            if self._z_crop:
-                df_barcode["z"] = df_barcode["z"] + self._z_range[0]
+            if self._z_crop or self._zstride != 1:
+                df_barcode["z"] = self._decoded_z_to_source_z(df_barcode["z"])
 
             df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
             df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
@@ -1641,11 +1761,14 @@ class PixelDecoder:
         else:
             if not (self._barcodes_filtered):
                 self._datastore.save_local_decoded_spots(
-                    self._df_barcodes, tile=self._tile_idx
+                    self._df_barcodes,
+                    tile=self._tile_idx,
+                    decode_run_key=self._decode_run_key,
                 )
             else:
                 self._datastore.save_global_filtered_decoded_spots(
-                    self._df_filtered_barcodes
+                    self._df_filtered_barcodes,
+                    decode_run_key=self._decode_run_key,
                 )
 
     @property
@@ -1695,6 +1818,7 @@ class PixelDecoder:
         normalization_method: Literal["iterative", "global", "none"] | None,
         use_normalization: bool | None,
         gpu_id: int = 0,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """
         Select and load the normalization state used by pixel decoding.
@@ -1707,6 +1831,10 @@ class PixelDecoder:
             Function argument.
         gpu_id : int
             Function argument.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma used when global normalization needs to be
+            recalculated, keeping normalization preprocessing aligned with
+            decoding preprocessing.
 
         Returns
         -------
@@ -1721,7 +1849,10 @@ class PixelDecoder:
             self._load_iterative_normalization_vectors(gpu_id=gpu_id)
         elif normalization_method == "global":
             self._iterative_normalization_loaded = False
-            self._load_global_normalization_vectors(gpu_id=gpu_id)
+            self._load_global_normalization_vectors(
+                gpu_id=gpu_id,
+                lowpass_sigma=lowpass_sigma,
+            )
         elif normalization_method == "none":
             self._iterative_normalization_loaded = False
             self._global_normalization_loaded = False
@@ -1759,11 +1890,18 @@ class PixelDecoder:
         elif self._load_tile_decoding:
             tile_data = []
             for tile_id in self._datastore.tile_ids:
-                tile_data.append(self._datastore.load_local_decoded_spots(tile_id))
+                tile_data.append(
+                    self._datastore.load_local_decoded_spots(
+                        tile_id,
+                        decode_run_key=self._decode_run_key,
+                    )
+                )
             self._df_barcodes_loaded = pd.concat(tile_data)
         else:
             self._df_filtered_barcodes = (
-                self._datastore.load_global_filtered_decoded_spots()
+                self._datastore.load_global_filtered_decoded_spots(
+                    decode_run_key=self._decode_run_key,
+                )
             )
             self._df_barcodes_loaded = self._df_filtered_barcodes.copy()
             self._barcodes_filtered = True
@@ -3386,9 +3524,9 @@ class PixelDecoder:
         gpu_id: int = 0,
         display_results: bool = False,
         return_results: bool = False,
-        lowpass_sigma: Sequence[float] | None = (3, 1, 1),
-        magnitude_threshold: list[float, float] | None = (0.9, 10.0),
-        minimum_pixels: float | None = 2.0,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
+        magnitude_threshold: Sequence[float] | None = None,
+        minimum_pixels: float | None = None,
         use_normalization: bool | None = True,
         normalization_method: Literal["iterative", "global", "none"] | None = None,
         feature_predictor_threshold: float | None = 0.1,
@@ -3409,9 +3547,9 @@ class PixelDecoder:
             Return results as np.ndarray
         lowpass_sigma : Sequence[float], default (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Sequence[float], default (0.9, 10.0)
+        magnitude_threshold: Sequence[float], optional
             L2-norm threshold
-        minimum_pixels : float, default 2.0
+        minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
         use_normalization : bool, default True
             Use iterative normalization when ``normalization_method`` is not set.
@@ -3421,7 +3559,8 @@ class PixelDecoder:
             calculated iterative normalization, ``global`` uses global
             normalization, and ``none`` decodes unnormalized traces.
         feature_predictor_threshold : float, default 0.1
-            feature_predictor threshold.
+            Legacy argument retained for compatibility. Decode input is weighted
+            by the feature-predictor image rather than thresholded.
 
         Returns
         -------
@@ -3435,19 +3574,28 @@ class PixelDecoder:
         """
 
         with cp.cuda.Device(gpu_id):
+            if magnitude_threshold is None:
+                magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
+            if minimum_pixels is None:
+                minimum_pixels = self._default_minimum_pixels()
             self._prepare_normalization_state(
                 normalization_method=normalization_method,
                 use_normalization=use_normalization,
                 gpu_id=gpu_id,
+                lowpass_sigma=lowpass_sigma,
             )
 
             self._tile_idx = tile_idx
             self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
             self._filter_type = "raw"
-            if lowpass_sigma is not None and not np.any(
-                np.asarray(lowpass_sigma, dtype=float) == 0
+            effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
+            if effective_lowpass_sigma is not None and not np.any(
+                np.asarray(effective_lowpass_sigma, dtype=float) == 0
             ):
-                self._lp_filter(sigma=lowpass_sigma, gpu_id=gpu_id)
+                self._lp_filter(
+                    sigma=effective_lowpass_sigma,
+                    gpu_id=gpu_id,
+                )
             self._decode_pixels(
                 magnitude_threshold=magnitude_threshold,
                 gpu_id=gpu_id,
@@ -3482,10 +3630,10 @@ class PixelDecoder:
         self,
         n_random_tiles: int = 5,
         n_iterations: int = 10,
-        minimum_pixels: float | None = 2.0,
+        minimum_pixels: float | None = None,
         feature_predictor_threshold: float | None = 0.1,
-        lowpass_sigma: Sequence[float] | None = (3, 1, 1),
-        magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
+        magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
     ) -> None:
         """Iteratively refine normalization vectors using exact-called transcripts.
@@ -3496,13 +3644,13 @@ class PixelDecoder:
             Number of random tiles.
         n_iterations : int, default 10
             Number of iterations.
-        minimum_pixels : float, default = 2.0
+        minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default = 0.1
             feature_predictor threshold.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Sequence[float], default = (0.9,10.0)
+        magnitude_threshold: Sequence[float], optional
             L2-norm threshold
         tile_indices : Sequence[int], optional
             Explicit tile indices to use for normalization. If omitted, a random
@@ -3510,6 +3658,10 @@ class PixelDecoder:
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
+        if magnitude_threshold is None:
+            magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
+        if minimum_pixels is None:
+            minimum_pixels = self._default_minimum_pixels()
         all_tiles = list(range(len(self._datastore.tile_ids)))
 
         # preload global normalization once
@@ -3518,9 +3670,16 @@ class PixelDecoder:
         self._global_background_vector = None
         self._optimize_normalization_weights = True
         self._load_global_normalization_vectors(
-            gpu_id=0, recalculate=True, tile_indices=tile_indices
+            gpu_id=0,
+            recalculate=True,
+            tile_indices=tile_indices,
+            lowpass_sigma=lowpass_sigma,
         )
-        temp_dir = Path(tempfile.mkdtemp())
+        if self._decode_run_key is None:
+            temp_dir = Path(tempfile.mkdtemp())
+        else:
+            temp_dir = self._datastore.decoded_temporary_dir(self._decode_run_key)
+            temp_dir.mkdir(parents=True, exist_ok=True)
         self._temp_dir = temp_dir
 
         # split the same set of tiles each iteration
@@ -3538,6 +3697,16 @@ class PixelDecoder:
             iterator = range(n_iterations)
 
         for iteration in iterator:
+            iteration_temp_dir = (
+                self._datastore.decoded_temporary_dir(
+                    self._decode_run_key,
+                    iteration=iteration,
+                )
+                if self._decode_run_key is not None
+                else temp_dir
+            )
+            iteration_temp_dir.mkdir(parents=True, exist_ok=True)
+            self._temp_dir = iteration_temp_dir
             # launch one process per GPU
             processes = []
             for gpu in range(self._num_gpus):
@@ -3553,7 +3722,9 @@ class PixelDecoder:
                         subset,
                         gpu,
                         self._n_merfish_bits,
-                        temp_dir,
+                        self._zstride_level,
+                        self._decode_mode,
+                        iteration_temp_dir,
                         iteration,
                         lowpass_sigma,
                         magnitude_threshold,
@@ -3576,7 +3747,10 @@ class PixelDecoder:
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
                     )
-                self._load_global_normalization_vectors(gpu_id=0)
+                self._load_global_normalization_vectors(
+                    gpu_id=0,
+                    lowpass_sigma=lowpass_sigma,
+                )
                 self._iterative_normalization_vectors(gpu_id=0)
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()
@@ -3587,14 +3761,15 @@ class PixelDecoder:
         # cleanup temp files, etc.
         self._cleanup()
         self._optimize_normalization_weights = False
-        shutil.rmtree(self._temp_dir)
+        if self._decode_run_key is None:
+            shutil.rmtree(temp_dir)
 
     def decode_all_tiles(
         self,
         assign_to_cells: bool = True,
-        lowpass_sigma: Sequence[float] | None = (3, 1, 1),
-        magnitude_threshold: Sequence[float] | None = (0.9, 10.0),
-        minimum_pixels: float | None = 2.0,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
+        magnitude_threshold: Sequence[float] | None = None,
+        minimum_pixels: float | None = None,
         feature_predictor_threshold: float | None = 0.1,
         normalization_method: Literal["iterative", "global", "none"] = "iterative",
         duplicate_radius_xy: float | None = None,
@@ -3613,9 +3788,9 @@ class PixelDecoder:
             Assign codewords to cells
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma.
-        magnitude_threshold: Sequence[float], default = (0.9, 10.0)
+        magnitude_threshold: Sequence[float], optional
             Accept pixels with magnitudes between low and high values
-        minimum_pixels : float, default 2.0
+        minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
         feature_predictor_threshold : float, default 0.1
             feature_predictor threshold.
@@ -3635,6 +3810,10 @@ class PixelDecoder:
 
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
+        if magnitude_threshold is None:
+            magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
+        if minimum_pixels is None:
+            minimum_pixels = self._default_minimum_pixels()
         self._validate_filter_configuration(
             filter_method=filter_method,
             target_gross_misid_rate=float(target_gross_misid_rate),
@@ -3658,6 +3837,8 @@ class PixelDecoder:
                     gpu,
                     self._n_merfish_bits,
                     self._verbose,
+                    self._zstride_level,
+                    self._decode_mode,
                     lowpass_sigma,
                     magnitude_threshold,
                     minimum_pixels,

@@ -964,6 +964,211 @@ class qi2labDataStore:
             self._iterative_background_vector,
         )
 
+    @staticmethod
+    def _validate_decode_run_key(decode_run_key: str | None) -> str | None:
+        """
+        Validate an optional decoded-output run key.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Optional subfolder name under decoded-output roots.
+
+        Returns
+        -------
+        str or None
+            Validated run key.
+        """
+
+        if decode_run_key is None:
+            return None
+        decode_run_key = str(decode_run_key)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", decode_run_key):
+            raise ValueError(
+                "decode_run_key may only contain letters, numbers, '.', '_', and '-'."
+            )
+        return decode_run_key
+
+    def _decoded_run_root(self, decode_run_key: str | None = None) -> Path:
+        """
+        Return the local decoded output root for an optional decode run.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
+
+        Returns
+        -------
+        pathlib.Path
+            Decoded output root.
+        """
+
+        decode_run_key = self._validate_decode_run_key(decode_run_key)
+        if decode_run_key is None:
+            return self._decoded_root_path
+        return self._decoded_root_path / Path(decode_run_key)
+
+    def decoded_temporary_dir(
+        self,
+        decode_run_key: str | None = None,
+        iteration: int | None = None,
+    ) -> Path:
+        """
+        Return the temporary decoded-output directory for a decode run.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
+        iteration : int or None, default None
+            Optional optimization iteration index.
+
+        Returns
+        -------
+        pathlib.Path
+            Temporary decoded-output directory.
+        """
+
+        root = self._decoded_run_root(decode_run_key) / Path("temporary")
+        if iteration is not None:
+            root = root / Path(f"iteration_{int(iteration):03d}")
+        return root
+
+    def _global_filtered_decoded_root(
+        self,
+        decode_run_key: str | None = None,
+    ) -> Path:
+        """
+        Return the global filtered decoded-output root for an optional decode run.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
+
+        Returns
+        -------
+        pathlib.Path
+            Global filtered decoded-output root.
+        """
+
+        root = self._datastore_path / Path("all_tiles_filtered_decoded_features")
+        decode_run_key = self._validate_decode_run_key(decode_run_key)
+        if decode_run_key is None:
+            return root
+        return root / Path(decode_run_key)
+
+    def load_decode_normalization_vectors(
+        self,
+        decode_run_key: str | None,
+        kind: str,
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """
+        Load run-scoped normalization and background vectors.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Optional decoded-output run key. None reads the default vectors.
+        kind : {'global', 'iterative'}
+            Normalization vector kind.
+
+        Returns
+        -------
+        tuple[numpy.ndarray or None, numpy.ndarray or None]
+            Normalization and background vectors.
+        """
+
+        if kind == "global":
+            if decode_run_key is None:
+                return self.global_normalization_vector, self.global_background_vector
+            norm_key = "global_normalization_vector"
+            background_key = "global_background_vector"
+        elif kind == "iterative":
+            if decode_run_key is None:
+                return (
+                    self.iterative_normalization_vector,
+                    self.iterative_background_vector,
+                )
+            norm_key = "iterative_normalization_vector"
+            background_key = "iterative_background_vector"
+        else:
+            raise ValueError("kind must be one of 'global' or 'iterative'.")
+
+        decode_run_key = self._validate_decode_run_key(decode_run_key)
+        calib_attrs = self._load_calibrations_attributes()
+        run_attrs = calib_attrs.get("decode_normalization_runs", {}).get(
+            decode_run_key, {}
+        )
+        normalization_vector = run_attrs.get(norm_key)
+        background_vector = run_attrs.get(background_key)
+        if normalization_vector is None or background_vector is None:
+            return None, None
+        return (
+            np.asarray(normalization_vector, dtype=np.float32),
+            np.asarray(background_vector, dtype=np.float32),
+        )
+
+    def save_decode_normalization_vectors(
+        self,
+        decode_run_key: str | None,
+        kind: str,
+        normalization_vector: ArrayLike,
+        background_vector: ArrayLike,
+        zstride_level: int | None = None,
+        decode_mode: str | None = None,
+    ) -> None:
+        """
+        Save default or run-scoped normalization and background vectors.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Optional decoded-output run key. None writes the default vectors.
+        kind : {'global', 'iterative'}
+            Normalization vector kind.
+        normalization_vector : ArrayLike
+            Foreground normalization vector.
+        background_vector : ArrayLike
+            Background vector.
+        zstride_level : int or None, default None
+            Decode-time z stride metadata.
+        decode_mode : str or None, default None
+            Decode mode metadata.
+        """
+
+        if kind == "global":
+            if decode_run_key is None:
+                self.global_normalization_vector = normalization_vector
+                self.global_background_vector = background_vector
+                return
+            norm_key = "global_normalization_vector"
+            background_key = "global_background_vector"
+        elif kind == "iterative":
+            if decode_run_key is None:
+                self.iterative_normalization_vector = normalization_vector
+                self.iterative_background_vector = background_vector
+                return
+            norm_key = "iterative_normalization_vector"
+            background_key = "iterative_background_vector"
+        else:
+            raise ValueError("kind must be one of 'global' or 'iterative'.")
+
+        decode_run_key = self._validate_decode_run_key(decode_run_key)
+        calib_attrs = self._load_calibrations_attributes()
+        runs = dict(calib_attrs.get("decode_normalization_runs", {}))
+        run_attrs = dict(runs.get(decode_run_key, {}))
+        if zstride_level is not None:
+            run_attrs["zstride_level"] = int(zstride_level)
+        if decode_mode is not None:
+            run_attrs["decode_mode"] = str(decode_mode)
+        run_attrs[norm_key] = np.asarray(normalization_vector, dtype=np.float32)
+        run_attrs[background_key] = np.asarray(background_vector, dtype=np.float32)
+        runs[decode_run_key] = run_attrs
+        calib_attrs["decode_normalization_runs"] = runs
+        self._save_calibrations_attributes(calib_attrs)
+
     @property
     def tile_ids(self) -> Collection[str] | None:
         """Tile IDs.
@@ -4482,6 +4687,7 @@ class qi2labDataStore:
     def load_local_decoded_spots(
         self,
         tile: int | str,
+        decode_run_key: str | None = None,
     ) -> pd.DataFrame | None:
         """Load decoded spots and features for one tile.
 
@@ -4489,6 +4695,8 @@ class qi2labDataStore:
         ----------
         tile : Union[int, str]
             Tile index or tile id.
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
 
         Returns
         -------
@@ -4512,7 +4720,7 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        current_tile_features_path = self._decoded_root_path / Path(
+        current_tile_features_path = self._decoded_run_root(decode_run_key) / Path(
             tile_id + "_decoded_features.parquet"
         )
 
@@ -4527,6 +4735,7 @@ class qi2labDataStore:
         self,
         features_df: pd.DataFrame,
         tile: int | str,
+        decode_run_key: str | None = None,
     ) -> None:
         """Save decoded spots and features for one tile.
 
@@ -4536,6 +4745,8 @@ class qi2labDataStore:
             Decoded spots and features for one tile.
         tile : Union[int, str]
             Tile index or tile id.
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
         """
 
         if isinstance(tile, int):
@@ -4554,7 +4765,9 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        current_tile_features_path = self._decoded_root_path / Path(
+        decoded_root_path = self._decoded_run_root(decode_run_key)
+        decoded_root_path.mkdir(parents=True, exist_ok=True)
+        current_tile_features_path = decoded_root_path / Path(
             tile_id + "_decoded_features.parquet"
         )
 
@@ -4562,8 +4775,14 @@ class qi2labDataStore:
 
     def load_global_filtered_decoded_spots(
         self,
+        decode_run_key: str | None = None,
     ) -> pd.DataFrame | None:
         """Load all decoded and filtered spots.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
 
         Returns
         -------
@@ -4571,8 +4790,8 @@ class qi2labDataStore:
             All decoded and filtered spots.
         """
 
-        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
-            "all_tiles_filtered_decoded_features"
+        current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
+            decode_run_key
         )
         current_global_filtered_decoded_path = (
             current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
@@ -4590,6 +4809,7 @@ class qi2labDataStore:
     def save_global_filtered_decoded_spots(
         self,
         filtered_decoded_df: pd.DataFrame,
+        decode_run_key: str | None = None,
     ) -> None:
         """Save all decoded and filtered spots.
 
@@ -4597,14 +4817,16 @@ class qi2labDataStore:
         ----------
         filtered_decoded_df : pd.DataFrame
             All decoded and filtered spots.
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
         """
 
-        current_global_filtered_decoded_dir_path = self._datastore_path / Path(
-            "all_tiles_filtered_decoded_features"
+        current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
+            decode_run_key
         )
 
         if not current_global_filtered_decoded_dir_path.exists():
-            current_global_filtered_decoded_dir_path.mkdir()
+            current_global_filtered_decoded_dir_path.mkdir(parents=True)
 
         current_global_filtered_decoded_path = (
             current_global_filtered_decoded_dir_path / Path("decoded_features.parquet")
