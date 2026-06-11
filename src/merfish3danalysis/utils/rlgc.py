@@ -656,19 +656,25 @@ def rlgc(
             prev_kld1 = kld1
             prev_kld2 = kld2
 
-            HTratio1 = fft_conv(
-                observed_mask
-                * cp.divide(split1, 0.5 * (Hu + 1e-12), dtype=cp.float32),
-                otfT,
-                image_gpu.shape,
-            ) / update_norm
+            HTratio1 = (
+                fft_conv(
+                    observed_mask
+                    * cp.divide(split1, 0.5 * (Hu + 1e-12), dtype=cp.float32),
+                    otfT,
+                    image_gpu.shape,
+                )
+                / update_norm
+            )
             del split1
-            HTratio2 = fft_conv(
-                observed_mask
-                * cp.divide(split2, 0.5 * (Hu + 1e-12), dtype=cp.float32),
-                otfT,
-                image_gpu.shape,
-            ) / update_norm
+            HTratio2 = (
+                fft_conv(
+                    observed_mask
+                    * cp.divide(split2, 0.5 * (Hu + 1e-12), dtype=cp.float32),
+                    otfT,
+                    image_gpu.shape,
+                )
+                / update_norm
+            )
             del split2
             HTratio = HTratio1 + HTratio2
             del Hu
