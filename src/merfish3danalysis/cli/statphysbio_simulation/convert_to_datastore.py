@@ -47,6 +47,7 @@ def convert_data(
     output_path: Path | None = None,
     codebook_path: Path | None = None,
     bit_order_path: Path | None = None,
+    z_step: int = 1,
 ) -> None:
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -68,7 +69,13 @@ def convert_data(
         path to bit order file. This file defines what bits are present in each
         imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
+    z_step : int, default=1
+        Keep every z_step-th axial plane when writing the datastore. The
+        datastore z voxel size and generated PSFs are updated to match the
+        retained axial sampling.
     """
+    if z_step <= 0:
+        raise ValueError("z_step must be greater than 0.")
 
     # load codebook
     # --------------
@@ -97,6 +104,11 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
     num_z = metadata["num_z"]
+    num_z_strided = len(range(0, int(num_z), int(z_step)))
+    if num_z_strided <= 0:
+        raise ValueError(
+            f"z_step={z_step} does not retain any planes from num_z={num_z}."
+        )
 
     camera = "synthetic"
     e_per_ADU = metadata["gain"]
@@ -115,7 +127,7 @@ def convert_data(
         channel_order = "forward"
 
     voxel_size_zyx_um = [
-        metadata["z_step_um"],
+        metadata["z_step_um"] * z_step,
         metadata["yx_pixel_um"],
         metadata["yx_pixel_um"],
     ]
@@ -172,7 +184,7 @@ def convert_data(
 
     # generate PSFs
     # --------------
-    psf_z = int(num_z)
+    psf_z = int(num_z_strided)
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
@@ -247,10 +259,16 @@ def convert_data(
             # zeros for this round/stage position.
             raw_image = imread(image_path)
             if tile_idx == 0 and round_idx == 0:
-                correct_shape = raw_image.shape
+                raw_correct_shape = raw_image.shape
+                correct_shape = (
+                    raw_image.shape[0],
+                    num_z_strided,
+                    raw_image.shape[2],
+                    raw_image.shape[3],
+                )
             else:
-                if raw_image is None or raw_image.shape != correct_shape:
-                    if raw_image.shape[0] < correct_shape[0]:
+                if raw_image is None or raw_image.shape != raw_correct_shape:
+                    if raw_image.shape[0] < raw_correct_shape[0]:
                         print(
                             "\nround="
                             + str(round_idx + 1)
@@ -258,13 +276,13 @@ def convert_data(
                             + str(tile_idx + 1)
                         )
                         print("Found shape: " + str(raw_image.shape))
-                        print("Correct shape: " + str(correct_shape))
+                        print("Correct shape: " + str(raw_correct_shape))
                         print("Replacing data with zeros.\n")
-                        raw_image = np.zeros(correct_shape, dtype=np.uint16)
+                        raw_image = np.zeros(raw_correct_shape, dtype=np.uint16)
                     else:
                         # print("\nround=" + str(round_idx + 1) + "; tile=" + str(tile_idx + 1))
                         # print("Found shape: " + str(raw_image.shape))
-                        size_to_trim = raw_image.shape[1] - correct_shape[1]
+                        size_to_trim = raw_image.shape[1] - raw_correct_shape[1]
                         raw_image = raw_image[:, size_to_trim:, :].copy()
                         # print("Correct shape: " + str(correct_shape))
                         # print("Corrected to shape: " + str(raw_image.shape) + "\n")
@@ -272,6 +290,7 @@ def convert_data(
             # Correct if channels were acquired in reverse order (red->purple)
             if channel_order == "reversed":
                 raw_image = np.flip(raw_image, axis=0)
+            raw_image = raw_image[:, ::z_step, :, :]
 
             # Correct for known camera gain and offset
             raw_image = (raw_image.astype(np.float32) - offset) * e_per_ADU

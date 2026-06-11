@@ -131,7 +131,10 @@ def decode_tiles_worker(
         decode_mode=decode_mode,
     )
 
-    local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
+    local_decoder._load_global_normalization_vectors(
+        gpu_id=gpu_id,
+        lowpass_sigma=lowpass_sigma,
+    )
     local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
     local_decoder._optimize_normalization_weights = False
 
@@ -235,7 +238,10 @@ def _optimize_norm_worker(
         decode_mode=decode_mode,
     )
 
-    local_decoder._load_global_normalization_vectors(gpu_id=gpu_id)
+    local_decoder._load_global_normalization_vectors(
+        gpu_id=gpu_id,
+        lowpass_sigma=lowpass_sigma,
+    )
     local_decoder._optimize_normalization_weights = True
     local_decoder._temp_dir = temp_dir
 
@@ -492,6 +498,7 @@ class PixelDecoder:
         gpu_id: int = 0,
         recalculate: bool = False,
         tile_indices: Sequence[int] | None = None,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """Load or calculate global normalization and background vectors.
 
@@ -504,6 +511,9 @@ class PixelDecoder:
             reusing cached datastore values.
         tile_indices : Sequence[int], optional
             Explicit tile indices to use when recalculating.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma applied to ``data * prediction`` before estimating
+            the global background and foreground normalization vectors.
         """
         with cp.cuda.Device(gpu_id):
             normalization_vector, background_vector = (
@@ -523,6 +533,7 @@ class PixelDecoder:
                 self._global_normalization_vectors(
                     gpu_id=gpu_id,
                     tile_indices=tile_indices,
+                    lowpass_sigma=lowpass_sigma,
                 )
 
             cp.cuda.Stream.null.synchronize()
@@ -536,6 +547,7 @@ class PixelDecoder:
         hot_pixel_threshold: int = 50000,
         gpu_id: int = 0,
         tile_indices: Sequence[int] | None = None,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """Calculate global normalization and background vectors.
 
@@ -552,12 +564,13 @@ class PixelDecoder:
         tile_indices : Sequence[int], optional
             Explicit tile indices to use. If omitted, up to five random tiles
             are sampled from the datastore.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma applied to ``data * prediction`` before estimating
+            background and foreground normalization vectors.
         """
 
         with cp.cuda.Device(gpu_id):
-            effective_lowpass_sigma = self._effective_lowpass_sigma(
-                DEFAULT_DECODE_LOWPASS_SIGMA
-            )
+            effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
             if tile_indices is not None:
                 random_tiles = [
                     self._datastore.tile_ids[tile_idx] for tile_idx in tile_indices
@@ -1805,6 +1818,7 @@ class PixelDecoder:
         normalization_method: Literal["iterative", "global", "none"] | None,
         use_normalization: bool | None,
         gpu_id: int = 0,
+        lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
         """
         Select and load the normalization state used by pixel decoding.
@@ -1817,6 +1831,10 @@ class PixelDecoder:
             Function argument.
         gpu_id : int
             Function argument.
+        lowpass_sigma : Sequence[float], default = (3, 1, 1)
+            Lowpass sigma used when global normalization needs to be
+            recalculated, keeping normalization preprocessing aligned with
+            decoding preprocessing.
 
         Returns
         -------
@@ -1831,7 +1849,10 @@ class PixelDecoder:
             self._load_iterative_normalization_vectors(gpu_id=gpu_id)
         elif normalization_method == "global":
             self._iterative_normalization_loaded = False
-            self._load_global_normalization_vectors(gpu_id=gpu_id)
+            self._load_global_normalization_vectors(
+                gpu_id=gpu_id,
+                lowpass_sigma=lowpass_sigma,
+            )
         elif normalization_method == "none":
             self._iterative_normalization_loaded = False
             self._global_normalization_loaded = False
@@ -3561,6 +3582,7 @@ class PixelDecoder:
                 normalization_method=normalization_method,
                 use_normalization=use_normalization,
                 gpu_id=gpu_id,
+                lowpass_sigma=lowpass_sigma,
             )
 
             self._tile_idx = tile_idx
@@ -3651,6 +3673,7 @@ class PixelDecoder:
             gpu_id=0,
             recalculate=True,
             tile_indices=tile_indices,
+            lowpass_sigma=lowpass_sigma,
         )
         if self._decode_run_key is None:
             temp_dir = Path(tempfile.mkdtemp())
@@ -3724,7 +3747,10 @@ class PixelDecoder:
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
                     )
-                self._load_global_normalization_vectors(gpu_id=0)
+                self._load_global_normalization_vectors(
+                    gpu_id=0,
+                    lowpass_sigma=lowpass_sigma,
+                )
                 self._iterative_normalization_vectors(gpu_id=0)
                 del self._global_background_vector, self._global_normalization_vector
                 gc.collect()

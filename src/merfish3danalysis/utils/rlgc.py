@@ -92,7 +92,12 @@ def next_gpu_fft_size(x: int) -> int:
         n += 1
 
 
-def _axis_linear_fft_padding(length: int, psf_support: int) -> tuple[int, int]:
+def _axis_linear_fft_padding(
+    length: int,
+    psf_support: int,
+    *,
+    halo_multiplier: int = 1,
+) -> tuple[int, int]:
     """
     Calculate symmetric linear-convolution padding for one axis.
 
@@ -102,6 +107,9 @@ def _axis_linear_fft_padding(length: int, psf_support: int) -> tuple[int, int]:
         Input image length along the axis.
     psf_support : int
         PSF support length along the same axis.
+    halo_multiplier : int, default=1
+        Multiplier applied to the PSF half-width when constructing the
+        reflected boundary halo.
 
     Returns
     -------
@@ -110,7 +118,7 @@ def _axis_linear_fft_padding(length: int, psf_support: int) -> tuple[int, int]:
         and any extra samples needed to reach an FFT-friendly length.
     """
 
-    halo = max(int(psf_support) // 2, 0)
+    halo = max((int(psf_support) // 2) * int(halo_multiplier), 0)
     length_with_halo = length + 2 * halo
     new_length = next_gpu_fft_size(length_with_halo)
     fft_extra = new_length - length_with_halo
@@ -188,6 +196,79 @@ def remove_padding_zyx(
         stop = padded_image.shape[axis] - pad_after if pad_after > 0 else None
         slices.append(slice(start, stop))
     return padded_image[tuple(slices)]
+
+
+def _symmetric_padded_axis_indices(
+    length: int,
+    pad_before: int,
+    pad_after: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return source indices for a symmetric extension of one padded axis.
+
+    Parameters
+    ----------
+    length : int
+        Full padded axis length.
+    pad_before : int
+        Number of samples padded before the observed region.
+    pad_after : int
+        Number of samples padded after the observed region.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        Source indices for the left and right padded regions.
+    """
+
+    observed = np.arange(pad_before, length - pad_after, dtype=np.int64)
+    padded = np.pad(observed, (pad_before, pad_after), mode="symmetric")
+    return padded[:pad_before], padded[length - pad_after :]
+
+
+def enforce_symmetric_boundary(
+    image: cp.ndarray,
+    pad_width: tuple[tuple[int, int], tuple[int, int], tuple[int, int]],
+) -> None:
+    """
+    Constrain padded samples to be a symmetric extension of observed samples.
+
+    Parameters
+    ----------
+    image : cupy.ndarray
+        Padded 3D image in Z, Y, X order. The array is modified in place.
+    pad_width : tuple[tuple[int, int], tuple[int, int], tuple[int, int]]
+        Per-axis padding widths returned by :func:`pad_for_linear_fft`.
+
+    Returns
+    -------
+    None
+    """
+
+    for axis, (pad_before, pad_after) in enumerate(pad_width):
+        if pad_before == 0 and pad_after == 0:
+            continue
+        left_indices, right_indices = _symmetric_padded_axis_indices(
+            image.shape[axis],
+            pad_before,
+            pad_after,
+        )
+        if pad_before > 0:
+            destination = [slice(None)] * image.ndim
+            destination[axis] = slice(0, pad_before)
+            image[tuple(destination)] = cp.take(
+                image,
+                cp.asarray(left_indices),
+                axis=axis,
+            )
+        if pad_after > 0:
+            destination = [slice(None)] * image.ndim
+            destination[axis] = slice(image.shape[axis] - pad_after, None)
+            image[tuple(destination)] = cp.take(
+                image,
+                cp.asarray(right_indices),
+                axis=axis,
+            )
 
 
 def pad_psf(
@@ -269,7 +350,37 @@ def fft_conv(
     return cp.fft.irfftn(fft_buf, s=shape).astype(cp.float32, copy=False)
 
 
-def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
+def _observed_region_mask(
+    shape: tuple[int, int, int],
+    pad_width: tuple[tuple[int, int], tuple[int, int], tuple[int, int]],
+) -> cp.ndarray:
+    """
+    Build a mask that is one in the original image and zero in padding.
+
+    Parameters
+    ----------
+    shape : tuple[int, int, int]
+        Full padded image shape.
+    pad_width : tuple[tuple[int, int], tuple[int, int], tuple[int, int]]
+        Per-axis padding widths returned by :func:`pad_for_linear_fft`.
+
+    Returns
+    -------
+    cupy.ndarray
+        Float32 mask with observed voxels equal to one.
+    """
+
+    mask = cp.zeros(shape, dtype=cp.float32)
+    slices = []
+    for axis, (pad_before, pad_after) in enumerate(pad_width):
+        start = pad_before
+        stop = shape[axis] - pad_after if pad_after > 0 else None
+        slices.append(slice(start, stop))
+    mask[tuple(slices)] = 1
+    return mask
+
+
+def kl_div(p: cp.ndarray, q: cp.ndarray, mask: cp.ndarray | None = None) -> float:
     """
     Compute Kullback-Leibler divergence between two distributions.
 
@@ -279,20 +390,27 @@ def kl_div(p: cp.ndarray, q: cp.ndarray) -> float:
         First distribution (nonnegative).
     q : cupy.ndarray
         Second distribution (nonnegative).
+    mask : cupy.ndarray or None, default=None
+        Optional mask selecting the observed image region. Values outside the
+        mask are excluded before normalization.
 
     Returns
     -------
     float
         Sum over all elements of ``p * (log(p) - log(q))``, with NaNs set to 0.
     """
-    p = p + 1e-4
-    q = q + 1e-4
+    eps = cp.float32(1e-4)
+    if mask is not None:
+        p = (p + eps) * mask
+        q = (q + eps) * mask
+    else:
+        p = p + eps
+        q = q + eps
     p = p / cp.sum(p)
     q = q / cp.sum(q)
     kldiv = p * (cp.log(p) - cp.log(q))
     kldiv[cp.isnan(kldiv)] = 0
-    kldiv = cp.sum(kldiv)
-    return kldiv
+    return float(cp.sum(kldiv))
 
 
 def _child_log_prefix(base_prefix: str, suffix: str) -> str:
@@ -471,15 +589,22 @@ def rlgc(
         otfotfT = otf * otfT
         del psf_gpu
 
+        observed_mask = _observed_region_mask(image_gpu.shape, pad_width)
+        observed_image = image_gpu * observed_mask
+        update_norm = fft_conv(observed_mask, otfT, image_gpu.shape)
+        update_norm = cp.maximum(update_norm, cp.float32(1e-6))
+
         num_z = image_gpu.shape[0]
         num_y = image_gpu.shape[1]
         num_x = image_gpu.shape[2]
-        num_pixels = num_z * num_y * num_x
+        num_pixels = int(cp.sum(observed_mask))
         num_iters = 0
         prev_kld1 = np.inf
         prev_kld2 = np.inf
 
-        recon = cp.mean(image_gpu) * cp.ones((num_z, num_y, num_x), dtype=cp.float32)
+        recon = cp.mean(observed_image[observed_mask > 0]) * cp.ones(
+            (num_z, num_y, num_x), dtype=cp.float32
+        )
         previous_recon = recon
 
         if logging_enabled:
@@ -496,14 +621,16 @@ def rlgc(
         while True:
             iter_start_time = timeit.default_timer() if logging_enabled else None
 
-            split1 = rng.binomial(image_gpu.astype("int64"), p=0.5).astype(cp.float32)
-            split2 = image_gpu - split1
+            split1 = rng.binomial(observed_image.astype("int64"), p=0.5).astype(
+                cp.float32
+            )
+            split2 = observed_image - split1
 
             Hu = fft_conv(recon, otf, image_gpu.shape)
 
-            kldim = kl_div(Hu, image_gpu)
-            kld1 = kl_div(Hu, split1)
-            kld2 = kl_div(Hu, split2)
+            kldim = kl_div(Hu, observed_image, observed_mask)
+            kld1 = kl_div(Hu, split1, observed_mask)
+            kld2 = kl_div(Hu, split2, observed_mask)
 
             if safe_mode:
                 should_restore = (kld1 > prev_kld1) or (kld2 > prev_kld2)
@@ -530,16 +657,18 @@ def rlgc(
             prev_kld2 = kld2
 
             HTratio1 = fft_conv(
-                cp.divide(split1, 0.5 * (Hu + 1e-12), dtype=cp.float32),
+                observed_mask
+                * cp.divide(split1, 0.5 * (Hu + 1e-12), dtype=cp.float32),
                 otfT,
                 image_gpu.shape,
-            )
+            ) / update_norm
             del split1
             HTratio2 = fft_conv(
-                cp.divide(split2, 0.5 * (Hu + 1e-12), dtype=cp.float32),
+                observed_mask
+                * cp.divide(split2, 0.5 * (Hu + 1e-12), dtype=cp.float32),
                 otfT,
                 image_gpu.shape,
-            )
+            ) / update_norm
             del split2
             HTratio = HTratio1 + HTratio2
             del Hu
@@ -550,15 +679,19 @@ def rlgc(
 
             previous_recon = recon
             recon = filter_update(recon, HTratio, consensus_map)
+            enforce_symmetric_boundary(recon, pad_width)
 
-            num_updated = num_pixels - cp.sum(consensus_map < 0)
-            recon_max = cp.maximum(cp.max(recon), cp.float32(1e-12))
+            num_updated = cp.sum((consensus_map >= 0) * observed_mask)
+            observed_recon = recon * observed_mask
+            observed_previous = previous_recon * observed_mask
+            recon_max = cp.maximum(cp.max(observed_recon), cp.float32(1e-12))
             updated_fraction = float(num_updated) / float(num_pixels)
             min_HTratio = cp.min(HTratio)
             max_HTratio = cp.max(HTratio)
             max_relative_delta = float(
-                cp.max(cp.abs(recon - previous_recon) / recon_max)
+                cp.max(cp.abs(observed_recon - observed_previous) / recon_max)
             )
+            del observed_recon, observed_previous
             del HTratio
 
             num_iters += 1
