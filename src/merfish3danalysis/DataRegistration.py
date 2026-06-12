@@ -551,7 +551,11 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if reg_on_disk and feature_predictor_on_disk and not dr._overwrite_registered:
             continue
 
-        if (not reg_on_disk) or (not feature_predictor_on_disk) or dr._overwrite_registered:
+        if (
+            (not reg_on_disk)
+            or (not feature_predictor_on_disk)
+            or dr._overwrite_registered
+        ):
             # load data
             corrected_image = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id, bit=bit_id, return_future=False
@@ -606,8 +610,10 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             gc.collect()
 
             if r_idx > 0:
-                local_transform_zyx_um = dr._datastore.load_local_round_transform_zyx_um(
-                    tile=dr._tile_id, round=dr._round_ids[r_idx]
+                local_transform_zyx_um = (
+                    dr._datastore.load_local_round_transform_zyx_um(
+                        tile=dr._tile_id, round=dr._round_ids[r_idx]
+                    )
                 )
                 if local_transform_zyx_um is None:
                     raise RuntimeError(
@@ -1331,7 +1337,9 @@ class DataRegistration:
         for tile_idx, (msim, transform) in enumerate(
             zip(msims, global_transforms, strict=False)
         ):
-            affine = np.asarray(transform.data if hasattr(transform, "data") else transform)
+            affine = np.asarray(
+                transform.data if hasattr(transform, "data") else transform
+            )
             affine = np.round(np.squeeze(affine), 2)
             sim = msi_utils.get_sim_from_msim(msim)
             origin = si_utils.get_origin_from_sim(sim, asarray=True)
@@ -1397,14 +1405,18 @@ class DataRegistration:
         if create_max_proj_tiff:
             loaded = self._datastore.load_global_fidicual_image(return_future=False)
             if loaded is None:
-                raise RuntimeError("Fused fiducial image was not readable after fusion.")
+                raise RuntimeError(
+                    "Fused fiducial image was not readable after fusion."
+                )
             fiducial_fused, _, _, spacing_zyx_um = loaded
             fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
             del fiducial_fused
 
-            cellpose_path = self._datastore._datastore_path / Path(
-                "segmentation"
-            ) / Path("cellpose")
+            cellpose_path = (
+                self._datastore._datastore_path
+                / Path("segmentation")
+                / Path("cellpose")
+            )
             cellpose_path.mkdir(exist_ok=True)
             filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
             with TiffWriter(filename_path, bigtiff=True) as tif:
@@ -1520,7 +1532,9 @@ class DataRegistration:
             try:
                 status, round_id, payload, crop_yx = result_queue.get(timeout=5)
             except queue.Empty:
-                if any(process.exitcode not in (None, 0) for process in decon_processes):
+                if any(
+                    process.exitcode not in (None, 0) for process in decon_processes
+                ):
                     break
                 if all(process.exitcode is not None for process in decon_processes):
                     break

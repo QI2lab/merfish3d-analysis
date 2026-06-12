@@ -142,8 +142,12 @@ def msim_from_array(
         image, spacing_zyx_um=spacing_zyx_um, origin_zyx_um=origin_zyx_um
     )
     msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
-    transform = np.eye(4, dtype=np.float32) if transform_zyx_um is None else transform_zyx_um
-    msi_utils.set_affine_transform(msim, np.asarray(transform)[None, ...], transform_key)
+    transform = (
+        np.eye(4, dtype=np.float32) if transform_zyx_um is None else transform_zyx_um
+    )
+    msi_utils.set_affine_transform(
+        msim, np.asarray(transform)[None, ...], transform_key
+    )
     return msim
 
 
@@ -233,7 +237,9 @@ def register_pair_to_fixed(
                 "transform": "affine",
             },
         )
-    _diag(f"register_pair_to_fixed_done elapsed_s={timeit.default_timer() - start_time:.2f}")
+    _diag(
+        f"register_pair_to_fixed_done elapsed_s={timeit.default_timer() - start_time:.2f}"
+    )
     return np.asarray(transforms[1].values[0], dtype=np.float32)
 
 
@@ -307,7 +313,9 @@ def warp_array_to_reference(
     data = warped.data
     if hasattr(data, "compute"):
         data = data.compute()
-    _diag(f"warp_array_to_reference_done elapsed_s={timeit.default_timer() - start_time:.2f}")
+    _diag(
+        f"warp_array_to_reference_done elapsed_s={timeit.default_timer() - start_time:.2f}"
+    )
     return np.asarray(data)
 
 
@@ -434,6 +442,8 @@ def get_gpu_fusion_backend_kwargs(fuse_func: Callable) -> dict[str, Any]:
     try:
         import cupy  # noqa: F401
     except ImportError as exc:
-        raise RuntimeError("GPU fusion requires a CUDA-compatible CuPy package.") from exc
+        raise RuntimeError(
+            "GPU fusion requires a CUDA-compatible CuPy package."
+        ) from exc
 
     return {"backend": "cupy", "output_on_backend": False}
