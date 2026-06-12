@@ -582,6 +582,10 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             )
 
         if (not feature_predictor_on_disk) or dr._overwrite_registered:
+            clear_rlgc_caches(clear_memory_pool=True)
+            torch.cuda.empty_cache()
+            gc.collect()
+
             # UFISH
             ufish = UFish(device=f"cuda:{gpu_id}")
             _load_ufish_model(ufish, dr._ufish_model)
