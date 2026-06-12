@@ -57,11 +57,17 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
         cp.fft.config.get_plan_cache().clear()
     except Exception:
         pass
+    try:
+        import cupyx
+
+        cupyx.scipy.fft.clear_plan_cache()
+    except Exception:
+        pass
     if clear_memory_pool:
+        gc.collect()
         cp.cuda.Stream.null.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
-        gc.collect()
 
 
 def next_gpu_fft_size(x: int) -> int:
