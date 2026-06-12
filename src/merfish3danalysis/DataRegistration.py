@@ -161,6 +161,7 @@ def _run_chunked_rlgc_remembering_crop(
     image: np.ndarray,
     psf: np.ndarray,
     gpu_id: int,
+    release_memory: bool = False,
 ) -> np.ndarray:
     """
     Run RLGC and remember the lateral chunk size that succeeds in this worker.
@@ -176,6 +177,8 @@ def _run_chunked_rlgc_remembering_crop(
     psf : np.ndarray
         Function argument.
     gpu_id : int
+        Function argument.
+    release_memory : bool
         Function argument.
 
     Returns
@@ -213,7 +216,7 @@ def _run_chunked_rlgc_remembering_crop(
         gpu_id=gpu_id,
         crop_yx=dr._crop_yx_decon,
         crop_z=None,
-        release_memory=False,
+        release_memory=release_memory,
         on_successful_crop_yx=_remember_successful_crop,
     )
 
@@ -521,6 +524,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     image=corrected_image,
                     psf=_resolve_psf(dr._psfs, psf_idx),
                     gpu_id=gpu_id,
+                    release_memory=True,
                 )
                 decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
             else:
