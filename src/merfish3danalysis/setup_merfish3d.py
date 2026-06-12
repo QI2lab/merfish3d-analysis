@@ -35,7 +35,7 @@ BASE_PIP_DEPS = [
     "roifile",
     "imbalanced-learn",
     "scikit-learn",
-    "yaozarrs[write-tensorstore,io]>=0.3",
+    "yaozarrs[write-tensorstore,io] @ git+https://github.com/dpshepherd/yaozarrs.git@fix-v3-extra-attributes-location",
     "matplotlib",
     "xarray",
 ]
@@ -82,7 +82,7 @@ MVSTITCHER_ENV_PIP_IMPORTS = [
     "shapely",
     "fastparquet",
     "joblib",
-    "yaozarrs[write-tensorstore,io]>=0.3",
+    "yaozarrs[write-tensorstore,io] @ git+https://github.com/dpshepherd/yaozarrs.git@fix-v3-extra-attributes-location",
 ]
 
 

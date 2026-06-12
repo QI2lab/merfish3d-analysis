@@ -1605,56 +1605,9 @@ class qi2labDataStore:
         return path.with_name(path.name + ".ome.zarr")
 
     @staticmethod
-    def _write_extra_attributes(
-        image_path: Path | str,
-        extra_attributes: Mapping[str, Any],
-        merge: bool = True,
-    ) -> None:
-        """
-        Persist extra attributes directly into zarr.json.
-
-        Parameters
-        ----------
-        image_path : Path | str
-            Function argument.
-        extra_attributes : Mapping[str, Any]
-            Function argument.
-        merge : bool
-            Function argument.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
-
-        if not extra_attributes:
-            return
-
-        image_root = qi2labDataStore._image_store_path(image_path)
-        zarr_json_path = image_root / Path("zarr.json")
-        data: dict[str, Any]
-        if zarr_json_path.exists():
-            data = qi2labDataStore._load_from_json(zarr_json_path)
-        else:
-            data = {}
-
-        if merge:
-            merged = {}
-            current = data.get("extra_attributes")
-            if isinstance(current, dict):
-                merged.update(current)
-            merged.update(dict(extra_attributes))
-            data["extra_attributes"] = merged
-        else:
-            data["extra_attributes"] = dict(extra_attributes)
-
-        qi2labDataStore._save_to_json(data, zarr_json_path)
-
-    @staticmethod
     def _read_extra_attributes(image_path: Path | str) -> dict[str, Any]:
         """
-        Load extra attributes from zarr.json.
+        Load extra attributes through yaozarrs.
 
         Parameters
         ----------
@@ -1668,12 +1621,10 @@ class qi2labDataStore:
         """
 
         image_root = qi2labDataStore._image_store_path(image_path)
-        zarr_json_path = image_root / Path("zarr.json")
-        data = qi2labDataStore._load_from_json(zarr_json_path)
-        maybe_attrs = data.get("extra_attributes")
-        if isinstance(maybe_attrs, dict):
-            return maybe_attrs
-        return {}
+        open_group, _, _ = qi2labDataStore._import_yaozarrs()
+        attrs = dict(open_group(str(image_root)).attrs)
+        attrs.pop("ome", None)
+        return attrs
 
     @staticmethod
     def _to_json_compatible(value: Any) -> Any:
@@ -1758,9 +1709,7 @@ class qi2labDataStore:
         """
 
         entity_root = Path(entity_root_path)
-        merged = self._load_from_json(self._entity_attributes_path(entity_root))
-        if not isinstance(merged, dict):
-            merged = {}
+        merged: dict[str, Any] = {}
 
         default_images = (
             "corrected_data",
@@ -1777,6 +1726,10 @@ class qi2labDataStore:
             if isinstance(extra_attrs, dict):
                 merged.update(extra_attrs)
 
+        sidecar_attrs = self._load_from_json(self._entity_attributes_path(entity_root))
+        if isinstance(sidecar_attrs, dict):
+            merged.update(sidecar_attrs)
+
         return merged
 
     def _save_entity_attributes(
@@ -1787,7 +1740,7 @@ class qi2labDataStore:
         image_names: Sequence[str] | None = None,
     ) -> None:
         """
-        Save metadata to image extra_attributes and entity sidecar.
+        Save metadata to the entity sidecar.
 
         Parameters
         ----------
@@ -1809,38 +1762,11 @@ class qi2labDataStore:
         if not updates:
             return
 
+        del target_image_name, image_names
         entity_root = Path(entity_root_path)
         payload = {
             str(k): self._to_json_compatible(v) for k, v in dict(updates).items()
         }
-
-        candidate_names: list[str] = []
-        if target_image_name is not None:
-            candidate_names.append(target_image_name)
-        if image_names is not None:
-            candidate_names.extend(
-                [name for name in image_names if name not in candidate_names]
-            )
-        candidate_names.extend(
-            [
-                "corrected_data",
-                "registered_decon_data",
-                f"registered_{self.feature_predictor_folder_name}_data",
-                "opticalflow_xform_px",
-            ]
-        )
-
-        target_image_path: Path | None = None
-        for image_name in candidate_names:
-            image_path = self._image_store_path(entity_root / Path(image_name))
-            if image_path.exists():
-                target_image_path = image_path
-                break
-
-        if target_image_path is not None:
-            self._write_extra_attributes(
-                image_path=target_image_path, extra_attributes=payload, merge=True
-            )
 
         sidecar_path = self._entity_attributes_path(entity_root)
         sidecar_attrs = self._load_from_json(sidecar_path)
@@ -2209,12 +2135,6 @@ class qi2labDataStore:
                 chunks=chunk_spec,
                 compression=compression,
             )
-            if extra_attributes:
-                qi2labDataStore._write_extra_attributes(
-                    image_path=image_path,
-                    extra_attributes=extra_attributes,
-                    merge=True,
-                )
         except (OSError, TimeoutError, ValueError) as exc:
             print(exc)
             print("Error writing OME-Zarr array.")
