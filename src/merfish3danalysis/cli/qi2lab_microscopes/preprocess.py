@@ -29,6 +29,7 @@ def local_register_data(
     overwrite: bool = True,
     crop_yx_decon: int = 2048,
     ufish_model: str | None = None,
+    global_registration: bool = True,
     zstride_level: int = 0,
     verbose: int = 1,
 ) -> None:
@@ -58,6 +59,9 @@ def local_register_data(
         package default model, simfish. Known aliases include simfish/smfish,
         merfish, seqfish, deepspot, and exseq. A local .onnx/.pth path or
         HuggingFace weights filename may also be used.
+    global_registration: bool, default = True
+        perform global tile registration and fused fiducial OME-Zarr creation
+        after local preprocessing.
     zstride_level: int, default = 0
         look for a skip z dataset.
     verbose : int, default = 1
@@ -85,6 +89,7 @@ def local_register_data(
         num_gpus=num_gpus,
         crop_yx_decon=crop_yx_decon,
         ufish_model=ufish_model,
+        global_registration=global_registration,
         verbose=verbose,
     )
 

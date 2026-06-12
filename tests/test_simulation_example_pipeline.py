@@ -410,9 +410,6 @@ def simulation_api() -> dict[str, Any]:
         from merfish3danalysis.cli.statphysbio_simulation.pixeldecode import (
             decode_pixels,
         )
-        from merfish3danalysis.cli.statphysbio_simulation.register_and_deconvolve import (
-            global_register_data,
-        )
         from merfish3danalysis.DataRegistration import DataRegistration
         from merfish3danalysis.qi2labDataStore import qi2labDataStore
     except Exception as exc:
@@ -424,7 +421,6 @@ def simulation_api() -> dict[str, Any]:
         "convert_simulation": convert_simulation,
         "convert_data": convert_data,
         "decode_pixels": decode_pixels,
-        "global_register_data": global_register_data,
         "qi2labDataStore": qi2labDataStore,
     }
 
@@ -653,8 +649,7 @@ def _run_simulation_preprocess(
         verbose=1,
     )
     registration_factory.register_all_tiles()
-
-    simulation_api["global_register_data"](acquisition_root, create_max_proj_tiff=False)
+    registration_factory.global_register(create_max_proj_tiff=False)
 
     # Mark local registration complete only after global registration succeeds so
     # follow-on datastore opens do not validate a half-updated local state.
