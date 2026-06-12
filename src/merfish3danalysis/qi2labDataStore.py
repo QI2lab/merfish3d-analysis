@@ -1627,6 +1627,67 @@ class qi2labDataStore:
         return attrs
 
     @staticmethod
+    def _write_extra_attributes(
+        image_path: Path | str,
+        extra_attributes: Mapping[str, Any],
+        merge: bool = True,
+    ) -> None:
+        """
+        Write image-level extra attributes for externally-created OME-Zarr stores.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Image group path. Both the directory path and the corresponding
+            OME-Zarr store path are accepted.
+        extra_attributes : Mapping[str, Any]
+            Attribute updates to write at the image root.
+        merge : bool, default=True
+            If True, merge updates into existing attributes. If False, replace
+            the existing image-level attributes with ``extra_attributes``.
+
+        Returns
+        -------
+        None
+            Attributes are written to ``zarr.json`` for Zarr v3 stores or to
+            ``.zattrs`` for Zarr v2 stores.
+        """
+
+        image_root = qi2labDataStore._image_store_path(image_path)
+        payload = {
+            str(k): qi2labDataStore._to_json_compatible(v)
+            for k, v in dict(extra_attributes).items()
+        }
+
+        zarr_json_path = image_root / Path("zarr.json")
+        if zarr_json_path.exists():
+            with zarr_json_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            if merge:
+                attributes = metadata.get("attributes", {})
+                if not isinstance(attributes, dict):
+                    attributes = {}
+                attributes.update(payload)
+                metadata["attributes"] = attributes
+            else:
+                metadata["attributes"] = payload
+            with zarr_json_path.open("w", encoding="utf-8") as handle:
+                json.dump(metadata, handle, indent=2)
+            return
+
+        zattrs_path = image_root / Path(".zattrs")
+        if zattrs_path.exists() and merge:
+            with zattrs_path.open("r", encoding="utf-8") as handle:
+                attributes = json.load(handle)
+            if not isinstance(attributes, dict):
+                attributes = {}
+        else:
+            attributes = {}
+        attributes.update(payload)
+        with zattrs_path.open("w", encoding="utf-8") as handle:
+            json.dump(attributes, handle, indent=2)
+
+    @staticmethod
     def _to_json_compatible(value: Any) -> Any:
         """
         Convert numpy/scalar containers to JSON-compatible values.
@@ -2423,12 +2484,12 @@ class qi2labDataStore:
                 if round_id != self._round_ids[0]:
                     attributes = self._load_entity_attributes(entity_root)
 
-                    keys_to_check = ["rigid_xform_xyz_px"]
+                    keys_to_check = ["local_round_transform_zyx_um"]
 
                     for key in keys_to_check:
                         if key not in attributes.keys():
                             raise KeyError(
-                                f"{round_id, tile_id} Rigid registration missing"
+                                f"{round_id, tile_id} local round transform missing"
                             )
 
                     current_local_zarr_path = str(
@@ -2553,7 +2614,7 @@ class qi2labDataStore:
         # check and validate fused
         if self._datastore_state["Fused"] and validate:
             fused_image_path = self._fused_root_path / Path(
-                f"fused_{self.fiducial_folder_name}_iso_zyx"
+                f"fused_{self.fiducial_folder_name}_zyx"
             )
             attributes = self._read_extra_attributes(fused_image_path)
 
@@ -3687,6 +3748,137 @@ class qi2labDataStore:
             print("Error writing rigid transform attribute.")
             return None
 
+    def load_local_round_transform_zyx_um(
+        self,
+        tile: int | str,
+        round: int | str,
+    ) -> ArrayLike | None:
+        """
+        Load the local fiducial round transform for one tile.
+
+        Parameters
+        ----------
+        tile : int | str
+            Tile index or tile identifier.
+        round : int | str
+            Fiducial round index or round identifier.
+
+        Returns
+        -------
+        ArrayLike or None
+            Homogeneous 4x4 affine transform in physical Z, Y, X microns. The
+            transform maps first-round reference coordinates to coordinates in
+            the requested moving round. Returns None when the transform is not
+            present.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+        try:
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            attributes = self._load_entity_attributes(entity_root)
+            return np.asarray(
+                attributes["local_round_transform_zyx_um"], dtype=np.float32
+            )
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            print(tile_id, round_id)
+            print("Local round transform mapping back to first round not found.")
+            return None
+
+    def save_local_round_transform_zyx_um(
+        self,
+        transform_zyx_um: ArrayLike,
+        tile: int | str,
+        round: int | str,
+    ) -> None:
+        """
+        Save the local fiducial round transform for one tile.
+
+        Parameters
+        ----------
+        transform_zyx_um : ArrayLike
+            Homogeneous 4x4 affine transform in physical Z, Y, X microns. The
+            transform maps first-round reference coordinates to coordinates in
+            the requested moving round.
+        tile : int | str
+            Tile index or tile identifier.
+        round : int | str
+            Fiducial round index or round identifier.
+
+        Returns
+        -------
+        None
+            The transform is stored in the entity attributes for the requested
+            fiducial tile and round.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+        try:
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates={
+                    "local_round_transform_zyx_um": np.asarray(
+                        transform_zyx_um, dtype=np.float32
+                    ).tolist()
+                },
+                target_image_name="registered_decon_data",
+            )
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+            print("Error writing local round transform attribute.")
+            return None
+
     def load_coord_of_xform_px(
         self,
         tile: int | str | None,
@@ -4526,7 +4718,7 @@ class qi2labDataStore:
         """
 
         current_local_zarr_path = self._fused_root_path / Path(
-            f"fused_{self.fiducial_folder_name}_iso_zyx"
+            f"fused_{self.fiducial_folder_name}_zyx"
         )
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -4577,7 +4769,7 @@ class qi2labDataStore:
         """
 
         if fusion_type == "fiducial":
-            filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
+            filename = f"fused_{self.fiducial_folder_name}_zyx"
         else:
             filename = "fused_all_channels_zyx"
         current_local_zarr_path = self._fused_root_path / Path(filename)

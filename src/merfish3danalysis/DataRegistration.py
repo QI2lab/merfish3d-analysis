@@ -1,8 +1,10 @@
 """
-Register qi2lab 3D MERFISH data using cross-correlation and optical flow.
+Register qi2lab 3D MERFISH data using multiview-stitcher and optical flow.
 
-This module enables the registration of MERFISH datasets by utilizing
-cross-correlation and optical flow techniques.
+This module registers fiducial rounds to the first fiducial round, applies the
+saved physical-space transforms to readout data and U-FISH predictions, and can
+optionally apply the legacy optical-flow deformation field after affine
+registration.
 
 History:
 --------
@@ -39,12 +41,14 @@ warnings.filterwarnings(
 
 import builtins
 import gc
+import queue
+import timeit
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import SimpleITK as sitk
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -59,6 +63,43 @@ UFISH_MODEL_ALIASES = {
 DEFAULT_UFISH_MODEL = "simfish"
 
 
+def _registration_diagnostics_enabled() -> bool:
+    """
+    Return whether registration diagnostics should be printed.
+
+    Returns
+    -------
+    bool
+        True when ``MERFISH3D_REGISTRATION_DIAGNOSTICS`` is set to a truthy
+        value.
+    """
+
+    return os.environ.get("MERFISH3D_REGISTRATION_DIAGNOSTICS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _registration_diag(message: str) -> None:
+    """
+    Print one timestamped registration diagnostic message when enabled.
+
+    Parameters
+    ----------
+    message : str
+        Diagnostic message body.
+
+    Returns
+    -------
+    None
+        The message is printed only when diagnostics are enabled.
+    """
+
+    if _registration_diagnostics_enabled():
+        print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
+
+
 def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
     """
     Resolve a U-FISH model alias or path without requiring U-FISH imports.
@@ -66,12 +107,14 @@ def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
     Parameters
     ----------
     model : str | Path | None
-        Function argument.
+        U-FISH model alias, weights filename, local path, or None to use the
+        default model.
 
     Returns
     -------
     Path | str | None
-        Function result.
+        Existing local path when one is found; otherwise a U-FISH weights file
+        name accepted by ``UFish.load_weights``.
     """
 
     if model is None:
@@ -103,14 +146,15 @@ def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
     Parameters
     ----------
     ufish : Any
-        Function argument.
+        U-FISH instance.
     model : str | Path | None
-        Function argument.
+        U-FISH model alias, weights filename, local path, or None to use the
+        default model.
 
     Returns
     -------
     None
-        Function result.
+        The weights are loaded into ``ufish`` in place.
     """
 
     weights = _resolve_ufish_weights_path(model)
@@ -130,14 +174,15 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     Parameters
     ----------
     psfs : Any
-        Function argument.
+        PSF container. This may be a list of arrays or a stacked numpy-like
+        array whose first axis indexes channels.
     psf_idx : int
-        Function argument.
+        Channel PSF index to return.
 
     Returns
     -------
-    np.ndarray
-        Function result.
+    numpy.ndarray
+        Selected PSF as a float32 array.
     """
 
     if isinstance(psfs, list):
@@ -169,37 +214,38 @@ def _run_chunked_rlgc_remembering_crop(
     Parameters
     ----------
     dr : Any
-        Function argument.
+        DataRegistration-like object containing the current cached
+        ``_crop_yx_decon`` value.
     chunked_rlgc : Any
-        Function argument.
+        RLGC callable. It must accept ``on_successful_crop_yx``.
     image : np.ndarray
-        Function argument.
+        Image to deconvolve.
     psf : np.ndarray
-        Function argument.
+        PSF to use for deconvolution.
     gpu_id : int
-        Function argument.
-    release_memory : bool
-        Function argument.
+        CUDA device index.
+    release_memory : bool, default=False
+        If True, ask RLGC to release its CuPy memory pools before returning.
 
     Returns
     -------
-    np.ndarray
-        Function result.
+    numpy.ndarray
+        Deconvolved image returned by ``chunked_rlgc``.
     """
 
     def _remember_successful_crop(successful_crop_yx: int) -> None:
         """
-        Remember successful crop.
+        Cache the successful RLGC crop size on the registration object.
 
         Parameters
         ----------
         successful_crop_yx : int
-            Function argument.
+            Lateral crop size that completed without GPU memory fallback.
 
         Returns
         -------
         None
-            Function result.
+            The crop size is stored on ``dr``.
         """
         previous_crop_yx = int(dr._crop_yx_decon)
         dr._crop_yx_decon = int(successful_crop_yx)
@@ -221,252 +267,247 @@ def _run_chunked_rlgc_remembering_crop(
     )
 
 
-def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _deconvolve_fiducials_on_gpu(
+    dr,  # noqa: ANN001
+    round_list: list,
+    gpu_id: int,
+    result_queue: Any,
+) -> None:
     """
-    Apply first fiducial on gpu.
-
-    Parameters
-    ----------
-    dr : Any
-        Function argument.
-    gpu_id : int
-        Function argument.
-
-    Returns
-    -------
-    bool
-        Function result.
-    """
-    import cupy as cp
-
-    cp.cuda.Device(gpu_id).use()
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
-
-    raw0 = dr._datastore.load_local_corrected_image(
-        tile=dr._tile_id, round=0, return_future=False
-    )
-
-    ref_image_decon = _run_chunked_rlgc_remembering_crop(
-        dr=dr,
-        chunked_rlgc=chunked_rlgc,
-        image=raw0,
-        psf=_resolve_psf(dr._psfs, 0),
-        gpu_id=0,
-    )
-
-    dr._datastore.save_local_registered_image(
-        ref_image_decon.clip(0, 2**16 - 1).astype(np.uint16),
-        tile=dr._tile_id,
-        deconvolution=True,
-        round=dr._round_ids[0],
-    )
-    if dr._verbose >= 1:
-        print(
-            time_stamp(),
-            f"Finished fiducial tile id: {dr._tile_id}; round id: round001.",
-        )
-
-    del raw0, ref_image_decon
-    gc.collect()
-    clear_rlgc_caches(clear_memory_pool=False)
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    return True
-
-
-def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
-    """
-    Run the “deconvolve→rigid+optical-flow” loop for a subset of fiducial rounds on a single GPU.
-
-    Parameters
-    ----------
-    dr : Registration
-        DataRegistration instance (pickled into this process)
-    round_list : list
-        round_ids to process on this GPU
-    gpu_id : int
-        physical GPU to bind in this process
-    """
-    import torch
-
-    torch.cuda.set_device(gpu_id)
-    import cupy as cp
-
-    cp.cuda.Device(gpu_id).use()
-
-    from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
-    from merfish3danalysis.utils.registration import (
-        apply_transform,
-        compute_rigid_transform,
-        compute_warpfield,
-    )
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
-
-    for _r_idx, round_id in enumerate(round_list):
-        has_reg_decon_data = dr._has_valid_registered_image(round_id=round_id)
-
-        if not (has_reg_decon_data) or dr._overwrite_registered:
-            if dr._decon_fiducial:
-                ref_image_decon_float = dr._datastore.load_local_registered_image(
-                    tile=dr._tile_id, round=dr._round_ids[0], return_future=False
-                ).astype(np.float32)
-            else:
-                ref_image = dr._datastore.load_local_corrected_image(
-                    tile=dr._tile_id, round=dr._round_ids[0], return_future=False
-                )
-                ref_image_decon_float = ref_image.copy().astype(np.float32)
-                del ref_image
-
-            raw = dr._datastore.load_local_corrected_image(
-                tile=dr._tile_id, round=round_id, return_future=False
-            )
-
-            if dr._decon_fiducial:
-                fiducial_image = raw.copy()
-                del raw
-
-                mov_image_decon = _run_chunked_rlgc_remembering_crop(
-                    dr=dr,
-                    chunked_rlgc=chunked_rlgc,
-                    image=fiducial_image,
-                    psf=_resolve_psf(dr._psfs, 0),
-                    gpu_id=gpu_id,
-                )
-                mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(np.uint16)
-                del fiducial_image
-            else:
-                mov_image_decon = raw.copy().astype(np.uint16)
-                del raw
-
-            mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
-            del mov_image_decon
-
-            if dr._datastore.microscope_type == "3D":
-                downsample_factors = [3, 9, 9]
-                if max(downsample_factors) > 1:
-                    ref_image_decon_float_ds = downsample_image_anisotropic(
-                        ref_image_decon_float, downsample_factors
-                    )
-                    mov_image_decon_float_ds = downsample_image_anisotropic(
-                        mov_image_decon_float, downsample_factors
-                    )
-                else:
-                    ref_image_decon_float_ds = ref_image_decon_float.copy()
-                    mov_image_decon_float_ds = mov_image_decon_float.copy()
-            else:
-                downsample_factors = [1, 3, 3]
-                if max(downsample_factors) > 1:
-                    ref_image_decon_float_ds = downsample_image_anisotropic(
-                        ref_image_decon_float, downsample_factors
-                    )
-                    mov_image_decon_float_ds = downsample_image_anisotropic(
-                        mov_image_decon_float, downsample_factors
-                    )
-                else:
-                    ref_image_decon_float_ds = ref_image_decon_float.copy()
-                    mov_image_decon_float_ds = mov_image_decon_float.copy()
-
-            _, lowres_xyz_shift = compute_rigid_transform(
-                ref_image_decon_float_ds,
-                mov_image_decon_float_ds,
-                downsample_factors=downsample_factors,
-                mask=None,
-                projection=None,
-                gpu_id=gpu_id,
-            )
-
-            xyz_shift = np.asarray(lowres_xyz_shift, dtype=np.float32)
-            xyz_shift_float = [round(float(v), 1) for v in lowres_xyz_shift]
-
-            initial_xyz_transform = sitk.TranslationTransform(3, xyz_shift_float)
-            warped_mov_image_decon_float = apply_transform(
-                ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
-            )
-            del mov_image_decon_float
-            gc.collect()
-
-            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(
-                np.float32
-            )
-            del warped_mov_image_decon_float
-            gc.collect()
-
-            dr._datastore.save_local_rigid_xform_xyz_px(
-                rigid_xform_xyz_px=xyz_shift, tile=dr._tile_id, round=round_id
-            )
-
-            if dr._perform_optical_flow:
-                data_registered, warp_field, block_size, block_stride = (
-                    compute_warpfield(
-                        ref_image_decon_float, mov_image_decon_float, gpu_id=gpu_id
-                    )
-                )
-
-                dr._datastore.save_coord_of_xform_px(
-                    of_xform_px=warp_field,
-                    tile=dr._tile_id,
-                    block_size=block_size,
-                    block_stride=block_stride,
-                    round=round_id,
-                )
-
-                data_registered = data_registered.clip(0, 2**16 - 1).astype(np.uint16)
-
-                del warp_field
-                gc.collect()
-            else:
-                data_registered = mov_image_decon_float.clip(0, 2**16 - 1).astype(
-                    np.uint16
-                )
-
-            if dr.save_all_fiducial_registered:
-                dr._datastore.save_local_registered_image(
-                    registered_image=data_registered.astype(np.uint16),
-                    tile=dr._tile_id,
-                    deconvolution=dr._decon_fiducial,
-                    round=round_id,
-                )
-            if dr._verbose >= 1:
-                print(
-                    time_stamp(),
-                    f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
-                )
-
-            del data_registered
-            gc.collect()
-    try:
-        clear_rlgc_caches(clear_memory_pool=False)
-        cp.cuda.Stream.null.synchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
-        try:
-            import cupyx
-
-            cupyx.scipy.fft.clear_plan_cache()
-        except Exception:
-            pass
-        try:
-            cp.fft.config.get_plan_cache().clear()
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-    return True
-
-
-def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
-    """
-    Run the “deconvolve→rigid+optical-flow→feature_predictor” loop for a subset of bits on a single GPU.
+    Deconvolve fiducial rounds on one GPU and send results to the parent process.
 
     Parameters
     ----------
     dr : DataRegistration
-        DataRegistration instance (pickled into this process)
-    bit_list : list
-        bit_ids to process on this GPU
+        Registration object pickled into the worker process. The worker uses its
+        datastore, PSF list, deconvolution settings, and current tile id.
+    round_list : list
+        Fiducial round identifiers assigned to this worker.
     gpu_id : int
-        physical GPU to bind in this process
+        CUDA device index visible within the worker process.
+    result_queue : multiprocessing.Queue
+        Queue used to send ``("result", round_id, image, crop_yx)`` messages
+        back to the parent. On failure the worker sends an ``"error"`` message
+        containing the formatted traceback.
+
+    Returns
+    -------
+    None
+        Results are returned through ``result_queue``.
+    """
+
+    import cupy as cp
+    import torch
+
+    try:
+        torch.cuda.set_device(gpu_id)
+        cp.cuda.Device(gpu_id).use()
+
+        from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+
+        for round_id in round_list:
+            raw = dr._datastore.load_local_corrected_image(
+                tile=dr._tile_id, round=round_id, return_future=False
+            )
+            _registration_diag(
+                "fiducial_decon_start "
+                f"tile={dr._tile_id} round={round_id} "
+                f"raw_shape={tuple(int(v) for v in raw.shape)}"
+            )
+            start_time = timeit.default_timer()
+            if dr._decon_fiducial:
+                decon = _run_chunked_rlgc_remembering_crop(
+                    dr=dr,
+                    chunked_rlgc=chunked_rlgc,
+                    image=raw,
+                    psf=_resolve_psf(dr._psfs, 0),
+                    gpu_id=gpu_id,
+                )
+                decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
+            else:
+                decon = raw.copy().astype(np.uint16)
+            _registration_diag(
+                "fiducial_decon_done "
+                f"tile={dr._tile_id} round={round_id} "
+                f"input_shape={tuple(int(v) for v in raw.shape)} "
+                f"output_shape={tuple(int(v) for v in decon.shape)} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+            )
+            del raw
+            result_queue.put(("result", round_id, decon, int(dr._crop_yx_decon)))
+            del decon
+            gc.collect()
+
+        clear_rlgc_caches(clear_memory_pool=False)
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+        cp.get_default_pinned_memory_pool().free_all_blocks()
+    except Exception:
+        result_queue.put(("error", None, traceback.format_exc(), None))
+        raise
+
+
+def _register_fiducial_transform_worker(
+    dr,  # noqa: ANN001
+    fixed_image: np.ndarray,
+    moving_image: np.ndarray,
+    round_id: str,
+) -> None:
+    """
+    Register one fiducial round to the reference round and save its transform.
+
+    Parameters
+    ----------
+    dr : DataRegistration
+        Registration object pickled into the worker process. The worker uses the
+        datastore to read voxel spacing and save the transform.
+    fixed_image : numpy.ndarray
+        Reference fiducial image in Z, Y, X order. This is normally the first
+        fiducial round for the current tile.
+    moving_image : numpy.ndarray
+        Deconvolved fiducial image to align to ``fixed_image``.
+    round_id : str
+        Fiducial round identifier for ``moving_image``.
+
+    Returns
+    -------
+    None
+        The affine transform is saved to the datastore.
+    """
+
+    try:
+        from merfish3danalysis.utils.multiview_registration import (
+            register_pair_to_fixed,
+        )
+
+        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
+        _registration_diag(
+            "fiducial_elastix_registration_start "
+            f"tile={dr._tile_id} round={round_id} "
+            f"fixed_shape={tuple(int(v) for v in fixed_image.shape)} "
+            f"moving_shape={tuple(int(v) for v in moving_image.shape)} "
+            f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
+        )
+        start_time = timeit.default_timer()
+        local_transform_zyx_um = register_pair_to_fixed(
+            fixed_image.astype(np.float32, copy=False),
+            moving_image.astype(np.float32, copy=False),
+            spacing_zyx_um=spacing_zyx_um,
+        )
+        dr._datastore.save_local_round_transform_zyx_um(
+            transform_zyx_um=local_transform_zyx_um,
+            tile=dr._tile_id,
+            round=round_id,
+        )
+        _registration_diag(
+            "fiducial_elastix_registration_done "
+            f"tile={dr._tile_id} round={round_id} "
+            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        )
+    except Exception:
+        print(traceback.format_exc(), flush=True)
+        raise
+
+
+def _local_registered_fiducial_path(
+    datastore: qi2labDataStore,
+    tile_id: str,
+    round_id: str,
+) -> Path:
+    """
+    Return the registered fiducial OME-Zarr path for one tile and round.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Open datastore containing registered fiducial images.
+    tile_id : str
+        Tile identifier, such as ``tile0000``.
+    round_id : str
+        Round identifier, such as ``round001``.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to ``registered_decon_data.ome.zarr``.
+    """
+
+    return datastore._image_store_path(
+        datastore._fiducial_root_path
+        / Path(tile_id)
+        / Path(round_id)
+        / Path("registered_decon_data")
+    )
+
+
+def _read_registered_fiducial_sim(
+    input_path: Path,
+    scale: dict[str, float],
+    translation: dict[str, float],
+    affine_zyx_px: Any,
+    ngff_utils: Any,
+    si_utils: Any,
+) -> Any:
+    """
+    Read one registered fiducial OME-Zarr as a SpatialImage.
+
+    Parameters
+    ----------
+    input_path : pathlib.Path
+        Local registered fiducial OME-Zarr path.
+    scale : dict[str, float]
+        Physical pixel spacing by spatial dimension.
+    translation : dict[str, float]
+        Stage-derived physical origin by spatial dimension.
+    affine_zyx_px : Any
+        Camera-to-stage affine transform loaded from datastore metadata.
+    ngff_utils : Any
+        ``multiview_stitcher.ngff_utils`` module.
+    si_utils : Any
+        ``multiview_stitcher.spatial_image_utils`` module.
+
+    Returns
+    -------
+    Any
+        SpatialImage with datastore stage metadata attached under
+        ``stage_metadata``.
+    """
+
+    sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
+        input_path,
+        resolution_level=0,
+        transform_key="stage_metadata",
+        use_dask=False,
+    )
+    return si_utils.get_sim_from_array(
+        sim_on_disk.data,
+        dims=sim_on_disk.dims,
+        scale=scale,
+        translation=translation,
+        affine=affine_zyx_px,
+        transform_key="stage_metadata",
+        c_coords=sim_on_disk.coords["c"].values if "c" in sim_on_disk.coords else None,
+        t_coords=sim_on_disk.coords["t"].values if "t" in sim_on_disk.coords else None,
+    )
+
+
+def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
+    """
+    Deconvolve readout bits, run U-FISH, apply saved transforms, and save outputs.
+
+    Parameters
+    ----------
+    dr : DataRegistration
+        DataRegistration instance pickled into this process.
+    bit_list : list
+        Bit identifiers to process on this GPU.
+    gpu_id : int
+        CUDA device index visible within this worker process.
+
+    Returns
+    -------
+    bool
+        True after all assigned bits are processed.
     """
 
     import cupy as cp
@@ -485,9 +526,13 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     ort.set_default_logger_severity(3)
     from ufish.api import UFish
 
-    from merfish3danalysis.utils.registration import apply_transform
+    from merfish3danalysis.utils.multiview_registration import (
+        transform_points_to_reference,
+        warp_array_to_reference,
+    )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
+    spacing_zyx_um = dr._datastore.voxel_size_zyx_um
     for bit_id in bit_list:
         r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
         ex_wl, _em_wl = dr._datastore.load_local_wavelengths_um(
@@ -506,18 +551,21 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if reg_on_disk and feature_predictor_on_disk and not dr._overwrite_registered:
             continue
 
-        if reg_on_disk and not dr._overwrite_registered:
-            data_reg = dr._datastore.load_local_registered_image(
-                tile=dr._tile_id, bit=bit_id, return_future=False
-            ).astype(np.uint16, copy=False)
-        else:
+        if (not reg_on_disk) or (not feature_predictor_on_disk) or dr._overwrite_registered:
             # load data
             corrected_image = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id, bit=bit_id, return_future=False
             )
+            _registration_diag(
+                "bit_start "
+                f"tile={dr._tile_id} bit={bit_id} linked_round={dr._round_ids[r_idx]} "
+                f"raw_shape={tuple(int(v) for v in corrected_image.shape)} "
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
+            )
 
             # deconvolution
             if dr._decon_readout:
+                start_time = timeit.default_timer()
                 decon_image = _run_chunked_rlgc_remembering_crop(
                     dr=dr,
                     chunked_rlgc=chunked_rlgc,
@@ -527,19 +575,73 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     release_memory=True,
                 )
                 decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
+                _registration_diag(
+                    "bit_decon "
+                    f"tile={dr._tile_id} bit={bit_id} "
+                    f"input_shape={tuple(int(v) for v in corrected_image.shape)} "
+                    f"output_shape={tuple(int(v) for v in decon_image.shape)} "
+                    f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                )
             else:
                 decon_image = corrected_image.copy()
 
-            # apply rigid + (optional) optical-flow if r_idx > 0
+            ufish = UFish(device=f"cuda:{gpu_id}")
+            _load_ufish_model(ufish, dr._ufish_model)
+            start_time = timeit.default_timer()
+            feature_predictor_loc, feature_predictor_data = ufish.predict(
+                decon_image, axes="zyx", blend_3d=False, batch_size=1
+            )
+            _registration_diag(
+                "bit_ufish "
+                f"tile={dr._tile_id} bit={bit_id} "
+                f"image_shape={tuple(int(v) for v in decon_image.shape)} "
+                f"spots={len(feature_predictor_loc)} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+            )
+            feature_predictor_loc = feature_predictor_loc.rename(
+                columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
+            )
+            del ufish
+            torch.cuda.empty_cache()
+            gc.collect()
+
             if r_idx > 0:
-                rigid_xyz_px = dr._datastore.load_local_rigid_xform_xyz_px(
+                local_transform_zyx_um = dr._datastore.load_local_round_transform_zyx_um(
                     tile=dr._tile_id, round=dr._round_ids[r_idx]
                 )
-                shift_xyz = [float(v) for v in rigid_xyz_px]
-                xyz_tx = sitk.TranslationTransform(3, np.asarray(shift_xyz))
-
-                # apply rigid
-                decon_image_rigid = apply_transform(decon_image, decon_image, xyz_tx)
+                if local_transform_zyx_um is None:
+                    raise RuntimeError(
+                        f"Missing local round transform for tile={dr._tile_id} "
+                        f"round={dr._round_ids[r_idx]}."
+                    )
+                start_time = timeit.default_timer()
+                data_reg = warp_array_to_reference(
+                    decon_image,
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=decon_image.shape,
+                )
+                feature_predictor_data = warp_array_to_reference(
+                    feature_predictor_data,
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=decon_image.shape,
+                )
+                registered_points_zyx = transform_points_to_reference(
+                    feature_predictor_loc[["z", "y", "x"]].to_numpy(),
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                )
+                feature_predictor_loc[["z", "y", "x"]] = registered_points_zyx
+                _registration_diag(
+                    "bit_transform_and_warp "
+                    f"tile={dr._tile_id} bit={bit_id} "
+                    f"round={dr._round_ids[r_idx]} "
+                    f"image_shape={tuple(int(v) for v in decon_image.shape)} "
+                    f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
+                    f"spots={len(feature_predictor_loc)} "
+                    f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                )
                 del decon_image
 
                 if dr._perform_optical_flow:
@@ -554,7 +656,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     block_size = cp.asarray(block_size, dtype=cp.float32)
                     block_stride = cp.asarray(block_stride, dtype=cp.float32)
                     decon_image_warped_cp = warp_volume(
-                        decon_image_rigid,
+                        data_reg,
                         warp_field,
                         block_stride,
                         cp.array(-block_size / block_stride / 2),
@@ -563,11 +665,16 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     )
                     data_reg = cp.asnumpy(decon_image_warped_cp).astype(np.float32)
                     del decon_image_warped_cp
-                    gc.collect()
-
-                else:
-                    data_reg = decon_image_rigid.copy()
-                    del decon_image_rigid
+                    feature_predictor_data_cp = warp_volume(
+                        feature_predictor_data,
+                        warp_field,
+                        block_stride,
+                        cp.array(-block_size / block_stride / 2),
+                        out=None,
+                        gpu_id=gpu_id,
+                    )
+                    feature_predictor_data = cp.asnumpy(feature_predictor_data_cp)
+                    del feature_predictor_data_cp
                 gc.collect()
             else:
                 data_reg = decon_image.copy()
@@ -585,43 +692,27 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 bit=bit_id,
             )
 
-        if (not feature_predictor_on_disk) or dr._overwrite_registered:
-            # UFISH
-            ufish = UFish(device=f"cuda:{gpu_id}")
-            _load_ufish_model(ufish, dr._ufish_model)
-            feature_predictor_loc, feature_predictor_data = ufish.predict(
-                data_reg, axes="zyx", blend_3d=False, batch_size=1
-            )
-
-            feature_predictor_loc = feature_predictor_loc.rename(
-                columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
-            )
-            del ufish
-            gc.collect()
-
-            torch.cuda.empty_cache()
-            gc.collect()
-
             # feature_predictor ROI sums
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
                 """
-                Sum pixels in roi.
+                Sum image intensities in a fixed-size ROI centered on one spot.
 
                 Parameters
                 ----------
                 row : Any
-                    Function argument.
+                    Feature predictor spot row containing ``z``, ``y``, and
+                    ``x`` coordinates.
                 image : Any
-                    Function argument.
+                    Image from which to sample intensities.
                 roi_dims : Any
-                    Function argument.
+                    ROI shape in Z, Y, X order.
 
                 Returns
                 -------
-                Any
-                    Function result.
+                float
+                    Sum of pixel intensities inside the clipped ROI.
                 """
                 z, y, x = row["z"], row["y"], row["x"]
                 rz, ry, rx = roi_dims
@@ -725,6 +816,7 @@ class DataRegistration:
         num_gpus: int = 1,
         crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
+        global_registration: bool = False,
         verbose: int = 1,
     ) -> None:
         """
@@ -733,25 +825,35 @@ class DataRegistration:
         Parameters
         ----------
         datastore : qi2labDataStore
-            Function argument.
+            Datastore containing corrected images, PSFs, metadata, and output
+            groups.
         decon_fiducial : bool
-            Function argument.
+            If True, deconvolve fiducial images before registration.
         decon_readout : bool
-            Function argument.
+            If True, deconvolve readout images before U-FISH prediction and
+            warping.
         overwrite_registered : bool
-            Function argument.
+            If True, regenerate registered images and feature predictor outputs
+            even when they already exist.
         perform_optical_flow : bool
-            Function argument.
+            If True, apply the legacy optical-flow deformation after affine
+            registration.
         save_all_fiducial_registered : bool
-            Function argument.
+            If True, save warped fiducial image volumes for all rounds. The
+            first fiducial round is always saved.
         num_gpus : int
-            Function argument.
+            Number of GPUs available for deconvolution and readout processing.
         crop_yx_decon : int
-            Function argument.
+            Initial lateral RLGC crop size. GPU memory fallback can reduce this
+            value and cache the successful size.
         ufish_model : str | Path | None
-            Function argument.
+            U-FISH model alias, weights filename, local path, or None for the
+            default model.
+        global_registration : bool, default=False
+            If True, run global tile registration and fused fiducial OME-Zarr
+            generation after local tile preprocessing.
         verbose : int
-            Function argument.
+            Verbosity level for progress messages.
         """
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
@@ -768,6 +870,7 @@ class DataRegistration:
         self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
+        self._global_registration = global_registration
         self._original_print = builtins.print
         self._verbose = verbose
 
@@ -1080,6 +1183,9 @@ class DataRegistration:
             self._generate_registrations()
             self._apply_registration_to_bits()
 
+        if self._global_registration:
+            self.global_register()
+
     def register_one_tile(self, tile_id: int | str) -> None:
         """Helper function to register one tile.
 
@@ -1102,6 +1208,229 @@ class DataRegistration:
 
         self.tile_id = tile_id
         self._apply_registration_to_bits()
+
+    def global_register(
+        self,
+        create_max_proj_tiff: bool = True,
+    ) -> None:
+        """
+        Globally register first-round fiducial tiles and write fused OME-Zarr.
+
+        The method reads the locally registered first fiducial round for every
+        tile, combines stage metadata with multiview-stitcher/ITK-Elastix
+        global registration, saves per-tile global transforms back to the
+        datastore, and fuses the registered views directly into the datastore as
+        OME-Zarr v0.5 using CuPy-backed fusion.
+
+        Parameters
+        ----------
+        create_max_proj_tiff : bool, default=True
+            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            from the full-resolution fused OME-Zarr.
+
+        Returns
+        -------
+        None
+            Global transforms, fused fiducial OME-Zarr, datastore state, and
+            optional max projection are written to the datastore.
+        """
+
+        import shutil
+
+        from dask import config as dask_config
+        from multiview_stitcher import (
+            fusion,
+            misc_utils,
+            msi_utils,
+            ngff_utils,
+            registration,
+        )
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from tifffile import TiffWriter
+
+        from merfish3danalysis.utils.multiview_registration import (
+            get_batch_processing_options,
+            get_gpu_fusion_backend_kwargs,
+            get_scale0_sim_from_fusion_result,
+        )
+
+        if len(self._tile_ids) <= 1:
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=np.eye(4, dtype=np.float32),
+                origin_zyx_um=np.zeros(3, dtype=np.float32),
+                spacing_zyx_um=np.asarray(
+                    self._datastore.voxel_size_zyx_um,
+                    dtype=np.float32,
+                ),
+                tile=self._tile_ids[0],
+            )
+            self._datastore.datastore_state = {"GlobalRegistered": True}
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Skipping global registration because datastore has one tile.",
+                )
+            return
+
+        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        scale = {
+            "z": float(voxel_zyx_um[0]),
+            "y": float(voxel_zyx_um[1]),
+            "x": float(voxel_zyx_um[2]),
+        }
+        reference_round_id = self._round_ids[0]
+        msims = []
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Starting global fiducial registration.")
+
+        for tile_id in self._tile_ids:
+            tile_position_zyx_um, affine_zyx_px = (
+                self._datastore.load_local_stage_position_zyx_um(
+                    tile_id, reference_round_id
+                )
+            )
+            tile_grid_positions = {
+                "z": float(np.round(tile_position_zyx_um[0], 2)),
+                "y": float(np.round(tile_position_zyx_um[1], 2)),
+                "x": float(np.round(tile_position_zyx_um[2], 2)),
+            }
+            input_path = _local_registered_fiducial_path(
+                datastore=self._datastore,
+                tile_id=tile_id,
+                round_id=reference_round_id,
+            )
+            sim = _read_registered_fiducial_sim(
+                input_path=input_path,
+                scale=scale,
+                translation=tile_grid_positions,
+                affine_zyx_px=affine_zyx_px,
+                ngff_utils=ngff_utils,
+                si_utils=si_utils,
+            )
+            msims.append(msi_utils.get_msim_from_sim(sim, scale_factors=[]))
+            gc.collect()
+
+        with dask_config.set(scheduler="single-threaded"):
+            global_transforms = registration.register(
+                msims,
+                reg_channel_index=0,
+                transform_key="stage_metadata",
+                new_transform_key="global_registered",
+                pairwise_reg_func=registration.registration_ITKElastix,
+                pairwise_reg_func_kwargs={
+                    "transform_types": ["translation", "rigid", "affine"],
+                },
+                groupwise_resolution_kwargs={
+                    "reference_view": 0,
+                    "transform": "affine",
+                },
+                n_parallel_pairwise_regs=max(1, min(4, len(msims))),
+            )
+
+        for tile_idx, (msim, transform) in enumerate(
+            zip(msims, global_transforms, strict=False)
+        ):
+            affine = np.asarray(transform.data if hasattr(transform, "data") else transform)
+            affine = np.round(np.squeeze(affine), 2)
+            sim = msi_utils.get_sim_from_msim(msim)
+            origin = si_utils.get_origin_from_sim(sim, asarray=True)
+            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=affine,
+                origin_zyx_um=origin,
+                spacing_zyx_um=spacing,
+                tile=tile_idx,
+            )
+
+        output_zarr_path = self._datastore._image_store_path(
+            self._datastore._fused_root_path
+            / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
+        )
+        if output_zarr_path.exists():
+            shutil.rmtree(output_zarr_path)
+
+        fused_sim = fusion.fuse(
+            images=msims,
+            transform_key="global_registered",
+            output_spacing=scale,
+            output_zarr_url=str(output_zarr_path),
+            zarr_options={
+                "ome_zarr": True,
+                "ngff_version": "0.5",
+                "overwrite": True,
+            },
+            batch_options=get_batch_processing_options(
+                misc_utils=misc_utils,
+                n_batch=20,
+                n_jobs=4,
+            ),
+            **get_gpu_fusion_backend_kwargs(fusion.fuse),
+        )
+
+        fused_sim = get_scale0_sim_from_fusion_result(fused_sim, msi_utils=msi_utils)
+        fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
+        affine = msi_utils.get_transform_from_msim(
+            fused_msim, transform_key="global_registered"
+        ).data.squeeze()
+        fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
+        origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
+        spacing = si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+
+        qi2labDataStore._write_extra_attributes(
+            image_path=output_zarr_path,
+            extra_attributes={
+                "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
+                "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
+                "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+            },
+            merge=True,
+        )
+
+        del fused_msim, fused_sim
+        gc.collect()
+
+        datastore_state = self._datastore.datastore_state
+        datastore_state.update({"GlobalRegistered": True, "Fused": True})
+        self._datastore.datastore_state = datastore_state
+
+        if create_max_proj_tiff:
+            loaded = self._datastore.load_global_fidicual_image(return_future=False)
+            if loaded is None:
+                raise RuntimeError("Fused fiducial image was not readable after fusion.")
+            fiducial_fused, _, _, spacing_zyx_um = loaded
+            fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+            del fiducial_fused
+
+            cellpose_path = self._datastore._datastore_path / Path(
+                "segmentation"
+            ) / Path("cellpose")
+            cellpose_path.mkdir(exist_ok=True)
+            filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
+            with TiffWriter(filename_path, bigtiff=True) as tif:
+                tif.write(
+                    fiducial_max_projection,
+                    resolution=(
+                        1e4 / float(spacing_zyx_um[2]),
+                        1e4 / float(spacing_zyx_um[1]),
+                    ),
+                    compression="zlib",
+                    compressionargs={"level": 8},
+                    predictor=True,
+                    photometric="minisblack",
+                    resolutionunit="CENTIMETER",
+                    metadata={
+                        "axes": "YX",
+                        "SignificantBits": 16,
+                        "PhysicalSizeX": float(spacing_zyx_um[2]),
+                        "PhysicalSizeXUnit": "µm",
+                        "PhysicalSizeY": float(spacing_zyx_um[1]),
+                        "PhysicalSizeYUnit": "µm",
+                    },
+                )
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Finished global fiducial registration.")
 
     def _load_raw_data(self) -> None:
         """
@@ -1136,69 +1465,223 @@ class DataRegistration:
 
     def _generate_registrations(self) -> None:
         """
-        Generate registered, deconvolved fiducial data and save to datastore.
+        Deconvolve fiducials, register rounds, and save local transforms.
+
+        The first fiducial round is the local reference for the tile. All
+        fiducial rounds are first deconvolved in GPU worker processes and
+        returned as NumPy arrays. Moving rounds are then registered to the first
+        round in parallel CPU workers using multiview-stitcher/ITK-Elastix. The
+        resulting physical-space affine transforms are saved to the datastore.
+        If requested, the parent process also warps and saves registered
+        fiducial image volumes.
 
         Returns
         -------
         None
-            Function result.
+            Results are written to the datastore.
         """
-        has_reg_decon_data = self._has_valid_registered_image(
-            round_id=self._round_ids[0]
-        )
-
-        if not (has_reg_decon_data) or self._overwrite_registered:
-            p_first = mp.Process(target=_apply_first_fiducial_on_gpu, args=(self, 0))
-            p_first.start()
-            p_first.join()
-
-        # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(
                 "No GPUs detected. Cannot run _generate_registrations()."
             )
 
-        # 2) Grab all rounds IDs after round 0 and split into `num_gpus` chunks
-        all_rounds = list(self._round_ids[1:])
-        chunk_size = (
-            len(all_rounds) + self._num_gpus - 1
-        ) // self._num_gpus  # ceiling division
+        all_rounds = list(self._round_ids)
+        start_time = timeit.default_timer()
+        result_queue = mp.Queue()
+        num_decon_workers = min(self._num_gpus, len(all_rounds))
+        chunk_size = (len(all_rounds) + num_decon_workers - 1) // num_decon_workers
+        decon_processes = []
 
-        # 3) Launch one process per GPU (only as many as needed)
-        processes = []
-        for gpu_id in range(self._num_gpus):
+        for gpu_id in range(num_decon_workers):
             start = gpu_id * chunk_size
             end = min(start + chunk_size, len(all_rounds))
             if start >= end:
-                break  # no more rounds to assign
+                break
 
             subset = all_rounds[start:end]
-
             old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
             os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
             try:
-                # Inside child, logical device 0 maps to this physical GPU.
-                p = mp.Process(target=_apply_fiducial_on_gpu, args=(self, subset, 0))
-                p.start()
-                processes.append(p)
+                process = mp.Process(
+                    target=_deconvolve_fiducials_on_gpu,
+                    args=(self, subset, 0, result_queue),
+                )
+                process.start()
+                decon_processes.append(process)
             finally:
                 if old_vis is None:
                     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
                 else:
                     os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
 
-        # 4) Wait for all GPU-workers to finish
-        for p in processes:
-            p.join()
+        decon_by_round = {}
+        errors = []
+        while len(decon_by_round) + len(errors) < len(all_rounds):
+            try:
+                status, round_id, payload, crop_yx = result_queue.get(timeout=5)
+            except queue.Empty:
+                if any(process.exitcode not in (None, 0) for process in decon_processes):
+                    break
+                if all(process.exitcode is not None for process in decon_processes):
+                    break
+                continue
+            if status == "result":
+                decon_by_round[round_id] = payload
+                if crop_yx is not None:
+                    self._crop_yx_decon = min(int(self._crop_yx_decon), int(crop_yx))
+            else:
+                errors.append(payload)
+
+        for process in decon_processes:
+            process.join()
+            if process.exitcode not in (0, None):
+                errors.append(
+                    f"Fiducial decon worker pid={process.pid} failed with "
+                    f"exitcode={process.exitcode}."
+                )
+
+        if errors:
+            raise RuntimeError("Fiducial deconvolution failed:\n" + "\n".join(errors))
+
+        missing_rounds = [
+            round_id for round_id in all_rounds if round_id not in decon_by_round
+        ]
+        if missing_rounds:
+            raise RuntimeError(f"Missing deconvolved fiducial rounds: {missing_rounds}")
+
+        _registration_diag(
+            "fiducial_decon_all_done "
+            f"tile={self._tile_id} rounds={len(decon_by_round)} "
+            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        )
+
+        reference_round_id = self._round_ids[0]
+        reference_image = decon_by_round[reference_round_id]
+        self._datastore.save_local_registered_image(
+            reference_image,
+            tile=self._tile_id,
+            deconvolution=self._decon_fiducial,
+            round=reference_round_id,
+        )
+        self._datastore.save_local_round_transform_zyx_um(
+            np.eye(4, dtype=np.float32),
+            tile=self._tile_id,
+            round=reference_round_id,
+        )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                f"Finished fiducial tile id: {self._tile_id}; round id: {reference_round_id}.",
+            )
+
+        registration_start_time = timeit.default_timer()
+        registration_processes = []
+        for round_id in self._round_ids[1:]:
+            process = mp.Process(
+                target=_register_fiducial_transform_worker,
+                args=(self, reference_image, decon_by_round[round_id], round_id),
+            )
+            process.start()
+            registration_processes.append(process)
+
+        registration_errors = []
+        for process in registration_processes:
+            process.join()
+            if process.exitcode != 0:
+                registration_errors.append(
+                    f"Fiducial registration worker pid={process.pid} failed with "
+                    f"exitcode={process.exitcode}."
+                )
+        if registration_errors:
+            raise RuntimeError(
+                "Fiducial registration failed:\n" + "\n".join(registration_errors)
+            )
+
+        _registration_diag(
+            "fiducial_registration_all_done "
+            f"tile={self._tile_id} rounds={len(self._round_ids) - 1} "
+            f"elapsed_s={timeit.default_timer() - registration_start_time:.2f}"
+        )
+
+        if self.save_all_fiducial_registered or self._perform_optical_flow:
+            from merfish3danalysis.utils.multiview_registration import (
+                warp_array_to_reference,
+            )
+
+            spacing_zyx_um = self._datastore.voxel_size_zyx_um
+            for round_id in self._round_ids[1:]:
+                transform_zyx_um = self._datastore.load_local_round_transform_zyx_um(
+                    tile=self._tile_id,
+                    round=round_id,
+                )
+                if transform_zyx_um is None:
+                    raise RuntimeError(
+                        f"Missing local round transform for tile={self._tile_id} "
+                        f"round={round_id}."
+                    )
+                warp_start_time = timeit.default_timer()
+                warped = warp_array_to_reference(
+                    decon_by_round[round_id],
+                    transform_zyx_um=transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=reference_image.shape,
+                )
+                _registration_diag(
+                    "fiducial_parent_warp "
+                    f"tile={self._tile_id} round={round_id} "
+                    f"shape={tuple(int(v) for v in decon_by_round[round_id].shape)} "
+                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
+                )
+
+                if self._perform_optical_flow:
+                    from merfish3danalysis.utils.registration import compute_warpfield
+
+                    data_registered, warp_field, block_size, block_stride = (
+                        compute_warpfield(
+                            reference_image.astype(np.float32, copy=False),
+                            warped.astype(np.float32, copy=False),
+                            gpu_id=0,
+                        )
+                    )
+                    self._datastore.save_coord_of_xform_px(
+                        of_xform_px=warp_field,
+                        tile=self._tile_id,
+                        block_size=block_size,
+                        block_stride=block_stride,
+                        round=round_id,
+                    )
+                    registered_image = data_registered.clip(0, 2**16 - 1).astype(
+                        np.uint16
+                    )
+                    del data_registered, warp_field
+                else:
+                    registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
+
+                if self.save_all_fiducial_registered:
+                    self._datastore.save_local_registered_image(
+                        registered_image=registered_image,
+                        tile=self._tile_id,
+                        deconvolution=self._decon_fiducial,
+                        round=round_id,
+                    )
+                if self._verbose >= 1:
+                    print(
+                        time_stamp(),
+                        f"Finished fiducial tile id: {self._tile_id}; round id: {round_id}.",
+                    )
+                del warped, registered_image
+
+        del decon_by_round
+        gc.collect()
 
     def _apply_registration_to_bits(self) -> None:
         """
-        Generate feature_predictor + deconvolved, registered readout data and save to datastore.
+        Register readout bits and save registered data plus U-FISH predictions.
 
         Returns
         -------
         None
-            Function result.
+            Results are written to the datastore.
         """
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
@@ -1255,11 +1738,11 @@ def no_op(*args: Any, **kwargs: Any) -> None:
 
 def time_stamp() -> str:
     """
-    Time stamp.
+    Return a human-readable timestamp for progress messages.
 
     Returns
     -------
     str
-        Function result.
+        Current local time formatted as ``YYYY-MM-DD HH:MM:SS``.
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
