@@ -284,7 +284,7 @@ def global_fused_available(datastore: Any) -> bool:
         return False
 
     fiducial_name = getattr(datastore, "fiducial_folder_name", "polyDT")
-    fused_path = datastore_path / "fused" / f"fused_{fiducial_name}_iso_zyx"
+    fused_path = datastore_path / "fused" / f"fused_{fiducial_name}_zyx"
     return fused_path.exists()
 
 
@@ -1296,8 +1296,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
         from qtpy import QtCore, QtWidgets
     except ImportError as exc:
         raise RuntimeError(
-            "The qi2lab viewer requires GUI dependencies. Run setup-merfish3d "
-            "without --headless to install ndv and Qt support."
+            "The qi2lab viewer requires GUI dependencies. Run "
+            "`uv sync` to install ndv and Qt support."
         ) from exc
 
     if hasattr(ndv, "set_gui_backend"):

@@ -2,7 +2,7 @@
 
 _WARNING: under active development._ Please expect breaking changes.
 
-GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This package currently **Nvidia only** and **Linux only** due to RAPIDS.AI package availability. Documentation, including examples, is available at [https://qi2lab.github.io/merfish3d-analysis/](https://qi2lab.github.io/merfish3d-analysis/).
+GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This package is currently **NVIDIA only** and **Linux only**. Documentation, including examples, is available at [https://qi2lab.github.io/merfish3d-analysis/](https://qi2lab.github.io/merfish3d-analysis/).
 
 ## Associated preprint publication
 [GPU-accelerated, self-optimizing processing for 3D multiplexed iterative RNA-FISH experiments](https://www.biorxiv.org/content/10.1101/2025.10.10.681751v1).
@@ -12,58 +12,65 @@ You can try out the package in the cloud on simulated data using a [Google Colab
 
 ## Installation
 
-Create a python 3.12 environment using your favorite package manager, e.g.
-```
-conda create -n merfish3d python=3.12
+This project uses one `uv` environment for preprocessing, decoding,
+registration, stitching, viewing, development, and documentation. The Python
+environment installs CUDA 12.9 runtime/toolkit wheels through the project
+dependencies, including PyTorch from the CUDA 12.9 PyTorch index and
+`cupy-cuda12x[ctk]`. You still need a compatible NVIDIA driver installed on the
+machine.
+
+Install `uv` if needed:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Activate the environment and install the GPU dependencies. This install method assumes an Nvidia GPU capable of running CUDA 12.8.
-```
-conda activate merfish3d
-```
+Clone the repository and enter it:
 
-Next, clone the repository in your location of choice and enter the directory using
-```
+```bash
 git clone https://github.com/QI2lab/merfish3d-analysis
 cd merfish3d-analysis
-``` 
-
-and install using 
-```
-pip install .
 ```
 
-For interactive editing use 
+Create and sync the environment:
+
+```bash
+uv sync
 ```
-pip install -e .
-``` 
 
-Finally, install the `merfish3d-analysis` package using the command 
+For development tools, include the `dev` group:
+
+```bash
+uv sync --group dev
 ```
-setup-merfish3d
-```` 
 
-This will automatically setup the correct CUDA libraries and other packages in the conda environment. **Note**: Due to package incompatibility, the install script currently creates a second conda/mamba environment called `merfish3d-stitcher`. In this environment, we install the minimal packages required to read the datastore used by `merfish3d-analysis` and the newest PyPI release of [multiview-stitcher](https://github.com/multiview-stitcher/multiview-stitcher) with the `gpu-cuda12` extra. Global registration uses this environment to read registered tile OME-Zarrs directly, stream fused OME-Zarr output with `fusion.fuse(..., output_zarr_url=...)`, and use CuPy fusion with `backend="cupy"`. The reason for this change is that one of the `multiview-stitcher` sub-dependencies (`xarray-dataclass`) now requires `numpy>2.0`, which is incompatible with the scientific computing packages used for `merfish3d-analysis`.
+For documentation tools, include the `docs` group:
 
-The `merfish3d-stitcher` environment is only used when individual tiles are registered into a global coordinate system. The code automatically invokes this second environment, but it is important to note that the current install strategy does create a new conda/mamba environment beyond what you as the user creates. As soon as the dependency issue is solved, we will remove this work around.
+```bash
+uv sync --group docs
+```
+
+Run package entry points through `uv run`, for example:
+
+```bash
+uv run qi2lab-preprocess /path/to/experiment
+```
 
 ## View a qi2lab datastore
 
-The standard `setup-merfish3d` install includes the ndv/PyQt dependencies for the
-view-only datastore GUI. If you run `setup-merfish3d --headless`, GUI dependencies
-are skipped and `qi2lab-viewer` will not be usable until the GUI dependencies are
-installed.
+The standard `uv sync` install includes the ndv/PyQt dependencies for the
+view-only datastore GUI.
 
 Open an experiment root:
 
 ```bash
-qi2lab-viewer /path/to/experiment
+uv run qi2lab-viewer /path/to/experiment
 ```
 
 or open a datastore directly:
 
 ```bash
-qi2lab-viewer /path/to/experiment/qi2labdatastore
+uv run qi2lab-viewer /path/to/experiment/qi2labdatastore
 ```
 
 The viewer only reads existing datastore contents. It can display selected tiles,
@@ -100,7 +107,9 @@ mkdir /path/to/qi2labdatastore/proseg/3D
 
 ## Documentation
 
-To build the documentation, install using `pip install .[docs]`. Then execute `mkdocs build --clean` and `mkdocs serve`. The documentation is available in your web browser at `http://127.0.0.1:8000/`.
+To build the documentation, install using `uv sync --group docs`.
+Then execute `uv run mkdocs build --clean` or `uv run mkdocs serve`. The
+documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
 ## Testing
 
@@ -126,7 +135,7 @@ If your local simulation data lives elsewhere, update that constant before runni
 Run the required standard matrix with:
 
 ```bash
-python -m pytest tests/test_simulation_example_pipeline.py -q
+uv run pytest tests/test_simulation_example_pipeline.py -q
 ```
 
 This runs the standard simulation policy across:
@@ -156,7 +165,7 @@ The default decode policy is locked to:
 Run the optional exhaustive regression matrix with:
 
 ```bash
-python -m pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+uv run pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
 ```
 
 This expands the matrix to include:
@@ -170,7 +179,7 @@ This expands the matrix to include:
 These F1 scores are from the local exhaustive simulation matrix:
 
 ```bash
-python -m pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+uv run pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
 ```
 
 The matrix writes `tests/data/simulation_performance.json`. The regression baselines in `tests/test_simulation_example_pipeline.py` are generated from the same results.

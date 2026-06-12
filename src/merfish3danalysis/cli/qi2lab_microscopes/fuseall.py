@@ -20,12 +20,12 @@ from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils, regist
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
-from merfish3danalysis.cli.qi2lab_microscopes.global_register import (
-    _get_batch_processing_options,
-    _get_fusion_backend_kwargs,
-    _get_scale0_sim_from_fusion_result,
-)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.multiview_registration import (
+    get_batch_processing_options,
+    get_gpu_fusion_backend_kwargs,
+    get_scale0_sim_from_fusion_result,
+)
 
 mp.set_start_method("spawn", force=True)
 
@@ -237,17 +237,14 @@ def fuse_all_channels(
                 "ngff_version": ngff_version,
                 "overwrite": True,
             },
-            batch_options=_get_batch_processing_options(
+            batch_options=get_batch_processing_options(
                 misc_utils=misc_utils,
+                n_batch=n_jobs,
                 n_jobs=n_jobs,
-                use_gpu_fusion=use_gpu_fusion,
             ),
-            **_get_fusion_backend_kwargs(
-                fusion.fuse,
-                use_gpu_fusion=use_gpu_fusion,
-            ),
+            **(get_gpu_fusion_backend_kwargs(fusion.fuse) if use_gpu_fusion else {}),
         )
-        fused = _get_scale0_sim_from_fusion_result(fused, msi_utils=msi_utils)
+        fused = get_scale0_sim_from_fusion_result(fused, msi_utils=msi_utils)
         del fused
 
 

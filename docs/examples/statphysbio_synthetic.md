@@ -69,23 +69,23 @@ We provide a command line interface (CLI) to run the simulation analysis. This c
 
 1. Simulation conversion
 ```bash
-conda run -n merfish3d --live-stream bash -lc "sim-convert /path/to/simulation/example_16bit_cells/0.315"
+uv run sim-convert /path/to/simulation/example_16bit_cells/0.315
 ```
 2. Simulation to qi2lab datastore conversion
 ```bash
-conda run -n merfish3d --live-stream bash -lc "sim-datastore /path/to/simulation/example_16bit_cells/0.315/sim_acquisition"
+uv run sim-datastore /path/to/simulation/example_16bit_cells/0.315/sim_acquisition
 ```
 3. Data pre-processing
 ```bash
-conda run -n merfish3d --live-stream bash -lc "sim-preprocess /path/to/simulation/example_16bit_cells/0.315/sim_acquisition"
+uv run sim-preprocess /path/to/simulation/example_16bit_cells/0.315/sim_acquisition
 ```
 4. Pixel decoding and RNA calling
 ```bash
-conda run -n merfish3d --live-stream bash -lc "sim-decode /path/to/simulation/example_16bit_cells/0.315/sim_acquisition"
+uv run sim-decode /path/to/simulation/example_16bit_cells/0.315/sim_acquisition
 ```
 5. Calculate F1-score
 ```bash
-conda run -n merfish3d --live-stream bash -lc "sim-f1score /path/to/simulation/example_16bit_cells/0.315"
+uv run sim-f1score /path/to/simulation/example_16bit_cells/0.315
 ```
 
 ## Ensuring a successful run
