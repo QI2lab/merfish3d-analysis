@@ -160,6 +160,21 @@ The default decode policy is locked to:
   - `1.0` -> `0.7`
   - `1.5` -> `0.2`
 
+The most recent CUDA-visible standard matrix run for the package default
+`simfish` model produced:
+
+| Dataset | Axial spacing (um) | Deconvolved readout | Feature predictor threshold | Magnitude lower | Minimum pixels | F1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| cells | 0.315 | yes | 0.5 | 0.9 | 28 | 0.985 |
+| cells | 1.0 | yes | 0.5 | 0.7 | 7 | 0.953 |
+| cells | 1.5 | yes | 0.5 | 0.2 | 7 | 0.377 |
+| uniform | 0.315 | yes | 0.5 | 0.9 | 28 | 0.990 |
+| uniform | 1.0 | yes | 0.5 | 0.7 | 7 | 0.967 |
+| uniform | 1.5 | yes | 0.5 | 0.2 | 7 | 0.616 |
+
+The regression assertions use an absolute F1 tolerance of `0.02` to account for
+small run-to-run differences in registration and decoding.
+
 ### Exhaustive regression matrix
 
 Run the optional exhaustive regression matrix with:
@@ -270,7 +285,7 @@ Values are rounded to three decimal places. The bold value marks the selected be
 | --- | --- | --- | --- | --- | --- |
 | merfish | 0.581 | 0.630 | **0.663** | 0.657 | 0.646 |
 | seqfish | 0.633 | 0.636 | 0.603 | 0.552 | 0.503 |
-| simfish | 0.594 | 0.578 | 0.538 | 0.495 | 0.429 |
+| simfish | 0.594 | 0.578 | 0.538 | 0.495 | 0.377 |
 | deepspot | 0.628 | 0.626 | 0.626 | 0.613 | 0.568 |
 | exseq | 0.623 | 0.635 | 0.655 | 0.627 | 0.588 |
 | dnafish | 0.429 | 0.337 | 0.269 | 0.196 | 0.167 |
