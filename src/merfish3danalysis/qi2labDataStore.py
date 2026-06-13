@@ -1973,7 +1973,9 @@ class qi2labDataStore:
                 return [float(v) for v in stage]
         return None
 
-    def _resolve_reference_tile_position_zyx_um(self, tile_id: str) -> list[float] | None:
+    def _resolve_reference_tile_position_zyx_um(
+        self, tile_id: str
+    ) -> list[float] | None:
         """
         Resolve the first-round reference stage position for registered outputs.
 
