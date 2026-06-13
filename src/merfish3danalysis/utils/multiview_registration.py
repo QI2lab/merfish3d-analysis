@@ -250,6 +250,7 @@ def warp_array_to_reference(
     spacing_zyx_um: Sequence[float],
     reference_shape: Sequence[int],
     reference_origin_zyx_um: Sequence[float] = (0.0, 0.0, 0.0),
+    mode: str = "nearest",
     order: int = 1,
 ) -> np.ndarray:
     """
@@ -270,6 +271,10 @@ def warp_array_to_reference(
         Output grid shape in Z, Y, X order.
     reference_origin_zyx_um : Sequence[float], default=(0.0, 0.0, 0.0)
         Physical output origin in microns in Z, Y, X order.
+    mode : str, default="nearest"
+        Boundary mode passed to ``scipy.ndimage.affine_transform`` through
+        multiview-stitcher. ``nearest`` avoids zero-filling edge planes when
+        tiny subpixel transforms sample just outside the source grid.
     order : int, default=1
         Interpolation order passed to multiview-stitcher.
 
@@ -287,6 +292,7 @@ def warp_array_to_reference(
         f"image_shape={tuple(int(v) for v in image.shape)} "
         f"reference_shape={tuple(int(v) for v in reference_shape)} "
         f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)} "
+        f"mode={mode} "
         f"order={order}"
     )
     sim = sim_from_array(
@@ -308,6 +314,7 @@ def warp_array_to_reference(
                 "x": int(reference_shape[2]),
             },
         },
+        mode=mode,
         order=order,
     )
     data = warped.data
