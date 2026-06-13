@@ -233,6 +233,12 @@ def _run_chunked_rlgc_remembering_crop(
         Deconvolved image returned by ``chunked_rlgc``.
     """
 
+    image_arr = np.asarray(image)
+    if image_arr.ndim == 2:
+        image_max_yx = max(image_arr.shape)
+    else:
+        image_max_yx = max(image_arr.shape[-2:])
+
     def _remember_successful_crop(successful_crop_yx: int) -> None:
         """
         Cache the successful RLGC crop size on the registration object.
@@ -248,8 +254,12 @@ def _run_chunked_rlgc_remembering_crop(
             The crop size is stored on ``dr``.
         """
         previous_crop_yx = int(dr._crop_yx_decon)
+        requested_crop_yx = min(previous_crop_yx, int(image_max_yx))
+        if int(successful_crop_yx) >= requested_crop_yx:
+            return
+
         dr._crop_yx_decon = int(successful_crop_yx)
-        if successful_crop_yx < previous_crop_yx and dr._verbose >= 1:
+        if dr._verbose >= 1:
             print(
                 time_stamp(),
                 "RLGC reduced crop_yx after GPU memory fallback: "
@@ -1542,7 +1552,12 @@ class DataRegistration:
             if status == "result":
                 decon_by_round[round_id] = payload
                 if crop_yx is not None:
-                    self._crop_yx_decon = min(int(self._crop_yx_decon), int(crop_yx))
+                    requested_crop_yx = min(
+                        int(self._crop_yx_decon),
+                        int(max(np.asarray(payload).shape[-2:])),
+                    )
+                    if int(crop_yx) < requested_crop_yx:
+                        self._crop_yx_decon = int(crop_yx)
             else:
                 errors.append(payload)
 

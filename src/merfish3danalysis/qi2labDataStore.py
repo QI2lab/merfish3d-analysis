@@ -1877,6 +1877,49 @@ class qi2labDataStore:
             }
         return spec
 
+    def _update_image_translation_transform(
+        self,
+        image_root: Path,
+        stage_zyx_um: Sequence[float],
+    ) -> None:
+        """
+        Update an existing OME-Zarr image translation transform.
+
+        Parameters
+        ----------
+        image_root : Path
+            Image root path, without or with the ``.ome.zarr`` suffix.
+        stage_zyx_um : Sequence[float]
+            Physical Z, Y, X translation to write into the image metadata.
+
+        Returns
+        -------
+        None
+            The image metadata is updated in place when it already exists.
+        """
+
+        image_path = self._image_store_path(image_root)
+        metadata_path = image_path / Path("zarr.json")
+        if not metadata_path.exists():
+            return
+
+        metadata = self._load_from_json(metadata_path)
+        if not isinstance(metadata, dict):
+            return
+
+        transforms = (
+            metadata.get("attributes", {})
+            .get("ome", {})
+            .get("multiscales", [{}])[0]
+            .get("datasets", [{}])[0]
+            .get("coordinateTransformations", [])
+        )
+        for transform in transforms:
+            if transform.get("type") == "translation":
+                transform["translation"] = [float(v) for v in stage_zyx_um]
+                self._save_to_json(metadata, metadata_path)
+                return
+
     def _resolve_original_tile_position_zyx_um(
         self,
         tile_id: str,
@@ -1929,6 +1972,27 @@ class qi2labDataStore:
             if stage is not None:
                 return [float(v) for v in stage]
         return None
+
+    def _resolve_reference_tile_position_zyx_um(self, tile_id: str) -> list[float] | None:
+        """
+        Resolve the first-round reference stage position for registered outputs.
+
+        Parameters
+        ----------
+        tile_id : str
+            Tile identifier.
+
+        Returns
+        -------
+        list[float] or None
+            First fiducial round stage position in Z, Y, X microns.
+        """
+
+        if not getattr(self, "_round_ids", None):
+            return None
+        return self._resolve_original_tile_position_zyx_um(
+            tile_id=tile_id, round_id=self._round_ids[0]
+        )
 
     def _validate_core_image_shape(
         self,
@@ -3178,15 +3242,19 @@ class qi2labDataStore:
 
         try:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            stage_zyx_um = np.asarray(stage_zyx_um, dtype=np.float32)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
-                    "stage_zyx_um": np.asarray(stage_zyx_um, dtype=np.float32).tolist(),
+                    "stage_zyx_um": stage_zyx_um.tolist(),
                     "affine_zyx_px": np.asarray(
                         affine_zyx_px, dtype=np.float32
                     ).tolist(),
                 },
                 target_image_name="corrected_data",
+            )
+            self._update_image_translation_transform(
+                entity_root / Path("corrected_data"), stage_zyx_um
             )
         except (TypeError, ValueError):
             print(tile_id, round_id)
@@ -4226,9 +4294,7 @@ class qi2labDataStore:
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -4247,9 +4313,7 @@ class qi2labDataStore:
                 return None
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, round_id=local_id
-            )
+            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
 
         try:
             self._validate_core_image_shape(
@@ -4424,9 +4488,7 @@ class qi2labDataStore:
                 image_name=f"registered_{self.feature_predictor_folder_name}_data",
                 image=feature_predictor_image,
             )
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
             attributes = self._load_entity_attributes(entity_root)
             spec = self._build_image_write_spec(
                 dtype="<f4",
