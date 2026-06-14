@@ -1392,6 +1392,7 @@ class DataRegistration:
 
         from merfish3danalysis.utils.multiview_registration import (
             cucim_phase_correlation_registration,
+            registration_binning_from_spacing,
         )
 
         if len(self._tile_ids) <= 1:
@@ -1458,7 +1459,9 @@ class DataRegistration:
                 transform_key="stage_metadata",
                 new_transform_key="global_registered",
                 pairwise_reg_func=cucim_phase_correlation_registration,
-                registration_binning={"z": 2, "y": 2, "x": 2},
+                registration_binning=registration_binning_from_spacing(
+                    voxel_zyx_um
+                ),
                 groupwise_resolution_kwargs={
                     "reference_view": 0,
                     "transform": "translation",

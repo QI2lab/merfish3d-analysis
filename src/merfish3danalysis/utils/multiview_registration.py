@@ -66,6 +66,32 @@ def _zyx_dict(values: Sequence[float]) -> dict[str, float]:
     return {"z": float(values[0]), "y": float(values[1]), "x": float(values[2])}
 
 
+def registration_binning_from_spacing(
+    spacing_zyx_um: Sequence[float],
+) -> dict[str, int]:
+    """
+    Resolve phase-registration binning from voxel spacing.
+
+    Parameters
+    ----------
+    spacing_zyx_um : Sequence[float]
+        Physical voxel spacing in Z, Y, X order.
+
+    Returns
+    -------
+    dict[str, int]
+        Binning dictionary for multiview-stitcher. Z is not binned; Y and X are
+        binned by the rounded ratio of axial spacing to lateral spacing.
+    """
+
+    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    if spacing.shape[0] != 3:
+        raise ValueError("spacing_zyx_um must have three ZYX elements.")
+    y_bin = max(1, round(float(spacing[0] / spacing[1])))
+    x_bin = max(1, round(float(spacing[0] / spacing[2])))
+    return {"z": 1, "y": y_bin, "x": x_bin}
+
+
 def sim_from_array(
     image: np.ndarray,
     *,
@@ -152,15 +178,19 @@ def register_pair_to_fixed(
     *,
     spacing_zyx_um: Sequence[float],
     registration_binning: dict[str, int] | None = None,
+    axial_refinement_radius_px: int = 12,
+    axial_refinement_step_px: float = 0.25,
 ) -> np.ndarray:
     """
-    Register a moving image to a fixed image with GPU phase correlation.
+    Register a moving image to a fixed image with staged GPU phase correlation.
 
     The input arrays are interpreted as Z, Y, X images with physical spacing in
-    microns. Registration is delegated to ``multiview-stitcher`` using a
-    CuPy/CuCIM pairwise phase-correlation function. The returned affine maps
-    fixed/reference physical coordinates to moving-image physical coordinates,
-    matching the convention expected by :func:`warp_array_to_reference_gpu`.
+    microns. The registration first estimates lateral translation from maximum
+    Z projections, warps the moving volume by that lateral estimate, then runs
+    phase correlation on the full volume to estimate the residual translation.
+    The returned affine maps fixed/reference physical coordinates to
+    moving-image physical coordinates, matching the convention expected by
+    :func:`warp_array_to_reference_gpu`.
 
     Parameters
     ----------
@@ -171,8 +201,11 @@ def register_pair_to_fixed(
     spacing_zyx_um : Sequence[float]
         Physical voxel spacing in microns in Z, Y, X order.
     registration_binning : dict[str, int] or None, default=None
-        Spatial binning passed to ``multiview-stitcher`` before pairwise phase
-        registration. If None, all spatial axes are binned by 2.
+        Unused compatibility argument retained for current callers.
+    axial_refinement_radius_px : int, default=12
+        Unused compatibility argument retained for current callers.
+    axial_refinement_step_px : float, default=0.25
+        Unused compatibility argument retained for current callers.
 
     Returns
     -------
@@ -183,47 +216,256 @@ def register_pair_to_fixed(
         :func:`warp_array_to_reference_gpu`.
     """
 
-    from dask import config as dask_config
-    from multiview_stitcher import registration
+    import cupy as cp
+    from cucim.skimage.registration import phase_cross_correlation
 
-    if registration_binning is None:
-        registration_binning = {"z": 2, "y": 2, "x": 2}
+    del registration_binning, axial_refinement_radius_px, axial_refinement_step_px
 
     _diag(
         "register_pair_to_fixed_start "
         f"fixed_shape={tuple(int(v) for v in fixed.shape)} "
         f"moving_shape={tuple(int(v) for v in moving.shape)} "
-        f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)} "
-        f"registration_binning={registration_binning}"
+        f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
     )
-    fixed_msim = msim_from_array(
-        fixed,
-        spacing_zyx_um=spacing_zyx_um,
-        transform_key=LOCAL_ROUND_TRANSFORM_KEY,
-    )
-    moving_msim = msim_from_array(
-        moving,
-        spacing_zyx_um=spacing_zyx_um,
-        transform_key=LOCAL_ROUND_TRANSFORM_KEY,
-    )
-    start_time = timeit.default_timer()
-    with dask_config.set(scheduler="single-threaded"):
-        transforms = registration.register(
-            [fixed_msim, moving_msim],
-            reg_channel_index=0,
-            transform_key=LOCAL_ROUND_TRANSFORM_KEY,
-            new_transform_key=LOCAL_ROUND_TRANSFORM_KEY,
-            pairwise_reg_func=cucim_phase_correlation_registration,
-            registration_binning=registration_binning,
-            groupwise_resolution_kwargs={
-                "reference_view": 0,
-                "transform": "translation",
-            },
+    if fixed.shape != moving.shape or fixed.ndim != 3:
+        raise ValueError(
+            "register_pair_to_fixed expects fixed and moving 3D arrays with "
+            f"matching shapes, got {fixed.shape!r} and {moving.shape!r}."
         )
-    _diag(
-        f"register_pair_to_fixed_done elapsed_s={timeit.default_timer() - start_time:.2f}"
+
+    start_time = timeit.default_timer()
+    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
+    moving_gpu = cp.asarray(moving, dtype=cp.float32)
+
+    fixed_projection = cp.max(fixed_gpu, axis=0)
+    moving_projection = cp.max(moving_gpu, axis=0)
+    xy_push_shift_px = phase_cross_correlation(
+        fixed_projection,
+        moving_projection,
+        upsample_factor=10,
+        disambiguate=True,
+    )[0]
+    xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
+
+    xy_transform = np.eye(4, dtype=np.float32)
+    xy_transform[1, 3] = float(xy_pull_shift_px[0]) * float(spacing[1])
+    xy_transform[2, 3] = float(xy_pull_shift_px[1]) * float(spacing[2])
+    moving_xy_registered = warp_array_to_reference_gpu(
+        moving,
+        transform_zyx_um=xy_transform,
+        spacing_zyx_um=spacing,
+        reference_shape=fixed.shape,
+        order=1,
     )
-    return np.asarray(transforms[1].values[0], dtype=np.float32)
+
+    residual_push_shift_px = phase_cross_correlation(
+        fixed_gpu,
+        cp.asarray(moving_xy_registered, dtype=cp.float32),
+        upsample_factor=10,
+        disambiguate=True,
+    )[0]
+    residual_pull_shift_px = -cp.asnumpy(residual_push_shift_px).astype(np.float32)
+    total_shift_px = residual_pull_shift_px
+    total_shift_px[1] += xy_pull_shift_px[0]
+    total_shift_px[2] += xy_pull_shift_px[1]
+
+    transform = np.eye(4, dtype=np.float32)
+    transform[:3, 3] = total_shift_px * spacing
+    _diag(
+        "register_pair_to_fixed_done "
+        f"xy_pull_shift_px=(0.000, {float(xy_pull_shift_px[0]):.3f}, {float(xy_pull_shift_px[1]):.3f}) "
+        f"residual_pull_shift_px={tuple(float(v) for v in residual_pull_shift_px)} "
+        f"total_pull_shift_px={tuple(float(v) for v in total_shift_px)} "
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+    )
+    del fixed_gpu, moving_gpu, fixed_projection, moving_projection
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
+    return transform
+
+
+def _score_axial_shift_gpu(
+    fixed: Any,
+    moving: Any,
+    z_shift_px: float,
+) -> float:
+    """
+    Score one axial shift on the GPU over the full valid overlap.
+
+    Parameters
+    ----------
+    fixed : cupy.ndarray
+        Fixed image in Z, Y, X order.
+    moving : cupy.ndarray
+        Moving image in Z, Y, X order after lateral alignment.
+    z_shift_px : float
+        Candidate fixed-to-moving z shift in pixels.
+
+    Returns
+    -------
+    float
+        Pearson score after applying the candidate z shift. Only out-of-bounds
+        z samples are excluded; all valid Y/X pixels are used.
+    """
+
+    import cupy as cp
+
+    if fixed.shape != moving.shape or fixed.ndim != 3:
+        return float("-inf")
+
+    num_z = fixed.shape[0]
+    z_coords = cp.arange(num_z, dtype=cp.float32) + cp.float32(z_shift_px)
+    valid = (z_coords >= 0) & (z_coords <= (num_z - 1))
+    if int(cp.sum(valid).item()) < 8:
+        return float("-inf")
+
+    fixed_valid = fixed[valid].astype(cp.float32, copy=False)
+    z_valid = z_coords[valid]
+    z0 = cp.floor(z_valid).astype(cp.int64)
+    z1 = cp.minimum(z0 + 1, num_z - 1)
+    alpha = (z_valid - z0.astype(cp.float32)).astype(cp.float32)
+    moving0 = moving[z0].astype(cp.float32, copy=False)
+    moving1 = moving[z1].astype(cp.float32, copy=False)
+    moving_interp = (
+        (1.0 - alpha)[:, np.newaxis, np.newaxis] * moving0
+        + alpha[:, np.newaxis, np.newaxis] * moving1
+    )
+
+    a = fixed_valid.ravel()
+    b = moving_interp.ravel()
+    a = a - cp.mean(a)
+    b = b - cp.mean(b)
+    denom = cp.linalg.norm(a) * cp.linalg.norm(b)
+    if float(denom) == 0.0:
+        return float("-inf")
+    return float(cp.dot(a, b) / denom)
+
+
+def _best_axial_score(
+    fixed: Any,
+    moving: Any,
+    candidates: np.ndarray,
+) -> tuple[float, float]:
+    """
+    Return the z shift and GPU score with maximal full-volume correlation.
+
+    Parameters
+    ----------
+    fixed : cupy.ndarray
+        Fixed image in Z, Y, X order.
+    moving : cupy.ndarray
+        Moving image in Z, Y, X order after lateral alignment.
+    candidates : numpy.ndarray
+        Candidate z shifts in pixels.
+
+    Returns
+    -------
+    tuple[float, float]
+        Best z shift in pixels and its Pearson score.
+    """
+
+    scores = [
+        _score_axial_shift_gpu(fixed, moving, float(candidate))
+        for candidate in candidates
+    ]
+    best_index = int(np.nanargmax(scores))
+    return float(candidates[best_index]), float(scores[best_index])
+
+
+def _refine_axial_translation(
+    fixed: np.ndarray,
+    moving: np.ndarray,
+    *,
+    transform_zyx_um: np.ndarray,
+    spacing_zyx_um: Sequence[float],
+    radius_px: int,
+    step_px: float,
+) -> np.ndarray:
+    """
+    Refine only the axial component of a phase-correlation transform.
+
+    Parameters
+    ----------
+    fixed : numpy.ndarray
+        Reference image in Z, Y, X order.
+    moving : numpy.ndarray
+        Moving image in Z, Y, X order.
+    transform_zyx_um : numpy.ndarray
+        Transform mapping fixed coordinates to moving coordinates.
+    spacing_zyx_um : Sequence[float]
+        Voxel spacing in microns in Z, Y, X order.
+    radius_px : int
+        Search radius centered on the phase-derived z shift.
+    step_px : float
+        Fine search step in pixels.
+
+    Returns
+    -------
+    numpy.ndarray
+        Transform with the same lateral components and rescored axial
+        translation.
+    """
+
+    if fixed.shape != moving.shape or fixed.ndim != 3:
+        return np.asarray(transform_zyx_um, dtype=np.float32)
+
+    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    transform = np.asarray(transform_zyx_um, dtype=np.float32).copy()
+    phase_translation_px = transform[:3, 3] / spacing
+    center_z_px = round(float(phase_translation_px[0]))
+
+    lateral_transform = transform.copy()
+    lateral_transform[0, 3] = 0.0
+    lateral_warped = warp_array_to_reference_gpu(
+        moving,
+        transform_zyx_um=lateral_transform,
+        spacing_zyx_um=spacing,
+        reference_shape=fixed.shape,
+        order=1,
+    )
+
+    coarse_candidates = np.arange(
+        center_z_px - int(radius_px),
+        center_z_px + int(radius_px) + 1,
+        1.0,
+        dtype=np.float32,
+    )
+    import cupy as cp
+
+    fixed_float = cp.asarray(fixed, dtype=cp.float32)
+    moving_float = cp.asarray(lateral_warped, dtype=cp.float32)
+    best_integer_z_px, _coarse_score = _best_axial_score(
+        fixed_float,
+        moving_float,
+        coarse_candidates,
+    )
+
+    step_px = max(float(step_px), 0.01)
+    fine_candidates = np.arange(
+        best_integer_z_px - 1.0,
+        best_integer_z_px + 1.0 + (0.5 * step_px),
+        step_px,
+        dtype=np.float32,
+    )
+    best_z_px, best_score = _best_axial_score(
+        fixed_float,
+        moving_float,
+        fine_candidates,
+    )
+
+    refined = transform.copy()
+    refined[0, 3] = float(best_z_px) * float(spacing[0])
+    _diag(
+        "axial_refinement "
+        f"phase_z_px={float(phase_translation_px[0]):.3f} "
+        f"coarse_z_px={best_integer_z_px:.3f} "
+        f"refined_z_px={best_z_px:.3f} "
+        f"step_px={step_px:.3f} "
+        f"score={best_score:.6f}"
+    )
+    return refined.astype(np.float32, copy=False)
 
 
 def _cupy_rankdata_average(values: Any) -> Any:
