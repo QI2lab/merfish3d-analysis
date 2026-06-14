@@ -490,9 +490,7 @@ def _process_fiducial_rounds_on_gpu(
                         reference_shape=reference_image.shape,
                         sofima_flow_field_xyz_px=sofima_flow_field,
                         flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                        flow_field_box_start_xyz_px=flow_attrs[
-                            "map_box_start_xyz_px"
-                        ],
+                        flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
                         gpu_id=local_gpu_id,
                     )
                 else:
@@ -770,9 +768,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                         reference_shape=decon_image.shape,
                         sofima_flow_field_xyz_px=sofima_flow_field,
                         flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                        flow_field_box_start_xyz_px=flow_attrs[
-                            "map_box_start_xyz_px"
-                        ],
+                        flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
                         gpu_id=local_gpu_id,
                     )
                     feature_predictor_data = (
@@ -782,9 +778,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                             spacing_zyx_um=spacing_zyx_um,
                             reference_shape=decon_image.shape,
                             sofima_flow_field_xyz_px=sofima_flow_field,
-                            flow_field_stride_zyx_px=flow_attrs[
-                                "map_stride_zyx_px"
-                            ],
+                            flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
                             flow_field_box_start_xyz_px=flow_attrs[
                                 "map_box_start_xyz_px"
                             ],

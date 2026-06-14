@@ -670,9 +670,7 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     transform = cp.asarray(transform_zyx_um, dtype=cp.float32)
     flow_field = cp.asarray(sofima_flow_field_xyz_px, dtype=cp.float32)
     if flow_field.ndim != 4:
-        raise ValueError(
-            "sofima_flow_field_xyz_px must have channel plus ZYX axes."
-        )
+        raise ValueError("sofima_flow_field_xyz_px must have channel plus ZYX axes.")
     if flow_field.shape[0] != 3 and flow_field.shape[-1] == 3:
         flow_field = cp.moveaxis(flow_field, -1, 0)
     if flow_field.shape[0] != 3:
