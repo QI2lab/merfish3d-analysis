@@ -172,6 +172,109 @@ class qi2labDataStore:
         attributes[str(key)] = self._to_json_compatible(value)
         self._save_calibrations_attributes(attributes)
 
+    def save_chromatic_affine_transforms_zyx_um(
+        self,
+        calibration: Mapping[str, Any],
+    ) -> None:
+        """
+        Save chromatic affine calibration metadata.
+
+        Parameters
+        ----------
+        calibration : Mapping[str, Any]
+            Calibration metadata containing one 4x4 ``affine_zyx_um`` matrix
+            per channel. Each affine maps that channel's physical Z, Y, X
+            coordinates onto the lowest-wavelength reference channel.
+
+        Returns
+        -------
+        None
+            Metadata are written to ``calibrations/attributes.json``.
+        """
+
+        self._set_calibration_attribute(
+            "chromatic_affine_transforms_zyx_um",
+            calibration,
+        )
+
+    def load_chromatic_affine_transforms_zyx_um(self) -> dict[str, Any]:
+        """
+        Load chromatic affine calibration metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            Stored calibration metadata. Returns an empty dictionary when no
+            chromatic calibration is present.
+        """
+
+        try:
+            attributes = self._load_calibrations_attributes()
+        except (FileNotFoundError, json.JSONDecodeError, ValueError):
+            return {}
+        calibration = attributes.get("chromatic_affine_transforms_zyx_um", {})
+        if isinstance(calibration, dict):
+            return calibration
+        return {}
+
+    def load_chromatic_affine_transform_zyx_um(
+        self,
+        channel_name: str | None = None,
+        channel_index: int | None = None,
+        wavelength_um: float | None = None,
+    ) -> np.ndarray:
+        """
+        Load one chromatic affine transform with identity fallback.
+
+        Parameters
+        ----------
+        channel_name : str or None, default=None
+            Channel name from the calibration metadata.
+        channel_index : int or None, default=None
+            Channel index from the calibration metadata.
+        wavelength_um : float or None, default=None
+            Channel wavelength in microns. Used only when channel name/index do
+            not find a match.
+
+        Returns
+        -------
+        numpy.ndarray
+            4x4 affine matrix in physical Z, Y, X microns. Identity is returned
+            if the calibration or requested channel is absent.
+        """
+
+        calibration = self.load_chromatic_affine_transforms_zyx_um()
+        channels = calibration.get("channels", {})
+        if not isinstance(channels, Mapping):
+            return np.eye(4, dtype=np.float32)
+
+        candidates = []
+        if channel_name is not None:
+            channel = channels.get(str(channel_name))
+            if isinstance(channel, Mapping):
+                candidates.append(channel)
+        if channel_index is not None:
+            for channel in channels.values():
+                if (
+                    isinstance(channel, Mapping)
+                    and int(channel.get("channel_index", -1)) == int(channel_index)
+                ):
+                    candidates.append(channel)
+        if wavelength_um is not None:
+            wavelength = float(wavelength_um)
+            for channel in channels.values():
+                if not isinstance(channel, Mapping):
+                    continue
+                stored = channel.get("wavelength_um")
+                if stored is not None and np.isclose(float(stored), wavelength):
+                    candidates.append(channel)
+
+        for channel in candidates:
+            affine = channel.get("affine_zyx_um")
+            if affine is not None:
+                return np.asarray(affine, dtype=np.float32)
+        return np.eye(4, dtype=np.float32)
+
     @staticmethod
     def _strict_id_sort_key(name: str, prefix: str, width: int) -> int:
         """
