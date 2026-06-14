@@ -113,272 +113,214 @@ documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
 ## Testing
 
-The test coverage for this repository is the local simulation integration matrix in
-[tests/test_simulation_example_pipeline.py](tests/test_simulation_example_pipeline.py). These tests exercise a end-to-end simulation workflow:
-
-- convert simulation data into a fake acquisition
-- convert the acquisition into a datastore
-- preprocess with registration and optional readout deconvolution
-- decode transcripts
-- calculate F1 against the simulation ground truth
-
-The simulation dataset root is configured directly in the test file:
-
-```python
-LOCAL_SIMULATION_DATA_ROOT = Path("/media/dps/data/merfish3d_analysis-simulation")
-```
-
-If your local simulation data lives elsewhere, update that constant before running the tests.
-
-### Standard integration matrix
-
-Run the required standard matrix with:
+Standard simulation matrix:
 
 ```bash
-uv run pytest tests/test_simulation_example_pipeline.py -q
+uv run pytest tests/test_simulation_example_pipeline.py -vv
 ```
 
-This runs the standard simulation policy across:
-
-- `cells` and `uniform`
-- axial spacings `0.315`, `1.0`, and `1.5`
-- `decon=True`
-- `feature_predictor_threshold=0.5` for the pinned regression matrix
-- every locally cached U-FISH model, with pinned regression assertions for the
-  package default feature-prediction model, `simfish`
-
-The default decode policy is locked to:
-
-- `minimum_pixels_per_rna = 28` for `0.315` simulations
-- `minimum_pixels_per_rna = 7` for `1.0` and `1.5` simulations
-- wrapper feature-predictor threshold defaults:
-  - `0.315` or non-deconvolved data -> `0.5`
-  - `1.0` deconvolved 2D data -> `0.3`
-  - `1.5` deconvolved 2D data -> `0.2`
-- sampling-aware magnitude threshold defaults:
-  - `0.315` -> `0.9`
-  - `1.0` -> `0.7`
-  - `1.5` -> `0.2`
-
-The most recent CUDA-visible standard matrix run for the package default
-`simfish` model produced:
-
-| Dataset | Axial spacing (um) | Deconvolved readout | Feature predictor threshold | Magnitude lower | Minimum pixels | F1 |
-| --- | --- | --- | --- | --- | --- | --- |
-| cells | 0.315 | yes | 0.5 | 0.9 | 28 | 0.985 |
-| cells | 1.0 | yes | 0.5 | 0.7 | 7 | 0.953 |
-| cells | 1.5 | yes | 0.5 | 0.2 | 7 | 0.377 |
-| uniform | 0.315 | yes | 0.5 | 0.9 | 28 | 0.990 |
-| uniform | 1.0 | yes | 0.5 | 0.7 | 7 | 0.967 |
-| uniform | 1.5 | yes | 0.5 | 0.2 | 7 | 0.616 |
-
-The regression assertions use an absolute F1 tolerance of `0.02` to account for
-small run-to-run differences in registration and decoding.
-
-### Exhaustive regression matrix
-
-Run the optional exhaustive regression matrix with:
+Full feature-prediction probability threshold sweep:
 
 ```bash
-uv run pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
+uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
 ```
 
-This expands the matrix to include:
+### Simulation Results
 
-- `decon` and `no-decon`
-- feature predictor thresholds `0.1`, `0.2`, `0.3`, `0.4`, and `0.5`
-- every locally cached U-FISH model
+F1 scores for the default `simfish` model are summarized below using the consensus feature-prediction probability threshold selected from the full sweep.
 
-### Exhaustive U-FISH Model Sweep
+| Dataset | Axial spacing (um) | No deconvolution | Deconvolution |
+| --- | --- | --- | --- |
+| cells | 0.315 | 0.988 | 0.985 |
+| cells | 1.0 | 0.954 | 0.953 |
+| cells | 1.5 | 0.905 | 0.377 |
+| uniform | 0.315 | 0.988 | 0.990 |
+| uniform | 1.0 | 0.960 | 0.967 |
+| uniform | 1.5 | 0.790 | 0.616 |
 
-These F1 scores are from the local exhaustive simulation matrix:
+<details>
+<summary>exhaustive feature prediction testing</summary>
 
-```bash
-uv run pytest tests/test_simulation_example_pipeline.py -q --run-simulation-exhaustive
-```
-
-The matrix writes `tests/data/simulation_performance.json`. The regression baselines in `tests/test_simulation_example_pipeline.py` are generated from the same results.
-
-`simfish` is the package default and also covers the `smfish` alias because both resolve to `v1.0.1-simfish_model.onnx`.
-
-Values are rounded to three decimal places. The bold value marks the selected best model and threshold for that simulation condition and deconvolution state; ties after rounding prefer `simfish`, then `merfish`.
+Columns are feature-prediction probability thresholds. Values are F1 scores.
 
 #### cells, axial spacing 0.315 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.992 | 0.992 | 0.992 | 0.995 | 0.995 |
-| seqfish | 0.992 | 0.994 | 0.995 | 0.996 | 0.995 |
-| simfish | 0.994 | 0.992 | 0.995 | 0.995 | 0.996 |
-| deepspot | 0.994 | 0.996 | 0.996 | 0.995 | 0.996 |
-| exseq | 0.992 | 0.992 | 0.994 | 0.996 | 0.995 |
-| dnafish | 0.992 | 0.994 | 0.991 | 0.989 | 0.982 |
-| rca | 0.991 | 0.994 | 0.995 | 0.995 | **0.997** |
-| deepblink | 0.992 | 0.992 | 0.991 | 0.994 | 0.993 |
-| suntag | 0.992 | 0.995 | 0.996 | 0.996 | 0.995 |
+| exseq | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| dnafish | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| deepblink | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| suntag | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| rca | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| simfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| merfish | 0.074 | 0.074 | 0.074 | 0.074 | 0.074 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.991 | 0.994 | 0.993 | 0.995 | **0.998** |
-| seqfish | 0.991 | 0.993 | 0.993 | 0.996 | 0.997 |
-| simfish | 0.992 | 0.994 | 0.993 | 0.995 | 0.993 |
-| deepspot | 0.994 | 0.992 | 0.994 | 0.997 | 0.996 |
-| exseq | 0.991 | 0.994 | 0.994 | 0.996 | 0.998 |
-| dnafish | 0.996 | 0.994 | 0.995 | 0.993 | 0.995 |
-| rca | 0.992 | 0.994 | 0.995 | 0.996 | 0.998 |
-| deepblink | 0.964 | 0.981 | 0.977 | 0.967 | 0.934 |
-| suntag | 0.995 | 0.993 | 0.996 | 0.997 | 0.997 |
+| exseq | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| dnafish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| deepblink | 0.745 | 0.745 | 0.745 | 0.745 | 0.745 |
+| suntag | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| rca | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| simfish | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 |
+| merfish | 0.986 | 0.986 | 0.986 | 0.986 | 0.986 |
 
 #### cells, axial spacing 1.0 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.714 | 0.767 | 0.779 | 0.823 | 0.854 |
-| seqfish | 0.759 | 0.786 | 0.831 | 0.862 | 0.877 |
-| simfish | 0.780 | 0.835 | 0.886 | 0.920 | 0.951 |
-| deepspot | 0.786 | 0.819 | 0.851 | 0.879 | 0.926 |
-| exseq | 0.745 | 0.785 | 0.815 | 0.852 | 0.877 |
-| dnafish | 0.891 | 0.912 | 0.919 | 0.914 | 0.902 |
-| rca | 0.834 | 0.874 | 0.910 | 0.935 | 0.969 |
-| deepblink | 0.703 | 0.719 | 0.705 | 0.734 | 0.704 |
-| suntag | 0.927 | 0.947 | 0.953 | 0.964 | **0.977** |
+| exseq | 0.938 | 0.938 | 0.938 | 0.938 | 0.938 |
+| dnafish | 0.940 | 0.940 | 0.940 | 0.940 | 0.940 |
+| deepspot | 0.954 | 0.954 | 0.954 | 0.954 | 0.954 |
+| deepblink | 0.927 | 0.927 | 0.927 | 0.927 | 0.927 |
+| suntag | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
+| rca | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 |
+| seqfish | 0.952 | 0.952 | 0.952 | 0.952 | 0.952 |
+| simfish | 0.954 | 0.954 | 0.954 | 0.954 | 0.954 |
+| merfish | 0.695 | 0.695 | 0.695 | 0.695 | 0.695 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.948 | 0.956 | 0.968 | 0.975 | 0.973 |
-| seqfish | 0.891 | 0.922 | 0.926 | 0.922 | 0.918 |
-| simfish | 0.964 | 0.972 | 0.979 | **0.982** | 0.971 |
-| deepspot | 0.949 | 0.966 | 0.962 | 0.968 | 0.954 |
-| exseq | 0.951 | 0.969 | 0.973 | 0.967 | 0.975 |
-| dnafish | 0.957 | 0.966 | 0.968 | 0.971 | 0.960 |
-| rca | 0.944 | 0.965 | 0.969 | 0.982 | 0.982 |
-| deepblink | 0.560 | 0.556 | 0.550 | 0.536 | 0.527 |
-| suntag | 0.956 | 0.974 | 0.976 | 0.979 | 0.979 |
+| exseq | 0.941 | 0.941 | 0.941 | 0.941 | 0.941 |
+| dnafish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
+| deepspot | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
+| deepblink | 0.880 | 0.880 | 0.880 | 0.880 | 0.880 |
+| suntag | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
+| rca | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
+| seqfish | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 |
+| simfish | 0.953 | 0.953 | 0.953 | 0.953 | 0.953 |
+| merfish | 0.884 | 0.884 | 0.884 | 0.884 | 0.884 |
 
 #### cells, axial spacing 1.5 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.828 | 0.856 | 0.878 | 0.899 | 0.922 |
-| seqfish | 0.901 | 0.924 | 0.943 | 0.947 | 0.957 |
-| simfish | 0.921 | 0.938 | 0.963 | 0.971 | **0.974** |
-| deepspot | 0.940 | 0.951 | 0.958 | 0.955 | 0.965 |
-| exseq | 0.891 | 0.914 | 0.928 | 0.937 | 0.940 |
-| dnafish | 0.901 | 0.875 | 0.850 | 0.829 | 0.788 |
-| rca | 0.970 | 0.971 | 0.969 | 0.959 | 0.935 |
-| deepblink | 0.891 | 0.890 | 0.883 | 0.884 | 0.879 |
-| suntag | 0.896 | 0.883 | 0.866 | 0.850 | 0.840 |
+| exseq | 0.922 | 0.922 | 0.922 | 0.922 | 0.922 |
+| dnafish | 0.886 | 0.886 | 0.886 | 0.886 | 0.886 |
+| deepspot | 0.936 | 0.936 | 0.936 | 0.936 | 0.936 |
+| deepblink | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 |
+| suntag | 0.888 | 0.888 | 0.888 | 0.888 | 0.888 |
+| rca | 0.939 | 0.939 | 0.939 | 0.939 | 0.939 |
+| seqfish | 0.920 | 0.920 | 0.920 | 0.920 | 0.920 |
+| simfish | 0.905 | 0.905 | 0.905 | 0.905 | 0.905 |
+| merfish | 0.464 | 0.464 | 0.464 | 0.464 | 0.464 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.581 | 0.630 | **0.663** | 0.657 | 0.646 |
-| seqfish | 0.633 | 0.636 | 0.603 | 0.552 | 0.503 |
-| simfish | 0.594 | 0.578 | 0.538 | 0.495 | 0.377 |
-| deepspot | 0.628 | 0.626 | 0.626 | 0.613 | 0.568 |
-| exseq | 0.623 | 0.635 | 0.655 | 0.627 | 0.588 |
-| dnafish | 0.429 | 0.337 | 0.269 | 0.196 | 0.167 |
-| rca | 0.634 | 0.663 | 0.642 | 0.572 | 0.438 |
-| deepblink | 0.534 | 0.588 | 0.602 | 0.602 | 0.619 |
-| suntag | 0.303 | 0.222 | 0.188 | 0.130 | 0.086 |
+| exseq | 0.539 | 0.539 | 0.539 | 0.539 | 0.539 |
+| dnafish | 0.596 | 0.596 | 0.596 | 0.596 | 0.596 |
+| deepspot | 0.593 | 0.593 | 0.593 | 0.593 | 0.593 |
+| deepblink | 0.530 | 0.530 | 0.530 | 0.530 | 0.530 |
+| suntag | 0.358 | 0.358 | 0.358 | 0.358 | 0.358 |
+| rca | 0.457 | 0.457 | 0.457 | 0.457 | 0.457 |
+| seqfish | 0.588 | 0.588 | 0.588 | 0.588 | 0.588 |
+| simfish | 0.377 | 0.377 | 0.377 | 0.377 | 0.377 |
+| merfish | 0.417 | 0.417 | 0.417 | 0.417 | 0.417 |
 
 #### uniform, axial spacing 0.315 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.993 | 0.996 | 0.996 | 0.997 | 0.996 |
-| seqfish | 0.995 | 0.997 | 0.996 | 0.997 | 0.996 |
-| simfish | 0.995 | **0.997** | 0.996 | 0.996 | 0.997 |
-| deepspot | 0.995 | 0.996 | 0.995 | 0.997 | 0.996 |
-| exseq | 0.995 | 0.997 | 0.996 | 0.997 | 0.997 |
-| dnafish | 0.997 | 0.997 | 0.996 | 0.995 | 0.993 |
-| rca | 0.995 | 0.997 | 0.995 | 0.997 | 0.997 |
-| deepblink | 0.995 | 0.995 | 0.995 | 0.995 | 0.995 |
-| suntag | 0.996 | 0.996 | 0.997 | 0.995 | 0.997 |
+| exseq | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| dnafish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| deepblink | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| suntag | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| rca | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| seqfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| simfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
+| merfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.994 | 0.994 | 0.995 | 0.996 | 0.995 |
-| seqfish | 0.992 | 0.993 | 0.993 | 0.995 | 0.988 |
-| simfish | 0.994 | 0.994 | 0.994 | 0.995 | 0.995 |
-| deepspot | 0.987 | 0.981 | 0.960 | 0.920 | 0.786 |
-| exseq | 0.993 | 0.994 | **0.997** | 0.996 | 0.995 |
-| dnafish | 0.995 | 0.993 | 0.992 | 0.985 | 0.970 |
-| rca | 0.994 | 0.994 | 0.995 | 0.997 | 0.996 |
-| deepblink | 0.898 | 0.925 | 0.840 | 0.716 | 0.468 |
-| suntag | 0.993 | 0.993 | 0.993 | 0.992 | 0.989 |
+| exseq | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| dnafish | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
+| deepspot | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| deepblink | 0.984 | 0.984 | 0.984 | 0.984 | 0.984 |
+| suntag | 0.991 | 0.991 | 0.991 | 0.991 | 0.991 |
+| rca | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
+| simfish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
+| merfish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
 
 #### uniform, axial spacing 1.0 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.810 | 0.858 | 0.883 | 0.911 | 0.943 |
-| seqfish | 0.834 | 0.874 | 0.882 | 0.904 | 0.935 |
-| simfish | 0.815 | 0.865 | 0.905 | 0.945 | 0.958 |
-| deepspot | 0.862 | 0.900 | 0.911 | 0.942 | 0.957 |
-| exseq | 0.831 | 0.874 | 0.886 | 0.916 | 0.936 |
-| dnafish | 0.921 | 0.944 | 0.958 | 0.956 | 0.931 |
-| rca | 0.849 | 0.894 | 0.932 | 0.960 | **0.982** |
-| deepblink | 0.697 | 0.702 | 0.676 | 0.685 | 0.686 |
-| suntag | 0.929 | 0.943 | 0.963 | 0.978 | 0.980 |
+| exseq | 0.959 | 0.959 | 0.959 | 0.959 | 0.959 |
+| dnafish | 0.962 | 0.962 | 0.962 | 0.962 | 0.962 |
+| deepspot | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
+| deepblink | 0.946 | 0.946 | 0.946 | 0.946 | 0.946 |
+| suntag | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
+| rca | 0.964 | 0.964 | 0.964 | 0.964 | 0.964 |
+| seqfish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
+| simfish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
+| merfish | 0.951 | 0.951 | 0.951 | 0.951 | 0.951 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.967 | 0.968 | 0.976 | 0.981 | 0.983 |
-| seqfish | 0.825 | 0.802 | 0.761 | 0.680 | 0.600 |
-| simfish | 0.958 | 0.974 | 0.977 | 0.980 | 0.981 |
-| deepspot | 0.872 | 0.810 | 0.729 | 0.609 | 0.418 |
-| exseq | 0.963 | 0.965 | 0.975 | 0.975 | 0.983 |
-| dnafish | 0.968 | 0.974 | 0.953 | 0.916 | 0.827 |
-| rca | 0.963 | 0.976 | 0.976 | 0.981 | **0.986** |
-| deepblink | 0.592 | 0.494 | 0.468 | 0.446 | 0.419 |
-| suntag | 0.977 | 0.971 | 0.964 | 0.941 | 0.904 |
+| exseq | 0.966 | 0.966 | 0.966 | 0.966 | 0.966 |
+| dnafish | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
+| deepspot | 0.872 | 0.872 | 0.872 | 0.872 | 0.872 |
+| deepblink | 0.952 | 0.952 | 0.952 | 0.952 | 0.952 |
+| suntag | 0.958 | 0.958 | 0.958 | 0.958 | 0.958 |
+| rca | 0.967 | 0.967 | 0.967 | 0.967 | 0.967 |
+| seqfish | 0.963 | 0.963 | 0.963 | 0.963 | 0.963 |
+| simfish | 0.967 | 0.967 | 0.967 | 0.967 | 0.967 |
+| merfish | 0.966 | 0.966 | 0.966 | 0.966 | 0.966 |
 
 #### uniform, axial spacing 1.5 um
 
 ##### No deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.831 | 0.866 | 0.894 | 0.918 | 0.936 |
-| seqfish | 0.877 | 0.899 | 0.913 | 0.940 | 0.956 |
-| simfish | 0.899 | 0.932 | 0.959 | 0.976 | 0.979 |
-| deepspot | 0.929 | 0.939 | 0.951 | 0.962 | 0.974 |
-| exseq | 0.865 | 0.885 | 0.912 | 0.933 | 0.948 |
-| dnafish | 0.958 | 0.963 | 0.946 | 0.923 | 0.885 |
-| rca | 0.960 | 0.972 | 0.979 | **0.986** | 0.980 |
-| deepblink | 0.851 | 0.854 | 0.842 | 0.831 | 0.818 |
-| suntag | 0.953 | 0.936 | 0.920 | 0.911 | 0.902 |
+| exseq | 0.924 | 0.924 | 0.924 | 0.924 | 0.924 |
+| dnafish | 0.935 | 0.935 | 0.935 | 0.935 | 0.935 |
+| deepspot | 0.938 | 0.938 | 0.938 | 0.938 | 0.938 |
+| deepblink | 0.920 | 0.920 | 0.920 | 0.920 | 0.920 |
+| suntag | 0.914 | 0.914 | 0.914 | 0.914 | 0.914 |
+| rca | 0.939 | 0.939 | 0.939 | 0.939 | 0.939 |
+| seqfish | 0.927 | 0.927 | 0.927 | 0.927 | 0.927 |
+| simfish | 0.790 | 0.790 | 0.790 | 0.790 | 0.790 |
+| merfish | 0.903 | 0.903 | 0.903 | 0.903 | 0.903 |
 
 ##### Deconvolution
 
-| U-FISH model | fp=0.1 | fp=0.2 | fp=0.3 | fp=0.4 | fp=0.5 |
+| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
 | --- | --- | --- | --- | --- | --- |
-| merfish | 0.632 | 0.642 | 0.669 | 0.684 | 0.689 |
-| seqfish | 0.658 | 0.689 | **0.716** | 0.709 | 0.685 |
-| simfish | 0.676 | 0.695 | 0.701 | 0.672 | 0.632 |
-| deepspot | 0.689 | 0.713 | 0.709 | 0.701 | 0.670 |
-| exseq | 0.619 | 0.638 | 0.667 | 0.680 | 0.665 |
-| dnafish | 0.512 | 0.427 | 0.355 | 0.289 | 0.209 |
-| rca | 0.686 | 0.696 | 0.700 | 0.710 | 0.673 |
-| deepblink | 0.627 | 0.655 | 0.663 | 0.655 | 0.663 |
-| suntag | 0.534 | 0.437 | 0.358 | 0.256 | 0.178 |
+| exseq | 0.584 | 0.584 | 0.584 | 0.584 | 0.584 |
+| dnafish | 0.665 | 0.665 | 0.665 | 0.665 | 0.665 |
+| deepspot | 0.659 | 0.659 | 0.659 | 0.659 | 0.659 |
+| deepblink | 0.581 | 0.581 | 0.581 | 0.581 | 0.581 |
+| suntag | 0.624 | 0.624 | 0.624 | 0.624 | 0.624 |
+| rca | 0.644 | 0.644 | 0.644 | 0.644 | 0.644 |
+| seqfish | 0.627 | 0.627 | 0.627 | 0.627 | 0.627 |
+| simfish | 0.616 | 0.616 | 0.616 | 0.616 | 0.616 |
+| merfish | 0.594 | 0.594 | 0.594 | 0.594 | 0.594 |
+
+</details>
