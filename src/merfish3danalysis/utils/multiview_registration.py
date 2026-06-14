@@ -328,10 +328,9 @@ def _score_axial_shift_gpu(
     alpha = (z_valid - z0.astype(cp.float32)).astype(cp.float32)
     moving0 = moving[z0].astype(cp.float32, copy=False)
     moving1 = moving[z1].astype(cp.float32, copy=False)
-    moving_interp = (
-        (1.0 - alpha)[:, np.newaxis, np.newaxis] * moving0
-        + alpha[:, np.newaxis, np.newaxis] * moving1
-    )
+    moving_interp = (1.0 - alpha)[:, np.newaxis, np.newaxis] * moving0 + alpha[
+        :, np.newaxis, np.newaxis
+    ] * moving1
 
     a = fixed_valid.ravel()
     b = moving_interp.ravel()

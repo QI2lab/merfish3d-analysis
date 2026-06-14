@@ -1459,9 +1459,7 @@ class DataRegistration:
                 transform_key="stage_metadata",
                 new_transform_key="global_registered",
                 pairwise_reg_func=cucim_phase_correlation_registration,
-                registration_binning=registration_binning_from_spacing(
-                    voxel_zyx_um
-                ),
+                registration_binning=registration_binning_from_spacing(voxel_zyx_um),
                 groupwise_resolution_kwargs={
                     "reference_view": 0,
                     "transform": "translation",
