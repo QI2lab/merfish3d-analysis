@@ -24,6 +24,7 @@ mp.set_start_method("spawn", force=True)
 
 import ctypes
 import gc
+import operator
 import shutil
 import sys
 import tempfile
@@ -1922,7 +1923,7 @@ class PixelDecoder:
             decoded_dir_path = self._temp_dir
 
             tile_files = decoded_dir_path.glob("*.parquet")
-            tile_files = sorted(tile_files, key=lambda x: x.name)
+            tile_files = sorted(tile_files, key=operator.attrgetter("name"))
 
             if self._verbose >= 1:
                 iterable_files = tqdm(tile_files, desc="tile", leave=False)

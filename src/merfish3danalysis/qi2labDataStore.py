@@ -219,8 +219,11 @@ class qi2labDataStore:
             Function result.
         """
 
+        def sort_id(value: str) -> tuple[int, int, str]:
+            return cls._strict_id_sort_key(value, prefix, width)
+
         ids = [entry.name for entry in parent.iterdir() if entry.is_dir()]
-        ids.sort(key=lambda value: cls._strict_id_sort_key(value, prefix, width))
+        ids.sort(key=sort_id)
         return ids
 
     @property
@@ -2410,6 +2413,9 @@ class qi2labDataStore:
                 psf_root_path = self._calibrations_zarr_path / Path("psf_data")
                 try:
                     if psf_root_path.exists():
+                        def psf_sort_key(path: Path) -> int:
+                            return int(path.name[len("psf_") : len("psf_") + 3])
+
                         psf_dirs = sorted(
                             [
                                 entry
@@ -2417,7 +2423,7 @@ class qi2labDataStore:
                                 if entry.is_dir()
                                 and re.fullmatch(r"psf_\d{3}\.ome\.zarr", entry.name)
                             ],
-                            key=lambda p: int(p.name[len("psf_") : len("psf_") + 3]),
+                            key=psf_sort_key,
                         )
                     else:
                         psf_dirs = []

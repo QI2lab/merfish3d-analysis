@@ -1,7 +1,5 @@
 """View qi2lab datastores with an ndv/PyQt GUI."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1682,6 +1680,26 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 return
             apply_lut_channel_labels(self.array_viewer, labels)
 
+        def _apply_lut_names_callback(self, labels: list[str]) -> Any:
+            """
+            Return a callback that applies LUT names to the current viewer.
+
+            Parameters
+            ----------
+            labels : list[str]
+                Channel labels to apply when the callback runs.
+
+            Returns
+            -------
+            Any
+                Zero-argument callback for ``QTimer.singleShot``.
+            """
+
+            def apply_labels() -> None:
+                self._apply_lut_names(labels)
+
+            return apply_labels
+
         def _set_loading(self, is_loading: bool, message: str) -> None:
             """
             Set loading.
@@ -1953,12 +1971,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
             step += 1
             self._advance_progress(step, "Updated viewer")
             self._apply_lut_names(self.channel_labels)
-            QtCore.QTimer.singleShot(
-                50, lambda labels=stack.labels: self._apply_lut_names(labels)
-            )
-            QtCore.QTimer.singleShot(
-                250, lambda labels=stack.labels: self._apply_lut_names(labels)
-            )
+            QtCore.QTimer.singleShot(50, self._apply_lut_names_callback(stack.labels))
+            QtCore.QTimer.singleShot(250, self._apply_lut_names_callback(stack.labels))
             self.status_label.setText("Displayed: " + ", ".join(stack.labels))
 
         def display_selection(self) -> None:
@@ -2050,10 +2064,10 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 self._advance_progress(step, "Updated viewer")
                 self._apply_lut_names(self.channel_labels)
                 QtCore.QTimer.singleShot(
-                    50, lambda labels=stack.labels: self._apply_lut_names(labels)
+                    50, self._apply_lut_names_callback(stack.labels)
                 )
                 QtCore.QTimer.singleShot(
-                    250, lambda labels=stack.labels: self._apply_lut_names(labels)
+                    250, self._apply_lut_names_callback(stack.labels)
                 )
                 self.status_label.setText("Displayed: " + ", ".join(stack.labels))
             except ValueError as exc:

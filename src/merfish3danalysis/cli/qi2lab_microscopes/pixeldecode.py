@@ -34,6 +34,36 @@ QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
 QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
+def _nearest_nyquist_multiple(
+    thresholds_by_multiple: dict[float, float],
+    nyquist_multiple: float,
+) -> float:
+    """
+    Return the configured Nyquist multiple nearest to a measured multiple.
+
+    Parameters
+    ----------
+    thresholds_by_multiple : dict[float, float]
+        Threshold table keyed by Nyquist sampling multiple.
+    nyquist_multiple : float
+        Measured axial step divided by the axial Nyquist step.
+
+    Returns
+    -------
+    float
+        Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
+    """
+
+    best_multiple = next(iter(thresholds_by_multiple))
+    best_distance = abs(best_multiple - nyquist_multiple)
+    for multiple in thresholds_by_multiple:
+        distance = abs(multiple - nyquist_multiple)
+        if distance < best_distance:
+            best_multiple = multiple
+            best_distance = distance
+    return best_multiple
+
+
 def _effective_decode_mode(
     datastore: qi2labDataStore,
     decode_mode: Literal["auto", "2d", "3d"],
@@ -116,9 +146,9 @@ def _default_qi2lab_magnitude_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     lower_threshold = QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
     return (lower_threshold, QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD[1])
@@ -185,9 +215,9 @@ def _default_qi2lab_feature_predictor_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     return QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
 

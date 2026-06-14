@@ -28,6 +28,36 @@ SIMULATION_AXIAL_NYQUIST_STEP_UM = 0.315
 SIMULATION_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
+def _nearest_nyquist_multiple(
+    thresholds_by_multiple: dict[float, float],
+    nyquist_multiple: float,
+) -> float:
+    """
+    Return the configured Nyquist multiple nearest to a measured multiple.
+
+    Parameters
+    ----------
+    thresholds_by_multiple : dict[float, float]
+        Threshold table keyed by Nyquist sampling multiple.
+    nyquist_multiple : float
+        Measured axial step divided by the axial Nyquist step.
+
+    Returns
+    -------
+    float
+        Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
+    """
+
+    best_multiple = next(iter(thresholds_by_multiple))
+    best_distance = abs(best_multiple - nyquist_multiple)
+    for multiple in thresholds_by_multiple:
+        distance = abs(multiple - nyquist_multiple)
+        if distance < best_distance:
+            best_multiple = multiple
+            best_distance = distance
+    return best_multiple
+
+
 def _default_simulation_magnitude_threshold(
     datastore: qi2labDataStore,
 ) -> tuple[float, float]:
@@ -50,9 +80,9 @@ def _default_simulation_magnitude_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     lower_threshold = SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
     return (lower_threshold, 10.0)
@@ -112,9 +142,9 @@ def _default_simulation_feature_predictor_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     return SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
 

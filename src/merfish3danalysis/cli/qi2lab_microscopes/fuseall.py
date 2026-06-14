@@ -21,11 +21,6 @@ from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.multiview_registration import (
-    get_batch_processing_options,
-    get_gpu_fusion_backend_kwargs,
-    get_scale0_sim_from_fusion_result,
-)
 
 mp.set_start_method("spawn", force=True)
 
@@ -237,14 +232,19 @@ def fuse_all_channels(
                 "ngff_version": ngff_version,
                 "overwrite": True,
             },
-            batch_options=get_batch_processing_options(
-                misc_utils=misc_utils,
-                n_batch=n_jobs,
-                n_jobs=n_jobs,
+            batch_options={
+                "batch_func": misc_utils.process_batch_using_joblib,
+                "n_batch": int(n_jobs),
+                "batch_func_kwargs": {"n_jobs": int(n_jobs)},
+            },
+            **(
+                {"backend": "cupy", "output_on_backend": False}
+                if use_gpu_fusion
+                else {}
             ),
-            **(get_gpu_fusion_backend_kwargs(fusion.fuse) if use_gpu_fusion else {}),
         )
-        fused = get_scale0_sim_from_fusion_result(fused, msi_utils=msi_utils)
+        if not hasattr(fused, "data"):
+            fused = msi_utils.get_sim_from_msim(fused, scale="scale0")
         del fused
 
 
