@@ -247,6 +247,9 @@ def register_pair_to_fixed(
         disambiguate=True,
     )[0]
     xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
+    del moving_gpu, fixed_projection, moving_projection, xy_push_shift_px
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
 
     xy_transform = np.eye(4, dtype=np.float32)
     xy_transform[1, 3] = float(xy_pull_shift_px[0]) * float(spacing[1])
@@ -259,13 +262,15 @@ def register_pair_to_fixed(
         order=1,
     )
 
+    moving_xy_registered_gpu = cp.asarray(moving_xy_registered, dtype=cp.float32)
     residual_push_shift_px = phase_cross_correlation(
         fixed_gpu,
-        cp.asarray(moving_xy_registered, dtype=cp.float32),
+        moving_xy_registered_gpu,
         upsample_factor=10,
         disambiguate=True,
     )[0]
     residual_pull_shift_px = -cp.asnumpy(residual_push_shift_px).astype(np.float32)
+    del fixed_gpu, moving_xy_registered_gpu, moving_xy_registered
     total_shift_px = residual_pull_shift_px
     total_shift_px[1] += xy_pull_shift_px[0]
     total_shift_px[2] += xy_pull_shift_px[1]
@@ -279,7 +284,6 @@ def register_pair_to_fixed(
         f"total_pull_shift_px={tuple(float(v) for v in total_shift_px)} "
         f"elapsed_s={timeit.default_timer() - start_time:.2f}"
     )
-    del fixed_gpu, moving_gpu, fixed_projection, moving_projection
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()

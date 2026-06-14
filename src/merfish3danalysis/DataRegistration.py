@@ -219,6 +219,28 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     return np.asarray(psf_array[psf_idx], dtype=np.float32)
 
 
+def _release_worker_gpu_memory(cp: Any) -> None:
+    """
+    Release cached CuPy allocations in a worker process.
+
+    Parameters
+    ----------
+    cp : Any
+        Imported CuPy module for the worker process.
+
+    Returns
+    -------
+    None
+        The current CUDA stream is synchronized and CuPy memory pools are
+        released.
+    """
+
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
+    gc.collect()
+
+
 def _run_chunked_rlgc_remembering_crop(
     dr: Any,
     chunked_rlgc: Any,
@@ -338,6 +360,7 @@ def _load_deconvolve_fiducial_round(
             image=raw,
             psf=_resolve_psf(dr._psfs, 0),
             gpu_id=gpu_id,
+            release_memory=True,
         )
         decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
     else:
@@ -414,6 +437,8 @@ def _process_fiducial_rounds_on_gpu(
                 gpu_id=local_gpu_id,
                 chunked_rlgc=chunked_rlgc,
             )
+            clear_rlgc_caches(clear_memory_pool=True)
+            _release_worker_gpu_memory(cp)
 
             _registration_diag(
                 "fiducial_phase_registration_start "
@@ -442,9 +467,7 @@ def _process_fiducial_rounds_on_gpu(
             sofima_flow_field = None
             flow_attrs = None
             if dr._perform_deformable_registration:
-                cp.cuda.Stream.null.synchronize()
-                cp.get_default_memory_pool().free_all_blocks()
-                cp.get_default_pinned_memory_pool().free_all_blocks()
+                _release_worker_gpu_memory(cp)
                 worker_request = {
                     "datastore_path": str(dr._datastore._datastore_path),
                     "tile_id": dr._tile_id,
@@ -525,12 +548,11 @@ def _process_fiducial_rounds_on_gpu(
                 )
             result_queue.put(("result", round_id, int(dr._crop_yx_decon)))
             del decon
-            gc.collect()
+            clear_rlgc_caches(clear_memory_pool=True)
+            _release_worker_gpu_memory(cp)
 
-        clear_rlgc_caches(clear_memory_pool=False)
-        cp.cuda.Stream.null.synchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
+        clear_rlgc_caches(clear_memory_pool=True)
+        _release_worker_gpu_memory(cp)
     except Exception:
         result_queue.put(("error", None, traceback.format_exc()))
         raise
