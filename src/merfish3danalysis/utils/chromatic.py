@@ -134,7 +134,9 @@ def _parse_ome_metadata(
     for channel in pixels.findall(f"{namespace}Channel"):
         name = channel.attrib.get("Name") or channel.attrib.get("ID") or ""
         names.append(str(name))
-        emission = _wavelength_to_um(_xml_float(channel.attrib.get("EmissionWavelength")))
+        emission = _wavelength_to_um(
+            _xml_float(channel.attrib.get("EmissionWavelength"))
+        )
         excitation = _wavelength_to_um(
             _xml_float(channel.attrib.get("ExcitationWavelength"))
         )
@@ -213,7 +215,9 @@ def load_bead_channel_stack(
     order = [axes.index(axis) for axis in "CZYX"]
     stack = np.transpose(image, order)
     if stack.ndim != 4:
-        raise ValueError(f"Expected CZYX stack after axis normalization, got {stack.shape}.")
+        raise ValueError(
+            f"Expected CZYX stack after axis normalization, got {stack.shape}."
+        )
 
     spacing = tuple(float(v) for v in (voxel_size_zyx_um or ome_spacing or (1, 1, 1)))
     if len(spacing) != 3:
@@ -295,7 +299,9 @@ def _load_ufish_model(ufish: Any, model: str | Path | None) -> None:
         ufish.load_weights(weights_file=weights)
 
 
-def _roi_sum(image: np.ndarray, point_zyx: Sequence[float], radius_zyx: Sequence[int]) -> float:
+def _roi_sum(
+    image: np.ndarray, point_zyx: Sequence[float], radius_zyx: Sequence[int]
+) -> float:
     """
     Sum image pixels in a clipped ROI around one point.
 
@@ -573,7 +579,9 @@ def fit_affine_source_to_reference(
     source = np.asarray(source_points_zyx_um, dtype=np.float64)
     reference = np.asarray(reference_points_zyx_um, dtype=np.float64)
     if source.shape[0] < 4:
-        raise ValueError("At least four matched beads are required for 3D affine fitting.")
+        raise ValueError(
+            "At least four matched beads are required for 3D affine fitting."
+        )
 
     keep = np.ones(source.shape[0], dtype=bool)
     affine = np.eye(4, dtype=np.float64)
@@ -586,18 +594,18 @@ def fit_affine_source_to_reference(
         affine = np.eye(4, dtype=np.float64)
         affine[:3, :3] = solution[:3, :].T
         affine[:3, 3] = solution[3, :]
-        predicted = (np.concatenate([source, np.ones((source.shape[0], 1))], axis=1) @ affine.T)[
-            :, :3
-        ]
+        predicted = (
+            np.concatenate([source, np.ones((source.shape[0], 1))], axis=1) @ affine.T
+        )[:, :3]
         residuals = np.linalg.norm(predicted - reference, axis=1)
         next_keep = residuals <= float(outlier_threshold_um)
         if np.sum(next_keep) < 4 or np.array_equal(next_keep, keep):
             break
         keep = next_keep
 
-    predicted = (np.concatenate([source, np.ones((source.shape[0], 1))], axis=1) @ affine.T)[
-        :, :3
-    ]
+    predicted = (
+        np.concatenate([source, np.ones((source.shape[0], 1))], axis=1) @ affine.T
+    )[:, :3]
     residuals = np.linalg.norm(predicted - reference, axis=1)
     kept_residuals = residuals[keep]
     diagnostics = {

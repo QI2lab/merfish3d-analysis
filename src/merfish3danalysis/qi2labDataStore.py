@@ -255,10 +255,9 @@ class qi2labDataStore:
                 candidates.append(channel)
         if channel_index is not None:
             for channel in channels.values():
-                if (
-                    isinstance(channel, Mapping)
-                    and int(channel.get("channel_index", -1)) == int(channel_index)
-                ):
+                if isinstance(channel, Mapping) and int(
+                    channel.get("channel_index", -1)
+                ) == int(channel_index):
                     candidates.append(channel)
         if wavelength_um is not None:
             wavelength = float(wavelength_um)
