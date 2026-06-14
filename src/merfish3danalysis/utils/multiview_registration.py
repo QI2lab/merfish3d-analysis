@@ -254,9 +254,7 @@ def _cupy_rankdata_average(values: Any) -> Any:
     group_start[1:] = sorted_values[1:] != sorted_values[:-1]
     group_id = cp.cumsum(group_start, dtype=cp.int64) - 1
     counts = cp.bincount(group_id)
-    starts = cp.cumsum(
-        cp.concatenate((cp.asarray([0], dtype=cp.int64), counts[:-1]))
-    )
+    starts = cp.cumsum(cp.concatenate((cp.asarray([0], dtype=cp.int64), counts[:-1])))
     average_ranks = starts.astype(cp.float32) + (counts.astype(cp.float32) - 1) / 2
     sorted_ranks = average_ranks[group_id]
     ranks = cp.empty(values.size, dtype=cp.float32)
@@ -495,9 +493,7 @@ def cucim_phase_correlation_registration(
                         win_size=ssim_win_size,
                     )
                 )
-            quality_metric_val = _cupy_spearman_correlation(
-                im0[mask], im1t[mask] - 1
-            )
+            quality_metric_val = _cupy_spearman_correlation(im0[mask], im1t[mask] - 1)
 
         disambiguate_metric_vals.append(disambiguate_metric_val)
         quality_metric_vals.append(quality_metric_val)
