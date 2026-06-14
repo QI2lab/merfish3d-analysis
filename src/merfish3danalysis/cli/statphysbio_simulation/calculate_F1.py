@@ -241,9 +241,7 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
     image_shape_zyx = np.squeeze(image).shape[-3:]
     z_min_um = datastore.voxel_size_zyx_um[0] / 2
     z_max_um = (image_shape_zyx[0] - 0.5) * datastore.voxel_size_zyx_um[0]
-    qi2lab_keep = (qi2lab_coords[:, 0] >= z_min_um) & (
-        qi2lab_coords[:, 0] <= z_max_um
-    )
+    qi2lab_keep = (qi2lab_coords[:, 0] >= z_min_um) & (qi2lab_coords[:, 0] <= z_max_um)
     gt_keep = (gt_coords[:, 0] >= z_min_um) & (gt_coords[:, 0] <= z_max_um)
 
     results, _, _, _ = calculate_F1_with_radius(

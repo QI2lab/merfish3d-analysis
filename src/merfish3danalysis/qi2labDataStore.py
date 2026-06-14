@@ -2413,6 +2413,7 @@ class qi2labDataStore:
                 psf_root_path = self._calibrations_zarr_path / Path("psf_data")
                 try:
                     if psf_root_path.exists():
+
                         def psf_sort_key(path: Path) -> int:
                             return int(path.name[len("psf_") : len("psf_") + 3])
 
