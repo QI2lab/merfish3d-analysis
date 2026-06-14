@@ -277,14 +277,73 @@ def _run_chunked_rlgc_remembering_crop(
     )
 
 
-def _deconvolve_fiducials_on_gpu(
+def _load_deconvolve_fiducial_round(
+    dr,  # noqa: ANN001
+    round_id: str,
+    gpu_id: int,
+    chunked_rlgc: Any,
+) -> np.ndarray:
+    """
+    Load and optionally deconvolve one fiducial round.
+
+    Parameters
+    ----------
+    dr : DataRegistration
+        Registration object containing datastore and deconvolution settings.
+    round_id : str
+        Fiducial round identifier to load.
+    gpu_id : int
+        CUDA device index used for RLGC.
+    chunked_rlgc : Any
+        RLGC function imported in the process using this helper.
+
+    Returns
+    -------
+    numpy.ndarray
+        Deconvolved or copied fiducial image as ``uint16``.
+    """
+
+    raw = dr._datastore.load_local_corrected_image(
+        tile=dr._tile_id, round=round_id, return_future=False
+    )
+    _registration_diag(
+        "fiducial_decon_start "
+        f"tile={dr._tile_id} round={round_id} "
+        f"raw_shape={tuple(int(v) for v in raw.shape)}"
+    )
+    start_time = timeit.default_timer()
+    if dr._decon_fiducial:
+        decon = _run_chunked_rlgc_remembering_crop(
+            dr=dr,
+            chunked_rlgc=chunked_rlgc,
+            image=raw,
+            psf=_resolve_psf(dr._psfs, 0),
+            gpu_id=gpu_id,
+        )
+        decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
+    else:
+        decon = raw.copy().astype(np.uint16)
+    _registration_diag(
+        "fiducial_decon_done "
+        f"tile={dr._tile_id} round={round_id} "
+        f"input_shape={tuple(int(v) for v in raw.shape)} "
+        f"output_shape={tuple(int(v) for v in decon.shape)} "
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+    )
+    del raw
+    gc.collect()
+    return decon
+
+
+def _process_fiducial_rounds_on_gpu(
     dr,  # noqa: ANN001
     round_list: list,
+    reference_image: np.ndarray,
     gpu_id: int,
     result_queue: Any,
 ) -> None:
     """
-    Deconvolve fiducial rounds on one GPU and send results to the parent process.
+    Deconvolve, register, warp, and optionally save fiducials on one GPU.
 
     Parameters
     ----------
@@ -292,18 +351,21 @@ def _deconvolve_fiducials_on_gpu(
         Registration object pickled into the worker process. The worker uses its
         datastore, PSF list, deconvolution settings, and current tile id.
     round_list : list
-        Fiducial round identifiers assigned to this worker.
+        Moving fiducial round identifiers assigned to this worker.
+    reference_image : numpy.ndarray
+        Round-1 deconvolved fiducial image in Z, Y, X order.
     gpu_id : int
         CUDA device index visible within the worker process.
     result_queue : multiprocessing.Queue
-        Queue used to send ``("result", round_id, image, crop_yx)`` messages
-        back to the parent. On failure the worker sends an ``"error"`` message
+        Queue used to send ``("result", round_id, crop_yx)`` messages back to
+        the parent. On failure the worker sends an ``"error"`` message
         containing the formatted traceback.
 
     Returns
     -------
     None
-        Results are returned through ``result_queue``.
+        Results are saved to the datastore and status is returned through
+        ``result_queue``.
     """
 
     import cupy as cp
@@ -313,38 +375,101 @@ def _deconvolve_fiducials_on_gpu(
         torch.cuda.set_device(gpu_id)
         cp.cuda.Device(gpu_id).use()
 
+        from merfish3danalysis.utils.multiview_registration import (
+            register_pair_to_fixed,
+            warp_array_to_reference_gpu,
+        )
         from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
+        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
+        reference_float = reference_image.astype(np.float32, copy=False)
         for round_id in round_list:
-            raw = dr._datastore.load_local_corrected_image(
-                tile=dr._tile_id, round=round_id, return_future=False
+            decon = _load_deconvolve_fiducial_round(
+                dr=dr,
+                round_id=round_id,
+                gpu_id=gpu_id,
+                chunked_rlgc=chunked_rlgc,
             )
+
             _registration_diag(
-                "fiducial_decon_start "
+                "fiducial_phase_registration_start "
                 f"tile={dr._tile_id} round={round_id} "
-                f"raw_shape={tuple(int(v) for v in raw.shape)}"
+                f"fixed_shape={tuple(int(v) for v in reference_image.shape)} "
+                f"moving_shape={tuple(int(v) for v in decon.shape)} "
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
             )
             start_time = timeit.default_timer()
-            if dr._decon_fiducial:
-                decon = _run_chunked_rlgc_remembering_crop(
-                    dr=dr,
-                    chunked_rlgc=chunked_rlgc,
-                    image=raw,
-                    psf=_resolve_psf(dr._psfs, 0),
-                    gpu_id=gpu_id,
-                )
-                decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
-            else:
-                decon = raw.copy().astype(np.uint16)
+            local_transform_zyx_um = register_pair_to_fixed(
+                reference_float,
+                decon.astype(np.float32, copy=False),
+                spacing_zyx_um=spacing_zyx_um,
+            )
+            dr._datastore.save_local_round_transform_zyx_um(
+                transform_zyx_um=local_transform_zyx_um,
+                tile=dr._tile_id,
+                round=round_id,
+            )
             _registration_diag(
-                "fiducial_decon_done "
+                "fiducial_phase_registration_done "
                 f"tile={dr._tile_id} round={round_id} "
-                f"input_shape={tuple(int(v) for v in raw.shape)} "
-                f"output_shape={tuple(int(v) for v in decon.shape)} "
                 f"elapsed_s={timeit.default_timer() - start_time:.2f}"
             )
-            del raw
-            result_queue.put(("result", round_id, decon, int(dr._crop_yx_decon)))
+
+            if dr.save_all_fiducial_registered or dr._perform_optical_flow:
+                warp_start_time = timeit.default_timer()
+                warped = warp_array_to_reference_gpu(
+                    decon,
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=reference_image.shape,
+                    gpu_id=gpu_id,
+                )
+                _registration_diag(
+                    "fiducial_warp "
+                    f"tile={dr._tile_id} round={round_id} "
+                    f"shape={tuple(int(v) for v in decon.shape)} "
+                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
+                )
+
+                if dr._perform_optical_flow:
+                    from merfish3danalysis.utils.registration import compute_warpfield
+
+                    data_registered, warp_field, block_size, block_stride = (
+                        compute_warpfield(
+                            reference_image.astype(np.float32, copy=False),
+                            warped.astype(np.float32, copy=False),
+                            gpu_id=gpu_id,
+                        )
+                    )
+                    dr._datastore.save_coord_of_xform_px(
+                        of_xform_px=warp_field,
+                        tile=dr._tile_id,
+                        block_size=block_size,
+                        block_stride=block_stride,
+                        round=round_id,
+                    )
+                    registered_image = data_registered.clip(0, 2**16 - 1).astype(
+                        np.uint16
+                    )
+                    del data_registered, warp_field
+                else:
+                    registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
+
+                if dr.save_all_fiducial_registered:
+                    dr._datastore.save_local_registered_image(
+                        registered_image=registered_image,
+                        tile=dr._tile_id,
+                        deconvolution=dr._decon_fiducial,
+                        round=round_id,
+                    )
+                del warped, registered_image
+
+            if dr._verbose >= 1:
+                print(
+                    time_stamp(),
+                    f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
+                )
+            result_queue.put(("result", round_id, int(dr._crop_yx_decon)))
             del decon
             gc.collect()
 
@@ -353,69 +478,7 @@ def _deconvolve_fiducials_on_gpu(
         cp.get_default_memory_pool().free_all_blocks()
         cp.get_default_pinned_memory_pool().free_all_blocks()
     except Exception:
-        result_queue.put(("error", None, traceback.format_exc(), None))
-        raise
-
-
-def _register_fiducial_transform_worker(
-    dr,  # noqa: ANN001
-    fixed_image: np.ndarray,
-    moving_image: np.ndarray,
-    round_id: str,
-) -> None:
-    """
-    Register one fiducial round to the reference round and save its transform.
-
-    Parameters
-    ----------
-    dr : DataRegistration
-        Registration object pickled into the worker process. The worker uses the
-        datastore to read voxel spacing and save the transform.
-    fixed_image : numpy.ndarray
-        Reference fiducial image in Z, Y, X order. This is normally the first
-        fiducial round for the current tile.
-    moving_image : numpy.ndarray
-        Deconvolved fiducial image to align to ``fixed_image``.
-    round_id : str
-        Fiducial round identifier for ``moving_image``.
-
-    Returns
-    -------
-    None
-        The affine transform is saved to the datastore.
-    """
-
-    try:
-        from merfish3danalysis.utils.multiview_registration import (
-            register_pair_to_fixed,
-        )
-
-        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
-        _registration_diag(
-            "fiducial_elastix_registration_start "
-            f"tile={dr._tile_id} round={round_id} "
-            f"fixed_shape={tuple(int(v) for v in fixed_image.shape)} "
-            f"moving_shape={tuple(int(v) for v in moving_image.shape)} "
-            f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
-        )
-        start_time = timeit.default_timer()
-        local_transform_zyx_um = register_pair_to_fixed(
-            fixed_image.astype(np.float32, copy=False),
-            moving_image.astype(np.float32, copy=False),
-            spacing_zyx_um=spacing_zyx_um,
-        )
-        dr._datastore.save_local_round_transform_zyx_um(
-            transform_zyx_um=local_transform_zyx_um,
-            tile=dr._tile_id,
-            round=round_id,
-        )
-        _registration_diag(
-            "fiducial_elastix_registration_done "
-            f"tile={dr._tile_id} round={round_id} "
-            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
-        )
-    except Exception:
-        print(traceback.format_exc(), flush=True)
+        result_queue.put(("error", None, traceback.format_exc()))
         raise
 
 
@@ -538,7 +601,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
 
     from merfish3danalysis.utils.multiview_registration import (
         transform_points_to_reference,
-        warp_array_to_reference,
+        warp_array_to_reference_gpu,
     )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
@@ -631,17 +694,19 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                         f"round={dr._round_ids[r_idx]}."
                     )
                 start_time = timeit.default_timer()
-                data_reg = warp_array_to_reference(
+                data_reg = warp_array_to_reference_gpu(
                     decon_image,
                     transform_zyx_um=local_transform_zyx_um,
                     spacing_zyx_um=spacing_zyx_um,
                     reference_shape=decon_image.shape,
+                    gpu_id=gpu_id,
                 )
-                feature_predictor_data = warp_array_to_reference(
+                feature_predictor_data = warp_array_to_reference_gpu(
                     feature_predictor_data,
                     transform_zyx_um=local_transform_zyx_um,
                     spacing_zyx_um=spacing_zyx_um,
                     reference_shape=decon_image.shape,
+                    gpu_id=gpu_id,
                 )
                 registered_points_zyx = transform_points_to_reference(
                     feature_predictor_loc[["z", "y", "x"]].to_numpy(),
@@ -1233,10 +1298,10 @@ class DataRegistration:
         Globally register first-round fiducial tiles and write fused OME-Zarr.
 
         The method reads the locally registered first fiducial round for every
-        tile, combines stage metadata with multiview-stitcher/ITK-Elastix
-        global registration, saves per-tile global transforms back to the
-        datastore, and fuses the registered views directly into the datastore as
-        OME-Zarr v0.5 using CuPy-backed fusion.
+        tile, combines stage metadata with GPU phase-correlation global
+        registration, saves per-tile global transforms back to the datastore,
+        and fuses the registered views directly into the datastore as OME-Zarr
+        v0.5 using CuPy-backed fusion.
 
         Parameters
         ----------
@@ -1265,9 +1330,7 @@ class DataRegistration:
         from tifffile import TiffWriter
 
         from merfish3danalysis.utils.multiview_registration import (
-            get_batch_processing_options,
-            get_gpu_fusion_backend_kwargs,
-            get_scale0_sim_from_fusion_result,
+            cucim_phase_correlation_registration,
         )
 
         if len(self._tile_ids) <= 1:
@@ -1333,15 +1396,13 @@ class DataRegistration:
                 reg_channel_index=0,
                 transform_key="stage_metadata",
                 new_transform_key="global_registered",
-                pairwise_reg_func=registration.registration_ITKElastix,
-                pairwise_reg_func_kwargs={
-                    "transform_types": ["translation", "rigid", "affine"],
-                },
+                pairwise_reg_func=cucim_phase_correlation_registration,
+                registration_binning={"z": 2, "y": 2, "x": 2},
                 groupwise_resolution_kwargs={
                     "reference_view": 0,
-                    "transform": "affine",
+                    "transform": "translation",
                 },
-                n_parallel_pairwise_regs=max(1, min(4, len(msims))),
+                n_parallel_pairwise_regs=1,
             )
 
         for tile_idx, (msim, transform) in enumerate(
@@ -1378,15 +1439,17 @@ class DataRegistration:
                 "ngff_version": "0.5",
                 "overwrite": True,
             },
-            batch_options=get_batch_processing_options(
-                misc_utils=misc_utils,
-                n_batch=20,
-                n_jobs=4,
-            ),
-            **get_gpu_fusion_backend_kwargs(fusion.fuse),
+            batch_options={
+                "batch_func": misc_utils.process_batch_using_joblib,
+                "n_batch": 20,
+                "batch_func_kwargs": {"n_jobs": 4},
+            },
+            backend="cupy",
+            output_on_backend=False,
         )
 
-        fused_sim = get_scale0_sim_from_fusion_result(fused_sim, msi_utils=msi_utils)
+        if not hasattr(fused_sim, "data"):
+            fused_sim = msi_utils.get_sim_from_msim(fused_sim, scale="scale0")
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
         affine = msi_utils.get_transform_from_msim(
             fused_msim, transform_key="global_registered"
@@ -1489,13 +1552,12 @@ class DataRegistration:
         """
         Deconvolve fiducials, register rounds, and save local transforms.
 
-        The first fiducial round is the local reference for the tile. All
-        fiducial rounds are first deconvolved in GPU worker processes and
-        returned as NumPy arrays. Moving rounds are then registered to the first
-        round in parallel CPU workers using multiview-stitcher/ITK-Elastix. The
-        resulting physical-space affine transforms are saved to the datastore.
-        If requested, the parent process also warps and saves registered
-        fiducial image volumes.
+        The first fiducial round is loaded, optionally deconvolved, saved, and
+        stored as the local reference for the tile. Remaining fiducial rounds
+        are split across GPU worker processes. Each worker loads its assigned
+        rounds, optionally deconvolves them, registers them to round 1, saves the
+        physical-space transform, and warps/saves registered fiducials when
+        requested.
 
         Returns
         -------
@@ -1507,85 +1569,20 @@ class DataRegistration:
                 "No GPUs detected. Cannot run _generate_registrations()."
             )
 
-        all_rounds = list(self._round_ids)
         start_time = timeit.default_timer()
-        result_queue = mp.Queue()
-        num_decon_workers = min(self._num_gpus, len(all_rounds))
-        chunk_size = (len(all_rounds) + num_decon_workers - 1) // num_decon_workers
-        decon_processes = []
-
-        for gpu_id in range(num_decon_workers):
-            start = gpu_id * chunk_size
-            end = min(start + chunk_size, len(all_rounds))
-            if start >= end:
-                break
-
-            subset = all_rounds[start:end]
-            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            try:
-                process = mp.Process(
-                    target=_deconvolve_fiducials_on_gpu,
-                    args=(self, subset, 0, result_queue),
-                )
-                process.start()
-                decon_processes.append(process)
-            finally:
-                if old_vis is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
-
-        decon_by_round = {}
-        errors = []
-        while len(decon_by_round) + len(errors) < len(all_rounds):
-            try:
-                status, round_id, payload, crop_yx = result_queue.get(timeout=5)
-            except queue.Empty:
-                if any(
-                    process.exitcode not in (None, 0) for process in decon_processes
-                ):
-                    break
-                if all(process.exitcode is not None for process in decon_processes):
-                    break
-                continue
-            if status == "result":
-                decon_by_round[round_id] = payload
-                if crop_yx is not None:
-                    requested_crop_yx = min(
-                        int(self._crop_yx_decon),
-                        int(max(np.asarray(payload).shape[-2:])),
-                    )
-                    if int(crop_yx) < requested_crop_yx:
-                        self._crop_yx_decon = int(crop_yx)
-            else:
-                errors.append(payload)
-
-        for process in decon_processes:
-            process.join()
-            if process.exitcode not in (0, None):
-                errors.append(
-                    f"Fiducial decon worker pid={process.pid} failed with "
-                    f"exitcode={process.exitcode}."
-                )
-
-        if errors:
-            raise RuntimeError("Fiducial deconvolution failed:\n" + "\n".join(errors))
-
-        missing_rounds = [
-            round_id for round_id in all_rounds if round_id not in decon_by_round
-        ]
-        if missing_rounds:
-            raise RuntimeError(f"Missing deconvolved fiducial rounds: {missing_rounds}")
-
-        _registration_diag(
-            "fiducial_decon_all_done "
-            f"tile={self._tile_id} rounds={len(decon_by_round)} "
-            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
-        )
-
         reference_round_id = self._round_ids[0]
-        reference_image = decon_by_round[reference_round_id]
+
+        import cupy as cp
+
+        from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+
+        cp.cuda.Device(0).use()
+        reference_image = _load_deconvolve_fiducial_round(
+            dr=self,
+            round_id=reference_round_id,
+            gpu_id=0,
+            chunked_rlgc=chunked_rlgc,
+        )
         self._datastore.save_local_registered_image(
             reference_image,
             tile=self._tile_id,
@@ -1603,104 +1600,87 @@ class DataRegistration:
                 f"Finished fiducial tile id: {self._tile_id}; round id: {reference_round_id}.",
             )
 
-        registration_start_time = timeit.default_timer()
-        registration_processes = []
-        for round_id in self._round_ids[1:]:
-            process = mp.Process(
-                target=_register_fiducial_transform_worker,
-                args=(self, reference_image, decon_by_round[round_id], round_id),
-            )
-            process.start()
-            registration_processes.append(process)
+        clear_rlgc_caches(clear_memory_pool=True)
 
-        registration_errors = []
-        for process in registration_processes:
+        moving_rounds = list(self._round_ids[1:])
+        if not moving_rounds:
+            del reference_image
+            gc.collect()
+            return
+
+        result_queue = mp.Queue()
+        num_workers = min(self._num_gpus, len(moving_rounds))
+        chunk_size = (len(moving_rounds) + num_workers - 1) // num_workers
+        processes = []
+
+        for gpu_id in range(num_workers):
+            start = gpu_id * chunk_size
+            end = min(start + chunk_size, len(moving_rounds))
+            if start >= end:
+                break
+
+            subset = moving_rounds[start:end]
+            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            try:
+                process = mp.Process(
+                    target=_process_fiducial_rounds_on_gpu,
+                    args=(self, subset, reference_image, 0, result_queue),
+                )
+                process.start()
+                processes.append(process)
+            finally:
+                if old_vis is None:
+                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+                else:
+                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+
+        completed_rounds = set()
+        errors = []
+        while len(completed_rounds) + len(errors) < len(moving_rounds):
+            try:
+                status, round_id, payload = result_queue.get(timeout=5)
+            except queue.Empty:
+                if any(process.exitcode not in (None, 0) for process in processes):
+                    break
+                if all(process.exitcode is not None for process in processes):
+                    break
+                continue
+            if status == "result":
+                completed_rounds.add(round_id)
+                if payload is not None:
+                    requested_crop_yx = min(
+                        int(self._crop_yx_decon),
+                        int(max(reference_image.shape[-2:])),
+                    )
+                    if int(payload) < requested_crop_yx:
+                        self._crop_yx_decon = int(payload)
+            else:
+                errors.append(payload)
+
+        for process in processes:
             process.join()
-            if process.exitcode != 0:
-                registration_errors.append(
-                    f"Fiducial registration worker pid={process.pid} failed with "
+            if process.exitcode not in (0, None):
+                errors.append(
+                    f"Fiducial worker pid={process.pid} failed with "
                     f"exitcode={process.exitcode}."
                 )
-        if registration_errors:
-            raise RuntimeError(
-                "Fiducial registration failed:\n" + "\n".join(registration_errors)
-            )
+
+        missing_rounds = [
+            round_id for round_id in moving_rounds if round_id not in completed_rounds
+        ]
+        if missing_rounds:
+            errors.append(f"Missing processed fiducial rounds: {missing_rounds}")
+        if errors:
+            raise RuntimeError("Fiducial registration failed:\n" + "\n".join(errors))
 
         _registration_diag(
             "fiducial_registration_all_done "
-            f"tile={self._tile_id} rounds={len(self._round_ids) - 1} "
-            f"elapsed_s={timeit.default_timer() - registration_start_time:.2f}"
+            f"tile={self._tile_id} rounds={len(self._round_ids)} "
+            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
         )
 
-        if self.save_all_fiducial_registered or self._perform_optical_flow:
-            from merfish3danalysis.utils.multiview_registration import (
-                warp_array_to_reference,
-            )
-
-            spacing_zyx_um = self._datastore.voxel_size_zyx_um
-            for round_id in self._round_ids[1:]:
-                transform_zyx_um = self._datastore.load_local_round_transform_zyx_um(
-                    tile=self._tile_id,
-                    round=round_id,
-                )
-                if transform_zyx_um is None:
-                    raise RuntimeError(
-                        f"Missing local round transform for tile={self._tile_id} "
-                        f"round={round_id}."
-                    )
-                warp_start_time = timeit.default_timer()
-                warped = warp_array_to_reference(
-                    decon_by_round[round_id],
-                    transform_zyx_um=transform_zyx_um,
-                    spacing_zyx_um=spacing_zyx_um,
-                    reference_shape=reference_image.shape,
-                )
-                _registration_diag(
-                    "fiducial_parent_warp "
-                    f"tile={self._tile_id} round={round_id} "
-                    f"shape={tuple(int(v) for v in decon_by_round[round_id].shape)} "
-                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
-                )
-
-                if self._perform_optical_flow:
-                    from merfish3danalysis.utils.registration import compute_warpfield
-
-                    data_registered, warp_field, block_size, block_stride = (
-                        compute_warpfield(
-                            reference_image.astype(np.float32, copy=False),
-                            warped.astype(np.float32, copy=False),
-                            gpu_id=0,
-                        )
-                    )
-                    self._datastore.save_coord_of_xform_px(
-                        of_xform_px=warp_field,
-                        tile=self._tile_id,
-                        block_size=block_size,
-                        block_stride=block_stride,
-                        round=round_id,
-                    )
-                    registered_image = data_registered.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del data_registered, warp_field
-                else:
-                    registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
-
-                if self.save_all_fiducial_registered:
-                    self._datastore.save_local_registered_image(
-                        registered_image=registered_image,
-                        tile=self._tile_id,
-                        deconvolution=self._decon_fiducial,
-                        round=round_id,
-                    )
-                if self._verbose >= 1:
-                    print(
-                        time_stamp(),
-                        f"Finished fiducial tile id: {self._tile_id}; round id: {round_id}.",
-                    )
-                del warped, registered_image
-
-        del decon_by_round
+        del reference_image
         gc.collect()
 
     def _apply_registration_to_bits(self) -> None:
