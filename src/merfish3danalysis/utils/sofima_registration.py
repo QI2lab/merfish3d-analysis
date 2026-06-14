@@ -107,7 +107,7 @@ def estimate_sofima_flow_field_xyz_px(
         fixed_zyx.astype(np.float32, copy=False),
         patch_size=patch_size,
         step=step,
-        batch_size=int(config.get("batch_size", 256)),
+        batch_size=int(config.get("batch_size", 32)),
         max_masked=float(config.get("max_masked", 0.75)),
     )
     cleaned_flow = flow_utils.clean_flow(

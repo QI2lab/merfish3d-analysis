@@ -1,5 +1,6 @@
 """Small multiview-stitcher adapters for MERFISH registration."""
 
+import gc
 import os
 import timeit
 from collections.abc import Sequence
@@ -45,6 +46,55 @@ def _diag(message: str) -> None:
 
     if _diagnostics_enabled():
         print(f"[multiview-registration] {message}", flush=True)
+
+
+def _clear_cupy_memory(cp: Any) -> None:
+    """
+    Release cached CuPy allocations and FFT plans after a registration stage.
+
+    Parameters
+    ----------
+    cp : Any
+        Imported ``cupy`` module.
+
+    Returns
+    -------
+    None
+        CuPy memory pools and FFT plan cache are cleared in-place.
+    """
+
+    cp.cuda.Stream.null.synchronize()
+    try:
+        cp.fft.config.get_plan_cache().clear()
+    except Exception:
+        pass
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
+    gc.collect()
+
+
+def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
+    """
+    Compute a maximum Z projection without retaining the full GPU volume.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input image in Z, Y, X order.
+    cp : Any
+        Imported ``cupy`` module.
+
+    Returns
+    -------
+    cupy.ndarray
+        Maximum projection over Z as a GPU array.
+    """
+
+    image_gpu = cp.asarray(image, dtype=cp.float32)
+    projection = cp.max(image_gpu, axis=0)
+    del image_gpu
+    _clear_cupy_memory(cp)
+    return projection
 
 
 def _zyx_dict(values: Sequence[float]) -> dict[str, float]:
@@ -235,11 +285,8 @@ def register_pair_to_fixed(
 
     start_time = timeit.default_timer()
     spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
-    fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
-    moving_gpu = cp.asarray(moving, dtype=cp.float32)
-
-    fixed_projection = cp.max(fixed_gpu, axis=0)
-    moving_projection = cp.max(moving_gpu, axis=0)
+    fixed_projection = _max_z_projection_gpu(fixed, cp)
+    moving_projection = _max_z_projection_gpu(moving, cp)
     xy_push_shift_px = phase_cross_correlation(
         fixed_projection,
         moving_projection,
@@ -247,9 +294,8 @@ def register_pair_to_fixed(
         disambiguate=True,
     )[0]
     xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
-    del moving_gpu, fixed_projection, moving_projection, xy_push_shift_px
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
+    del fixed_projection, moving_projection, xy_push_shift_px
+    _clear_cupy_memory(cp)
 
     xy_transform = np.eye(4, dtype=np.float32)
     xy_transform[1, 3] = float(xy_pull_shift_px[0]) * float(spacing[1])
@@ -262,6 +308,7 @@ def register_pair_to_fixed(
         order=1,
     )
 
+    fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
     moving_xy_registered_gpu = cp.asarray(moving_xy_registered, dtype=cp.float32)
     residual_push_shift_px = phase_cross_correlation(
         fixed_gpu,
@@ -271,7 +318,7 @@ def register_pair_to_fixed(
     )[0]
     residual_pull_shift_px = -cp.asnumpy(residual_push_shift_px).astype(np.float32)
     del fixed_gpu, moving_xy_registered_gpu, moving_xy_registered
-    total_shift_px = residual_pull_shift_px
+    total_shift_px = residual_pull_shift_px.copy()
     total_shift_px[1] += xy_pull_shift_px[0]
     total_shift_px[2] += xy_pull_shift_px[1]
 
@@ -284,9 +331,7 @@ def register_pair_to_fixed(
         f"total_pull_shift_px={tuple(float(v) for v in total_shift_px)} "
         f"elapsed_s={timeit.default_timer() - start_time:.2f}"
     )
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    cp.get_default_pinned_memory_pool().free_all_blocks()
+    _clear_cupy_memory(cp)
     return transform
 
 

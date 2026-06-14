@@ -423,10 +423,8 @@ def _process_fiducial_rounds_on_gpu(
         from merfish3danalysis.utils.multiview_registration import (
             register_pair_to_fixed,
             warp_array_to_reference_gpu,
-            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
         )
         from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
-        from merfish3danalysis.utils.sofima_worker import run_sofima_flow_field_worker
 
         spacing_zyx_um = dr._datastore.voxel_size_zyx_um
         reference_float = reference_image.astype(np.float32, copy=False)
@@ -464,68 +462,17 @@ def _process_fiducial_rounds_on_gpu(
                 f"elapsed_s={timeit.default_timer() - start_time:.2f}"
             )
 
-            sofima_flow_field = None
-            flow_attrs = None
-            if dr._perform_deformable_registration:
-                _release_worker_gpu_memory(cp)
-                worker_request = {
-                    "datastore_path": str(dr._datastore._datastore_path),
-                    "tile_id": dr._tile_id,
-                    "reference_round_id": dr._round_ids[0],
-                    "moving_round_id": round_id,
-                    "gpu_id": assigned_gpu_id,
-                    "fixed_zyx": reference_image.astype(np.float32, copy=False),
-                    "moving_native_zyx": decon.astype(np.float32, copy=False),
-                    "spacing_zyx_um": tuple(float(v) for v in spacing_zyx_um),
-                    "config": {},
-                }
-                sofima_process = mp.Process(
-                    target=run_sofima_flow_field_worker,
-                    args=(worker_request,),
-                )
-                sofima_process.start()
-                sofima_process.join()
-                if sofima_process.exitcode != 0:
-                    raise RuntimeError(
-                        "SOFIMA flow-field worker failed for "
-                        f"tile={dr._tile_id} round={round_id} with exit code "
-                        f"{sofima_process.exitcode}."
-                    )
-                loaded_flow_field = dr._datastore.load_local_sofima_flow_field(
-                    tile=dr._tile_id,
-                    round=round_id,
-                    return_future=False,
-                )
-                if loaded_flow_field is None:
-                    raise RuntimeError(
-                        f"Missing SOFIMA flow field for tile={dr._tile_id} "
-                        f"round={round_id}."
-                    )
-                sofima_flow_field, flow_attrs = loaded_flow_field
-
-            if dr.save_all_fiducial_registered:
+            if dr.save_all_fiducial_registered or dr._perform_deformable_registration:
                 warp_start_time = timeit.default_timer()
-                if dr._perform_deformable_registration:
-                    warped = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
-                        decon,
-                        transform_zyx_um=local_transform_zyx_um,
-                        spacing_zyx_um=spacing_zyx_um,
-                        reference_shape=reference_image.shape,
-                        sofima_flow_field_xyz_px=sofima_flow_field,
-                        flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                        flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
-                        gpu_id=local_gpu_id,
-                    )
-                else:
-                    warped = warp_array_to_reference_gpu(
-                        decon,
-                        transform_zyx_um=local_transform_zyx_um,
-                        spacing_zyx_um=spacing_zyx_um,
-                        reference_shape=reference_image.shape,
-                        gpu_id=local_gpu_id,
-                    )
+                warped = warp_array_to_reference_gpu(
+                    decon,
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=reference_image.shape,
+                    gpu_id=local_gpu_id,
+                )
                 _registration_diag(
-                    "fiducial_warp "
+                    "fiducial_affine_warp "
                     f"tile={dr._tile_id} round={round_id} "
                     f"shape={tuple(int(v) for v in decon.shape)} "
                     f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
@@ -552,6 +499,133 @@ def _process_fiducial_rounds_on_gpu(
             _release_worker_gpu_memory(cp)
 
         clear_rlgc_caches(clear_memory_pool=True)
+        _release_worker_gpu_memory(cp)
+    except Exception:
+        result_queue.put(("error", None, traceback.format_exc()))
+        raise
+
+
+def _process_sofima_rounds_on_gpu(
+    dr,  # noqa: ANN001
+    round_list: list,
+    gpu_id: int,
+    result_queue: Any,
+) -> None:
+    """
+    Estimate SOFIMA residual flow fields in an isolated GPU worker.
+
+    Parameters
+    ----------
+    dr : DataRegistration
+        Registration object pickled into the worker process.
+    round_list : list
+        Moving fiducial round identifiers assigned to this worker.
+    gpu_id : int
+        Physical GPU index assigned by the parent process.
+    result_queue : multiprocessing.Queue
+        Queue used to send completion or error messages to the parent.
+
+    Returns
+    -------
+    None
+        SOFIMA flow fields are saved to the datastore.
+    """
+
+    local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.65")
+    os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
+
+    import cupy as cp
+
+    try:
+        cp.cuda.Device(local_gpu_id).use()
+
+        from merfish3danalysis.utils.multiview_registration import (
+            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
+        )
+        from merfish3danalysis.utils.sofima_registration import (
+            estimate_sofima_flow_field_xyz_px,
+        )
+
+        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
+        reference_round_id = dr._round_ids[0]
+        fixed = dr._datastore.load_local_registered_image(
+            tile=dr._tile_id,
+            round=reference_round_id,
+            return_future=False,
+        )
+        if fixed is None:
+            raise RuntimeError(
+                f"Missing affine registered reference fiducial for tile={dr._tile_id} "
+                f"round={reference_round_id}."
+            )
+        fixed = fixed.astype(np.float32, copy=False)
+
+        identity_transform = np.eye(4, dtype=np.float32)
+        for round_id in round_list:
+            moving_affine = dr._datastore.load_local_registered_image(
+                tile=dr._tile_id,
+                round=round_id,
+                return_future=False,
+            )
+            if moving_affine is None:
+                raise RuntimeError(
+                    f"Missing affine registered fiducial for tile={dr._tile_id} "
+                    f"round={round_id}."
+                )
+            moving_affine = moving_affine.astype(np.float32, copy=False)
+            _release_worker_gpu_memory(cp)
+
+            start_time = timeit.default_timer()
+            sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
+                fixed,
+                moving_affine,
+                config={},
+            )
+            dr._datastore.save_local_sofima_flow_field(
+                sofima_flow_field,
+                tile=dr._tile_id,
+                round=round_id,
+                reference_round=reference_round_id,
+                map_stride_zyx_px=metadata["map_stride_zyx_px"],
+                map_box_start_xyz_px=metadata["map_box_start_xyz_px"],
+                map_box_size_xyz_px=metadata["map_box_size_xyz_px"],
+                reference_shape_zyx_px=fixed.shape,
+                moving_shape_zyx_px=moving_affine.shape,
+                return_future=False,
+            )
+
+            if dr.save_all_fiducial_registered:
+                warped = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                    moving_affine,
+                    transform_zyx_um=identity_transform,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=fixed.shape,
+                    sofima_flow_field_xyz_px=sofima_flow_field,
+                    flow_field_stride_zyx_px=metadata["map_stride_zyx_px"],
+                    flow_field_box_start_xyz_px=metadata["map_box_start_xyz_px"],
+                    gpu_id=local_gpu_id,
+                )
+                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
+                dr._datastore.save_local_registered_image(
+                    registered_image=registered_image,
+                    tile=dr._tile_id,
+                    deconvolution=dr._decon_fiducial,
+                    round=round_id,
+                )
+                del warped, registered_image
+
+            _registration_diag(
+                "fiducial_sofima_done "
+                f"tile={dr._tile_id} round={round_id} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+            )
+            result_queue.put(("result", round_id, None))
+            del moving_affine, sofima_flow_field
+            _release_worker_gpu_memory(cp)
+
+        del fixed
         _release_worker_gpu_memory(cp)
     except Exception:
         result_queue.put(("error", None, traceback.format_exc()))
@@ -1749,6 +1823,72 @@ class DataRegistration:
             errors.append(f"Missing processed fiducial rounds: {missing_rounds}")
         if errors:
             raise RuntimeError("Fiducial registration failed:\n" + "\n".join(errors))
+
+        if self._perform_deformable_registration:
+            sofima_queue = mp.Queue()
+            sofima_processes = []
+            sofima_workers = min(self._num_gpus, len(moving_rounds))
+            sofima_chunk_size = (
+                len(moving_rounds) + sofima_workers - 1
+            ) // sofima_workers
+
+            for gpu_id in range(sofima_workers):
+                start = gpu_id * sofima_chunk_size
+                end = min(start + sofima_chunk_size, len(moving_rounds))
+                if start >= end:
+                    break
+
+                subset = moving_rounds[start:end]
+                process = mp.Process(
+                    target=_process_sofima_rounds_on_gpu,
+                    args=(self, subset, gpu_id, sofima_queue),
+                )
+                process.start()
+                sofima_processes.append(process)
+
+            completed_sofima_rounds = set()
+            sofima_errors = []
+            while (
+                len(completed_sofima_rounds) + len(sofima_errors)
+                < len(moving_rounds)
+            ):
+                try:
+                    status, round_id, payload = sofima_queue.get(timeout=5)
+                except queue.Empty:
+                    if any(
+                        process.exitcode not in (None, 0)
+                        for process in sofima_processes
+                    ):
+                        break
+                    if all(process.exitcode is not None for process in sofima_processes):
+                        break
+                    continue
+                if status == "result":
+                    completed_sofima_rounds.add(round_id)
+                else:
+                    sofima_errors.append(payload)
+
+            for process in sofima_processes:
+                process.join()
+                if process.exitcode not in (0, None):
+                    sofima_errors.append(
+                        f"SOFIMA worker pid={process.pid} failed with "
+                        f"exitcode={process.exitcode}."
+                    )
+
+            missing_sofima_rounds = [
+                round_id
+                for round_id in moving_rounds
+                if round_id not in completed_sofima_rounds
+            ]
+            if missing_sofima_rounds:
+                sofima_errors.append(
+                    f"Missing SOFIMA fiducial rounds: {missing_sofima_rounds}"
+                )
+            if sofima_errors:
+                raise RuntimeError(
+                    "SOFIMA registration failed:\n" + "\n".join(sofima_errors)
+                )
 
         _registration_diag(
             "fiducial_registration_all_done "
