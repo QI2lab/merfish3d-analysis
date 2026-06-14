@@ -755,9 +755,11 @@ def warp_array_to_reference_gpu(
     spacing_zyx_um: Sequence[float],
     reference_shape: Sequence[int],
     reference_origin_zyx_um: Sequence[float] = (0.0, 0.0, 0.0),
-    mode: str = "nearest",
+    mode: str = "constant",
+    cval: float = 0.0,
     order: int = 1,
     gpu_id: int = 0,
+    z_batch_size: int = 4,
 ) -> np.ndarray:
     """
     Warp an image into a reference ZYX grid using CuPy affine interpolation.
@@ -783,12 +785,19 @@ def warp_array_to_reference_gpu(
     reference_origin_zyx_um : Sequence[float], default=(0.0, 0.0, 0.0)
         Physical output origin in microns in Z, Y, X order. The moving image is
         assumed to use the same origin convention as the reference grid.
-    mode : str, default="nearest"
+    mode : str, default="constant"
         Boundary mode passed to ``cupyx.scipy.ndimage.affine_transform``.
+    cval : float, default=0.0
+        Constant fill value used when ``mode="constant"``. This matches the
+        old SimpleITK registration path, which filled samples outside the
+        moving image with background.
     order : int, default=1
         Interpolation order passed to ``cupyx.scipy.ndimage.affine_transform``.
     gpu_id : int, default=0
         CUDA device ID to use.
+    z_batch_size : int, default=4
+        Number of output z planes to process per GPU batch. Keeping this small
+        avoids allocating full-volume coordinate grids for large tiles.
 
     Returns
     -------
@@ -816,6 +825,7 @@ def warp_array_to_reference_gpu(
         f"reference_shape={tuple(int(v) for v in reference_shape)} "
         f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)} "
         f"mode={mode} "
+        f"cval={float(cval)} "
         f"order={order} "
         f"gpu_id={gpu_id}"
     )
@@ -828,6 +838,7 @@ def warp_array_to_reference_gpu(
         output_shape=tuple(int(v) for v in reference_shape),
         order=order,
         mode=mode,
+        cval=float(cval),
     )
     warped = cp.asnumpy(warped_gpu)
     del image_gpu, warped_gpu
@@ -851,9 +862,11 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     flow_field_stride_zyx_px: Sequence[float],
     flow_field_box_start_xyz_px: Sequence[float],
     reference_origin_zyx_um: Sequence[float] = (0.0, 0.0, 0.0),
-    mode: str = "nearest",
+    mode: str = "constant",
+    cval: float = 0.0,
     order: int = 1,
     gpu_id: int = 0,
+    z_batch_size: int = 4,
 ) -> np.ndarray:
     """
     Warp an image with a stored affine transform and SOFIMA flow field.
@@ -882,12 +895,17 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
         Reference pixel coordinate of the flow-field origin in X, Y, Z order.
     reference_origin_zyx_um : Sequence[float], default=(0.0, 0.0, 0.0)
         Physical origin for the reference and moving local grids.
-    mode : str, default="nearest"
+    mode : str, default="constant"
         Boundary mode for flow-field interpolation and image sampling.
+    cval : float, default=0.0
+        Constant fill value used when sampling outside the flow field or moving
+        image.
     order : int, default=1
         Interpolation order for the final image sampling.
     gpu_id : int, default=0
         CUDA device ID to use.
+    z_batch_size : int, default=4
+        Number of output z planes to process per GPU batch.
 
     Returns
     -------
@@ -927,86 +945,114 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
         f"reference_shape={ref_shape} "
         f"flow_field_shape={tuple(int(v) for v in flow_field.shape)} "
         f"mode={mode} "
+        f"cval={float(cval)} "
         f"order={order} "
-        f"gpu_id={gpu_id}"
+        f"gpu_id={gpu_id} "
+        f"z_batch_size={int(z_batch_size)}"
     )
     start_time = timeit.default_timer()
 
-    grid_z, grid_y, grid_x = cp.indices(ref_shape, dtype=cp.float32)
-    flow_coords = cp.stack(
-        [
-            (grid_z - box_start_zyx[0]) / stride_zyx[0],
-            (grid_y - box_start_zyx[1]) / stride_zyx[1],
-            (grid_x - box_start_zyx[2]) / stride_zyx[2],
-        ],
-        axis=0,
-    )
-
-    identity_xyz = (grid_x, grid_y, grid_z)
-    affine_initialized_xyz = []
-    for channel_index, identity_channel in enumerate(identity_xyz):
-        channel = flow_field[channel_index]
-        flow_component = ndimage.map_coordinates(
-            channel,
-            flow_coords,
-            order=1,
-            mode=mode,
-        )
-        affine_initialized_xyz.append(identity_channel + flow_component)
-
-    affine_initialized_zyx = (
-        affine_initialized_xyz[2],
-        affine_initialized_xyz[1],
-        affine_initialized_xyz[0],
-    )
-    physical_z = affine_initialized_zyx[0] * spacing[0] + origin[0]
-    physical_y = affine_initialized_zyx[1] * spacing[1] + origin[1]
-    physical_x = affine_initialized_zyx[2] * spacing[2] + origin[2]
-
-    moving_z = (
-        transform[0, 0] * physical_z
-        + transform[0, 1] * physical_y
-        + transform[0, 2] * physical_x
-        + transform[0, 3]
-    )
-    moving_y = (
-        transform[1, 0] * physical_z
-        + transform[1, 1] * physical_y
-        + transform[1, 2] * physical_x
-        + transform[1, 3]
-    )
-    moving_x = (
-        transform[2, 0] * physical_z
-        + transform[2, 1] * physical_y
-        + transform[2, 2] * physical_x
-        + transform[2, 3]
-    )
-    source_coords = cp.stack(
-        [
-            (moving_z - origin[0]) / spacing[0],
-            (moving_y - origin[1]) / spacing[1],
-            (moving_x - origin[2]) / spacing[2],
-        ],
-        axis=0,
-    )
-
     image_gpu = cp.asarray(image)
-    warped_gpu = ndimage.map_coordinates(
-        image_gpu,
-        source_coords,
-        order=order,
-        mode=mode,
-    )
-    warped = cp.asnumpy(warped_gpu)
+    warped = np.empty(ref_shape, dtype=np.asarray(image).dtype)
+    z_batch_size = max(1, int(z_batch_size))
+    y_indices = cp.arange(ref_shape[1], dtype=cp.float32)
+    x_indices = cp.arange(ref_shape[2], dtype=cp.float32)
+    grid_y, grid_x = cp.meshgrid(y_indices, x_indices, indexing="ij")
+
+    for z_start in range(0, ref_shape[0], z_batch_size):
+        z_stop = min(z_start + z_batch_size, ref_shape[0])
+        z_indices = cp.arange(z_start, z_stop, dtype=cp.float32)
+        grid_z = cp.broadcast_to(
+            z_indices[:, cp.newaxis, cp.newaxis],
+            (z_stop - z_start, ref_shape[1], ref_shape[2]),
+        )
+        batch_grid_y = cp.broadcast_to(
+            grid_y[cp.newaxis, :, :],
+            (z_stop - z_start, ref_shape[1], ref_shape[2]),
+        )
+        batch_grid_x = cp.broadcast_to(
+            grid_x[cp.newaxis, :, :],
+            (z_stop - z_start, ref_shape[1], ref_shape[2]),
+        )
+        flow_coords = cp.stack(
+            [
+                (grid_z - box_start_zyx[0]) / stride_zyx[0],
+                (batch_grid_y - box_start_zyx[1]) / stride_zyx[1],
+                (batch_grid_x - box_start_zyx[2]) / stride_zyx[2],
+            ],
+            axis=0,
+        )
+
+        affine_initialized_xyz = []
+        for channel_index, identity_channel in enumerate(
+            (batch_grid_x, batch_grid_y, grid_z)
+        ):
+            flow_component = ndimage.map_coordinates(
+                flow_field[channel_index],
+                flow_coords,
+                order=1,
+                mode=mode,
+                cval=float(cval),
+            )
+            affine_initialized_xyz.append(identity_channel + flow_component)
+
+        physical_z = affine_initialized_xyz[2] * spacing[0] + origin[0]
+        physical_y = affine_initialized_xyz[1] * spacing[1] + origin[1]
+        physical_x = affine_initialized_xyz[0] * spacing[2] + origin[2]
+
+        moving_z = (
+            transform[0, 0] * physical_z
+            + transform[0, 1] * physical_y
+            + transform[0, 2] * physical_x
+            + transform[0, 3]
+        )
+        moving_y = (
+            transform[1, 0] * physical_z
+            + transform[1, 1] * physical_y
+            + transform[1, 2] * physical_x
+            + transform[1, 3]
+        )
+        moving_x = (
+            transform[2, 0] * physical_z
+            + transform[2, 1] * physical_y
+            + transform[2, 2] * physical_x
+            + transform[2, 3]
+        )
+        source_coords = cp.stack(
+            [
+                (moving_z - origin[0]) / spacing[0],
+                (moving_y - origin[1]) / spacing[1],
+                (moving_x - origin[2]) / spacing[2],
+            ],
+            axis=0,
+        )
+        warped_batch = ndimage.map_coordinates(
+            image_gpu,
+            source_coords,
+            order=order,
+            mode=mode,
+            cval=float(cval),
+        )
+        warped[z_start:z_stop] = cp.asnumpy(warped_batch)
+        del (
+            grid_z,
+            flow_coords,
+            affine_initialized_xyz,
+            physical_z,
+            physical_y,
+            physical_x,
+            moving_z,
+            moving_y,
+            moving_x,
+            source_coords,
+            warped_batch,
+        )
+
     del (
         image_gpu,
-        warped_gpu,
         flow_field,
-        grid_z,
         grid_y,
         grid_x,
-        source_coords,
-        flow_coords,
     )
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
