@@ -1,17 +1,16 @@
 """
-Register qi2lab 3D MERFISH data using multiview-stitcher and optical flow.
+Register qi2lab 3D MERFISH data using multiview-stitcher.
 
 This module registers fiducial rounds to the first fiducial round, applies the
 saved physical-space transforms to readout data and U-FISH predictions, and can
-optionally apply the legacy optical-flow deformation field after affine
-registration.
+optionally apply a SOFIMA deformable flow field after affine registration.
 
 History:
 --------
 - **2025/07**:
     - Implement anistropic downsampling for registration.
     - Implement RLGC deconvolution.
-    - Implement new GPU based pixel-warping strategy using warpfield
+    - Implement GPU based pixel-warping strategy.
     - Implement multi-GPU processing.
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
@@ -98,6 +97,26 @@ def _registration_diag(message: str) -> None:
 
     if _registration_diagnostics_enabled():
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
+
+
+def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
+    """
+    Restrict a spawned worker process to one physical CUDA device.
+
+    Parameters
+    ----------
+    gpu_id : int
+        Physical GPU index assigned by the parent process.
+
+    Returns
+    -------
+    int
+        Local CUDA device index visible inside the restricted worker. This is
+        always 0 after setting ``CUDA_VISIBLE_DEVICES``.
+    """
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_id))
+    return 0
 
 
 def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
@@ -368,18 +387,23 @@ def _process_fiducial_rounds_on_gpu(
         ``result_queue``.
     """
 
+    assigned_gpu_id = int(gpu_id)
+    local_gpu_id = _restrict_worker_to_assigned_gpu(assigned_gpu_id)
+
     import cupy as cp
     import torch
 
     try:
-        torch.cuda.set_device(gpu_id)
-        cp.cuda.Device(gpu_id).use()
+        torch.cuda.set_device(local_gpu_id)
+        cp.cuda.Device(local_gpu_id).use()
 
         from merfish3danalysis.utils.multiview_registration import (
             register_pair_to_fixed,
             warp_array_to_reference_gpu,
+            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
         )
         from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+        from merfish3danalysis.utils.sofima_worker import run_sofima_flow_field_worker
 
         spacing_zyx_um = dr._datastore.voxel_size_zyx_um
         reference_float = reference_image.astype(np.float32, copy=False)
@@ -387,7 +411,7 @@ def _process_fiducial_rounds_on_gpu(
             decon = _load_deconvolve_fiducial_round(
                 dr=dr,
                 round_id=round_id,
-                gpu_id=gpu_id,
+                gpu_id=local_gpu_id,
                 chunked_rlgc=chunked_rlgc,
             )
 
@@ -415,15 +439,70 @@ def _process_fiducial_rounds_on_gpu(
                 f"elapsed_s={timeit.default_timer() - start_time:.2f}"
             )
 
-            if dr.save_all_fiducial_registered or dr._perform_optical_flow:
-                warp_start_time = timeit.default_timer()
-                warped = warp_array_to_reference_gpu(
-                    decon,
-                    transform_zyx_um=local_transform_zyx_um,
-                    spacing_zyx_um=spacing_zyx_um,
-                    reference_shape=reference_image.shape,
-                    gpu_id=gpu_id,
+            sofima_flow_field = None
+            flow_attrs = None
+            if dr._perform_deformable_registration:
+                cp.cuda.Stream.null.synchronize()
+                cp.get_default_memory_pool().free_all_blocks()
+                cp.get_default_pinned_memory_pool().free_all_blocks()
+                worker_request = {
+                    "datastore_path": str(dr._datastore._datastore_path),
+                    "tile_id": dr._tile_id,
+                    "reference_round_id": dr._round_ids[0],
+                    "moving_round_id": round_id,
+                    "gpu_id": assigned_gpu_id,
+                    "fixed_zyx": reference_image.astype(np.float32, copy=False),
+                    "moving_native_zyx": decon.astype(np.float32, copy=False),
+                    "spacing_zyx_um": tuple(float(v) for v in spacing_zyx_um),
+                    "config": {},
+                }
+                sofima_process = mp.Process(
+                    target=run_sofima_flow_field_worker,
+                    args=(worker_request,),
                 )
+                sofima_process.start()
+                sofima_process.join()
+                if sofima_process.exitcode != 0:
+                    raise RuntimeError(
+                        "SOFIMA flow-field worker failed for "
+                        f"tile={dr._tile_id} round={round_id} with exit code "
+                        f"{sofima_process.exitcode}."
+                    )
+                loaded_flow_field = dr._datastore.load_local_sofima_flow_field(
+                    tile=dr._tile_id,
+                    round=round_id,
+                    return_future=False,
+                )
+                if loaded_flow_field is None:
+                    raise RuntimeError(
+                        f"Missing SOFIMA flow field for tile={dr._tile_id} "
+                        f"round={round_id}."
+                    )
+                sofima_flow_field, flow_attrs = loaded_flow_field
+
+            if dr.save_all_fiducial_registered:
+                warp_start_time = timeit.default_timer()
+                if dr._perform_deformable_registration:
+                    warped = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                        decon,
+                        transform_zyx_um=local_transform_zyx_um,
+                        spacing_zyx_um=spacing_zyx_um,
+                        reference_shape=reference_image.shape,
+                        sofima_flow_field_xyz_px=sofima_flow_field,
+                        flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
+                        flow_field_box_start_xyz_px=flow_attrs[
+                            "map_box_start_xyz_px"
+                        ],
+                        gpu_id=local_gpu_id,
+                    )
+                else:
+                    warped = warp_array_to_reference_gpu(
+                        decon,
+                        transform_zyx_um=local_transform_zyx_um,
+                        spacing_zyx_um=spacing_zyx_um,
+                        reference_shape=reference_image.shape,
+                        gpu_id=local_gpu_id,
+                    )
                 _registration_diag(
                     "fiducial_warp "
                     f"tile={dr._tile_id} round={round_id} "
@@ -431,37 +510,14 @@ def _process_fiducial_rounds_on_gpu(
                     f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
                 )
 
-                if dr._perform_optical_flow:
-                    from merfish3danalysis.utils.registration import compute_warpfield
+                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
 
-                    data_registered, warp_field, block_size, block_stride = (
-                        compute_warpfield(
-                            reference_image.astype(np.float32, copy=False),
-                            warped.astype(np.float32, copy=False),
-                            gpu_id=gpu_id,
-                        )
-                    )
-                    dr._datastore.save_coord_of_xform_px(
-                        of_xform_px=warp_field,
-                        tile=dr._tile_id,
-                        block_size=block_size,
-                        block_stride=block_stride,
-                        round=round_id,
-                    )
-                    registered_image = data_registered.clip(0, 2**16 - 1).astype(
-                        np.uint16
-                    )
-                    del data_registered, warp_field
-                else:
-                    registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
-
-                if dr.save_all_fiducial_registered:
-                    dr._datastore.save_local_registered_image(
-                        registered_image=registered_image,
-                        tile=dr._tile_id,
-                        deconvolution=dr._decon_fiducial,
-                        round=round_id,
-                    )
+                dr._datastore.save_local_registered_image(
+                    registered_image=registered_image,
+                    tile=dr._tile_id,
+                    deconvolution=dr._decon_fiducial,
+                    round=round_id,
+                )
                 del warped, registered_image
 
             if dr._verbose >= 1:
@@ -583,15 +639,15 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         True after all assigned bits are processed.
     """
 
+    local_gpu_id = _restrict_worker_to_assigned_gpu(gpu_id)
+
     import cupy as cp
     import torch
 
-    torch.cuda.set_device(gpu_id)
-    cp.cuda.Device(gpu_id).use()
+    torch.cuda.set_device(local_gpu_id)
+    cp.cuda.Device(local_gpu_id).use()
 
     import os
-
-    from warpfield.warp import warp_volume
 
     os.environ["ORT_LOG_SEVERITY_LEVEL"] = "3"
     import onnxruntime as ort
@@ -602,6 +658,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     from merfish3danalysis.utils.multiview_registration import (
         transform_points_to_reference,
         warp_array_to_reference_gpu,
+        warp_array_to_reference_with_affine_and_sofima_flow_gpu,
     )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
@@ -648,7 +705,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
                     psf=_resolve_psf(dr._psfs, psf_idx),
-                    gpu_id=gpu_id,
+                    gpu_id=local_gpu_id,
                     release_memory=True,
                 )
                 decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
@@ -662,7 +719,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             else:
                 decon_image = corrected_image.copy()
 
-            ufish = UFish(device=f"cuda:{gpu_id}")
+            ufish = UFish(device=f"cuda:{local_gpu_id}")
             _load_ufish_model(ufish, dr._ufish_model)
             start_time = timeit.default_timer()
             feature_predictor_loc, feature_predictor_data = ufish.predict(
@@ -694,20 +751,61 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                         f"round={dr._round_ids[r_idx]}."
                     )
                 start_time = timeit.default_timer()
-                data_reg = warp_array_to_reference_gpu(
-                    decon_image,
-                    transform_zyx_um=local_transform_zyx_um,
-                    spacing_zyx_um=spacing_zyx_um,
-                    reference_shape=decon_image.shape,
-                    gpu_id=gpu_id,
-                )
-                feature_predictor_data = warp_array_to_reference_gpu(
-                    feature_predictor_data,
-                    transform_zyx_um=local_transform_zyx_um,
-                    spacing_zyx_um=spacing_zyx_um,
-                    reference_shape=decon_image.shape,
-                    gpu_id=gpu_id,
-                )
+                if dr._perform_deformable_registration:
+                    loaded_flow_field = dr._datastore.load_local_sofima_flow_field(
+                        tile=dr._tile_id,
+                        round=dr._round_ids[r_idx],
+                        return_future=False,
+                    )
+                    if loaded_flow_field is None:
+                        raise RuntimeError(
+                            f"Missing SOFIMA flow field for tile={dr._tile_id} "
+                            f"round={dr._round_ids[r_idx]}."
+                        )
+                    sofima_flow_field, flow_attrs = loaded_flow_field
+                    data_reg = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                        decon_image,
+                        transform_zyx_um=local_transform_zyx_um,
+                        spacing_zyx_um=spacing_zyx_um,
+                        reference_shape=decon_image.shape,
+                        sofima_flow_field_xyz_px=sofima_flow_field,
+                        flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
+                        flow_field_box_start_xyz_px=flow_attrs[
+                            "map_box_start_xyz_px"
+                        ],
+                        gpu_id=local_gpu_id,
+                    )
+                    feature_predictor_data = (
+                        warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                            feature_predictor_data,
+                            transform_zyx_um=local_transform_zyx_um,
+                            spacing_zyx_um=spacing_zyx_um,
+                            reference_shape=decon_image.shape,
+                            sofima_flow_field_xyz_px=sofima_flow_field,
+                            flow_field_stride_zyx_px=flow_attrs[
+                                "map_stride_zyx_px"
+                            ],
+                            flow_field_box_start_xyz_px=flow_attrs[
+                                "map_box_start_xyz_px"
+                            ],
+                            gpu_id=local_gpu_id,
+                        )
+                    )
+                else:
+                    data_reg = warp_array_to_reference_gpu(
+                        decon_image,
+                        transform_zyx_um=local_transform_zyx_um,
+                        spacing_zyx_um=spacing_zyx_um,
+                        reference_shape=decon_image.shape,
+                        gpu_id=local_gpu_id,
+                    )
+                    feature_predictor_data = warp_array_to_reference_gpu(
+                        feature_predictor_data,
+                        transform_zyx_um=local_transform_zyx_um,
+                        spacing_zyx_um=spacing_zyx_um,
+                        reference_shape=decon_image.shape,
+                        gpu_id=local_gpu_id,
+                    )
                 registered_points_zyx = transform_points_to_reference(
                     feature_predictor_loc[["z", "y", "x"]].to_numpy(),
                     transform_zyx_um=local_transform_zyx_um,
@@ -725,37 +823,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 )
                 del decon_image
 
-                if dr._perform_optical_flow:
-                    warp_field, block_size, block_stride = (
-                        dr._datastore.load_coord_of_xform_px(
-                            tile=dr._tile_id,
-                            round=dr._round_ids[r_idx],
-                            return_future=False,
-                        )
-                    )
-
-                    block_size = cp.asarray(block_size, dtype=cp.float32)
-                    block_stride = cp.asarray(block_stride, dtype=cp.float32)
-                    decon_image_warped_cp = warp_volume(
-                        data_reg,
-                        warp_field,
-                        block_stride,
-                        cp.array(-block_size / block_stride / 2),
-                        out=None,
-                        gpu_id=gpu_id,
-                    )
-                    data_reg = cp.asnumpy(decon_image_warped_cp).astype(np.float32)
-                    del decon_image_warped_cp
-                    feature_predictor_data_cp = warp_volume(
-                        feature_predictor_data,
-                        warp_field,
-                        block_stride,
-                        cp.array(-block_size / block_stride / 2),
-                        out=None,
-                        gpu_id=gpu_id,
-                    )
-                    feature_predictor_data = cp.asnumpy(feature_predictor_data_cp)
-                    del feature_predictor_data_cp
                 gc.collect()
             else:
                 data_reg = decon_image.copy()
@@ -868,8 +935,8 @@ class DataRegistration:
         Deconvolve readout images before registration to fiducials.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
-    perform_optical_flow: bool, default False
-        Perform optical flow registration
+    perform_deformable_registration: bool, default True
+        Estimate and apply a SOFIMA deformable flow field.
     save_all_fiducial_registered: bool, default True
         Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
@@ -892,7 +959,7 @@ class DataRegistration:
         decon_fiducial: bool = True,
         decon_readout: bool = False,
         overwrite_registered: bool = False,
-        perform_optical_flow: bool = True,
+        perform_deformable_registration: bool = True,
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 2048,
@@ -916,9 +983,9 @@ class DataRegistration:
         overwrite_registered : bool
             If True, regenerate registered images and feature predictor outputs
             even when they already exist.
-        perform_optical_flow : bool
-            If True, apply the legacy optical-flow deformation after affine
-            registration.
+        perform_deformable_registration : bool
+            If True, estimate a SOFIMA flow field after affine registration and
+            use the composed affine plus flow transform for final image warping.
         save_all_fiducial_registered : bool
             If True, save warped fiducial image volumes for all rounds. The
             first fiducial round is always saved.
@@ -944,7 +1011,7 @@ class DataRegistration:
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
-        self._perform_optical_flow = perform_optical_flow
+        self._perform_deformable_registration = perform_deformable_registration
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
@@ -1028,28 +1095,28 @@ class DataRegistration:
                 self._tile_id = value
 
     @property
-    def perform_optical_flow(self) -> bool:
-        """Get the perform_optical_flow flag.
+    def perform_deformable_registration(self) -> bool:
+        """Get the deformable registration flag.
 
         Returns
         -------
-        perform_optical_flow: bool
-            Perform optical flow registration
+        bool
+            True when SOFIMA deformable flow-field registration is enabled.
         """
 
-        return self._perform_optical_flow
+        return self._perform_deformable_registration
 
-    @perform_optical_flow.setter
-    def perform_optical_flow(self, value: bool) -> None:
-        """Set the perform_optical_flow flag.
+    @perform_deformable_registration.setter
+    def perform_deformable_registration(self, value: bool) -> None:
+        """Set the deformable registration flag.
 
         Parameters
         ----------
         value : bool
-            Perform optical flow registration
+            True to enable SOFIMA deformable flow-field registration.
         """
 
-        self._perform_optical_flow = value
+        self._perform_deformable_registration = value
 
     @property
     def overwrite_registered(self) -> bool:
@@ -1283,8 +1350,8 @@ class DataRegistration:
     def apply_registration_to_one_tile(self, tile_id: int | str) -> None:
         """Apply existing local registrations to readout bits for one tile.
 
-        This uses the rigid and optical-flow transforms already stored in the
-        datastore. It does not estimate or overwrite fiducial registrations.
+        This uses the local transforms already stored in the datastore. It does
+        not estimate or overwrite fiducial registrations.
         """
 
         self.tile_id = tile_id
@@ -1620,20 +1687,12 @@ class DataRegistration:
                 break
 
             subset = moving_rounds[start:end]
-            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            try:
-                process = mp.Process(
-                    target=_process_fiducial_rounds_on_gpu,
-                    args=(self, subset, reference_image, 0, result_queue),
-                )
-                process.start()
-                processes.append(process)
-            finally:
-                if old_vis is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+            process = mp.Process(
+                target=_process_fiducial_rounds_on_gpu,
+                args=(self, subset, reference_image, gpu_id, result_queue),
+            )
+            process.start()
+            processes.append(process)
 
         completed_rounds = set()
         errors = []
@@ -1713,18 +1772,9 @@ class DataRegistration:
                 break  # no more bits to assign
 
             subset = all_bits[start:end]
-
-            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            try:
-                p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, 0))
-                p.start()
-                processes.append(p)
-            finally:
-                if old_vis is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+            p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, gpu_id))
+            p.start()
+            processes.append(p)
 
         # 4) Wait for all GPU-workers to finish
         for p in processes:

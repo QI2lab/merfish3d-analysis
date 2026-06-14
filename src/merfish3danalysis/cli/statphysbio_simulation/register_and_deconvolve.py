@@ -53,7 +53,7 @@ def local_register_data(root_path: Path) -> None:
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        perform_optical_flow=False,
+        perform_deformable_registration=False,
         overwrite_registered=True,
         save_all_fiducial_registered=False,
         decon_readout=True,

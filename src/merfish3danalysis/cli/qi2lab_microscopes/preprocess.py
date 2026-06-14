@@ -23,7 +23,7 @@ def local_register_data(
     root_path: Path,
     num_gpus: int = 1,
     decon: bool = True,
-    opticalflow: bool = True,
+    deformable_registration: bool = True,
     decon_allfiducial: bool = True,
     save_all_fiducial: bool = False,
     overwrite: bool = True,
@@ -44,8 +44,8 @@ def local_register_data(
     decon: bool, Default = True
         perform readout deconvolution. If False, corrected data are re-saved for
         compatibility instead of deconvolved readouts.
-    opticalflow: bool, Default = True
-        perform optical flow based registration.
+    deformable_registration: bool, Default = True
+        perform SOFIMA residual deformable registration.
     decon_allfiducial: bool, Default = True
         perform deconvolution prior to registration for fiducials beyond the first round.
     save_all_fiducial: bool, Default = False
@@ -83,7 +83,7 @@ def local_register_data(
         datastore=datastore,
         decon_fiducial=decon_allfiducial,
         decon_readout=decon,
-        perform_optical_flow=opticalflow,
+        perform_deformable_registration=deformable_registration,
         overwrite_registered=overwrite,
         save_all_fiducial_registered=save_all_fiducial,
         num_gpus=num_gpus,

@@ -4128,6 +4128,221 @@ class qi2labDataStore:
             print("Error saving optical flow transform.")
             return None
 
+    def load_local_sofima_flow_field(
+        self,
+        *,
+        tile: int | str,
+        round: int | str,
+        return_future: bool | None = True,
+    ) -> tuple[ArrayLike, dict] | None:
+        """
+        Load the SOFIMA flow field for one local fiducial round.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile identifier.
+        round : int or str
+            Moving fiducial round index or identifier.
+        return_future : bool, default=True
+            If True, return the lazy array object used by the datastore backend.
+
+        Returns
+        -------
+        tuple[ArrayLike, dict] or None
+            SOFIMA flow field and metadata attributes. The map channels are X,
+            Y, Z and spatial axes are Z, Y, X.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        image_name = "local_sofima_flow_field"
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+        current_local_zarr_path = entity_root / Path(image_name)
+        image_path = self._image_store_path(current_local_zarr_path)
+        if not image_path.exists():
+            print("SOFIMA flow field not found.")
+            return None
+
+        try:
+            spec = self._build_image_write_spec(dtype="<f4")
+            sofima_flow_field = self._load_from_zarr_array(
+                self._get_kvstore_key(image_path),
+                spec,
+                return_future,
+            )
+            attributes = self._load_entity_attributes(
+                entity_root,
+                image_names=(image_name,),
+            )
+            return sofima_flow_field, attributes
+        except (OSError, ZarrError, KeyError) as e:
+            print(e)
+            print("Error loading SOFIMA flow field.")
+            return None
+
+    def save_local_sofima_flow_field(
+        self,
+        sofima_flow_field_xyz_px: ArrayLike,
+        *,
+        tile: int | str,
+        round: int | str,
+        reference_round: int | str,
+        map_stride_zyx_px: Sequence[float],
+        map_box_start_xyz_px: Sequence[float],
+        map_box_size_xyz_px: Sequence[float],
+        reference_shape_zyx_px: Sequence[int],
+        moving_shape_zyx_px: Sequence[int],
+        return_future: bool | None = False,
+    ) -> None:
+        """
+        Save the SOFIMA flow field for one local fiducial round.
+
+        Parameters
+        ----------
+        sofima_flow_field_xyz_px : ArrayLike
+            Relative SOFIMA flow field with channels X, Y, Z and spatial axes
+            Z, Y, X.
+        tile : int or str
+            Tile index or tile identifier.
+        round : int or str
+            Moving fiducial round index or identifier.
+        reference_round : int or str
+            Reference fiducial round index or identifier.
+        map_stride_zyx_px : Sequence[float]
+            Flow-field stride in reference pixels in Z, Y, X order.
+        map_box_start_xyz_px : Sequence[float]
+            Flow-field origin in reference pixels in X, Y, Z order.
+        map_box_size_xyz_px : Sequence[float]
+            Flow-field coverage in X, Y, Z order.
+        reference_shape_zyx_px : Sequence[int]
+            Reference image shape in Z, Y, X order.
+        moving_shape_zyx_px : Sequence[int]
+            Moving native image shape in Z, Y, X order.
+        return_future : bool, default=False
+            If True, return the asynchronous datastore write object.
+
+        Returns
+        -------
+        None
+            The flow field and attributes are written to the datastore.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        if isinstance(reference_round, int):
+            reference_round_id = self._round_ids[reference_round]
+        else:
+            reference_round_id = str(reference_round)
+
+        image_name = "local_sofima_flow_field"
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+        current_local_zarr_path = entity_root / Path(image_name)
+        attributes = {
+            "registration_backend": "sofima",
+            "initial_registration_source": "stored_local_affine_transform",
+            "flow_field_name": image_name,
+            "flow_direction": (
+                f"{reference_round_id}_reference_xyz_px_to_affine_initialized_"
+                f"{round_id}_xyz_px"
+            ),
+            "final_render_direction": (
+                f"{reference_round_id}_reference_xyz_px_to_moving_native_xyz_px"
+            ),
+            "flow_representation": "sofima_relative_coordinate_map",
+            "flow_channel_order": "xyz",
+            "flow_spatial_order": "zyx",
+            "map_stride_zyx_px": np.asarray(
+                map_stride_zyx_px, dtype=np.float32
+            ).tolist(),
+            "map_box_start_xyz_px": np.asarray(
+                map_box_start_xyz_px, dtype=np.float32
+            ).tolist(),
+            "map_box_size_xyz_px": np.asarray(
+                map_box_size_xyz_px, dtype=np.float32
+            ).tolist(),
+            "reference_shape_zyx_px": np.asarray(
+                reference_shape_zyx_px, dtype=np.int64
+            ).tolist(),
+            "moving_shape_zyx_px": np.asarray(
+                moving_shape_zyx_px, dtype=np.int64
+            ).tolist(),
+            "interpolation_count_final_image": 1,
+        }
+
+        try:
+            spec = self._build_image_write_spec(
+                dtype="<f4",
+                extra_attributes=attributes,
+            )
+            self._save_to_zarr_array(
+                np.asarray(sofima_flow_field_xyz_px, dtype=np.float32),
+                self._get_kvstore_key(current_local_zarr_path),
+                spec,
+                return_future,
+            )
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates=attributes,
+                target_image_name=image_name,
+                image_names=(image_name,),
+            )
+        except (OSError, TimeoutError):
+            print("Error saving SOFIMA flow field.")
+            return None
+
     def load_local_registered_image(
         self,
         tile: int | str,
