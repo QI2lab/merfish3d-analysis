@@ -5,9 +5,8 @@
 registered/deconvolved data, feature predictor images, decoded RNA overlays,
 cell outlines, and fused global outputs.
 
-The standard `setup-merfish3d` install includes the GUI dependencies. If the
-environment was installed with `setup-merfish3d --headless`, install the GUI
-dependencies before using the viewer.
+The standard `uv sync` install includes the GUI dependencies needed by the
+viewer.
 
 ## Launch
 
@@ -71,4 +70,3 @@ Common prerequisites are:
 - fused global polyDT and global decoded features for global fused view
 
 After changing selections, click **Display** to reload the NDV channel stack.
-

@@ -237,7 +237,7 @@ datastore.datastore_state = datastore_state
     │       └── ...
     ├── fused/
     │   └── fused.zarr/
-    │       ├── fused_fiducial_iso_zyx.ome.zarr/
+    │       ├── fused_fiducial_zyx.ome.zarr/
     │       │   ├── zarr.json
     │       │   └── 0/
     │       └── fused_all_channels_zyx.ome.zarr/   # optional

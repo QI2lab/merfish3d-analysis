@@ -22,8 +22,10 @@ import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
+import ctypes
 import gc
 import shutil
+import sys
 import tempfile
 import warnings
 from collections.abc import Sequence
@@ -31,6 +33,46 @@ from datetime import datetime
 from pathlib import Path
 from random import sample
 from typing import Literal
+
+_CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+
+
+def preload_cuda_libraries() -> None:
+    """Preload CUDA libs from NVIDIA pip wheels so GPU libraries can resolve them."""
+
+    if _CUDA_LIBRARY_HANDLES:
+        return
+
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    base = Path(sys.prefix) / "lib" / pyver / "site-packages" / "nvidia"
+
+    package_libraries = [
+        ("cuda_runtime", ["libcudart.so.12"]),
+        ("cuda_nvrtc", ["libnvrtc.so.12"]),
+        ("cuda_cupti", ["libcupti.so.12"]),
+        ("cufft", ["libcufft.so.11"]),
+        ("cublas", ["libcublasLt.so.12", "libcublas.so.12"]),
+        ("curand", ["libcurand.so.10"]),
+        ("cusparse", ["libcusparse.so.12"]),
+        ("cusolver", ["libcusolver.so.11", "libcusolverMg.so.11"]),
+        ("nvjitlink", ["libnvJitLink.so.12"]),
+    ]
+
+    for package_dir, names in package_libraries:
+        directory = base / package_dir / "lib"
+        for name in names:
+            lib_path = directory / name
+            if not lib_path.exists():
+                continue
+            try:
+                _CUDA_LIBRARY_HANDLES.append(
+                    ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+                )
+            except OSError:
+                pass
+
+
+preload_cuda_libraries()
 
 import cupy as cp
 import numpy as np
@@ -113,6 +155,8 @@ def decode_tiles_worker(
     None
         Function result.
     """
+    preload_cuda_libraries()
+
     import cupy as cp
     import torch
 
@@ -220,6 +264,8 @@ def _optimize_norm_worker(
     None
         Function result.
     """
+    preload_cuda_libraries()
+
     import cupy as cp
     import torch
 
