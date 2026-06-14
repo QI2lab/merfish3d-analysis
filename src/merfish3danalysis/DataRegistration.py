@@ -1848,9 +1848,8 @@ class DataRegistration:
 
             completed_sofima_rounds = set()
             sofima_errors = []
-            while (
-                len(completed_sofima_rounds) + len(sofima_errors)
-                < len(moving_rounds)
+            while len(completed_sofima_rounds) + len(sofima_errors) < len(
+                moving_rounds
             ):
                 try:
                     status, round_id, payload = sofima_queue.get(timeout=5)
@@ -1860,7 +1859,9 @@ class DataRegistration:
                         for process in sofima_processes
                     ):
                         break
-                    if all(process.exitcode is not None for process in sofima_processes):
+                    if all(
+                        process.exitcode is not None for process in sofima_processes
+                    ):
                         break
                     continue
                 if status == "result":
