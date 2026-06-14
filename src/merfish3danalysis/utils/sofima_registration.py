@@ -28,7 +28,7 @@ def _resolve_patch_and_step(
 
     default_patch_size = tuple(
         max(4, min(axis_size, patch_size))
-        for axis_size, patch_size in zip(shape_zyx, (32, 64, 64), strict=False)
+        for axis_size, patch_size in zip(shape_zyx, (48, 128, 128), strict=False)
     )
     patch_size = tuple(int(v) for v in config.get("patch_size_zyx", default_patch_size))
     patch_size = tuple(
@@ -112,23 +112,30 @@ def estimate_sofima_flow_field_xyz_px(
     )
     cleaned_flow = flow_utils.clean_flow(
         flow,
-        min_peak_ratio=float(config.get("min_peak_ratio", 1.4)),
-        min_peak_sharpness=float(config.get("min_peak_sharpness", 1.4)),
+        min_peak_ratio=float(config.get("min_peak_ratio", 1.2)),
+        min_peak_sharpness=float(config.get("min_peak_sharpness", 1.2)),
         max_magnitude=float(config.get("max_magnitude", 0.0)),
         max_deviation=float(config.get("max_deviation", 5.0)),
         dim=3,
     )
-    if not np.any(np.isfinite(cleaned_flow[0])):
-        raise RuntimeError("SOFIMA did not produce any valid flow vectors.")
-    sofima_flow_field = map_utils.fill_missing(
-        cleaned_flow,
-        extrapolate=True,
-        invalid_to_zero=False,
-        interpolate_first=True,
-    )
+    valid_flow_mask = np.isfinite(cleaned_flow[0])
+    valid_flow_vectors = int(np.sum(valid_flow_mask))
+    if valid_flow_vectors == 0:
+        sofima_flow_field = np.zeros_like(cleaned_flow, dtype=np.float32)
+        flow_status = "identity_fallback_no_valid_vectors"
+    else:
+        sofima_flow_field = map_utils.fill_missing(
+            cleaned_flow,
+            extrapolate=True,
+            invalid_to_zero=False,
+            interpolate_first=True,
+        )
+        flow_status = "ok"
     map_stride_zyx_px = [float(v) for v in step]
 
     metadata = {
+        "status": flow_status,
+        "valid_flow_vectors": valid_flow_vectors,
         "map_stride_zyx_px": map_stride_zyx_px,
         "map_box_start_xyz_px": [0.0, 0.0, 0.0],
         "map_box_size_xyz_px": [

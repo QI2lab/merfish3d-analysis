@@ -593,6 +593,8 @@ def _process_sofima_rounds_on_gpu(
                 map_box_size_xyz_px=metadata["map_box_size_xyz_px"],
                 reference_shape_zyx_px=fixed.shape,
                 moving_shape_zyx_px=moving_affine.shape,
+                sofima_status=metadata.get("status", "ok"),
+                valid_flow_vectors=metadata.get("valid_flow_vectors"),
                 return_future=False,
             )
 
@@ -619,6 +621,8 @@ def _process_sofima_rounds_on_gpu(
             _registration_diag(
                 "fiducial_sofima_done "
                 f"tile={dr._tile_id} round={round_id} "
+                f"status={metadata.get('status', 'ok')} "
+                f"valid_flow_vectors={metadata.get('valid_flow_vectors')} "
                 f"elapsed_s={timeit.default_timer() - start_time:.2f}"
             )
             result_queue.put(("result", round_id, None))

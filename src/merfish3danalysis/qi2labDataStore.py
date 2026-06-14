@@ -4321,6 +4321,8 @@ class qi2labDataStore:
         map_box_size_xyz_px: Sequence[float],
         reference_shape_zyx_px: Sequence[int],
         moving_shape_zyx_px: Sequence[int],
+        sofima_status: str = "ok",
+        valid_flow_vectors: int | None = None,
         return_future: bool | None = False,
     ) -> None:
         """
@@ -4347,6 +4349,10 @@ class qi2labDataStore:
             Reference image shape in Z, Y, X order.
         moving_shape_zyx_px : Sequence[int]
             Moving native image shape in Z, Y, X order.
+        sofima_status : str, default="ok"
+            Status reported by the SOFIMA estimator.
+        valid_flow_vectors : int or None, default=None
+            Number of valid local vectors before missing-vector fill.
         return_future : bool, default=False
             If True, return the asynchronous datastore write object.
 
@@ -4421,8 +4427,11 @@ class qi2labDataStore:
             "moving_shape_zyx_px": np.asarray(
                 moving_shape_zyx_px, dtype=np.int64
             ).tolist(),
+            "sofima_status": str(sofima_status),
             "interpolation_count_final_image": 1,
         }
+        if valid_flow_vectors is not None:
+            attributes["valid_flow_vectors"] = int(valid_flow_vectors)
 
         try:
             spec = self._build_image_write_spec(
