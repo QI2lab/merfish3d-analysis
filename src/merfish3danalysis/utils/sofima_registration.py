@@ -28,7 +28,7 @@ def _resolve_patch_and_step(
 
     default_patch_size = tuple(
         max(4, min(axis_size, patch_size))
-        for axis_size, patch_size in zip(shape_zyx, (48, 128, 128), strict=False)
+        for axis_size, patch_size in zip(shape_zyx, (24, 64, 64), strict=False)
     )
     patch_size = tuple(int(v) for v in config.get("patch_size_zyx", default_patch_size))
     patch_size = tuple(

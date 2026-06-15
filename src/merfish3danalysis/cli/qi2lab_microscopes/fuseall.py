@@ -189,10 +189,8 @@ def fuse_all_channels(
                     / Path(tile_id)
                     / Path("bit" + str(ch_idx).zfill(3))
                 )
-                decon_path = input_path / Path("registered_decon_data.ome.zarr")
-                predictor_path = input_path / Path(
-                    "registered_feature_predictor_data.ome.zarr"
-                )
+                decon_path = input_path / Path("decon_data.ome.zarr")
+                predictor_path = input_path / Path("feature_predictor_data.ome.zarr")
                 im_data[0, :] = (
                     da.from_zarr(str(decon_path)).astype(np.float32)
                     * da.from_zarr(str(predictor_path)).astype(np.float32).clip(0.25, 1)

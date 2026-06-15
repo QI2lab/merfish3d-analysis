@@ -753,11 +753,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     ort.set_default_logger_severity(3)
     from ufish.api import UFish
 
-    from merfish3danalysis.utils.multiview_registration import (
-        transform_points_to_reference,
-        warp_array_to_reference_gpu,
-        warp_array_to_reference_with_affine_and_sofima_flow_gpu,
-    )
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
     spacing_zyx_um = dr._datastore.voxel_size_zyx_um
@@ -837,91 +832,15 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             torch.cuda.empty_cache()
             gc.collect()
 
-            if r_idx > 0:
-                local_transform_zyx_um = (
-                    dr._datastore.load_local_round_transform_zyx_um(
-                        tile=dr._tile_id, round=dr._round_ids[r_idx]
-                    )
-                )
-                if local_transform_zyx_um is None:
-                    raise RuntimeError(
-                        f"Missing local round transform for tile={dr._tile_id} "
-                        f"round={dr._round_ids[r_idx]}."
-                    )
-                start_time = timeit.default_timer()
-                if dr._perform_deformable_registration:
-                    loaded_flow_field = dr._datastore.load_local_sofima_flow_field(
-                        tile=dr._tile_id,
-                        round=dr._round_ids[r_idx],
-                        return_future=False,
-                    )
-                    if loaded_flow_field is None:
-                        raise RuntimeError(
-                            f"Missing SOFIMA flow field for tile={dr._tile_id} "
-                            f"round={dr._round_ids[r_idx]}."
-                        )
-                    sofima_flow_field, flow_attrs = loaded_flow_field
-                    data_reg = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
-                        decon_image,
-                        transform_zyx_um=local_transform_zyx_um,
-                        spacing_zyx_um=spacing_zyx_um,
-                        reference_shape=decon_image.shape,
-                        sofima_flow_field_xyz_px=sofima_flow_field,
-                        flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                        flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
-                        gpu_id=local_gpu_id,
-                    )
-                    feature_predictor_data = (
-                        warp_array_to_reference_with_affine_and_sofima_flow_gpu(
-                            feature_predictor_data,
-                            transform_zyx_um=local_transform_zyx_um,
-                            spacing_zyx_um=spacing_zyx_um,
-                            reference_shape=decon_image.shape,
-                            sofima_flow_field_xyz_px=sofima_flow_field,
-                            flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                            flow_field_box_start_xyz_px=flow_attrs[
-                                "map_box_start_xyz_px"
-                            ],
-                            gpu_id=local_gpu_id,
-                        )
-                    )
-                else:
-                    data_reg = warp_array_to_reference_gpu(
-                        decon_image,
-                        transform_zyx_um=local_transform_zyx_um,
-                        spacing_zyx_um=spacing_zyx_um,
-                        reference_shape=decon_image.shape,
-                        gpu_id=local_gpu_id,
-                    )
-                    feature_predictor_data = warp_array_to_reference_gpu(
-                        feature_predictor_data,
-                        transform_zyx_um=local_transform_zyx_um,
-                        spacing_zyx_um=spacing_zyx_um,
-                        reference_shape=decon_image.shape,
-                        gpu_id=local_gpu_id,
-                    )
-                registered_points_zyx = transform_points_to_reference(
-                    feature_predictor_loc[["z", "y", "x"]].to_numpy(),
-                    transform_zyx_um=local_transform_zyx_um,
-                    spacing_zyx_um=spacing_zyx_um,
-                )
-                feature_predictor_loc[["z", "y", "x"]] = registered_points_zyx
-                _registration_diag(
-                    "bit_transform_and_warp "
-                    f"tile={dr._tile_id} bit={bit_id} "
-                    f"round={dr._round_ids[r_idx]} "
-                    f"image_shape={tuple(int(v) for v in decon_image.shape)} "
-                    f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
-                    f"spots={len(feature_predictor_loc)} "
-                    f"elapsed_s={timeit.default_timer() - start_time:.2f}"
-                )
-                del decon_image
-
-                gc.collect()
-            else:
-                data_reg = decon_image.copy()
-                del decon_image
-                gc.collect()
+            data_reg = decon_image
+            _registration_diag(
+                "bit_save_unwarped "
+                f"tile={dr._tile_id} bit={bit_id} "
+                f"round={dr._round_ids[r_idx]} "
+                f"image_shape={tuple(int(v) for v in data_reg.shape)} "
+                f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
+                f"spots={len(feature_predictor_loc)}"
+            )
 
             # clip to uint16
             data_reg = data_reg.clip(0, 2**16 - 1).astype(np.uint16)
@@ -1298,9 +1217,8 @@ class DataRegistration:
         corrected_shape = self._datastore._image_shape(
             entity_root / Path("corrected_data")
         )
-        registered_shape = self._datastore._image_shape(
-            entity_root / Path("registered_decon_data")
-        )
+        image_name = "registered_decon_data" if round_id is not None else "decon_data"
+        registered_shape = self._datastore._image_shape(entity_root / Path(image_name))
         return corrected_shape is not None and registered_shape == corrected_shape
 
     def _has_valid_feature_predictor_outputs(
@@ -1332,11 +1250,10 @@ class DataRegistration:
             entity_root / Path("corrected_data")
         )
         registered_shape = self._datastore._image_shape(
-            entity_root / Path("registered_decon_data")
+            entity_root / Path("decon_data")
         )
         feature_shape = self._datastore._image_shape(
-            entity_root
-            / Path(f"registered_{self._datastore.feature_predictor_folder_name}_data")
+            entity_root / Path(f"{self._datastore.feature_predictor_folder_name}_data")
         )
         spots_path = (
             self._datastore._feature_predictor_localizations_root_path

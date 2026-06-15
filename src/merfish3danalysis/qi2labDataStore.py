@@ -1880,7 +1880,8 @@ class qi2labDataStore:
         default_images = (
             "corrected_data",
             "registered_decon_data",
-            f"registered_{self.feature_predictor_folder_name}_data",
+            "decon_data",
+            f"{self.feature_predictor_folder_name}_data",
             "opticalflow_xform_px",
         )
         candidate_names = image_names if image_names is not None else default_images
@@ -2130,7 +2131,8 @@ class qi2labDataStore:
         required_names = {
             "corrected_data",
             "registered_decon_data",
-            f"registered_{self.feature_predictor_folder_name}_data",
+            "decon_data",
+            f"{self.feature_predictor_folder_name}_data",
         }
         for candidate_name in required_names:
             if candidate_name == image_name:
@@ -2142,8 +2144,8 @@ class qi2labDataStore:
                 raise ValueError(
                     f"Image shape mismatch in {entity_root.name}: "
                     f"{image_name}={shape} but {candidate_name}={candidate_shape}. "
-                    "corrected_data, registered_decon_data, and "
-                    "registered_feature_predictor_data must match."
+                    "corrected_data, registered/decon data, and "
+                    "feature_predictor_data must match."
                 )
 
     @staticmethod
@@ -2711,8 +2713,19 @@ class qi2labDataStore:
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
                 entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
+                current_local_zarr_path = str(entity_root / Path("decon_data"))
+
+                try:
+                    self._check_for_zarr_array(
+                        self._get_kvstore_key(current_local_zarr_path),
+                        self._zarrv2_spec.copy(),
+                    )
+                except (OSError, ZarrError):
+                    print(tile_id, bit_id)
+                    print("Readout decon data missing.")
+
                 current_local_zarr_path = str(
-                    entity_root / Path("registered_decon_data")
+                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
 
                 try:
@@ -2722,30 +2735,13 @@ class qi2labDataStore:
                     )
                 except (OSError, ZarrError):
                     print(tile_id, bit_id)
-                    print("Registered readout data missing.")
-
-                current_local_zarr_path = str(
-                    entity_root
-                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
-                )
-
-                try:
-                    self._check_for_zarr_array(
-                        self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec.copy(),
-                    )
-                except (OSError, ZarrError):
-                    print(tile_id, bit_id)
-                    print("Registered feature_predictor prediction missing.")
+                    print("feature_predictor prediction missing.")
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(
-                    entity_root / Path("registered_decon_data")
-                )
+                registered_shape = self._image_shape(entity_root / Path("decon_data"))
                 feature_shape = self._image_shape(
-                    entity_root
-                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
+                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
                 shapes = [
                     shape
@@ -2754,7 +2750,7 @@ class qi2labDataStore:
                 ]
                 if len(shapes) > 1 and any(shape != shapes[0] for shape in shapes[1:]):
                     raise ValueError(
-                        f"{tile_id} {bit_id} corrected/registered/feature image shapes differ: "
+                        f"{tile_id} {bit_id} corrected/decon/feature image shapes differ: "
                         f"{corrected_shape}, {registered_shape}, {feature_shape}"
                     )
 
@@ -4520,7 +4516,7 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id)
-                / Path("registered_decon_data")
+                / Path("decon_data")
             )
         else:
             if isinstance(round, int):
@@ -4628,8 +4624,10 @@ class qi2labDataStore:
                 print("'bit' must be integer index or string identifier")
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+            current_local_zarr_path = entity_root / Path("decon_data")
+            stage_position = self._resolve_original_tile_position_zyx_um(
+                tile_id=tile_id, bit_id=local_id
+            )
         else:
             if isinstance(round, int):
                 if round < 0:
@@ -4653,7 +4651,7 @@ class qi2labDataStore:
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name="registered_decon_data",
+                image_name="decon_data" if bit is not None else "registered_decon_data",
                 image=registered_image,
             )
             attributes = self._load_entity_attributes(entity_root)
@@ -4672,7 +4670,9 @@ class qi2labDataStore:
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name="registered_decon_data",
+                target_image_name=(
+                    "decon_data" if bit is not None else "registered_decon_data"
+                ),
             )
         except (OSError, TimeoutError, ValueError):
             print("Error saving corrected image.")
@@ -4737,7 +4737,7 @@ class qi2labDataStore:
             self._readouts_root_path
             / Path(tile_id)
             / Path(bit_id)
-            / Path(f"registered_{self.feature_predictor_folder_name}_data")
+            / Path(f"{self.feature_predictor_folder_name}_data")
         )
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -4814,16 +4814,18 @@ class qi2labDataStore:
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path(
-                f"registered_{self.feature_predictor_folder_name}_data"
+                f"{self.feature_predictor_folder_name}_data"
             )
 
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name=f"registered_{self.feature_predictor_folder_name}_data",
+                image_name=f"{self.feature_predictor_folder_name}_data",
                 image=feature_predictor_image,
             )
-            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+            stage_position = self._resolve_original_tile_position_zyx_um(
+                tile_id=tile_id, bit_id=local_id
+            )
             attributes = self._load_entity_attributes(entity_root)
             spec = self._build_image_write_spec(
                 dtype="<f4",
@@ -4839,7 +4841,7 @@ class qi2labDataStore:
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name=f"registered_{self.feature_predictor_folder_name}_data",
+                target_image_name=f"{self.feature_predictor_folder_name}_data",
             )
         except (OSError, ZarrError, ValueError) as e:
             print(e)

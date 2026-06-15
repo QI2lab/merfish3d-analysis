@@ -75,6 +75,8 @@ def preload_cuda_libraries() -> None:
 
 preload_cuda_libraries()
 
+import itertools
+
 import cupy as cp
 import numpy as np
 import pandas as pd
@@ -659,10 +661,23 @@ class PixelDecoder:
                             tile=tile_id, bit=bit_id, return_future=False
                         )
                     )
+                    _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                        tile=tile_id,
+                        bit=bit_id,
+                    )
 
-                    current_image = cp.asarray(
-                        decon_image, dtype=cp.float32
-                    ) * cp.asarray(feature_predictor_image, dtype=cp.float32)
+                    current_image = (
+                        np.asarray(decon_image, dtype=np.float32)
+                        * np.asarray(feature_predictor_image, dtype=np.float32)
+                    )
+                    current_image = self._warp_bit_prediction_weighted_image(
+                        current_image,
+                        tile=tile_id,
+                        bit_id=bit_id,
+                        emission_wavelength_um=em_wvl,
+                        gpu_id=gpu_id,
+                    )
+                    current_image = cp.asarray(current_image, dtype=cp.float32)
                     current_image[current_image > hot_pixel_threshold] = cp.median(
                         current_image[current_image.shape[0] // 2, :, :]
                     ).astype(cp.float32)
@@ -959,7 +974,294 @@ class PixelDecoder:
             cp.get_default_memory_pool().free_all_blocks()
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    def _load_bit_data(self, feature_predictor_threshold: float | None = 0.1) -> None:
+    def _estimate_chromatic_affines_from_barcodes(
+        self,
+        min_pairs: int = 20,
+    ) -> None:
+        """
+        Estimate 3D chromatic affine matrices from decoded RNA on-bit centroids.
+
+        Parameters
+        ----------
+        min_pairs : int, default=20
+            Minimum number of paired on-bit centroid measurements required to
+            estimate a wavelength-pair affine.
+
+        Returns
+        -------
+        None
+            Chromatic affine metadata are saved into the datastore calibration
+            sidecar.
+        """
+
+        if self._df_barcodes_loaded.empty:
+            return
+
+        bit_wavelengths = {}
+        bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
+        reference_tile = self._datastore.tile_ids[0]
+        for bit_index, bit_id in enumerate(bit_ids, start=1):
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=reference_tile,
+                bit=bit_id,
+            )
+            bit_wavelengths[bit_index] = float(em_wvl)
+
+        unique_wavelengths = sorted(set(bit_wavelengths.values()))
+        reference_wavelength = unique_wavelengths[0]
+        spacing = np.asarray(self._datastore.voxel_size_zyx_um, dtype=np.float32)
+        wavelength_to_index = {
+            wavelength: index for index, wavelength in enumerate(unique_wavelengths)
+        }
+        pair_points: dict[tuple[float, float], list[tuple[np.ndarray, np.ndarray]]] = {
+            (source_wavelength, target_wavelength): []
+            for source_wavelength in unique_wavelengths
+            for target_wavelength in unique_wavelengths
+            if not np.isclose(source_wavelength, target_wavelength)
+        }
+        contributing_transcripts = 0
+
+        for _row_index, row in self._df_barcodes_loaded.iterrows():
+            on_bits = [
+                int(row["on_bit_1"]),
+                int(row["on_bit_2"]),
+                int(row["on_bit_3"]),
+                int(row["on_bit_4"]),
+            ]
+            centers_by_wavelength = {}
+            for bit in on_bits:
+                center_cols = [
+                    f"bit{bit:02d}_center_z",
+                    f"bit{bit:02d}_center_y",
+                    f"bit{bit:02d}_center_x",
+                ]
+                if not all(col in row.index for col in center_cols):
+                    continue
+                center = row[center_cols].to_numpy(dtype=np.float32)
+                if not np.all(np.isfinite(center)):
+                    continue
+                intensity_col = f"bit{bit:02d}_intensity_sum"
+                weight = (
+                    float(row[intensity_col])
+                    if intensity_col in row.index and np.isfinite(row[intensity_col])
+                    else 1.0
+                )
+                wavelength = bit_wavelengths[bit]
+                centers_by_wavelength.setdefault(wavelength, []).append(
+                    (center, max(weight, 1e-6))
+                )
+
+            if len(centers_by_wavelength) < 2:
+                continue
+            contributing_transcripts += 1
+            wavelength_centers_um = {}
+            for wavelength, center_weights in centers_by_wavelength.items():
+                centers = np.asarray(
+                    [center for center, _weight in center_weights],
+                    dtype=np.float32,
+                )
+                weights = np.asarray(
+                    [weight for _center, weight in center_weights],
+                    dtype=np.float32,
+                )
+                wavelength_centers_um[wavelength] = (
+                    np.average(centers, axis=0, weights=weights) * spacing
+                )
+            barcode_wavelengths = sorted(wavelength_centers_um)
+            for source_wavelength in barcode_wavelengths:
+                for target_wavelength in barcode_wavelengths:
+                    if np.isclose(source_wavelength, target_wavelength):
+                        continue
+                    pair_points[(source_wavelength, target_wavelength)].append(
+                        (
+                            wavelength_centers_um[source_wavelength],
+                            wavelength_centers_um[target_wavelength],
+                        )
+                    )
+
+        edge_affines = {}
+        edge_diagnostics = {}
+        for wavelength_pair, points in pair_points.items():
+            if len(points) < int(min_pairs):
+                continue
+            source_points = np.asarray([point[0] for point in points], dtype=np.float32)
+            target_points = np.asarray([point[1] for point in points], dtype=np.float32)
+            affine, diagnostics = self._fit_affine_zyx_um(
+                source_points,
+                target_points,
+                min_pairs=min_pairs,
+            )
+            diagnostics["candidate_pairs"] = len(points)
+            edge_diagnostics[wavelength_pair] = diagnostics
+            if affine is not None:
+                edge_affines[wavelength_pair] = affine
+
+        adjacency = {wavelength: [] for wavelength in unique_wavelengths}
+        for source_wavelength, target_wavelength in edge_affines:
+            adjacency[source_wavelength].append(target_wavelength)
+
+        affines_by_wavelength = {
+            reference_wavelength: np.eye(4, dtype=np.float32),
+        }
+        status_by_wavelength = {reference_wavelength: "identity_reference"}
+        diagnostics_by_wavelength = {
+            wavelength: {
+                "paired_transcripts": contributing_transcripts,
+                "pair_constraints": 0,
+                "path_wavelengths_um": [],
+            }
+            for wavelength in unique_wavelengths
+        }
+
+        for wavelength in unique_wavelengths:
+            if np.isclose(wavelength, reference_wavelength):
+                continue
+
+            queue = [(wavelength, [wavelength], np.eye(4, dtype=np.float32))]
+            visited = {wavelength}
+            while queue:
+                current_wavelength, path, composed_affine = queue.pop(0)
+                if np.isclose(current_wavelength, reference_wavelength):
+                    affines_by_wavelength[wavelength] = composed_affine
+                    status_by_wavelength[wavelength] = "affine_estimated"
+                    pair_count = 0
+                    path_diagnostics = []
+                    for source_wavelength, target_wavelength in itertools.pairwise(path):
+                        pair_count += len(
+                            pair_points[(source_wavelength, target_wavelength)]
+                        )
+                        path_diagnostics.append(
+                            {
+                                "source_wavelength_um": float(source_wavelength),
+                                "target_wavelength_um": float(target_wavelength),
+                                "fit": edge_diagnostics[
+                                    (source_wavelength, target_wavelength)
+                                ],
+                            }
+                        )
+                    diagnostics_by_wavelength[wavelength] = {
+                        "paired_transcripts": contributing_transcripts,
+                        "pair_constraints": int(pair_count),
+                        "path_wavelengths_um": [float(v) for v in path],
+                        "path_fits": path_diagnostics,
+                    }
+                    break
+                for neighbor in adjacency[current_wavelength]:
+                    if neighbor in visited:
+                        continue
+                    visited.add(neighbor)
+                    edge_affine = edge_affines[(current_wavelength, neighbor)]
+                    queue.append(
+                        (
+                            neighbor,
+                            [*path, neighbor],
+                            edge_affine @ composed_affine,
+                        )
+                    )
+
+            if wavelength not in affines_by_wavelength:
+                affines_by_wavelength[wavelength] = np.eye(4, dtype=np.float32)
+                candidate_pairs = sum(
+                    len(pair_points[(wavelength, other_wavelength)])
+                    for other_wavelength in unique_wavelengths
+                    if not np.isclose(wavelength, other_wavelength)
+                )
+                status_by_wavelength[wavelength] = (
+                    "identity_fallback_unconnected"
+                    if candidate_pairs >= int(min_pairs)
+                    else "identity_fallback_too_few_pairs"
+                )
+                diagnostics_by_wavelength[wavelength] = {
+                    "paired_transcripts": contributing_transcripts,
+                    "pair_constraints": int(candidate_pairs),
+                    "path_wavelengths_um": [],
+                }
+
+        channels = {}
+        for wavelength in unique_wavelengths:
+            key = f"wavelength_{wavelength:.6f}"
+            channels[key] = {
+                "channel_index": wavelength_to_index[wavelength],
+                "channel_name": key,
+                "wavelength_um": float(wavelength),
+                "reference_channel": bool(np.isclose(wavelength, reference_wavelength)),
+                "affine_zyx_um": affines_by_wavelength[wavelength].tolist(),
+                "diagnostics": diagnostics_by_wavelength[wavelength],
+                "status": status_by_wavelength.get(
+                    wavelength, "identity_fallback_unconnected"
+                ),
+            }
+
+        self._datastore.save_chromatic_affine_transforms_zyx_um(
+            {
+                "reference_wavelength_um": float(reference_wavelength),
+                "voxel_size_zyx_um": [float(v) for v in spacing],
+                "estimator": (
+                    "decoded_rna_on_bit_weighted_centroid_affine_graph"
+                ),
+                "pair_constraints": int(sum(len(points) for points in pair_points.values())),
+                "contributing_transcripts": contributing_transcripts,
+                "channels": channels,
+            }
+        )
+
+    def _save_identity_chromatic_affines(self) -> None:
+        """
+        Save identity chromatic affine transforms for the current bit wavelengths.
+
+        Returns
+        -------
+        None
+            Identity channel transforms are written to datastore metadata.
+        """
+
+        bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
+        reference_tile = self._datastore.tile_ids[0]
+        wavelengths = []
+        for bit_id in bit_ids:
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=reference_tile,
+                bit=bit_id,
+            )
+            wavelengths.append(float(em_wvl))
+        unique_wavelengths = sorted(set(wavelengths))
+        reference_wavelength = unique_wavelengths[0]
+        channels = {}
+        for index, wavelength in enumerate(unique_wavelengths):
+            key = f"wavelength_{wavelength:.6f}"
+            channels[key] = {
+                "channel_index": index,
+                "channel_name": key,
+                "wavelength_um": float(wavelength),
+                "reference_channel": bool(np.isclose(wavelength, reference_wavelength)),
+                "affine_zyx_um": np.eye(4, dtype=np.float32).tolist(),
+                "diagnostics": {
+                    "paired_transcripts": 0,
+                    "pair_constraints": 0,
+                    "path_wavelengths_um": [],
+                },
+                "status": "identity_reference"
+                if np.isclose(wavelength, reference_wavelength)
+                else "identity_initialization",
+            }
+        self._datastore.save_chromatic_affine_transforms_zyx_um(
+            {
+                "reference_wavelength_um": float(reference_wavelength),
+                "voxel_size_zyx_um": [
+                    float(v) for v in self._datastore.voxel_size_zyx_um
+                ],
+                "estimator": "identity_initialization_for_iterative_decoding",
+                "pair_constraints": 0,
+                "contributing_transcripts": 0,
+                "channels": channels,
+            }
+        )
+
+    def _load_bit_data(
+        self,
+        feature_predictor_threshold: float | None = 0.1,
+        gpu_id: int = 0,
+    ) -> None:
         """Load prediction-weighted readout data for all bits in the tile.
 
         Parameters
@@ -967,6 +1269,8 @@ class PixelDecoder:
         feature_predictor_threshold : float, default 0.1
             Legacy argument kept for API compatibility. The loaded image is
             weighted by the feature-predictor image rather than thresholded.
+        gpu_id : int, default=0
+            CUDA device ID used for decode-time warping.
         """
 
         if self._verbose > 1:
@@ -1001,22 +1305,24 @@ class PixelDecoder:
 
             feature_predictor_array = feature_predictor_image.result()
             decon_array = decon_image.result()
-            prediction = np.asarray(
-                feature_predictor_array[self._z_slice, :, :],
-                dtype=np.float32,
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=self._tile_idx,
+                bit=bit_id,
             )
-            registered_data = np.asarray(
-                decon_array[self._z_slice, :, :],
-                dtype=np.float32,
+            prediction_weighted = (
+                np.asarray(decon_array, dtype=np.float32)
+                * np.asarray(feature_predictor_array, dtype=np.float32)
             )
-            images.append(registered_data * prediction)
+            registered_data = self._warp_bit_prediction_weighted_image(
+                prediction_weighted,
+                tile=self._tile_idx,
+                bit_id=bit_id,
+                emission_wavelength_um=em_wvl,
+                gpu_id=gpu_id,
+            )
+            images.append(registered_data[self._z_slice, :, :])
             del feature_predictor_array, decon_array
-            self._em_wvl.append(
-                self._datastore.load_local_wavelengths_um(
-                    tile=self._tile_idx,
-                    bit=bit_id,
-                )[1]
-            )
+            self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)
         if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
@@ -1052,6 +1358,103 @@ class PixelDecoder:
 
         del images
         gc.collect()
+
+    def _warp_bit_prediction_weighted_image(
+        self,
+        image: np.ndarray,
+        *,
+        tile: int | str,
+        bit_id: str,
+        emission_wavelength_um: float,
+        gpu_id: int = 0,
+    ) -> np.ndarray:
+        """
+        Warp one unregistered prediction-weighted bit image into round001 space.
+
+        Parameters
+        ----------
+        image : numpy.ndarray
+            Prediction-weighted readout image in the bit's native Z, Y, X grid.
+        tile : int or str
+            Tile index or identifier.
+        bit_id : str
+            Readout bit identifier.
+        emission_wavelength_um : float
+            Bit emission wavelength in microns.
+        gpu_id : int, default=0
+            CUDA device ID used for interpolation.
+
+        Returns
+        -------
+        numpy.ndarray
+            Prediction-weighted image sampled in the round001 local reference
+            frame.
+        """
+
+        from merfish3danalysis.utils.multiview_registration import (
+            warp_array_to_reference_gpu,
+            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
+        )
+
+        round_index = (
+            self._datastore.load_local_round_linker(tile=tile, bit=bit_id) - 1
+        )
+        if round_index <= 0:
+            round_id = None
+            round_transform_zyx_um = np.eye(4, dtype=np.float32)
+        else:
+            round_id = self._datastore.round_ids[round_index]
+            round_transform_zyx_um = self._datastore.load_local_round_transform_zyx_um(
+                tile=tile,
+                round=round_id,
+            )
+            if round_transform_zyx_um is None:
+                raise RuntimeError(
+                    f"Missing local round transform for tile={tile} "
+                    f"round={round_id}."
+                )
+
+        chromatic_zyx_um = self._datastore.load_chromatic_affine_transform_zyx_um(
+            wavelength_um=emission_wavelength_um,
+        )
+        transform_zyx_um = (
+            np.linalg.inv(np.asarray(chromatic_zyx_um, dtype=np.float32))
+            @ np.asarray(round_transform_zyx_um, dtype=np.float32)
+        )
+        spacing_zyx_um = self._datastore.voxel_size_zyx_um
+
+        loaded_flow_field = None
+        if round_id is not None:
+            loaded_flow_field = self._datastore.load_local_sofima_flow_field(
+                tile=tile,
+                round=round_id,
+                return_future=False,
+            )
+        if loaded_flow_field is None and np.allclose(
+            transform_zyx_um,
+            np.eye(4, dtype=np.float32),
+        ):
+            return np.asarray(image, dtype=np.float32)
+        if loaded_flow_field is not None:
+            sofima_flow_field, flow_attrs = loaded_flow_field
+            return warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                image,
+                transform_zyx_um=transform_zyx_um,
+                spacing_zyx_um=spacing_zyx_um,
+                reference_shape=image.shape,
+                sofima_flow_field_xyz_px=sofima_flow_field,
+                flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
+                flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
+                gpu_id=gpu_id,
+            ).astype(np.float32, copy=False)
+
+        return warp_array_to_reference_gpu(
+            image,
+            transform_zyx_um=transform_zyx_um,
+            spacing_zyx_um=spacing_zyx_um,
+            reference_shape=image.shape,
+            gpu_id=gpu_id,
+        ).astype(np.float32, copy=False)
 
     def _lowpass_image(
         self,
@@ -1161,6 +1564,113 @@ class PixelDecoder:
         if self._zstride > 1:
             return DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS
         return DEFAULT_3D_MINIMUM_PIXELS
+
+    @staticmethod
+    def _fit_affine_zyx_um(
+        source_zyx_um: np.ndarray,
+        target_zyx_um: np.ndarray,
+        *,
+        min_pairs: int,
+        residual_threshold_um: float = 0.75,
+        max_iterations: int = 4,
+    ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
+        """
+        Fit a robust 3D affine from source to target points.
+
+        Parameters
+        ----------
+        source_zyx_um : numpy.ndarray
+            Source points in physical Z, Y, X microns.
+        target_zyx_um : numpy.ndarray
+            Target points in physical Z, Y, X microns.
+        min_pairs : int
+            Minimum number of retained point correspondences.
+        residual_threshold_um : float, default=0.75
+            Residual threshold used for iterative outlier rejection.
+        max_iterations : int, default=4
+            Number of robust refit iterations.
+
+        Returns
+        -------
+        tuple[numpy.ndarray or None, dict]
+            Affine mapping source coordinates to target coordinates and fit
+            diagnostics. The affine is None when the point set is not
+            sufficient for a 3D affine.
+        """
+
+        source = np.asarray(source_zyx_um, dtype=np.float64)
+        target = np.asarray(target_zyx_um, dtype=np.float64)
+        diagnostics: dict[str, float | int | str | list[float]] = {
+            "input_pairs": int(source.shape[0]),
+            "used_pairs": 0,
+            "median_residual_um": np.nan,
+            "p95_residual_um": np.nan,
+            "source_extent_zyx_um": [0.0, 0.0, 0.0],
+            "status": "insufficient_pairs",
+        }
+        if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
+            diagnostics["status"] = "invalid_point_shape"
+            return None, diagnostics
+        if source.shape[0] < max(4, int(min_pairs)):
+            return None, diagnostics
+
+        source_extent = np.ptp(source, axis=0)
+        diagnostics["source_extent_zyx_um"] = [float(v) for v in source_extent]
+        if np.linalg.matrix_rank(source - np.mean(source, axis=0)) < 3:
+            diagnostics["status"] = "insufficient_3d_spatial_rank"
+            return None, diagnostics
+
+        keep = np.ones(source.shape[0], dtype=bool)
+        affine = np.eye(4, dtype=np.float64)
+        for _iteration in range(max(1, int(max_iterations))):
+            design = np.concatenate(
+                [source[keep], np.ones((int(np.sum(keep)), 1), dtype=np.float64)],
+                axis=1,
+            )
+            solution, *_ = np.linalg.lstsq(design, target[keep], rcond=None)
+            affine = np.eye(4, dtype=np.float64)
+            affine[:3, :3] = solution[:3, :].T
+            affine[:3, 3] = solution[3, :]
+
+            predicted = (
+                np.concatenate(
+                    [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                    axis=1,
+                )
+                @ affine.T
+            )[:, :3]
+            residuals = np.linalg.norm(predicted - target, axis=1)
+            next_keep = residuals <= float(residual_threshold_um)
+            if np.sum(next_keep) < max(4, int(min_pairs)):
+                break
+            if np.array_equal(next_keep, keep):
+                keep = next_keep
+                break
+            keep = next_keep
+
+        predicted = (
+            np.concatenate(
+                [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                axis=1,
+            )
+            @ affine.T
+        )[:, :3]
+        residuals = np.linalg.norm(predicted - target, axis=1)
+        kept_residuals = residuals[keep]
+        if kept_residuals.size < max(4, int(min_pairs)):
+            diagnostics["status"] = "too_few_inliers"
+            diagnostics["used_pairs"] = int(kept_residuals.size)
+            return None, diagnostics
+
+        diagnostics.update(
+            {
+                "used_pairs": int(kept_residuals.size),
+                "median_residual_um": float(np.median(kept_residuals)),
+                "p95_residual_um": float(np.percentile(kept_residuals, 95)),
+                "status": "ok",
+            }
+        )
+        return affine.astype(np.float32), diagnostics
 
     @staticmethod
     def _scale_pixel_traces(
@@ -1502,6 +2012,84 @@ class PixelDecoder:
 
         return float(self._z_range[0]) + decoded_z * float(self._zstride)
 
+    def _add_on_bit_weighted_centroids(
+        self,
+        df_barcode: pd.DataFrame,
+        codewords_label_image: np.ndarray,
+        intensity_image: np.ndarray,
+        on_bits_1based: np.ndarray,
+    ) -> pd.DataFrame:
+        """
+        Add per-on-bit intensity-weighted centroids for chromatic estimation.
+
+        Parameters
+        ----------
+        df_barcode : pandas.DataFrame
+            Decoded barcode table with ``label`` and centroid columns.
+        codewords_label_image : numpy.ndarray
+            Connected-component label image in decoded Z, Y, X coordinates.
+        intensity_image : numpy.ndarray
+            Intensity image in Z, Y, X, bit order.
+        on_bits_1based : numpy.ndarray
+            On-bit indices for each barcode row, 1-based.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Barcode table with sparse per-bit center and intensity-support
+            columns.
+        """
+
+        if df_barcode.empty:
+            return df_barcode
+
+        intensity = np.asarray(intensity_image, dtype=np.float32)
+        for bit_idx in range(1, self._n_merfish_bits + 1):
+            df_barcode[f"bit{bit_idx:02d}_center_z"] = np.nan
+            df_barcode[f"bit{bit_idx:02d}_center_y"] = np.nan
+            df_barcode[f"bit{bit_idx:02d}_center_x"] = np.nan
+            df_barcode[f"bit{bit_idx:02d}_intensity_sum"] = np.nan
+            df_barcode[f"bit{bit_idx:02d}_intensity_peak"] = np.nan
+            df_barcode[f"bit{bit_idx:02d}_voxel_count"] = np.nan
+
+        region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
+        fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
+        for row_index, label_value in enumerate(region_labels):
+            region_mask = codewords_label_image == label_value
+            if not np.any(region_mask):
+                continue
+            coords = np.column_stack(np.nonzero(region_mask)).astype(np.float64)
+            for bit_idx in on_bits_1based[row_index]:
+                zero_based_bit = int(bit_idx) - 1
+                weights = intensity[..., zero_based_bit][region_mask].astype(
+                    np.float64,
+                    copy=False,
+                )
+                weights = np.maximum(weights, 0)
+                weight_sum = float(np.sum(weights))
+                positive_voxel_count = int(np.sum(weights > 0))
+                if weight_sum > 0:
+                    center = np.sum(coords * weights[:, np.newaxis], axis=0) / weight_sum
+                else:
+                    center = fallback_centers[row_index]
+                if self._z_crop or self._zstride != 1:
+                    center = center.copy()
+                    center[0] = self._decoded_z_to_source_z(np.asarray([center[0]]))[0]
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_z"] = center[0]
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_y"] = center[1]
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_x"] = center[2]
+                df_barcode.loc[
+                    row_index, f"bit{int(bit_idx):02d}_intensity_sum"
+                ] = weight_sum
+                df_barcode.loc[
+                    row_index, f"bit{int(bit_idx):02d}_intensity_peak"
+                ] = float(np.max(weights)) if weights.size else 0.0
+                df_barcode.loc[
+                    row_index, f"bit{int(bit_idx):02d}_voxel_count"
+                ] = positive_voxel_count
+
+        return df_barcode
+
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
     ) -> None:
@@ -1709,6 +2297,13 @@ class PixelDecoder:
             df_barcode = df_barcode.rename(
                 columns={"centroid-0": "z", "centroid-1": "y", "centroid-2": "x"}
             )
+            if self._optimize_normalization_weights:
+                df_barcode = self._add_on_bit_weighted_centroids(
+                    df_barcode,
+                    codewords_label_image,
+                    intensity_image,
+                    on_sel,
+                )
 
             if self._z_crop or self._zstride != 1:
                 df_barcode["z"] = self._decoded_z_to_source_z(df_barcode["z"])
@@ -3633,7 +4228,10 @@ class PixelDecoder:
             )
 
             self._tile_idx = tile_idx
-            self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
+            self._load_bit_data(
+                feature_predictor_threshold=feature_predictor_threshold,
+                gpu_id=gpu_id,
+            )
             self._filter_type = "raw"
             effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
             if effective_lowpass_sigma is not None and not np.any(
@@ -3716,6 +4314,7 @@ class PixelDecoder:
         self._iterative_normalization_vector = None
         self._global_background_vector = None
         self._optimize_normalization_weights = True
+        self._save_identity_chromatic_affines()
         self._load_global_normalization_vectors(
             gpu_id=0,
             recalculate=True,
@@ -3794,6 +4393,7 @@ class PixelDecoder:
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
                     )
+                self._estimate_chromatic_affines_from_barcodes()
                 self._load_global_normalization_vectors(
                     gpu_id=0,
                     lowpass_sigma=lowpass_sigma,

@@ -183,7 +183,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     entity_root = datastore._readouts_root_path / tile_ids[0] / bit_ids[0]
     attributes = datastore._load_entity_attributes(
         entity_root,
-        image_names=("registered_decon_data",),
+        image_names=("decon_data",),
     )
     return bool(attributes.get("deconvolution", False))
 
