@@ -666,10 +666,9 @@ class PixelDecoder:
                         bit=bit_id,
                     )
 
-                    current_image = (
-                        np.asarray(decon_image, dtype=np.float32)
-                        * np.asarray(feature_predictor_image, dtype=np.float32)
-                    )
+                    current_image = np.asarray(
+                        decon_image, dtype=np.float32
+                    ) * np.asarray(feature_predictor_image, dtype=np.float32)
                     current_image = self._warp_bit_prediction_weighted_image(
                         current_image,
                         tile=tile_id,
@@ -1126,7 +1125,9 @@ class PixelDecoder:
                     status_by_wavelength[wavelength] = "affine_estimated"
                     pair_count = 0
                     path_diagnostics = []
-                    for source_wavelength, target_wavelength in itertools.pairwise(path):
+                    for source_wavelength, target_wavelength in itertools.pairwise(
+                        path
+                    ):
                         pair_count += len(
                             pair_points[(source_wavelength, target_wavelength)]
                         )
@@ -1196,10 +1197,10 @@ class PixelDecoder:
             {
                 "reference_wavelength_um": float(reference_wavelength),
                 "voxel_size_zyx_um": [float(v) for v in spacing],
-                "estimator": (
-                    "decoded_rna_on_bit_weighted_centroid_affine_graph"
+                "estimator": ("decoded_rna_on_bit_weighted_centroid_affine_graph"),
+                "pair_constraints": int(
+                    sum(len(points) for points in pair_points.values())
                 ),
-                "pair_constraints": int(sum(len(points) for points in pair_points.values())),
                 "contributing_transcripts": contributing_transcripts,
                 "channels": channels,
             }
@@ -1309,10 +1310,9 @@ class PixelDecoder:
                 tile=self._tile_idx,
                 bit=bit_id,
             )
-            prediction_weighted = (
-                np.asarray(decon_array, dtype=np.float32)
-                * np.asarray(feature_predictor_array, dtype=np.float32)
-            )
+            prediction_weighted = np.asarray(
+                decon_array, dtype=np.float32
+            ) * np.asarray(feature_predictor_array, dtype=np.float32)
             registered_data = self._warp_bit_prediction_weighted_image(
                 prediction_weighted,
                 tile=self._tile_idx,
@@ -1396,9 +1396,7 @@ class PixelDecoder:
             warp_array_to_reference_with_affine_and_sofima_flow_gpu,
         )
 
-        round_index = (
-            self._datastore.load_local_round_linker(tile=tile, bit=bit_id) - 1
-        )
+        round_index = self._datastore.load_local_round_linker(tile=tile, bit=bit_id) - 1
         if round_index <= 0:
             round_id = None
             round_transform_zyx_um = np.eye(4, dtype=np.float32)
@@ -1410,17 +1408,15 @@ class PixelDecoder:
             )
             if round_transform_zyx_um is None:
                 raise RuntimeError(
-                    f"Missing local round transform for tile={tile} "
-                    f"round={round_id}."
+                    f"Missing local round transform for tile={tile} round={round_id}."
                 )
 
         chromatic_zyx_um = self._datastore.load_chromatic_affine_transform_zyx_um(
             wavelength_um=emission_wavelength_um,
         )
-        transform_zyx_um = (
-            np.linalg.inv(np.asarray(chromatic_zyx_um, dtype=np.float32))
-            @ np.asarray(round_transform_zyx_um, dtype=np.float32)
-        )
+        transform_zyx_um = np.linalg.inv(
+            np.asarray(chromatic_zyx_um, dtype=np.float32)
+        ) @ np.asarray(round_transform_zyx_um, dtype=np.float32)
         spacing_zyx_um = self._datastore.voxel_size_zyx_um
 
         loaded_flow_field = None
@@ -2069,7 +2065,9 @@ class PixelDecoder:
                 weight_sum = float(np.sum(weights))
                 positive_voxel_count = int(np.sum(weights > 0))
                 if weight_sum > 0:
-                    center = np.sum(coords * weights[:, np.newaxis], axis=0) / weight_sum
+                    center = (
+                        np.sum(coords * weights[:, np.newaxis], axis=0) / weight_sum
+                    )
                 else:
                     center = fallback_centers[row_index]
                 if self._z_crop or self._zstride != 1:
@@ -2078,15 +2076,15 @@ class PixelDecoder:
                 df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_z"] = center[0]
                 df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_y"] = center[1]
                 df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_x"] = center[2]
-                df_barcode.loc[
-                    row_index, f"bit{int(bit_idx):02d}_intensity_sum"
-                ] = weight_sum
-                df_barcode.loc[
-                    row_index, f"bit{int(bit_idx):02d}_intensity_peak"
-                ] = float(np.max(weights)) if weights.size else 0.0
-                df_barcode.loc[
-                    row_index, f"bit{int(bit_idx):02d}_voxel_count"
-                ] = positive_voxel_count
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_intensity_sum"] = (
+                    weight_sum
+                )
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_intensity_peak"] = (
+                    float(np.max(weights)) if weights.size else 0.0
+                )
+                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_voxel_count"] = (
+                    positive_voxel_count
+                )
 
         return df_barcode
 
