@@ -585,7 +585,6 @@ def _process_sofima_rounds_on_gpu(
             sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
                 fixed,
                 moving_affine,
-                config={},
             )
             dr._datastore.save_local_sofima_flow_field(
                 sofima_flow_field,
