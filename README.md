@@ -56,6 +56,14 @@ Run package entry points through `uv run`, for example:
 uv run qi2lab-preprocess /path/to/experiment
 ```
 
+## Registration conventions
+
+Local deformable registration uses SOFIMA residual flow fields after affine
+fiducial registration. The datastore saves these fields as OME-Zarr arrays with
+shape `(3, z, y, x)`, channel order `X, Y, Z`, spatial order `Z, Y, X`, and a
+patch-centered `map_box_start_xyz_px`. The datastore documentation describes
+the full convention and the save/load round-trip contract.
+
 ## View a qi2lab datastore
 
 The standard `uv sync` install includes the ndv/PyQt dependencies for the

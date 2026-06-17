@@ -19,7 +19,8 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
     - Read and write compressed Zarr v2 using Tensorstore library for performance.
 - Processing capabilities for widefield, standard light-sheet, and skewed light-sheet data.
 - Rigid, affine, and deformable local tile registration.
-    - GPU-accelerated registration estimation combined with ITK for image warping.
+    - GPU-accelerated affine registration, SOFIMA residual flow-field
+      estimation, and single-pass GPU warping.
 - Rigid and affine global registration using [multiview-stitcher](https://multiview-stitcher.github.io/multiview-stitcher/main/)
 - GPU-accelerated image processing and decoding.
     - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels. All non-GPU accelerated functions are [Numba](https://numba.pydata.org/) accelerated.

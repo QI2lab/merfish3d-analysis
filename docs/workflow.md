@@ -63,12 +63,12 @@ flowchart TD
  subgraph s2["MERFISH preprocessing"]
         n17["Deconvolution"]
         n18["feature_predictor prediction"]
-        n19["Tile warping"]
+        n19["Save unwarped readout arrays"]
   end
  subgraph s3["Fiducial preprocessing"]
         n14["Deconvolution"]
-        n15["Rigid registration"]
-        n16["Deformable registration"]
+        n15["Affine registration"]
+        n16["SOFIMA residual flow field"]
   end
  subgraph s1["Local preprocessing"]
         s2
@@ -93,6 +93,13 @@ flowchart TD
     n18@{ shape: procs}
     n19@{ shape: procs}
 ```
+
+Fiducial registration stores the affine transform for each round relative to
+round 1. When deformable registration is enabled, it also stores a SOFIMA
+residual flow field in the moving fiducial round. Readout preprocessing saves
+unwarped deconvolved images and feature-prediction images. Pixel decoding loads
+those arrays and applies chromatic, affine, and SOFIMA transforms in one
+sampling step.
 
 ## Global registration and fusion of first fiducial round
 

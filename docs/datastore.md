@@ -176,6 +176,35 @@ datastore_state.update({"Corrected": True})
 datastore.datastore_state = datastore_state
 ```
 
+## SOFIMA deformable registration convention
+
+When deformable local registration is enabled, preprocessing estimates a
+SOFIMA residual flow field after the moving fiducial round has already been
+affine-initialized into the first fiducial round frame. The field is stored in
+the moving round's fiducial group as `local_sofima_flow_field.ome.zarr`.
+
+The saved array and attributes use the following convention:
+
+- Array shape is `(3, z, y, x)`.
+- Channel order is `X, Y, Z`.
+- Spatial axis order is `Z, Y, X`, matching image arrays.
+- Values are relative displacements in reference-image pixels. Adding the
+  interpolated field to a round001 reference coordinate gives the coordinate in
+  the affine-initialized moving image.
+- `map_stride_zyx_px` is the flow-map spacing in reference pixels, ordered
+  `Z, Y, X`.
+- `map_box_start_xyz_px` is the reference pixel coordinate of the first flow
+  sample, ordered `X, Y, Z`. SOFIMA estimates patch-centered vectors, so this
+  value is normally half the patch size, not `(0, 0, 0)`.
+- `map_box_size_xyz_px` is the sampled flow-lattice extent from
+  `map_box_start_xyz_px` through the last stored map sample, ordered `X, Y, Z`.
+- `reference_shape_zyx_px` records the output grid used when the field is
+  applied after reload.
+
+The datastore round trip is expected to preserve the float32 flow array exactly.
+Applying a reloaded SOFIMA field with its saved metadata must produce the same
+warped image as applying the in-memory field returned by the estimator.
+
 ## DataStore structure
 
 ```bash
@@ -211,7 +240,7 @@ datastore.datastore_state = datastore_state
     │       │   ├── registered_decon_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   └── opticalflow_xform_px.ome.zarr/
+    │       │   └── local_sofima_flow_field.ome.zarr/  # rounds > 1 when enabled
     │       │       ├── zarr.json
     │       │       └── 0/
     │       ├── round002/
@@ -223,10 +252,10 @@ datastore.datastore_state = datastore_state
     │       │   ├── corrected_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   ├── registered_decon_data.ome.zarr/
+    │       │   ├── decon_data.ome.zarr/
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   └── registered_feature_predictor_data.ome.zarr/
+    │       │   └── feature_predictor_data.ome.zarr/
     │       │       ├── zarr.json
     │       │       └── 0/
     │       ├── bit002/
@@ -264,7 +293,7 @@ datastore.datastore_state = datastore_state
 
 ## Metadata conventions
 
-- Each image directory (for example `corrected_data.ome.zarr/`, `registered_decon_data.ome.zarr/`, `masks_fiducial_iso_zyx.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Each image directory (for example `corrected_data.ome.zarr/`, `registered_decon_data.ome.zarr/`, `decon_data.ome.zarr/`, or `feature_predictor_data.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
 - Folder-level metadata for non-image entities (for example `calibrations/`, `fiducial/*/round*/`, `readouts/*/bit*/`) is stored in `attributes.json`.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
 - All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).

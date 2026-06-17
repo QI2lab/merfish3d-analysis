@@ -1,9 +1,13 @@
 """
 Register qi2lab 3D MERFISH data using multiview-stitcher.
 
-This module registers fiducial rounds to the first fiducial round, applies the
-saved physical-space transforms to readout data and U-FISH predictions, and can
-optionally apply a SOFIMA deformable flow field after affine registration.
+This module registers fiducial rounds to the first fiducial round, saves the
+unwarped deconvolved readout data and U-FISH predictions, and records the
+transforms needed by pixel decoding. If enabled, SOFIMA estimates a residual
+deformable field after affine registration. The field is saved as an
+``(3, z, y, x)`` XYZ-channel map whose vectors point from round001 reference
+pixels toward the affine-initialized moving round; the map origin is the
+SOFIMA patch center, not the image corner.
 
 History:
 --------
@@ -949,7 +953,8 @@ class DataRegistration:
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
     perform_deformable_registration: bool, default True
-        Estimate and apply a SOFIMA deformable flow field.
+        Estimate and save a residual SOFIMA deformable flow field after affine
+        fiducial registration.
     save_all_fiducial_registered: bool, default True
         Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
@@ -997,8 +1002,10 @@ class DataRegistration:
             If True, regenerate registered images and feature predictor outputs
             even when they already exist.
         perform_deformable_registration : bool
-            If True, estimate a SOFIMA flow field after affine registration and
-            use the composed affine plus flow transform for final image warping.
+            If True, estimate a SOFIMA flow field after affine registration.
+            The saved field uses channel order X, Y, Z; spatial order Z, Y, X;
+            and a patch-centered map origin. Pixel decoding composes this field
+            with affine and chromatic transforms when readout images are loaded.
         save_all_fiducial_registered : bool
             If True, save warped fiducial image volumes for all rounds. The
             first fiducial round is always saved.

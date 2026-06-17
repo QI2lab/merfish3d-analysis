@@ -924,6 +924,18 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     reference pixel space, composed with the stored affine transform, and the
     original moving image is sampled at the composed source coordinates.
 
+    Deformable-field convention
+    ---------------------------
+    ``sofima_flow_field_xyz_px`` has channel-first shape ``(3, z, y, x)``.
+    Channels are ordered ``X, Y, Z`` and spatial axes are ordered ``Z, Y, X``.
+    Each vector is a relative displacement in reference pixels from a
+    reference-grid coordinate toward the affine-initialized moving image. The
+    first map sample is located at ``flow_field_box_start_xyz_px`` in ``X, Y,
+    Z`` pixel coordinates. SOFIMA estimates patch-centered vectors, so fields
+    produced by :func:`estimate_sofima_flow_field_xyz_px` use half the patch
+    size as this origin. The map stride is stored separately in ``Z, Y, X``
+    order.
+
     Parameters
     ----------
     image : numpy.ndarray
@@ -941,7 +953,7 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     flow_field_stride_zyx_px : Sequence[float]
         Flow-field sampling stride in reference pixels in Z, Y, X order.
     flow_field_box_start_xyz_px : Sequence[float]
-        Reference pixel coordinate of the flow-field origin in X, Y, Z order.
+        Reference pixel coordinate of the first flow sample in X, Y, Z order.
     reference_origin_zyx_um : Sequence[float], default=(0.0, 0.0, 0.0)
         Physical origin for the reference and moving local grids.
     mode : str, default="constant"

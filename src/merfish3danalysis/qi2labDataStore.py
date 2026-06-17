@@ -4249,7 +4249,11 @@ class qi2labDataStore:
         -------
         tuple[ArrayLike, dict] or None
             SOFIMA flow field and metadata attributes. The map channels are X,
-            Y, Z and spatial axes are Z, Y, X.
+            Y, Z and spatial axes are Z, Y, X. ``map_stride_zyx_px`` is stored
+            in Z, Y, X order. ``map_box_start_xyz_px`` is stored in X, Y, Z
+            order and gives the reference-grid coordinate of the first flow
+            sample. For fields produced by SOFIMA this is the patch center
+            coordinate, not the image corner.
         """
 
         if isinstance(tile, int):
@@ -4324,6 +4328,15 @@ class qi2labDataStore:
         """
         Save the SOFIMA flow field for one local fiducial round.
 
+        The saved OME-Zarr image stores the raw float32 SOFIMA map exactly as
+        used in memory. The package convention is channel-first ``(3, z, y,
+        x)`` with channels ``X, Y, Z`` and spatial axes ``Z, Y, X``. Flow
+        values are relative displacements in reference-image pixels from a
+        reference coordinate to the affine-initialized moving coordinate.
+        ``map_box_start_xyz_px`` is the reference coordinate of the first flow
+        sample in ``X, Y, Z`` order. SOFIMA patch-correlation vectors are
+        patch-centered, so this is normally half the patch size.
+
         Parameters
         ----------
         sofima_flow_field_xyz_px : ArrayLike
@@ -4338,9 +4351,11 @@ class qi2labDataStore:
         map_stride_zyx_px : Sequence[float]
             Flow-field stride in reference pixels in Z, Y, X order.
         map_box_start_xyz_px : Sequence[float]
-            Flow-field origin in reference pixels in X, Y, Z order.
+            Reference pixel coordinate of the first flow sample in X, Y, Z
+            order.
         map_box_size_xyz_px : Sequence[float]
-            Flow-field coverage in X, Y, Z order.
+            Flow-field sample-lattice extent in X, Y, Z order, measured from
+            ``map_box_start_xyz_px`` through the last stored map sample.
         reference_shape_zyx_px : Sequence[int]
             Reference image shape in Z, Y, X order.
         moving_shape_zyx_px : Sequence[int]

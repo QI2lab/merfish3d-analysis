@@ -54,6 +54,20 @@ def estimate_sofima_flow_field_xyz_px(
     """
     Estimate a SOFIMA flow field after affine initialization.
 
+    The returned field follows the package deformable-registration convention:
+
+    - Array shape is ``(3, z, y, x)``.
+    - Channel order is ``X, Y, Z`` because this is SOFIMA's flow-component
+      order.
+    - Spatial map axes are ``Z, Y, X`` to match image arrays.
+    - Values are relative displacements in reference-image pixels. Adding the
+      interpolated field to a reference-grid coordinate gives the coordinate in
+      the affine-initialized moving image.
+    - ``map_box_start_xyz_px`` is the reference-grid coordinate of the first
+      flow sample in ``X, Y, Z`` order. SOFIMA estimates patch-centered
+      displacements, so this origin is half the patch size, not the image
+      corner.
+
     Parameters
     ----------
     fixed_zyx : numpy.ndarray
@@ -69,7 +83,8 @@ def estimate_sofima_flow_field_xyz_px(
     -------
     tuple[numpy.ndarray, dict[str, Any]]
         Relative SOFIMA flow field with XYZ channels and metadata describing
-        the map spacing/origin.
+        the map spacing/origin. The metadata is sufficient to save the field
+        as OME-Zarr and later reproduce the same warp from the reloaded field.
 
     Notes
     -----
@@ -82,6 +97,8 @@ def estimate_sofima_flow_field_xyz_px(
     ``post_image`` to ``pre_image``. Passing the affine-initialized moving image
     as ``pre_image`` and round001 as ``post_image`` gives the residual
     displacement from reference pixels into affine-initialized moving pixels.
+    This is the direction expected by
+    :func:`merfish3danalysis.utils.multiview_registration.warp_array_to_reference_with_affine_and_sofima_flow_gpu`.
     """
 
     config = {} if config is None else dict(config)
@@ -137,7 +154,11 @@ def estimate_sofima_flow_field_xyz_px(
         "status": flow_status,
         "valid_flow_vectors": valid_flow_vectors,
         "map_stride_zyx_px": map_stride_zyx_px,
-        "map_box_start_xyz_px": [0.0, 0.0, 0.0],
+        "map_box_start_xyz_px": [
+            float(patch_size[2]) / 2.0,
+            float(patch_size[1]) / 2.0,
+            float(patch_size[0]) / 2.0,
+        ],
         "map_box_size_xyz_px": [
             float((sofima_flow_field.shape[3] - 1) * map_stride_zyx_px[2] + 1),
             float((sofima_flow_field.shape[2] - 1) * map_stride_zyx_px[1] + 1),

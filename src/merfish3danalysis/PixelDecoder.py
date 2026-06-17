@@ -1389,6 +1389,15 @@ class PixelDecoder:
         numpy.ndarray
             Prediction-weighted image sampled in the round001 local reference
             frame.
+
+        Notes
+        -----
+        When a SOFIMA field is present, the field is loaded from the fiducial
+        round metadata and applied with the package convention: channel order
+        X, Y, Z; spatial order Z, Y, X; and a patch-centered
+        ``map_box_start_xyz_px``. The stored ``reference_shape_zyx_px`` is used
+        as the output grid so reloaded deformable fields reproduce the
+        in-memory fiducial warp convention.
         """
 
         from merfish3danalysis.utils.multiview_registration import (
@@ -1433,11 +1442,14 @@ class PixelDecoder:
             return np.asarray(image, dtype=np.float32)
         if loaded_flow_field is not None:
             sofima_flow_field, flow_attrs = loaded_flow_field
+            reference_shape = tuple(
+                int(v) for v in flow_attrs["reference_shape_zyx_px"]
+            )
             return warp_array_to_reference_with_affine_and_sofima_flow_gpu(
                 image,
                 transform_zyx_um=transform_zyx_um,
                 spacing_zyx_um=spacing_zyx_um,
-                reference_shape=image.shape,
+                reference_shape=reference_shape,
                 sofima_flow_field_xyz_px=sofima_flow_field,
                 flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
                 flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
