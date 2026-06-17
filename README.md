@@ -12,12 +12,7 @@ You can try out the package in the cloud on simulated data using a [Google Colab
 
 ## Installation
 
-This project uses one `uv` environment for preprocessing, decoding,
-registration, stitching, viewing, development, and documentation. The Python
-environment installs CUDA 12.9 runtime/toolkit wheels through the project
-dependencies, including PyTorch from the CUDA 12.9 PyTorch index and
-`cupy-cuda12x[ctk]`. You still need a compatible NVIDIA driver installed on the
-machine.
+This project uses one `uv` environment for preprocessing, decoding, registration, stitching, viewing, development, and documentation. The Python environment installs CUDA 12.9 runtime/toolkit wheels through the project dependencies. You still need a compatible NVIDIA driver installed on the machine.
 
 Install `uv` if needed:
 
@@ -58,16 +53,11 @@ uv run qi2lab-preprocess /path/to/experiment
 
 ## Registration conventions
 
-Local deformable registration uses SOFIMA residual flow fields after affine
-fiducial registration. The datastore saves these fields as OME-Zarr arrays with
-shape `(3, z, y, x)`, channel order `X, Y, Z`, spatial order `Z, Y, X`, and a
-patch-centered `map_box_start_xyz_px`. The datastore documentation describes
-the full convention and the save/load round-trip contract.
+Local deformable registration uses SOFIMA residual flow fields after fiducial registration.
 
 ## View a qi2lab datastore
 
-The standard `uv sync` install includes the ndv/PyQt dependencies for the
-view-only datastore GUI.
+The standard `uv sync` install includes the ndv/PyQt dependencies for the view-only datastore GUI.
 
 Open an experiment root:
 
@@ -81,17 +71,9 @@ or open a datastore directly:
 uv run qi2lab-viewer /path/to/experiment/qi2labdatastore
 ```
 
-The viewer only reads existing datastore contents. It can display selected tiles,
-round-1 fiducials, selected bits, feature predictor probability images, decoded
-codebook-word overlays, and cell-outline overlays when those components are
-already present. When the datastore contains fused global polyDT data, globally
-decoded features, cell outlines, and the global polyDT segmentation image, enable
-the global fused view to inspect the downsampled polyDT max projection with
-selected RNA identities on the global coordinate canvas.
+The viewer only reads existing datastore contents. It can display selected tiles, round-1 fiducials, selected bits, feature predictor probability images, decoded codebook-word overlays, and cell-outline overlays when those components are already present. When the datastore contains fused global polyDT data, globally decoded features, cell outlines, and the global polyDT segmentation image, enable the global fused view to inspect the downsampled polyDT max projection with selected RNA identities on the global coordinate canvas.
 
-The documentation includes a [viewer guide with screenshots](https://qi2lab.github.io/merfish3d-analysis/viewer/)
-and a [current API notes](https://qi2lab.github.io/merfish3d-analysis/api/) page
-covering the current RLGC, PSF, and U-FISH defaults.
+The documentation includes a [viewer guide with screenshots](https://qi2lab.github.io/merfish3d-analysis/viewer/) and a [current API notes](https://qi2lab.github.io/merfish3d-analysis/api/) page covering the current RLGC, PSF, and U-FISH defaults.
 
 ## Proseg segmentation optimization
 
