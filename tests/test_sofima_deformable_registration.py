@@ -92,7 +92,9 @@ def _save_sofima_recovery_png(
     )
 
     for row_index, z_plane in enumerate(z_planes):
-        flow_z = round(z_plane * (estimated_flow_xyz.shape[1] - 1) / (fixed.shape[0] - 1))
+        flow_z = round(
+            z_plane * (estimated_flow_xyz.shape[1] - 1) / (fixed.shape[0] - 1)
+        )
         panels = (
             (fixed[z_plane], "gray", image_vmin, image_vmax),
             (expected_rgb[flow_z], None, None, None),
@@ -185,9 +187,7 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
         spacing_zyx_um=spacing_zyx_um,
         registration_binning={"z": 1, "y": 3, "x": 3},
     )
-    recovered_shift_zyx_px = np.asarray(transform[:3, 3]) / np.asarray(
-        spacing_zyx_um
-    )
+    recovered_shift_zyx_px = np.asarray(transform[:3, 3]) / np.asarray(spacing_zyx_um)
     np.testing.assert_allclose(
         recovered_shift_zyx_px,
         true_shift_zyx_px,
@@ -424,7 +424,9 @@ def test_sofima_estimator_recovers_object_model_warp_field(
         )
         displacement_xyz = np.stack(
             [
-                map_coordinates(flow_xyz[channel_index], coords, order=1, mode="nearest")
+                map_coordinates(
+                    flow_xyz[channel_index], coords, order=1, mode="nearest"
+                )
                 for channel_index in range(3)
             ],
             axis=1,

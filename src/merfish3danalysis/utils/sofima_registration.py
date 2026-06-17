@@ -231,8 +231,7 @@ def _refine_flow_vectors_subpixel(
         )
 
         pre_starts = (
-            base_pre_starts[:, jnp.newaxis, :]
-            + candidate_offsets[jnp.newaxis, :, :]
+            base_pre_starts[:, jnp.newaxis, :] + candidate_offsets[jnp.newaxis, :, :]
         )
         pre_coords = (
             patch_grid_zyx[:, jnp.newaxis, jnp.newaxis, ...]
@@ -438,9 +437,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             total_flow = _compose_flow_fields_same_grid(
                 total_flow,
                 residual_flow,
-                stride_zyx=tuple(
-                    float(v) for v in total_metadata["map_stride_zyx_px"]
-                ),
+                stride_zyx=tuple(float(v) for v in total_metadata["map_stride_zyx_px"]),
                 box_start_xyz=tuple(
                     float(v) for v in total_metadata["map_box_start_xyz_px"]
                 ),
