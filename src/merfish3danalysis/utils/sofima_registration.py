@@ -14,6 +14,7 @@ SOFIMA_MIN_PEAK_RATIO = 1.2
 SOFIMA_MIN_PEAK_SHARPNESS = 1.2
 SOFIMA_MAX_MAGNITUDE = 30.0
 SOFIMA_MAX_DEVIATION = 5.0
+SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX = 3.0
 SOFIMA_SUBPIXEL_OFFSETS = (-0.5, 0.0, 0.5)
 SOFIMA_SUBPIXEL_BATCH_SIZE = 32
 SOFIMA_MESH_DT = 0.001
@@ -55,6 +56,67 @@ def _resolve_patch_and_step(
     patch_size = tuple(int(v) for v in default_patch_size)
     step = tuple(max(1, size // 2) for size in patch_size)
     return patch_size, step
+
+
+def _stabilize_axial_flow_component(
+    flow_xyz: np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """
+    Clip unstable local axial residuals in a SOFIMA flow field.
+
+    The affine registration step handles the bulk Z displacement between
+    rounds. The SOFIMA field is used for residual deformable correction, but
+    local axial flow is much less well constrained than lateral flow in these
+    anisotropic volumes. Large local Z excursions can map valid reference
+    planes outside the moving image and produce black slabs in warped data.
+
+    Parameters
+    ----------
+    flow_xyz : numpy.ndarray
+        SOFIMA flow field with channels ordered X, Y, Z and spatial axes Z, Y,
+        X.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, dict[str, Any]]
+        Flow field with the Z channel clipped around its robust median, and
+        metadata describing the clipping.
+    """
+
+    stabilized = np.asarray(flow_xyz, dtype=np.float32).copy()
+    if stabilized.shape[0] != 3:
+        raise ValueError("SOFIMA flow field must have three XYZ channels.")
+
+    axial_flow = stabilized[2]
+    finite_mask = np.isfinite(axial_flow)
+    if not np.any(finite_mask):
+        stabilized[2] = 0.0
+        return stabilized, {
+            "axial_flow_stabilized": True,
+            "axial_flow_valid_vectors": 0,
+            "axial_flow_median_px": 0.0,
+            "axial_flow_max_local_displacement_px": SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX,
+            "axial_flow_clipped_vectors": int(axial_flow.size),
+        }
+
+    finite_values = axial_flow[finite_mask]
+    median_z = float(np.median(finite_values))
+    lower = median_z - SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX
+    upper = median_z + SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX
+    clipped = np.clip(axial_flow, lower, upper)
+    clipped = np.where(finite_mask, clipped, median_z)
+    clipped_count = int(np.sum(np.abs(clipped - axial_flow) > 1e-6))
+    stabilized[2] = clipped.astype(np.float32, copy=False)
+
+    return stabilized, {
+        "axial_flow_stabilized": True,
+        "axial_flow_valid_vectors": int(np.sum(finite_mask)),
+        "axial_flow_median_px": median_z,
+        "axial_flow_max_local_displacement_px": SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX,
+        "axial_flow_clipped_vectors": clipped_count,
+        "axial_flow_preclip_min_px": float(np.min(finite_values)),
+        "axial_flow_preclip_max_px": float(np.max(finite_values)),
+    }
 
 
 def _compose_flow_fields_same_grid(
@@ -442,6 +504,8 @@ def _estimate_sofima_flow_field_xyz_px_impl(
                     float(v) for v in total_metadata["map_box_start_xyz_px"]
                 ),
             )
+            total_flow, axial_metadata = _stabilize_axial_flow_component(total_flow)
+            total_metadata.update(axial_metadata)
             total_metadata["valid_flow_vectors"] = int(
                 total_metadata["valid_flow_vectors"]
             ) + int(residual_metadata["valid_flow_vectors"])
@@ -461,6 +525,8 @@ def _estimate_sofima_flow_field_xyz_px_impl(
                     mode="nearest",
                 ).astype(np.float32, copy=False)
         total_metadata["residual_iterations"] = completed_iterations
+        total_flow, axial_metadata = _stabilize_axial_flow_component(total_flow)
+        total_metadata.update(axial_metadata)
         return total_flow.astype(np.float32, copy=False), total_metadata
 
     from sofima import flow_field, flow_utils, map_utils
@@ -525,6 +591,9 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             initial_flow_field,
             step,
         )
+        sofima_flow_field, axial_metadata = _stabilize_axial_flow_component(
+            sofima_flow_field
+        )
         flow_status = "ok"
     map_stride_zyx_px = [float(v) for v in step]
 
@@ -546,6 +615,8 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         ],
     }
     metadata.update(relaxation_metadata)
+    if valid_flow_vectors > 0:
+        metadata.update(axial_metadata)
     return sofima_flow_field.astype(np.float32, copy=False), metadata
 
 

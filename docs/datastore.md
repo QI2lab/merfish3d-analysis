@@ -182,6 +182,12 @@ When deformable local registration is enabled, preprocessing estimates a
 SOFIMA residual flow field after the moving fiducial round has already been
 affine-initialized into the first fiducial round frame. The field is stored in
 the moving round's fiducial group as `local_sofima_flow_field.ome.zarr`.
+SOFIMA's local patch-correlation measurements are integer-pixel vectors. The
+preprocessing pipeline refines accepted vectors within a small subpixel search
+window, composes a bounded residual pass, and saves the float32 result after
+the measurements are relaxed with SOFIMA's 3D elastic mesh. The SOFIMA flow
+estimation, residual composition, and subpixel patch scoring are run through
+JAX on the GPU.
 
 The saved array and attributes use the following convention:
 

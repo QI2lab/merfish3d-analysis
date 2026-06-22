@@ -1012,85 +1012,109 @@ class PixelDecoder:
         wavelength_to_index = {
             wavelength: index for index, wavelength in enumerate(unique_wavelengths)
         }
-        pair_points: dict[tuple[float, float], list[tuple[np.ndarray, np.ndarray]]] = {
-            (source_wavelength, target_wavelength): []
+        previous_chromatic_affines = {}
+        previous_calibration = self._datastore.load_chromatic_affine_transforms_zyx_um()
+        if isinstance(previous_calibration, dict):
+            for channel in previous_calibration.get("channels", {}).values():
+                if not isinstance(channel, dict):
+                    continue
+                wavelength = channel.get("wavelength_um")
+                affine = channel.get("affine_zyx_um")
+                if wavelength is None or affine is None:
+                    continue
+                previous_chromatic_affines[float(wavelength)] = np.asarray(
+                    affine,
+                    dtype=np.float32,
+                )
+        pair_points: dict[tuple[float, float], tuple[np.ndarray, np.ndarray]] = {
+            (source_wavelength, target_wavelength): (
+                np.empty((0, 3), dtype=np.float32),
+                np.empty((0, 3), dtype=np.float32),
+            )
             for source_wavelength in unique_wavelengths
             for target_wavelength in unique_wavelengths
             if not np.isclose(source_wavelength, target_wavelength)
         }
-        contributing_transcripts = 0
 
-        for _row_index, row in self._df_barcodes_loaded.iterrows():
-            on_bits = [
-                int(row["on_bit_1"]),
-                int(row["on_bit_2"]),
-                int(row["on_bit_3"]),
-                int(row["on_bit_4"]),
-            ]
-            centers_by_wavelength = {}
-            for bit in on_bits:
+        on_bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
+        if not all(column in self._df_barcodes_loaded.columns for column in on_bit_columns):
+            return
+        on_bits = self._df_barcodes_loaded[on_bit_columns].to_numpy(dtype=np.int16)
+        num_barcodes = len(self._df_barcodes_loaded)
+        centers_by_wavelength_um = {}
+        valid_by_wavelength = {}
+
+        for wavelength in unique_wavelengths:
+            weighted_sum = np.zeros((num_barcodes, 3), dtype=np.float64)
+            weight_sum = np.zeros(num_barcodes, dtype=np.float64)
+            for bit, bit_wavelength in bit_wavelengths.items():
+                if not np.isclose(bit_wavelength, wavelength):
+                    continue
                 center_cols = [
                     f"bit{bit:02d}_center_z",
                     f"bit{bit:02d}_center_y",
                     f"bit{bit:02d}_center_x",
                 ]
-                if not all(col in row.index for col in center_cols):
+                if not all(col in self._df_barcodes_loaded.columns for col in center_cols):
                     continue
-                center = row[center_cols].to_numpy(dtype=np.float32)
-                if not np.all(np.isfinite(center)):
-                    continue
+                centers = self._df_barcodes_loaded[center_cols].to_numpy(
+                    dtype=np.float64
+                )
                 intensity_col = f"bit{bit:02d}_intensity_sum"
-                weight = (
-                    float(row[intensity_col])
-                    if intensity_col in row.index and np.isfinite(row[intensity_col])
-                    else 1.0
-                )
-                wavelength = bit_wavelengths[bit]
-                centers_by_wavelength.setdefault(wavelength, []).append(
-                    (center, max(weight, 1e-6))
-                )
-
-            if len(centers_by_wavelength) < 2:
-                continue
-            contributing_transcripts += 1
-            wavelength_centers_um = {}
-            for wavelength, center_weights in centers_by_wavelength.items():
-                centers = np.asarray(
-                    [center for center, _weight in center_weights],
-                    dtype=np.float32,
-                )
-                weights = np.asarray(
-                    [weight for _center, weight in center_weights],
-                    dtype=np.float32,
-                )
-                wavelength_centers_um[wavelength] = (
-                    np.average(centers, axis=0, weights=weights) * spacing
-                )
-            barcode_wavelengths = sorted(wavelength_centers_um)
-            for source_wavelength in barcode_wavelengths:
-                for target_wavelength in barcode_wavelengths:
-                    if np.isclose(source_wavelength, target_wavelength):
-                        continue
-                    pair_points[(source_wavelength, target_wavelength)].append(
-                        (
-                            wavelength_centers_um[source_wavelength],
-                            wavelength_centers_um[target_wavelength],
-                        )
+                if intensity_col in self._df_barcodes_loaded.columns:
+                    weights = self._df_barcodes_loaded[intensity_col].to_numpy(
+                        dtype=np.float64
                     )
+                else:
+                    weights = np.ones(num_barcodes, dtype=np.float64)
+                bit_is_on = np.any(on_bits == int(bit), axis=1)
+                valid = bit_is_on & np.all(np.isfinite(centers), axis=1)
+                valid &= np.isfinite(weights) & (weights > 0)
+                if not np.any(valid):
+                    continue
+                weighted_sum[valid] += centers[valid] * weights[valid, np.newaxis]
+                weight_sum[valid] += weights[valid]
+
+            valid_wavelength = weight_sum > 0
+            centers_um = np.full((num_barcodes, 3), np.nan, dtype=np.float32)
+            centers_um[valid_wavelength] = (
+                weighted_sum[valid_wavelength]
+                / weight_sum[valid_wavelength, np.newaxis]
+                * spacing
+            ).astype(np.float32)
+            centers_by_wavelength_um[wavelength] = centers_um
+            valid_by_wavelength[wavelength] = valid_wavelength
+
+        valid_wavelength_count = np.zeros(num_barcodes, dtype=np.int16)
+        for valid in valid_by_wavelength.values():
+            valid_wavelength_count += valid.astype(np.int16)
+        contributing_transcripts = int(np.sum(valid_wavelength_count >= 2))
+
+        for source_wavelength in unique_wavelengths:
+            for target_wavelength in unique_wavelengths:
+                if np.isclose(source_wavelength, target_wavelength):
+                    continue
+                valid_pair = (
+                    valid_by_wavelength[source_wavelength]
+                    & valid_by_wavelength[target_wavelength]
+                )
+                pair_points[(source_wavelength, target_wavelength)] = (
+                    centers_by_wavelength_um[source_wavelength][valid_pair],
+                    centers_by_wavelength_um[target_wavelength][valid_pair],
+                )
 
         edge_affines = {}
         edge_diagnostics = {}
         for wavelength_pair, points in pair_points.items():
-            if len(points) < int(min_pairs):
+            source_points, target_points = points
+            if source_points.shape[0] < int(min_pairs):
                 continue
-            source_points = np.asarray([point[0] for point in points], dtype=np.float32)
-            target_points = np.asarray([point[1] for point in points], dtype=np.float32)
             affine, diagnostics = self._fit_affine_zyx_um(
                 source_points,
                 target_points,
                 min_pairs=min_pairs,
             )
-            diagnostics["candidate_pairs"] = len(points)
+            diagnostics["candidate_pairs"] = int(source_points.shape[0])
             edge_diagnostics[wavelength_pair] = diagnostics
             if affine is not None:
                 edge_affines[wavelength_pair] = affine
@@ -1128,9 +1152,9 @@ class PixelDecoder:
                     for source_wavelength, target_wavelength in itertools.pairwise(
                         path
                     ):
-                        pair_count += len(
-                            pair_points[(source_wavelength, target_wavelength)]
-                        )
+                        pair_count += pair_points[
+                            (source_wavelength, target_wavelength)
+                        ][0].shape[0]
                         path_diagnostics.append(
                             {
                                 "source_wavelength_um": float(source_wavelength),
@@ -1163,7 +1187,7 @@ class PixelDecoder:
             if wavelength not in affines_by_wavelength:
                 affines_by_wavelength[wavelength] = np.eye(4, dtype=np.float32)
                 candidate_pairs = sum(
-                    len(pair_points[(wavelength, other_wavelength)])
+                    pair_points[(wavelength, other_wavelength)][0].shape[0]
                     for other_wavelength in unique_wavelengths
                     if not np.isclose(wavelength, other_wavelength)
                 )
@@ -1180,13 +1204,24 @@ class PixelDecoder:
 
         channels = {}
         for wavelength in unique_wavelengths:
+            residual_affine = affines_by_wavelength[wavelength].astype(
+                np.float32,
+                copy=False,
+            )
+            previous_affine = previous_chromatic_affines.get(
+                wavelength,
+                np.eye(4, dtype=np.float32),
+            )
+            cumulative_affine = residual_affine @ previous_affine
+            if np.isclose(wavelength, reference_wavelength):
+                cumulative_affine = np.eye(4, dtype=np.float32)
             key = f"wavelength_{wavelength:.6f}"
             channels[key] = {
                 "channel_index": wavelength_to_index[wavelength],
                 "channel_name": key,
                 "wavelength_um": float(wavelength),
                 "reference_channel": bool(np.isclose(wavelength, reference_wavelength)),
-                "affine_zyx_um": affines_by_wavelength[wavelength].tolist(),
+                "affine_zyx_um": cumulative_affine.tolist(),
                 "diagnostics": diagnostics_by_wavelength[wavelength],
                 "status": status_by_wavelength.get(
                     wavelength, "identity_fallback_unconnected"
@@ -1197,9 +1232,11 @@ class PixelDecoder:
             {
                 "reference_wavelength_um": float(reference_wavelength),
                 "voxel_size_zyx_um": [float(v) for v in spacing],
-                "estimator": ("decoded_rna_on_bit_weighted_centroid_affine_graph"),
+                "estimator": (
+                    "decoded_rna_on_bit_weighted_centroid_z_translation_yx_affine_graph"
+                ),
                 "pair_constraints": int(
-                    sum(len(points) for points in pair_points.values())
+                    sum(points[0].shape[0] for points in pair_points.values())
                 ),
                 "contributing_transcripts": contributing_transcripts,
                 "channels": channels,
@@ -1583,7 +1620,15 @@ class PixelDecoder:
         max_iterations: int = 4,
     ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
         """
-        Fit a robust 3D affine from source to target points.
+        Fit a robust chromatic affine from decoded transcript centroids.
+
+        The iterative chromatic estimator uses decoded RNA centroids, not bead
+        calibration volumes. These centroids span the lateral field of view
+        well, but usually span only a thin axial range. A full 3D affine is
+        therefore poorly conditioned and can turn centroid noise into axial
+        scale or shear. This fit intentionally estimates a lateral Y/X affine
+        plus a Z translation, returning the result as a 4x4 Z, Y, X physical
+        transform.
 
         Parameters
         ----------
@@ -1601,9 +1646,9 @@ class PixelDecoder:
         Returns
         -------
         tuple[numpy.ndarray or None, dict]
-            Affine mapping source coordinates to target coordinates and fit
-            diagnostics. The affine is None when the point set is not
-            sufficient for a 3D affine.
+            Constrained affine mapping source coordinates to target coordinates
+            and fit diagnostics. The affine is None when the point set is not
+            sufficient for the lateral affine model.
         """
 
         source = np.asarray(source_zyx_um, dtype=np.float64)
@@ -1614,31 +1659,41 @@ class PixelDecoder:
             "median_residual_um": np.nan,
             "p95_residual_um": np.nan,
             "source_extent_zyx_um": [0.0, 0.0, 0.0],
+            "model": "z_translation_yx_affine",
             "status": "insufficient_pairs",
         }
         if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
             diagnostics["status"] = "invalid_point_shape"
             return None, diagnostics
-        if source.shape[0] < max(4, int(min_pairs)):
+        if source.shape[0] < max(3, int(min_pairs)):
             return None, diagnostics
 
         source_extent = np.ptp(source, axis=0)
         diagnostics["source_extent_zyx_um"] = [float(v) for v in source_extent]
-        if np.linalg.matrix_rank(source - np.mean(source, axis=0)) < 3:
-            diagnostics["status"] = "insufficient_3d_spatial_rank"
+        if np.linalg.matrix_rank(source[:, 1:3] - np.mean(source[:, 1:3], axis=0)) < 2:
+            diagnostics["status"] = "insufficient_lateral_spatial_rank"
             return None, diagnostics
 
         keep = np.ones(source.shape[0], dtype=bool)
         affine = np.eye(4, dtype=np.float64)
         for _iteration in range(max(1, int(max_iterations))):
             design = np.concatenate(
-                [source[keep], np.ones((int(np.sum(keep)), 1), dtype=np.float64)],
+                [
+                    source[keep, 1:3],
+                    np.ones((int(np.sum(keep)), 1), dtype=np.float64),
+                ],
                 axis=1,
             )
-            solution, *_ = np.linalg.lstsq(design, target[keep], rcond=None)
+            solution_yx, *_ = np.linalg.lstsq(design, target[keep, 1:3], rcond=None)
+            z_translation = float(np.median(target[keep, 0] - source[keep, 0]))
             affine = np.eye(4, dtype=np.float64)
-            affine[:3, :3] = solution[:3, :].T
-            affine[:3, 3] = solution[3, :]
+            affine[0, 3] = z_translation
+            affine[1, 1] = solution_yx[0, 0]
+            affine[1, 2] = solution_yx[1, 0]
+            affine[1, 3] = solution_yx[2, 0]
+            affine[2, 1] = solution_yx[0, 1]
+            affine[2, 2] = solution_yx[1, 1]
+            affine[2, 3] = solution_yx[2, 1]
 
             predicted = (
                 np.concatenate(
@@ -1649,7 +1704,7 @@ class PixelDecoder:
             )[:, :3]
             residuals = np.linalg.norm(predicted - target, axis=1)
             next_keep = residuals <= float(residual_threshold_um)
-            if np.sum(next_keep) < max(4, int(min_pairs)):
+            if np.sum(next_keep) < max(3, int(min_pairs)):
                 break
             if np.array_equal(next_keep, keep):
                 keep = next_keep
@@ -1665,7 +1720,7 @@ class PixelDecoder:
         )[:, :3]
         residuals = np.linalg.norm(predicted - target, axis=1)
         kept_residuals = residuals[keep]
-        if kept_residuals.size < max(4, int(min_pairs)):
+        if kept_residuals.size < max(3, int(min_pairs)):
             diagnostics["status"] = "too_few_inliers"
             diagnostics["used_pairs"] = int(kept_residuals.size)
             return None, diagnostics
@@ -2023,8 +2078,8 @@ class PixelDecoder:
     def _add_on_bit_weighted_centroids(
         self,
         df_barcode: pd.DataFrame,
-        codewords_label_image: np.ndarray,
-        intensity_image: np.ndarray,
+        codewords_label_image: cp.ndarray,
+        intensity_image: cp.ndarray,
         on_bits_1based: np.ndarray,
     ) -> pd.DataFrame:
         """
@@ -2034,9 +2089,9 @@ class PixelDecoder:
         ----------
         df_barcode : pandas.DataFrame
             Decoded barcode table with ``label`` and centroid columns.
-        codewords_label_image : numpy.ndarray
+        codewords_label_image : cupy.ndarray
             Connected-component label image in decoded Z, Y, X coordinates.
-        intensity_image : numpy.ndarray
+        intensity_image : cupy.ndarray
             Intensity image in Z, Y, X, bit order.
         on_bits_1based : numpy.ndarray
             On-bit indices for each barcode row, 1-based.
@@ -2051,54 +2106,89 @@ class PixelDecoder:
         if df_barcode.empty:
             return df_barcode
 
-        intensity = np.asarray(intensity_image, dtype=np.float32)
-        for bit_idx in range(1, self._n_merfish_bits + 1):
-            df_barcode[f"bit{bit_idx:02d}_center_z"] = np.nan
-            df_barcode[f"bit{bit_idx:02d}_center_y"] = np.nan
-            df_barcode[f"bit{bit_idx:02d}_center_x"] = np.nan
-            df_barcode[f"bit{bit_idx:02d}_intensity_sum"] = np.nan
-            df_barcode[f"bit{bit_idx:02d}_intensity_peak"] = np.nan
-            df_barcode[f"bit{bit_idx:02d}_voxel_count"] = np.nan
-
+        extra_columns = {
+            f"bit{bit_idx:02d}_{suffix}": np.full(len(df_barcode), np.nan)
+            for bit_idx in range(1, self._n_merfish_bits + 1)
+            for suffix in (
+                "center_z",
+                "center_y",
+                "center_x",
+                "intensity_sum",
+                "intensity_peak",
+                "voxel_count",
+            )
+        }
+        extra_df = pd.DataFrame(extra_columns, index=df_barcode.index)
         region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
         fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
-        for row_index, label_value in enumerate(region_labels):
-            region_mask = codewords_label_image == label_value
-            if not np.any(region_mask):
-                continue
-            coords = np.column_stack(np.nonzero(region_mask)).astype(np.float64)
-            for bit_idx in on_bits_1based[row_index]:
-                zero_based_bit = int(bit_idx) - 1
-                weights = intensity[..., zero_based_bit][region_mask].astype(
-                    np.float64,
-                    copy=False,
-                )
-                weights = np.maximum(weights, 0)
-                weight_sum = float(np.sum(weights))
-                positive_voxel_count = int(np.sum(weights > 0))
-                if weight_sum > 0:
-                    center = (
-                        np.sum(coords * weights[:, np.newaxis], axis=0) / weight_sum
-                    )
-                else:
-                    center = fallback_centers[row_index]
-                if self._z_crop or self._zstride != 1:
-                    center = center.copy()
-                    center[0] = self._decoded_z_to_source_z(np.asarray([center[0]]))[0]
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_z"] = center[0]
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_y"] = center[1]
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_center_x"] = center[2]
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_intensity_sum"] = (
-                    weight_sum
-                )
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_intensity_peak"] = (
-                    float(np.max(weights)) if weights.size else 0.0
-                )
-                df_barcode.loc[row_index, f"bit{int(bit_idx):02d}_voxel_count"] = (
-                    positive_voxel_count
-                )
 
-        return df_barcode
+        for bit_idx in range(1, self._n_merfish_bits + 1):
+            active_rows = np.flatnonzero(np.any(on_bits_1based == bit_idx, axis=1))
+            if active_rows.size == 0:
+                continue
+
+            bit_image = cp.maximum(
+                intensity_image[..., bit_idx - 1],
+                cp.float32(0),
+            )
+            props = gpu_regionprops_table(
+                codewords_label_image,
+                intensity_image=bit_image,
+                properties=[
+                    "label",
+                    "area",
+                    "weighted_centroid",
+                    "intensity_mean",
+                    "intensity_max",
+                ],
+            )
+            bit_props = pd.DataFrame(
+                {
+                    key: (
+                        cp.asnumpy(value)
+                        if isinstance(value, cp.ndarray)
+                        else np.asarray(value)
+                    )
+                    for key, value in props.items()
+                }
+            )
+            if bit_props.empty:
+                continue
+
+            bit_props = bit_props.set_index("label", drop=True)
+            selected = bit_props.reindex(region_labels[active_rows])
+            centers = selected[
+                [
+                    "weighted_centroid-0",
+                    "weighted_centroid-1",
+                    "weighted_centroid-2",
+                ]
+            ].to_numpy(dtype=np.float64)
+            fallback = fallback_centers[active_rows]
+            invalid_centers = ~np.all(np.isfinite(centers), axis=1)
+            centers[invalid_centers] = fallback[invalid_centers]
+            if self._z_crop or self._zstride != 1:
+                centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
+
+            area = selected["area"].to_numpy(dtype=np.float64)
+            intensity_mean = selected["intensity_mean"].to_numpy(dtype=np.float64)
+            intensity_peak = selected["intensity_max"].to_numpy(dtype=np.float64)
+            weight_sum = intensity_mean * area
+            missing = ~np.isfinite(weight_sum)
+            area[missing] = 0.0
+            intensity_peak[~np.isfinite(intensity_peak)] = 0.0
+            weight_sum[missing] = 0.0
+
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_z"] = centers[:, 0]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_y"] = centers[:, 1]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_x"] = centers[:, 2]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_intensity_sum"] = weight_sum
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_intensity_peak"] = (
+                intensity_peak
+            )
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_voxel_count"] = area
+
+        return pd.concat([df_barcode, extra_df], axis=1)
 
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
@@ -2206,10 +2296,11 @@ class PixelDecoder:
                     columns={"intensity_min": "distance_min"}
                 )
 
-            # move arrays to CPU for the existing regionprops path
+            # Move labels to CPU for the existing regionprops path. Keep the
+            # GPU labels alive for the optional iterative chromatic estimates.
             codewords_label_image = cp.asnumpy(codewords_label_image_cp)
 
-            del codewords_label_image_cp, decoded_image_cp
+            del decoded_image_cp
             gc.collect()
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
@@ -2310,8 +2401,8 @@ class PixelDecoder:
             if self._optimize_normalization_weights:
                 df_barcode = self._add_on_bit_weighted_centroids(
                     df_barcode,
-                    codewords_label_image,
-                    intensity_image,
+                    codewords_label_image_cp,
+                    cp.asarray(intensity_image, dtype=cp.float32),
                     on_sel,
                 )
 
@@ -2378,6 +2469,7 @@ class PixelDecoder:
             # Cleanup
             del (
                 codewords_label_image,
+                codewords_label_image_cp,
                 props,
                 props_distance,
                 props_magnitude,
