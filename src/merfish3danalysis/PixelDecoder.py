@@ -1689,8 +1689,7 @@ class PixelDecoder:
             sample_source = source[sample_indices]
             if (
                 np.linalg.matrix_rank(
-                    sample_source[:, 1:3]
-                    - np.mean(sample_source[:, 1:3], axis=0)
+                    sample_source[:, 1:3] - np.mean(sample_source[:, 1:3], axis=0)
                 )
                 < 2
             ):
@@ -1732,12 +1731,9 @@ class PixelDecoder:
             if sample_score < max(3, int(min_pairs)):
                 continue
             sample_median_residual = float(np.median(residuals[sample_keep]))
-            if (
-                sample_score > best_score
-                or (
-                    sample_score == best_score
-                    and sample_median_residual < best_median_residual
-                )
+            if sample_score > best_score or (
+                sample_score == best_score
+                and sample_median_residual < best_median_residual
             ):
                 best_keep = sample_keep
                 best_score = sample_score
