@@ -1037,7 +1037,9 @@ class PixelDecoder:
         }
 
         on_bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
-        if not all(column in self._df_barcodes_loaded.columns for column in on_bit_columns):
+        if not all(
+            column in self._df_barcodes_loaded.columns for column in on_bit_columns
+        ):
             return
         on_bits = self._df_barcodes_loaded[on_bit_columns].to_numpy(dtype=np.int16)
         num_barcodes = len(self._df_barcodes_loaded)
@@ -1055,7 +1057,9 @@ class PixelDecoder:
                     f"bit{bit:02d}_center_y",
                     f"bit{bit:02d}_center_x",
                 ]
-                if not all(col in self._df_barcodes_loaded.columns for col in center_cols):
+                if not all(
+                    col in self._df_barcodes_loaded.columns for col in center_cols
+                ):
                     continue
                 centers = self._df_barcodes_loaded[center_cols].to_numpy(
                     dtype=np.float64
