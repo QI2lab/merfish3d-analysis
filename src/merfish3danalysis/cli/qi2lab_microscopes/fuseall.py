@@ -233,7 +233,10 @@ def fuse_all_channels(
             batch_options={
                 "batch_func": misc_utils.process_batch_using_joblib,
                 "n_batch": int(n_jobs),
-                "batch_func_kwargs": {"n_jobs": int(n_jobs)},
+                "batch_func_kwargs": {
+                    "n_jobs": int(n_jobs),
+                    "backend": "threading",
+                },
             },
             **(
                 {"backend": "cupy", "output_on_backend": False}

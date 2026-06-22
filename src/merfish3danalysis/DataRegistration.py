@@ -1527,7 +1527,10 @@ class DataRegistration:
             batch_options={
                 "batch_func": misc_utils.process_batch_using_joblib,
                 "n_batch": 20,
-                "batch_func_kwargs": {"n_jobs": 4},
+                "batch_func_kwargs": {
+                    "n_jobs": min(4, max(1, int(self._num_gpus))),
+                    "backend": "threading",
+                },
             },
             backend="cupy",
             output_on_backend=False,

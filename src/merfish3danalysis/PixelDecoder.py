@@ -1678,7 +1678,73 @@ class PixelDecoder:
             diagnostics["status"] = "insufficient_lateral_spatial_rank"
             return None, diagnostics
 
+        rng = np.random.default_rng(1729)
         keep = np.ones(source.shape[0], dtype=bool)
+        best_keep = None
+        best_score = -1
+        best_median_residual = np.inf
+        max_ransac_iterations = min(512, max(64, source.shape[0]))
+        for _iteration in range(max_ransac_iterations):
+            sample_indices = rng.choice(source.shape[0], size=3, replace=False)
+            sample_source = source[sample_indices]
+            if (
+                np.linalg.matrix_rank(
+                    sample_source[:, 1:3]
+                    - np.mean(sample_source[:, 1:3], axis=0)
+                )
+                < 2
+            ):
+                continue
+
+            sample_design = np.concatenate(
+                [
+                    sample_source[:, 1:3],
+                    np.ones((3, 1), dtype=np.float64),
+                ],
+                axis=1,
+            )
+            sample_solution_yx, *_ = np.linalg.lstsq(
+                sample_design,
+                target[sample_indices, 1:3],
+                rcond=None,
+            )
+            sample_affine = np.eye(4, dtype=np.float64)
+            sample_affine[0, 3] = float(
+                np.median(target[sample_indices, 0] - sample_source[:, 0])
+            )
+            sample_affine[1, 1] = sample_solution_yx[0, 0]
+            sample_affine[1, 2] = sample_solution_yx[1, 0]
+            sample_affine[1, 3] = sample_solution_yx[2, 0]
+            sample_affine[2, 1] = sample_solution_yx[0, 1]
+            sample_affine[2, 2] = sample_solution_yx[1, 1]
+            sample_affine[2, 3] = sample_solution_yx[2, 1]
+
+            predicted = (
+                np.concatenate(
+                    [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                    axis=1,
+                )
+                @ sample_affine.T
+            )[:, :3]
+            residuals = np.linalg.norm(predicted - target, axis=1)
+            sample_keep = residuals <= float(residual_threshold_um)
+            sample_score = int(np.sum(sample_keep))
+            if sample_score < max(3, int(min_pairs)):
+                continue
+            sample_median_residual = float(np.median(residuals[sample_keep]))
+            if (
+                sample_score > best_score
+                or (
+                    sample_score == best_score
+                    and sample_median_residual < best_median_residual
+                )
+            ):
+                best_keep = sample_keep
+                best_score = sample_score
+                best_median_residual = sample_median_residual
+
+        if best_keep is not None:
+            keep = best_keep
         affine = np.eye(4, dtype=np.float64)
         for _iteration in range(max(1, int(max_iterations))):
             design = np.concatenate(
