@@ -268,6 +268,11 @@ def _refine_flow_vectors_subpixel(
 
     @jax.jit
     def _refine_batch(
+        pre_image: jnp.ndarray,
+        post_image: jnp.ndarray,
+        patch_grid_zyx: jnp.ndarray,
+        candidate_offsets: jnp.ndarray,
+        step: jnp.ndarray,
         batch_indices_zyx: jnp.ndarray,
         batch_vectors_xyz: jnp.ndarray,
     ) -> jnp.ndarray:
@@ -334,6 +339,11 @@ def _refine_flow_vectors_subpixel(
         refined_batch = np.asarray(
             jax.device_get(
                 _refine_batch(
+                    pre_image,
+                    post_image,
+                    patch_grid_zyx,
+                    candidate_offsets,
+                    step,
                     jnp.asarray(batch_indices, dtype=jnp.int32),
                     jnp.asarray(batch_vectors, dtype=jnp.float32),
                 )
