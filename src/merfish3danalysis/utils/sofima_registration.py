@@ -14,7 +14,7 @@ SOFIMA_MIN_PEAK_RATIO = 1.2
 SOFIMA_MIN_PEAK_SHARPNESS = 1.2
 SOFIMA_MAX_MAGNITUDE = 30.0
 SOFIMA_MAX_DEVIATION = 5.0
-SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX = 3.0
+SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX = 5.0
 SOFIMA_SUBPIXEL_OFFSETS = (-0.5, 0.0, 0.5)
 SOFIMA_SUBPIXEL_BATCH_SIZE = 32
 SOFIMA_MESH_DT = 0.001
@@ -348,6 +348,42 @@ def _refine_flow_vectors_subpixel(
     return refined.astype(np.float32, copy=False), int(refined_vectors)
 
 
+def _median_initial_flow_field(cleaned_flow_xyz: np.ndarray) -> np.ndarray:
+    """
+    Build a dense SOFIMA mesh initializer from valid local flow vectors.
+
+    SOFIMA's elastic relaxation needs a dense initial mesh, but the cleaned
+    local flow map is sparse. Invalid nodes are initialized to the robust
+    median vector, while valid measured nodes keep their measured displacement.
+    This avoids the expensive CPU scattered interpolation in
+    ``sofima.map_utils.fill_missing`` while preserving the local information
+    available before relaxation.
+
+    Parameters
+    ----------
+    cleaned_flow_xyz : numpy.ndarray
+        Cleaned SOFIMA flow field in ``(3, z, y, x)`` order. Invalid vectors
+        are encoded as NaN.
+
+    Returns
+    -------
+    numpy.ndarray
+        Dense initial flow field in ``(3, z, y, x)`` order.
+    """
+
+    initial_flow = np.zeros_like(cleaned_flow_xyz, dtype=np.float32)
+    valid_mask = np.all(np.isfinite(cleaned_flow_xyz), axis=0)
+    if not np.any(valid_mask):
+        return initial_flow
+
+    for channel_index in range(3):
+        channel = cleaned_flow_xyz[channel_index]
+        median = float(np.median(channel[valid_mask]))
+        initial_flow[channel_index, ...] = median
+        initial_flow[channel_index][valid_mask] = channel[valid_mask]
+    return initial_flow
+
+
 def _relax_flow_field(
     cleaned_flow_xyz: np.ndarray,
     initial_flow_xyz: np.ndarray,
@@ -529,7 +565,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         total_metadata.update(axial_metadata)
         return total_flow.astype(np.float32, copy=False), total_metadata
 
-    from sofima import flow_field, flow_utils, map_utils
+    from sofima import flow_field, flow_utils
 
     if fixed_zyx.shape != moving_affine_initialized_zyx.shape:
         raise ValueError(
@@ -580,12 +616,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             "mesh_final_kinetic_energy": 0.0,
         }
     else:
-        initial_flow_field = map_utils.fill_missing(
-            cleaned_flow,
-            extrapolate=True,
-            invalid_to_zero=False,
-            interpolate_first=True,
-        )
+        initial_flow_field = _median_initial_flow_field(cleaned_flow)
         sofima_flow_field, relaxation_metadata = _relax_flow_field(
             cleaned_flow,
             initial_flow_field,
@@ -613,6 +644,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             float((sofima_flow_field.shape[2] - 1) * map_stride_zyx_px[1] + 1),
             float((sofima_flow_field.shape[1] - 1) * map_stride_zyx_px[0] + 1),
         ],
+        "mesh_initializer": "median_valid_flow",
     }
     metadata.update(relaxation_metadata)
     if valid_flow_vectors > 0:
