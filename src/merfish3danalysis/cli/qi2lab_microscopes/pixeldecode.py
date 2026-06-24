@@ -282,6 +282,7 @@ def decode_pixels(
     merfish_bits: int | None = None,
     skip_optimization: bool = False,
     normalization_method: str = "iterative",
+    estimate_chromatic_affines: bool = False,
     reprocess_existing: bool = False,
     zstride_level: int = 0,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
@@ -319,6 +320,9 @@ def decode_pixels(
         skip running iterative optimization.
     normalization_method : {"iterative", "global", "none"}, default "iterative"
         normalization source for pixel decoding.
+    estimate_chromatic_affines : bool, default=False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. Existing datastore calibration is still used by default.
     reprocess_existing : bool, default = False
         flag to reprocess existing exact-called decoded data. Legacy decoded
         parquet files from the old caller are not supported.
@@ -374,6 +378,7 @@ def decode_pixels(
         verbose=1,
         zstride_level=zstride_level,
         decode_mode=decode_mode,
+        estimate_chromatic_affines=estimate_chromatic_affines,
     )
 
     if not (reprocess_existing):

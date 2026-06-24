@@ -345,6 +345,10 @@ class PixelDecoder:
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Connected-component and filtering mode. ``auto`` follows the datastore
         microscope type.
+    estimate_chromatic_affines : bool, default False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. If False, use existing datastore calibration metadata
+        with identity fallback.
     """
 
     def __init__(
@@ -357,6 +361,7 @@ class PixelDecoder:
         z_range: Sequence[int] | None = None,
         zstride_level: int = 0,
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
+        estimate_chromatic_affines: bool = False,
     ) -> None:
         """
         Initialize the object.
@@ -379,6 +384,11 @@ class PixelDecoder:
             Function argument.
         decode_mode : Literal['auto', '2d', '3d']
             Function argument.
+        estimate_chromatic_affines : bool
+            If True, iterative normalization estimates chromatic affine
+            transforms from decoded on-bit centroids. If False, decoding uses
+            existing datastore chromatic calibration metadata with identity
+            fallback.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -394,6 +404,7 @@ class PixelDecoder:
             raise ValueError("decode_mode must be one of 'auto', '2d', or '3d'.")
 
         self._decode_mode = decode_mode
+        self._estimate_chromatic_affines = bool(estimate_chromatic_affines)
         self._zstride_level = int(zstride_level)
         self._zstride = max(1, int(zstride_level))
         if decode_mode == "auto":
@@ -1026,10 +1037,13 @@ class PixelDecoder:
                     affine,
                     dtype=np.float32,
                 )
-        pair_points: dict[tuple[float, float], tuple[np.ndarray, np.ndarray]] = {
+        pair_points: dict[
+            tuple[float, float], tuple[np.ndarray, np.ndarray, np.ndarray]
+        ] = {
             (source_wavelength, target_wavelength): (
                 np.empty((0, 3), dtype=np.float32),
                 np.empty((0, 3), dtype=np.float32),
+                np.empty((0,), dtype=np.float32),
             )
             for source_wavelength in unique_wavelengths
             for target_wavelength in unique_wavelengths
@@ -1044,6 +1058,7 @@ class PixelDecoder:
         on_bits = self._df_barcodes_loaded[on_bit_columns].to_numpy(dtype=np.int16)
         num_barcodes = len(self._df_barcodes_loaded)
         centers_by_wavelength_um = {}
+        weights_by_wavelength = {}
         valid_by_wavelength = {}
 
         for wavelength in unique_wavelengths:
@@ -1087,6 +1102,7 @@ class PixelDecoder:
                 * spacing
             ).astype(np.float32)
             centers_by_wavelength_um[wavelength] = centers_um
+            weights_by_wavelength[wavelength] = weight_sum.astype(np.float32)
             valid_by_wavelength[wavelength] = valid_wavelength
 
         valid_wavelength_count = np.zeros(num_barcodes, dtype=np.int16)
@@ -1102,20 +1118,41 @@ class PixelDecoder:
                     valid_by_wavelength[source_wavelength]
                     & valid_by_wavelength[target_wavelength]
                 )
+                pair_weights = np.sqrt(
+                    weights_by_wavelength[source_wavelength][valid_pair]
+                    * weights_by_wavelength[target_wavelength][valid_pair]
+                ).astype(np.float32)
+                finite_pair = np.isfinite(pair_weights) & (pair_weights > 0)
+                source_points = centers_by_wavelength_um[source_wavelength][
+                    valid_pair
+                ][finite_pair]
+                target_points = centers_by_wavelength_um[target_wavelength][
+                    valid_pair
+                ][finite_pair]
+                pair_weights = pair_weights[finite_pair]
+                if pair_weights.size >= 2 * int(min_pairs):
+                    min_weight = np.percentile(pair_weights, 25)
+                    strong = pair_weights >= min_weight
+                    if int(np.sum(strong)) >= int(min_pairs):
+                        source_points = source_points[strong]
+                        target_points = target_points[strong]
+                        pair_weights = pair_weights[strong]
                 pair_points[(source_wavelength, target_wavelength)] = (
-                    centers_by_wavelength_um[source_wavelength][valid_pair],
-                    centers_by_wavelength_um[target_wavelength][valid_pair],
+                    source_points,
+                    target_points,
+                    pair_weights,
                 )
 
         edge_affines = {}
         edge_diagnostics = {}
         for wavelength_pair, points in pair_points.items():
-            source_points, target_points = points
+            source_points, target_points, pair_weights = points
             if source_points.shape[0] < int(min_pairs):
                 continue
             affine, diagnostics = self._fit_affine_zyx_um(
                 source_points,
                 target_points,
+                weights=pair_weights,
                 min_pairs=min_pairs,
             )
             diagnostics["candidate_pairs"] = int(source_points.shape[0])
@@ -1219,6 +1256,26 @@ class PixelDecoder:
             cumulative_affine = residual_affine @ previous_affine
             if np.isclose(wavelength, reference_wavelength):
                 cumulative_affine = np.eye(4, dtype=np.float32)
+            elif not np.allclose(previous_affine, np.eye(4, dtype=np.float32)):
+                z_limit_um = 3.5 * float(spacing[0])
+                lateral_scale = np.diag(cumulative_affine[1:3, 1:3])
+                lateral_shear = cumulative_affine[1:3, 1:3] - np.diag(
+                    lateral_scale
+                )
+                plausible_cumulative = (
+                    abs(float(cumulative_affine[0, 3])) <= z_limit_um
+                    and np.all(lateral_scale >= 0.85)
+                    and np.all(lateral_scale <= 1.05)
+                    and float(np.max(np.abs(lateral_shear))) <= 0.08
+                )
+                if not plausible_cumulative:
+                    cumulative_affine = previous_affine.astype(
+                        np.float32,
+                        copy=True,
+                    )
+                    diagnostics_by_wavelength[wavelength][
+                        "rejected_residual_status"
+                    ] = "implausible_cumulative_affine"
             key = f"wavelength_{wavelength:.6f}"
             channels[key] = {
                 "channel_index": wavelength_to_index[wavelength],
@@ -1619,9 +1676,11 @@ class PixelDecoder:
         source_zyx_um: np.ndarray,
         target_zyx_um: np.ndarray,
         *,
+        weights: np.ndarray | None = None,
         min_pairs: int,
-        residual_threshold_um: float = 0.75,
-        max_iterations: int = 4,
+        residual_threshold_um: float = 0.35,
+        max_iterations: int = 6,
+        scale_regularization: float = 0.0,
     ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
         """
         Fit a robust chromatic affine from decoded transcript centroids.
@@ -1630,9 +1689,9 @@ class PixelDecoder:
         calibration volumes. These centroids span the lateral field of view
         well, but usually span only a thin axial range. A full 3D affine is
         therefore poorly conditioned and can turn centroid noise into axial
-        scale or shear. This fit intentionally estimates a lateral Y/X affine
-        plus a Z translation, returning the result as a 4x4 Z, Y, X physical
-        transform.
+        scale or shear. This fit estimates the chromatic model supported by
+        decoded RNA features: one shared radial Y/X scale, Y/X translations,
+        and a Z translation, returned as a 4x4 Z, Y, X physical transform.
 
         Parameters
         ----------
@@ -1640,12 +1699,18 @@ class PixelDecoder:
             Source points in physical Z, Y, X microns.
         target_zyx_um : numpy.ndarray
             Target points in physical Z, Y, X microns.
+        weights : numpy.ndarray or None, optional
+            Nonnegative per-pair confidence weights. Larger values increase the
+            influence of bright, well-supported transcript centroids.
         min_pairs : int
             Minimum number of retained point correspondences.
-        residual_threshold_um : float, default=0.75
+        residual_threshold_um : float, default=0.35
             Residual threshold used for iterative outlier rejection.
-        max_iterations : int, default=4
+        max_iterations : int, default=6
             Number of robust refit iterations.
+        scale_regularization : float, default=0.0
+            Penalty against lateral scale changes away from identity. The
+            default leaves radial scale unconstrained.
 
         Returns
         -------
@@ -1663,7 +1728,7 @@ class PixelDecoder:
             "median_residual_um": np.nan,
             "p95_residual_um": np.nan,
             "source_extent_zyx_um": [0.0, 0.0, 0.0],
-            "model": "z_translation_yx_affine",
+            "model": "z_translation_yx_radial_scale",
             "status": "insufficient_pairs",
         }
         if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
@@ -1671,6 +1736,19 @@ class PixelDecoder:
             return None, diagnostics
         if source.shape[0] < max(3, int(min_pairs)):
             return None, diagnostics
+        if weights is None:
+            weights_arr = np.ones(source.shape[0], dtype=np.float64)
+        else:
+            weights_arr = np.asarray(weights, dtype=np.float64)
+            if weights_arr.shape != (source.shape[0],):
+                diagnostics["status"] = "invalid_weight_shape"
+                return None, diagnostics
+            weights_arr = np.nan_to_num(weights_arr, nan=0.0, posinf=0.0, neginf=0.0)
+            weights_arr = np.maximum(weights_arr, 0.0)
+            if not np.any(weights_arr > 0):
+                diagnostics["status"] = "invalid_weights"
+                return None, diagnostics
+            weights_arr = weights_arr / np.median(weights_arr[weights_arr > 0])
 
         source_extent = np.ptp(source, axis=0)
         diagnostics["source_extent_zyx_um"] = [float(v) for v in source_extent]
@@ -1678,14 +1756,82 @@ class PixelDecoder:
             diagnostics["status"] = "insufficient_lateral_spatial_rank"
             return None, diagnostics
 
+        def solve_yx_radial_scale(
+            source_yx: np.ndarray,
+            target_yx: np.ndarray,
+            fit_weights: np.ndarray,
+        ) -> tuple[float, float, float]:
+            design_y = np.column_stack(
+                [
+                    source_yx[:, 0],
+                    np.ones(source_yx.shape[0], dtype=np.float64),
+                    np.zeros(source_yx.shape[0], dtype=np.float64),
+                ]
+            )
+            design_x = np.column_stack(
+                [
+                    source_yx[:, 1],
+                    np.zeros(source_yx.shape[0], dtype=np.float64),
+                    np.ones(source_yx.shape[0], dtype=np.float64),
+                ]
+            )
+            design = np.vstack([design_y, design_x])
+            target_values = np.concatenate([target_yx[:, 0], target_yx[:, 1]])
+            sqrt_weights = np.sqrt(np.maximum(fit_weights, 1e-12))
+            stacked_weights = np.concatenate([sqrt_weights, sqrt_weights])
+            weighted_design = design * stacked_weights[:, np.newaxis]
+            weighted_target = target_values * stacked_weights
+
+            if scale_regularization > 0:
+                penalty = np.sqrt(float(scale_regularization))
+                weighted_design = np.vstack(
+                    [weighted_design, np.asarray([[penalty, 0.0, 0.0]])]
+                )
+                weighted_target = np.concatenate(
+                    [weighted_target, np.asarray([penalty])]
+                )
+
+            solution, *_ = np.linalg.lstsq(
+                weighted_design,
+                weighted_target,
+                rcond=None,
+            )
+            return float(solution[0]), float(solution[1]), float(solution[2])
+
+        def robust_weighted_z_translation(
+            z_offsets: np.ndarray,
+            fit_weights: np.ndarray,
+        ) -> float:
+            finite = np.isfinite(z_offsets) & np.isfinite(fit_weights)
+            finite &= fit_weights > 0
+            if not np.any(finite):
+                return 0.0
+            offsets = z_offsets[finite]
+            local_weights = fit_weights[finite]
+            center = float(np.median(offsets))
+            spread = float(np.median(np.abs(offsets - center)))
+            if spread > 0:
+                keep_offsets = np.abs(offsets - center) <= 3.0 * 1.4826 * spread
+                if np.any(keep_offsets):
+                    offsets = offsets[keep_offsets]
+                    local_weights = local_weights[keep_offsets]
+            return float(np.average(offsets, weights=local_weights))
+
         rng = np.random.default_rng(1729)
         keep = np.ones(source.shape[0], dtype=bool)
         best_keep = None
         best_score = -1
+        best_weighted_score = -1.0
         best_median_residual = np.inf
         max_ransac_iterations = min(512, max(64, source.shape[0]))
+        sample_probability = weights_arr / np.sum(weights_arr)
         for _iteration in range(max_ransac_iterations):
-            sample_indices = rng.choice(source.shape[0], size=3, replace=False)
+            sample_indices = rng.choice(
+                source.shape[0],
+                size=3,
+                replace=False,
+                p=sample_probability,
+            )
             sample_source = source[sample_indices]
             if (
                 np.linalg.matrix_rank(
@@ -1695,28 +1841,22 @@ class PixelDecoder:
             ):
                 continue
 
-            sample_design = np.concatenate(
-                [
-                    sample_source[:, 1:3],
-                    np.ones((3, 1), dtype=np.float64),
-                ],
-                axis=1,
-            )
-            sample_solution_yx, *_ = np.linalg.lstsq(
-                sample_design,
+            sample_scale, sample_y_translation, sample_x_translation = (
+                solve_yx_radial_scale(
+                sample_source[:, 1:3],
                 target[sample_indices, 1:3],
-                rcond=None,
+                weights_arr[sample_indices],
+            )
             )
             sample_affine = np.eye(4, dtype=np.float64)
-            sample_affine[0, 3] = float(
-                np.median(target[sample_indices, 0] - sample_source[:, 0])
+            sample_affine[0, 3] = robust_weighted_z_translation(
+                target[sample_indices, 0] - sample_source[:, 0],
+                weights_arr[sample_indices],
             )
-            sample_affine[1, 1] = sample_solution_yx[0, 0]
-            sample_affine[1, 2] = sample_solution_yx[1, 0]
-            sample_affine[1, 3] = sample_solution_yx[2, 0]
-            sample_affine[2, 1] = sample_solution_yx[0, 1]
-            sample_affine[2, 2] = sample_solution_yx[1, 1]
-            sample_affine[2, 3] = sample_solution_yx[2, 1]
+            sample_affine[1, 1] = sample_scale
+            sample_affine[1, 3] = sample_y_translation
+            sample_affine[2, 2] = sample_scale
+            sample_affine[2, 3] = sample_x_translation
 
             predicted = (
                 np.concatenate(
@@ -1730,36 +1870,42 @@ class PixelDecoder:
             sample_score = int(np.sum(sample_keep))
             if sample_score < max(3, int(min_pairs)):
                 continue
+            sample_weighted_score = float(np.sum(weights_arr[sample_keep]))
             sample_median_residual = float(np.median(residuals[sample_keep]))
-            if sample_score > best_score or (
-                sample_score == best_score
-                and sample_median_residual < best_median_residual
+            if (
+                sample_score > best_score
+                or (
+                    sample_score == best_score
+                    and sample_weighted_score > best_weighted_score
+                )
+                or (
+                    sample_score == best_score
+                    and np.isclose(sample_weighted_score, best_weighted_score)
+                    and sample_median_residual < best_median_residual
+                )
             ):
                 best_keep = sample_keep
                 best_score = sample_score
+                best_weighted_score = sample_weighted_score
                 best_median_residual = sample_median_residual
 
         if best_keep is not None:
             keep = best_keep
         affine = np.eye(4, dtype=np.float64)
         for _iteration in range(max(1, int(max_iterations))):
-            design = np.concatenate(
-                [
-                    source[keep, 1:3],
-                    np.ones((int(np.sum(keep)), 1), dtype=np.float64),
-                ],
-                axis=1,
+            scale, y_translation, x_translation = solve_yx_radial_scale(
+                source[keep, 1:3],
+                target[keep, 1:3],
+                weights_arr[keep],
             )
-            solution_yx, *_ = np.linalg.lstsq(design, target[keep, 1:3], rcond=None)
-            z_translation = float(np.median(target[keep, 0] - source[keep, 0]))
+            z_offsets = target[keep, 0] - source[keep, 0]
+            z_translation = robust_weighted_z_translation(z_offsets, weights_arr[keep])
             affine = np.eye(4, dtype=np.float64)
             affine[0, 3] = z_translation
-            affine[1, 1] = solution_yx[0, 0]
-            affine[1, 2] = solution_yx[1, 0]
-            affine[1, 3] = solution_yx[2, 0]
-            affine[2, 1] = solution_yx[0, 1]
-            affine[2, 2] = solution_yx[1, 1]
-            affine[2, 3] = solution_yx[2, 1]
+            affine[1, 1] = scale
+            affine[1, 3] = y_translation
+            affine[2, 2] = scale
+            affine[2, 3] = x_translation
 
             predicted = (
                 np.concatenate(
@@ -2233,6 +2379,39 @@ class PixelDecoder:
             fallback = fallback_centers[active_rows]
             invalid_centers = ~np.all(np.isfinite(centers), axis=1)
             centers[invalid_centers] = fallback[invalid_centers]
+            z_radius = 4
+            yx_radius = 6
+            for center_idx, row_idx in enumerate(active_rows):
+                center = fallback_centers[row_idx]
+                if not np.all(np.isfinite(center)):
+                    continue
+                zc, yc, xc = np.rint(center).astype(np.int64)
+                z0 = max(int(zc) - z_radius, 0)
+                z1 = min(int(zc) + z_radius + 1, bit_image.shape[0])
+                y0 = max(int(yc) - yx_radius, 0)
+                y1 = min(int(yc) + yx_radius + 1, bit_image.shape[1])
+                x0 = max(int(xc) - yx_radius, 0)
+                x1 = min(int(xc) + yx_radius + 1, bit_image.shape[2])
+                if z0 >= z1 or y0 >= y1 or x0 >= x1:
+                    continue
+
+                patch = bit_image[z0:z1, y0:y1, x0:x1]
+                peak = float(cp.max(patch))
+                if not np.isfinite(peak) or peak <= 0:
+                    continue
+                support = patch >= cp.float32(0.25 * peak)
+                weights_patch = cp.where(support, patch, cp.float32(0))
+                weight_total = float(cp.sum(weights_patch))
+                if not np.isfinite(weight_total) or weight_total <= 0:
+                    continue
+
+                zz = cp.arange(z0, z1, dtype=cp.float32)[:, None, None]
+                yy = cp.arange(y0, y1, dtype=cp.float32)[None, :, None]
+                xx = cp.arange(x0, x1, dtype=cp.float32)[None, None, :]
+                centers[center_idx, 0] = float(cp.sum(weights_patch * zz)) / weight_total
+                centers[center_idx, 1] = float(cp.sum(weights_patch * yy)) / weight_total
+                centers[center_idx, 2] = float(cp.sum(weights_patch * xx)) / weight_total
+
             if self._z_crop or self._zstride != 1:
                 centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
 
@@ -4448,6 +4627,7 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
         magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
+        estimate_chromatic_affines: bool | None = None,
     ) -> None:
         """Iteratively refine normalization vectors using exact-called transcripts.
 
@@ -4468,6 +4648,10 @@ class PixelDecoder:
         tile_indices : Sequence[int], optional
             Explicit tile indices to use for normalization. If omitted, a random
             subset of ``n_random_tiles`` is used.
+        estimate_chromatic_affines : bool or None, optional
+            If True, estimate chromatic affine transforms after each iterative
+            decoding round. If None, use the instance setting supplied at
+            construction.
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
@@ -4482,7 +4666,13 @@ class PixelDecoder:
         self._iterative_normalization_vector = None
         self._global_background_vector = None
         self._optimize_normalization_weights = True
-        self._save_identity_chromatic_affines()
+        run_chromatic_estimation = (
+            self._estimate_chromatic_affines
+            if estimate_chromatic_affines is None
+            else bool(estimate_chromatic_affines)
+        )
+        if run_chromatic_estimation:
+            self._save_identity_chromatic_affines()
         self._load_global_normalization_vectors(
             gpu_id=0,
             recalculate=True,
@@ -4561,7 +4751,8 @@ class PixelDecoder:
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
                     )
-                self._estimate_chromatic_affines_from_barcodes()
+                if run_chromatic_estimation:
+                    self._estimate_chromatic_affines_from_barcodes()
                 self._load_global_normalization_vectors(
                     gpu_id=0,
                     lowpass_sigma=lowpass_sigma,

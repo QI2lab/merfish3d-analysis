@@ -209,6 +209,8 @@ def decode_pixels(
     filter_method: str = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
     lr_fdr_target: float = 0.05,
+    normalization_iterations: int = 3,
+    estimate_chromatic_affines: bool = False,
 ) -> None:
     """Perform pixel decoding.
 
@@ -243,6 +245,12 @@ def decode_pixels(
         gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float, default .05
         false discovery rate target for LR filtering.
+    normalization_iterations : int, default=3
+        Number of iterative normalization rounds to run before final decoding.
+    estimate_chromatic_affines : bool, default=False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. Existing datastore calibration is still used when this
+        is False, with identity fallback when no calibration is present.
     """
 
     # initialize datastore
@@ -274,11 +282,12 @@ def decode_pixels(
     if not skip_optimization:
         decoder.optimize_normalization_by_decoding(
             n_random_tiles=1,
-            n_iterations=3,
+            n_iterations=normalization_iterations,
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
             feature_predictor_threshold=feature_predictor_threshold,
+            estimate_chromatic_affines=estimate_chromatic_affines,
         )
 
     decoder.decode_all_tiles(
