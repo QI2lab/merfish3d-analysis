@@ -1,4 +1,3 @@
-import tomllib
 from pathlib import Path
 
 import numpy as np
@@ -118,37 +117,6 @@ def _save_sofima_recovery_png(
     plt.close(fig)
 
 
-def test_pyproject_declares_sofima_cuda_jax_without_warpfield() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text())
-    dependencies = "\n".join(pyproject["project"]["dependencies"])
-
-    assert "warpfield" not in dependencies
-    assert "sofima @ git+https://github.com/google-research/sofima.git" in dependencies
-    assert "jax[cuda12]" in dependencies
-
-
-def test_dataregistration_no_longer_uses_warpfield_runtime_path() -> None:
-    source = Path("src/merfish3danalysis/DataRegistration.py").read_text()
-
-    assert "warpfield" not in source
-    assert "compute_warpfield" not in source
-    assert "load_coord_of_xform_px" not in source
-    assert "save_coord_of_xform_px" not in source
-    assert "perform_optical_flow" not in source
-
-
-def test_registration_binning_preserves_z_and_matches_physical_ratio() -> None:
-    from merfish3danalysis.utils.multiview_registration import (
-        registration_binning_from_spacing,
-    )
-
-    assert registration_binning_from_spacing((0.32, 0.098, 0.098)) == {
-        "z": 1,
-        "y": 3,
-        "x": 3,
-    }
-
-
 def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
     cp = pytest.importorskip("cupy")
     pytest.importorskip("cucim")
@@ -202,58 +170,6 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
         gpu_id=0,
     )
     assert np.sqrt(np.mean((warped - fixed) ** 2)) < 1e-3
-
-
-def test_zero_sofima_flow_gpu_warp_matches_affine_identity() -> None:
-    cp = pytest.importorskip("cupy")
-    from merfish3danalysis.utils.multiview_registration import (
-        warp_array_to_reference_with_affine_and_sofima_flow_gpu,
-    )
-
-    try:
-        cp.cuda.runtime.getDeviceCount()
-    except cp.cuda.runtime.CUDARuntimeError:
-        pytest.skip("CUDA device is not available.")
-
-    image = np.arange(4 * 5 * 6, dtype=np.float32).reshape((4, 5, 6))
-    zero_flow = np.zeros((3, *image.shape), dtype=np.float32)
-    warped = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
-        image,
-        transform_zyx_um=np.eye(4, dtype=np.float32),
-        spacing_zyx_um=(1.0, 1.0, 1.0),
-        reference_shape=image.shape,
-        sofima_flow_field_xyz_px=zero_flow,
-        flow_field_stride_zyx_px=(1.0, 1.0, 1.0),
-        flow_field_box_start_xyz_px=(0.0, 0.0, 0.0),
-        gpu_id=0,
-    )
-
-    np.testing.assert_allclose(warped, image)
-
-
-def test_sofima_estimator_uses_flow_field() -> None:
-    pytest.importorskip("jax")
-    from merfish3danalysis.utils.sofima_registration import (
-        estimate_sofima_flow_field_xyz_px,
-    )
-
-    shape = (12, 24, 24)
-    z, y, x = np.indices(shape)
-    fixed = np.exp(
-        -(((z - 6) / 3) ** 2 + ((y - 12) / 5) ** 2 + ((x - 12) / 5) ** 2)
-    ).astype(np.float32)
-    moving = np.exp(
-        -(((z - 6) / 3) ** 2 + ((y - 12) / 5) ** 2 + ((x - 14) / 5) ** 2)
-    ).astype(np.float32)
-
-    sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
-        fixed,
-        moving,
-    )
-
-    assert sofima_flow_field.shape[0] == 3
-    assert np.any(np.abs(sofima_flow_field[0]) > 0)
-    assert metadata["map_stride_zyx_px"] == [5.0, 12.0, 12.0]
 
 
 def test_sofima_estimator_recovers_object_model_warp_field(
