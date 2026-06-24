@@ -246,74 +246,74 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
     )
 )
 STANDARD_EXPECTED_F1_SCORES = {
-    ('cells', '0.315'): 0.984822934232715,
-    ('cells', '1.0'): 0.9532710280373832,
-    ('cells', '1.5'): 0.3768224299065421,
-    ('uniform', '0.315'): 0.9899074852817493,
-    ('uniform', '1.0'): 0.9672977624784854,
-    ('uniform', '1.5'): 0.6160687815001483,
+    ("cells", "0.315"): 0.984822934232715,
+    ("cells", "1.0"): 0.9532710280373832,
+    ("cells", "1.5"): 0.3768224299065421,
+    ("uniform", "0.315"): 0.9899074852817493,
+    ("uniform", "1.0"): 0.9672977624784854,
+    ("uniform", "1.5"): 0.6160687815001483,
 }
 FULL_EXPECTED_F1_SCORES = {
-    ('cells', '0.315', 'decon', 0.1): 0.984822934232715,
-    ('cells', '0.315', 'decon', 0.2): 0.984822934232715,
-    ('cells', '0.315', 'decon', 0.3): 0.984822934232715,
-    ('cells', '0.315', 'decon', 0.4): 0.984822934232715,
-    ('cells', '0.315', 'decon', 0.5): 0.984822934232715,
-    ('cells', '0.315', 'no-decon', 0.1): 0.9881956155143339,
-    ('cells', '0.315', 'no-decon', 0.2): 0.9881956155143339,
-    ('cells', '0.315', 'no-decon', 0.3): 0.9881956155143339,
-    ('cells', '0.315', 'no-decon', 0.4): 0.9881956155143339,
-    ('cells', '0.315', 'no-decon', 0.5): 0.9881956155143339,
-    ('cells', '1.0', 'decon', 0.1): 0.9532710280373832,
-    ('cells', '1.0', 'decon', 0.2): 0.9532710280373832,
-    ('cells', '1.0', 'decon', 0.3): 0.9532710280373832,
-    ('cells', '1.0', 'decon', 0.4): 0.9532710280373832,
-    ('cells', '1.0', 'decon', 0.5): 0.9532710280373832,
-    ('cells', '1.0', 'no-decon', 0.1): 0.9540816326530613,
-    ('cells', '1.0', 'no-decon', 0.2): 0.9540816326530613,
-    ('cells', '1.0', 'no-decon', 0.3): 0.9540816326530613,
-    ('cells', '1.0', 'no-decon', 0.4): 0.9540816326530613,
-    ('cells', '1.0', 'no-decon', 0.5): 0.9540816326530613,
-    ('cells', '1.5', 'decon', 0.1): 0.3768224299065421,
-    ('cells', '1.5', 'decon', 0.2): 0.3768224299065421,
-    ('cells', '1.5', 'decon', 0.3): 0.3768224299065421,
-    ('cells', '1.5', 'decon', 0.4): 0.3768224299065421,
-    ('cells', '1.5', 'decon', 0.5): 0.3768224299065421,
-    ('cells', '1.5', 'no-decon', 0.1): 0.9051580698835274,
-    ('cells', '1.5', 'no-decon', 0.2): 0.9051580698835274,
-    ('cells', '1.5', 'no-decon', 0.3): 0.9051580698835274,
-    ('cells', '1.5', 'no-decon', 0.4): 0.9051580698835274,
-    ('cells', '1.5', 'no-decon', 0.5): 0.9051580698835274,
-    ('uniform', '0.315', 'decon', 0.1): 0.9899074852817493,
-    ('uniform', '0.315', 'decon', 0.2): 0.9899074852817493,
-    ('uniform', '0.315', 'decon', 0.3): 0.9899074852817493,
-    ('uniform', '0.315', 'decon', 0.4): 0.9899074852817493,
-    ('uniform', '0.315', 'decon', 0.5): 0.9899074852817493,
-    ('uniform', '0.315', 'no-decon', 0.1): 0.9882253994953742,
-    ('uniform', '0.315', 'no-decon', 0.2): 0.9882253994953742,
-    ('uniform', '0.315', 'no-decon', 0.3): 0.9882253994953742,
-    ('uniform', '0.315', 'no-decon', 0.4): 0.9882253994953742,
-    ('uniform', '0.315', 'no-decon', 0.5): 0.9882253994953742,
-    ('uniform', '1.0', 'decon', 0.1): 0.9672977624784854,
-    ('uniform', '1.0', 'decon', 0.2): 0.9672977624784854,
-    ('uniform', '1.0', 'decon', 0.3): 0.9672977624784854,
-    ('uniform', '1.0', 'decon', 0.4): 0.9672977624784854,
-    ('uniform', '1.0', 'decon', 0.5): 0.9672977624784854,
-    ('uniform', '1.0', 'no-decon', 0.1): 0.9598633646456021,
-    ('uniform', '1.0', 'no-decon', 0.2): 0.9598633646456021,
-    ('uniform', '1.0', 'no-decon', 0.3): 0.9598633646456021,
-    ('uniform', '1.0', 'no-decon', 0.4): 0.9598633646456021,
-    ('uniform', '1.0', 'no-decon', 0.5): 0.9598633646456021,
-    ('uniform', '1.5', 'decon', 0.1): 0.6160687815001483,
-    ('uniform', '1.5', 'decon', 0.2): 0.6160687815001483,
-    ('uniform', '1.5', 'decon', 0.3): 0.6160687815001483,
-    ('uniform', '1.5', 'decon', 0.4): 0.6160687815001483,
-    ('uniform', '1.5', 'decon', 0.5): 0.6160687815001483,
-    ('uniform', '1.5', 'no-decon', 0.1): 0.7897990726429677,
-    ('uniform', '1.5', 'no-decon', 0.2): 0.7897990726429677,
-    ('uniform', '1.5', 'no-decon', 0.3): 0.7897990726429677,
-    ('uniform', '1.5', 'no-decon', 0.4): 0.7897990726429677,
-    ('uniform', '1.5', 'no-decon', 0.5): 0.7897990726429677,
+    ("cells", "0.315", "decon", 0.1): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.2): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.3): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.4): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.5): 0.984822934232715,
+    ("cells", "0.315", "no-decon", 0.1): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.2): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.3): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.4): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.5): 0.9881956155143339,
+    ("cells", "1.0", "decon", 0.1): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.2): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.3): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.4): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.5): 0.9532710280373832,
+    ("cells", "1.0", "no-decon", 0.1): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.2): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.3): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.4): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.5): 0.9540816326530613,
+    ("cells", "1.5", "decon", 0.1): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.2): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.3): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.4): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.5): 0.3768224299065421,
+    ("cells", "1.5", "no-decon", 0.1): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.2): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.3): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.4): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.5): 0.9051580698835274,
+    ("uniform", "0.315", "decon", 0.1): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.2): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.3): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.4): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.5): 0.9899074852817493,
+    ("uniform", "0.315", "no-decon", 0.1): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.2): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.3): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.4): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.5): 0.9882253994953742,
+    ("uniform", "1.0", "decon", 0.1): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.2): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.3): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.4): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.5): 0.9672977624784854,
+    ("uniform", "1.0", "no-decon", 0.1): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.2): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.3): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.4): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.5): 0.9598633646456021,
+    ("uniform", "1.5", "decon", 0.1): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.2): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.3): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.4): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.5): 0.6160687815001483,
+    ("uniform", "1.5", "no-decon", 0.1): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.2): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.3): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.4): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.5): 0.7897990726429677,
 }
 
 
@@ -1602,13 +1602,13 @@ def test_simulation_chromatic_affine_recovery_cells_decon(
         wavelength_um=0.670
     )
     print(
-            (
-                f"[{case_label}] actual_green_readout_reference_zyx_um=\n"
-                f"{_format_matrix_fixed(readout_relative_affines[0.580])}\n"
-                f"[{case_label}] actual_red_to_green_zyx_um=\n"
-                f"{_format_matrix_fixed(readout_relative_affines[0.670])}\n"
-                f"[{case_label}] expected_red_to_green_zyx_um=\n"
-                f"{_format_matrix_fixed(expected_affines[0.670])}\n"
+        (
+            f"[{case_label}] actual_green_readout_reference_zyx_um=\n"
+            f"{_format_matrix_fixed(readout_relative_affines[0.580])}\n"
+            f"[{case_label}] actual_red_to_green_zyx_um=\n"
+            f"{_format_matrix_fixed(readout_relative_affines[0.670])}\n"
+            f"[{case_label}] expected_red_to_green_zyx_um=\n"
+            f"{_format_matrix_fixed(expected_affines[0.670])}\n"
             f"[{case_label}] recovered_red_to_green_zyx_um=\n"
             f"{_format_matrix_fixed(recovered_red_to_green)}"
         ),
@@ -1659,12 +1659,8 @@ def test_simulation_chromatic_affine_recovery_cells_decon(
         assert float(np.max(np.abs(error_px[:, 0]))) <= 0.5
 
         reference_points_um = source_points_um
-        expected_shift_px = (
-            expected_points_um - reference_points_um
-        ) / spacing
-        recovered_shift_px = (
-            recovered_points_um - reference_points_um
-        ) / spacing
+        expected_shift_px = (expected_points_um - reference_points_um) / spacing
+        recovered_shift_px = (recovered_points_um - reference_points_um) / spacing
         expected_radial_shift = np.linalg.norm(expected_shift_px[:, 1:3], axis=1)
         recovered_radial_shift = np.linalg.norm(recovered_shift_px[:, 1:3], axis=1)
         assert float(np.max(recovered_radial_shift)) > 0.0

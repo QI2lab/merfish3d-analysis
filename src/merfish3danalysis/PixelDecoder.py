@@ -1123,12 +1123,12 @@ class PixelDecoder:
                     * weights_by_wavelength[target_wavelength][valid_pair]
                 ).astype(np.float32)
                 finite_pair = np.isfinite(pair_weights) & (pair_weights > 0)
-                source_points = centers_by_wavelength_um[source_wavelength][
-                    valid_pair
-                ][finite_pair]
-                target_points = centers_by_wavelength_um[target_wavelength][
-                    valid_pair
-                ][finite_pair]
+                source_points = centers_by_wavelength_um[source_wavelength][valid_pair][
+                    finite_pair
+                ]
+                target_points = centers_by_wavelength_um[target_wavelength][valid_pair][
+                    finite_pair
+                ]
                 pair_weights = pair_weights[finite_pair]
                 if pair_weights.size >= 2 * int(min_pairs):
                     min_weight = np.percentile(pair_weights, 25)
@@ -1259,9 +1259,7 @@ class PixelDecoder:
             elif not np.allclose(previous_affine, np.eye(4, dtype=np.float32)):
                 z_limit_um = 3.5 * float(spacing[0])
                 lateral_scale = np.diag(cumulative_affine[1:3, 1:3])
-                lateral_shear = cumulative_affine[1:3, 1:3] - np.diag(
-                    lateral_scale
-                )
+                lateral_shear = cumulative_affine[1:3, 1:3] - np.diag(lateral_scale)
                 plausible_cumulative = (
                     abs(float(cumulative_affine[0, 3])) <= z_limit_um
                     and np.all(lateral_scale >= 0.85)
@@ -1843,10 +1841,10 @@ class PixelDecoder:
 
             sample_scale, sample_y_translation, sample_x_translation = (
                 solve_yx_radial_scale(
-                sample_source[:, 1:3],
-                target[sample_indices, 1:3],
-                weights_arr[sample_indices],
-            )
+                    sample_source[:, 1:3],
+                    target[sample_indices, 1:3],
+                    weights_arr[sample_indices],
+                )
             )
             sample_affine = np.eye(4, dtype=np.float64)
             sample_affine[0, 3] = robust_weighted_z_translation(
@@ -2408,9 +2406,15 @@ class PixelDecoder:
                 zz = cp.arange(z0, z1, dtype=cp.float32)[:, None, None]
                 yy = cp.arange(y0, y1, dtype=cp.float32)[None, :, None]
                 xx = cp.arange(x0, x1, dtype=cp.float32)[None, None, :]
-                centers[center_idx, 0] = float(cp.sum(weights_patch * zz)) / weight_total
-                centers[center_idx, 1] = float(cp.sum(weights_patch * yy)) / weight_total
-                centers[center_idx, 2] = float(cp.sum(weights_patch * xx)) / weight_total
+                centers[center_idx, 0] = (
+                    float(cp.sum(weights_patch * zz)) / weight_total
+                )
+                centers[center_idx, 1] = (
+                    float(cp.sum(weights_patch * yy)) / weight_total
+                )
+                centers[center_idx, 2] = (
+                    float(cp.sum(weights_patch * xx)) / weight_total
+                )
 
             if self._z_crop or self._zstride != 1:
                 centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
