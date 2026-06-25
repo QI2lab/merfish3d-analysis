@@ -25,6 +25,7 @@ mp.set_start_method("spawn", force=True)
 import ctypes
 import gc
 import operator
+import os
 import shutil
 import sys
 import tempfile
@@ -93,6 +94,7 @@ from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
@@ -107,6 +109,73 @@ warnings.filterwarnings(
 )
 
 # GPU helper functions
+
+
+def _start_gpu_worker_process(
+    *,
+    target: object,
+    args: tuple,
+    physical_gpu_id: int,
+) -> mp.Process:
+    """
+    Start one worker with only its assigned physical GPU visible.
+
+    Parameters
+    ----------
+    target : object
+        Worker function passed to :class:`multiprocessing.Process`.
+    args : tuple
+        Worker arguments. These should use local GPU index 0 because the child
+        process sees only ``physical_gpu_id``.
+    physical_gpu_id : int
+        Physical GPU index to expose to the child process.
+
+    Returns
+    -------
+    multiprocessing.Process
+        Started worker process.
+    """
+
+    previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
+    try:
+        process = mp.Process(target=target, args=args)
+        process.start()
+    finally:
+        if previous_visible_devices is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = previous_visible_devices
+    return process
+
+
+def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
+    """
+    Join GPU workers and raise if any worker failed.
+
+    Parameters
+    ----------
+    processes : Sequence[multiprocessing.Process]
+        Worker processes to join.
+    label : str
+        Human-readable worker group name used in the error message.
+
+    Returns
+    -------
+    None
+        Raises RuntimeError when at least one worker exits nonzero.
+    """
+
+    errors = []
+    for process in processes:
+        process.join()
+        if process.exitcode not in (0, None):
+            errors.append(
+                f"{label} worker pid={process.pid} failed with "
+                f"exitcode={process.exitcode}."
+            )
+    if errors:
+        raise RuntimeError(f"{label} failed:\n" + "\n".join(errors))
 
 
 def decode_tiles_worker(
@@ -680,8 +749,9 @@ class PixelDecoder:
                     current_image = np.asarray(
                         decon_image, dtype=np.float32
                     ) * np.asarray(feature_predictor_image, dtype=np.float32)
-                    current_image = self._warp_bit_prediction_weighted_image(
+                    current_image = warp_bit_image_to_reference(
                         current_image,
+                        datastore=self._datastore,
                         tile=tile_id,
                         bit_id=bit_id,
                         emission_wavelength_um=em_wvl,
@@ -1409,8 +1479,9 @@ class PixelDecoder:
             prediction_weighted = np.asarray(
                 decon_array, dtype=np.float32
             ) * np.asarray(feature_predictor_array, dtype=np.float32)
-            registered_data = self._warp_bit_prediction_weighted_image(
+            registered_data = warp_bit_image_to_reference(
                 prediction_weighted,
+                datastore=self._datastore,
                 tile=self._tile_idx,
                 bit_id=bit_id,
                 emission_wavelength_um=em_wvl,
@@ -1454,111 +1525,6 @@ class PixelDecoder:
 
         del images
         gc.collect()
-
-    def _warp_bit_prediction_weighted_image(
-        self,
-        image: np.ndarray,
-        *,
-        tile: int | str,
-        bit_id: str,
-        emission_wavelength_um: float,
-        gpu_id: int = 0,
-    ) -> np.ndarray:
-        """
-        Warp one unregistered prediction-weighted bit image into round001 space.
-
-        Parameters
-        ----------
-        image : numpy.ndarray
-            Prediction-weighted readout image in the bit's native Z, Y, X grid.
-        tile : int or str
-            Tile index or identifier.
-        bit_id : str
-            Readout bit identifier.
-        emission_wavelength_um : float
-            Bit emission wavelength in microns.
-        gpu_id : int, default=0
-            CUDA device ID used for interpolation.
-
-        Returns
-        -------
-        numpy.ndarray
-            Prediction-weighted image sampled in the round001 local reference
-            frame.
-
-        Notes
-        -----
-        When a SOFIMA field is present, the field is loaded from the fiducial
-        round metadata and applied with the package convention: channel order
-        X, Y, Z; spatial order Z, Y, X; and a patch-centered
-        ``map_box_start_xyz_px``. The stored ``reference_shape_zyx_px`` is used
-        as the output grid so reloaded deformable fields reproduce the
-        in-memory fiducial warp convention.
-        """
-
-        from merfish3danalysis.utils.multiview_registration import (
-            warp_array_to_reference_gpu,
-            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
-        )
-
-        round_index = self._datastore.load_local_round_linker(tile=tile, bit=bit_id) - 1
-        if round_index <= 0:
-            round_id = None
-            round_transform_zyx_um = np.eye(4, dtype=np.float32)
-        else:
-            round_id = self._datastore.round_ids[round_index]
-            round_transform_zyx_um = self._datastore.load_local_round_transform_zyx_um(
-                tile=tile,
-                round=round_id,
-            )
-            if round_transform_zyx_um is None:
-                raise RuntimeError(
-                    f"Missing local round transform for tile={tile} round={round_id}."
-                )
-
-        chromatic_zyx_um = self._datastore.load_chromatic_affine_transform_zyx_um(
-            wavelength_um=emission_wavelength_um,
-        )
-        transform_zyx_um = np.linalg.inv(
-            np.asarray(chromatic_zyx_um, dtype=np.float32)
-        ) @ np.asarray(round_transform_zyx_um, dtype=np.float32)
-        spacing_zyx_um = self._datastore.voxel_size_zyx_um
-
-        loaded_flow_field = None
-        if round_id is not None:
-            loaded_flow_field = self._datastore.load_local_sofima_flow_field(
-                tile=tile,
-                round=round_id,
-                return_future=False,
-            )
-        if loaded_flow_field is None and np.allclose(
-            transform_zyx_um,
-            np.eye(4, dtype=np.float32),
-        ):
-            return np.asarray(image, dtype=np.float32)
-        if loaded_flow_field is not None:
-            sofima_flow_field, flow_attrs = loaded_flow_field
-            reference_shape = tuple(
-                int(v) for v in flow_attrs["reference_shape_zyx_px"]
-            )
-            return warp_array_to_reference_with_affine_and_sofima_flow_gpu(
-                image,
-                transform_zyx_um=transform_zyx_um,
-                spacing_zyx_um=spacing_zyx_um,
-                reference_shape=reference_shape,
-                sofima_flow_field_xyz_px=sofima_flow_field,
-                flow_field_stride_zyx_px=flow_attrs["map_stride_zyx_px"],
-                flow_field_box_start_xyz_px=flow_attrs["map_box_start_xyz_px"],
-                gpu_id=gpu_id,
-            ).astype(np.float32, copy=False)
-
-        return warp_array_to_reference_gpu(
-            image,
-            transform_zyx_um=transform_zyx_um,
-            spacing_zyx_um=spacing_zyx_um,
-            reference_shape=image.shape,
-            gpu_id=gpu_id,
-        ).astype(np.float32, copy=False)
 
     def _lowpass_image(
         self,
@@ -2520,7 +2486,7 @@ class PixelDecoder:
             if self._verbose > 1:
                 print("remove small")
             codewords_label_image_cp = remove_small_objects(
-                codewords_label_image_cp, min_size=minimum_pixels
+                codewords_label_image_cp, max_size=max(int(minimum_pixels) - 1, 0)
             )
 
             props_distance = gpu_regionprops_table(
@@ -4723,12 +4689,12 @@ class PixelDecoder:
                 subset = random_tiles[start:end]
                 if not subset:
                     continue
-                p = mp.Process(
+                p = _start_gpu_worker_process(
                     target=_optimize_norm_worker,
                     args=(
                         self._datastore_path,
                         subset,
-                        gpu,
+                        0,
                         self._n_merfish_bits,
                         self._zstride_level,
                         self._decode_mode,
@@ -4739,12 +4705,11 @@ class PixelDecoder:
                         minimum_pixels,
                         feature_predictor_threshold,
                     ),
+                    physical_gpu_id=gpu,
                 )
-                p.start()
                 processes.append(p)
 
-            for p in processes:
-                p.join()
+            _join_gpu_workers(processes, "Iterative normalization")
 
             with cp.cuda.Device(0):
                 # gather results and update
@@ -4839,12 +4804,12 @@ class PixelDecoder:
             subset = all_tiles[start:end]
             if not subset:
                 continue
-            p = mp.Process(
+            p = _start_gpu_worker_process(
                 target=decode_tiles_worker,
                 args=(
                     self._datastore_path,
                     subset,
-                    gpu,
+                    0,
                     self._n_merfish_bits,
                     self._verbose,
                     self._zstride_level,
@@ -4855,12 +4820,11 @@ class PixelDecoder:
                     feature_predictor_threshold,
                     normalization_method,
                 ),
+                physical_gpu_id=gpu,
             )
-            p.start()
             processes.append(p)
 
-        for p in processes:
-            p.join()
+        _join_gpu_workers(processes, "Tile decoding")
 
         # load all barcodes and filter
         self._load_tile_decoding = True

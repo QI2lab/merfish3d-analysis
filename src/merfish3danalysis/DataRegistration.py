@@ -545,8 +545,8 @@ def _process_sofima_rounds_on_gpu(
     try:
         cp.cuda.Device(local_gpu_id).use()
 
-        from merfish3danalysis.utils.multiview_registration import (
-            warp_array_to_reference_with_affine_and_sofima_flow_gpu,
+        from merfish3danalysis.utils.decode_warping import (
+            warp_image_with_sofima_metadata,
         )
         from merfish3danalysis.utils.sofima_registration import (
             estimate_sofima_flow_field_xyz_px,
@@ -602,14 +602,13 @@ def _process_sofima_rounds_on_gpu(
             )
 
             if dr.save_all_fiducial_registered:
-                warped = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+                warped = warp_image_with_sofima_metadata(
                     moving_affine,
                     transform_zyx_um=identity_transform,
                     spacing_zyx_um=spacing_zyx_um,
-                    reference_shape=fixed.shape,
                     sofima_flow_field_xyz_px=sofima_flow_field,
-                    flow_field_stride_zyx_px=metadata["map_stride_zyx_px"],
-                    flow_field_box_start_xyz_px=metadata["map_box_start_xyz_px"],
+                    flow_attrs=metadata,
+                    reference_shape=fixed.shape,
                     gpu_id=local_gpu_id,
                 )
                 registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
@@ -723,7 +722,7 @@ def _read_registered_fiducial_sim(
 
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
-    Deconvolve readout bits, run U-FISH, apply saved transforms, and save outputs.
+    Deconvolve readout bits, run U-FISH, and save native-frame outputs.
 
     Parameters
     ----------
@@ -848,7 +847,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # clip to uint16
             data_reg = data_reg.clip(0, 2**16 - 1).astype(np.uint16)
 
-            # save registered readout immediately so overwrite does not depend on U-FISH
+            # Save unwarped readout immediately so overwrite does not depend on U-FISH.
             dr._datastore.save_local_registered_image(
                 data_reg,
                 tile=dr._tile_id,
@@ -948,7 +947,8 @@ class DataRegistration:
         Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
         stitching.
     decon_readout: bool, default False
-        Deconvolve readout images before registration to fiducials.
+        Deconvolve readout images before saving unwarped readout data for
+        decode-time registration.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
     perform_deformable_registration: bool, default True
@@ -1832,7 +1832,7 @@ class DataRegistration:
 
     def _apply_registration_to_bits(self) -> None:
         """
-        Register readout bits and save registered data plus U-FISH predictions.
+        Deconvolve readout bits, run U-FISH, and save unwarped outputs.
 
         Returns
         -------
@@ -1865,8 +1865,15 @@ class DataRegistration:
             processes.append(p)
 
         # 4) Wait for all GPU-workers to finish
+        errors = []
         for p in processes:
             p.join()
+            if p.exitcode not in (0, None):
+                errors.append(
+                    f"Readout worker pid={p.pid} failed with exitcode={p.exitcode}."
+                )
+        if errors:
+            raise RuntimeError("Readout preprocessing failed:\n" + "\n".join(errors))
 
 
 def no_op(*args: Any, **kwargs: Any) -> None:

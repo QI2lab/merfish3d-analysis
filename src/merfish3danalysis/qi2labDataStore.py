@@ -2144,7 +2144,7 @@ class qi2labDataStore:
                 raise ValueError(
                     f"Image shape mismatch in {entity_root.name}: "
                     f"{image_name}={shape} but {candidate_name}={candidate_shape}. "
-                    "corrected_data, registered/decon data, and "
+                    "corrected_data, decon/registered data, and "
                     "feature_predictor_data must match."
                 )
 
@@ -4472,7 +4472,12 @@ class qi2labDataStore:
         bit: int | str | None = None,
         return_future: bool | None = True,
     ) -> ArrayLike | None:
-        """Local registered, deconvolved image for fidiculial OR readout bit for one tile.
+        """Load a fiducial registered image or an unwarped readout image.
+
+        Fiducial rounds are loaded from ``registered_decon_data`` after local
+        registration. Readout bits are loaded from ``decon_data`` in their
+        native, unwarped tile frame; pixel decoding applies fiducial, SOFIMA,
+        and chromatic transforms at load time.
 
         Parameters
         ----------
@@ -4487,8 +4492,8 @@ class qi2labDataStore:
 
         Returns
         -------
-        registered_decon_image : Optional[ArrayLike]
-            Registered, deconvolved image for fidiculial OR readout bit for one tile.
+        ArrayLike or None
+            Fiducial registered image or unwarped readout image.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -4564,15 +4569,15 @@ class qi2labDataStore:
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<u2"
-            registered_decon_image = self._load_from_zarr_array(
+            image = self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return registered_decon_image
+            return image
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error loading registered deconvolved image.")
+            print("Error loading local deconvolved image.")
             return None
 
     def save_local_registered_image(
@@ -4584,12 +4589,16 @@ class qi2labDataStore:
         bit: int | str | None = None,
         return_future: bool | None = False,
     ) -> None:
-        """Save registered, deconvolved image.
+        """Save a fiducial registered image or an unwarped readout image.
+
+        Fiducial rounds are saved under ``registered_decon_data`` after local
+        registration. Readout bits are saved under ``decon_data`` in their
+        native, unwarped tile frame.
 
         Parameters
         ----------
         registered_image : ArrayLike
-            Registered, deconvolved image.
+            Image to save.
         tile : Union[int, str]
             Tile index or tile id.
         deconvolution : bool
@@ -4712,7 +4721,7 @@ class qi2labDataStore:
 
         Returns
         -------
-        registered_feature_predictor_image : Optional[ArrayLike]
+        feature_predictor_image : Optional[ArrayLike]
             feature_predictor prediction image for one tile.
         """
 
@@ -4763,12 +4772,12 @@ class qi2labDataStore:
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<f4"
-            registered_feature_predictor_image = self._load_from_zarr_array(
+            feature_predictor_image = self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return registered_feature_predictor_image
+            return feature_predictor_image
         except (OSError, ZarrError) as e:
             print(e)
             print("Error loading feature_predictor image.")
