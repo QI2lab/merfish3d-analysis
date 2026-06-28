@@ -97,6 +97,39 @@ def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
     return projection
 
 
+def _overlap_slices_after_translation(
+    shape: Sequence[int],
+    translation_px: Sequence[float],
+) -> tuple[slice, ...] | None:
+    """
+    Return output slices whose translated coordinates stay inside the input.
+
+    Parameters
+    ----------
+    shape : Sequence[int]
+        Image shape.
+    translation_px : Sequence[float]
+        Translation used by ``cupyx.scipy.ndimage.affine_transform``. An output
+        coordinate ``p`` samples input coordinate ``p + translation_px``.
+
+    Returns
+    -------
+    tuple[slice, ...] or None
+        Valid overlap slices, or None if the translation leaves no overlap.
+    """
+
+    slices = []
+    for axis_size, axis_translation_px in zip(shape, translation_px, strict=True):
+        start = int(np.ceil(max(0.0, -float(axis_translation_px))))
+        stop = int(
+            np.floor(min(float(axis_size), float(axis_size) - axis_translation_px))
+        )
+        if stop <= start:
+            return None
+        slices.append(slice(start, stop))
+    return tuple(slices)
+
+
 def _zyx_dict(values: Sequence[float]) -> dict[str, float]:
     """
     Convert a ZYX vector into the axis dictionary expected by multiview-stitcher.
@@ -310,13 +343,21 @@ def register_pair_to_fixed(
 
     fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
     moving_xy_registered_gpu = cp.asarray(moving_xy_registered, dtype=cp.float32)
-    residual_push_shift_px = phase_cross_correlation(
-        fixed_gpu,
-        moving_xy_registered_gpu,
-        upsample_factor=10,
-        disambiguate=True,
-    )[0]
-    residual_pull_shift_px = -cp.asnumpy(residual_push_shift_px).astype(np.float32)
+    overlap_slices = _overlap_slices_after_translation(
+        fixed.shape,
+        (0.0, float(xy_pull_shift_px[0]), float(xy_pull_shift_px[1])),
+    )
+    if overlap_slices is None:
+        residual_push_shift_px = np.zeros(3, dtype=np.float32)
+    else:
+        residual_push_shift_px = phase_cross_correlation(
+            fixed_gpu[overlap_slices],
+            moving_xy_registered_gpu[overlap_slices],
+            upsample_factor=10,
+            disambiguate=True,
+        )[0]
+        residual_push_shift_px = cp.asnumpy(residual_push_shift_px).astype(np.float32)
+    residual_pull_shift_px = -residual_push_shift_px.astype(np.float32, copy=False)
     del fixed_gpu, moving_xy_registered_gpu, moving_xy_registered
     total_shift_px = residual_pull_shift_px.copy()
     total_shift_px[1] += xy_pull_shift_px[0]

@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -170,6 +171,52 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
         gpu_id=0,
     )
     assert np.sqrt(np.mean((warped - fixed) ** 2)) < 1e-3
+
+
+def test_register_pair_to_fixed_residual_uses_valid_lateral_overlap() -> None:
+    cp = pytest.importorskip("cupy")
+    pytest.importorskip("cucim")
+    from scipy.ndimage import shift as ndi_shift
+
+    from merfish3danalysis.utils.multiview_registration import register_pair_to_fixed
+
+    try:
+        cp.cuda.runtime.getDeviceCount()
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("CUDA device is not available.")
+
+    shape = (24, 48, 48)
+    z, y, x = np.indices(shape)
+    fixed = np.zeros(shape, dtype=np.float32)
+    for z0, y0, x0 in [(7, 12, 14), (12, 30, 27), (18, 22, 38)]:
+        fixed += np.exp(
+            -(((z - z0) / 1.8) ** 2 + ((y - y0) / 3.2) ** 2 + ((x - x0) / 3.2) ** 2)
+        )
+
+    true_shift_zyx_px = (1.0, 8.0, -7.0)
+    moving = ndi_shift(
+        fixed,
+        shift=true_shift_zyx_px,
+        order=1,
+        mode="constant",
+        cval=0.0,
+    ).astype(np.float32)
+    spacing_zyx_um = (0.32, 0.098, 0.098)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        transform = register_pair_to_fixed(
+            fixed,
+            moving,
+            spacing_zyx_um=spacing_zyx_um,
+        )
+
+    recovered_shift_zyx_px = np.asarray(transform[:3, 3]) / np.asarray(spacing_zyx_um)
+    np.testing.assert_allclose(
+        recovered_shift_zyx_px,
+        true_shift_zyx_px,
+        atol=0.35,
+    )
 
 
 def test_sofima_estimator_recovers_object_model_warp_field(
