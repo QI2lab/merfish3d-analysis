@@ -30,6 +30,8 @@ def local_register_data(
     crop_yx_decon: int = 2048,
     ufish_model: str | None = None,
     global_registration: bool = True,
+    global_registration_only: bool = False,
+    create_max_proj_tiff: bool = True,
     zstride_level: int = 0,
     verbose: int = 1,
 ) -> None:
@@ -62,6 +64,12 @@ def local_register_data(
     global_registration: bool, default = True
         perform global tile registration and fused fiducial OME-Zarr creation
         after local preprocessing.
+    global_registration_only : bool, default=False
+        Skip local preprocessing and rerun only global tile registration and
+        fused fiducial OME-Zarr creation on an existing datastore.
+    create_max_proj_tiff : bool, default=True
+        If True, write the fused fiducial max-projection TIFF when global
+        registration runs.
     zstride_level: int, default = 0
         look for a skip z dataset.
     verbose : int, default = 1
@@ -93,6 +101,10 @@ def local_register_data(
         verbose=verbose,
     )
 
+    if global_registration_only:
+        registration_factory.global_register(create_max_proj_tiff=create_max_proj_tiff)
+        return
+
     # run local registration across rounds
     registration_factory.register_all_tiles()
 
@@ -100,51 +112,6 @@ def local_register_data(
     datastore_state = datastore.datastore_state
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
-
-
-@app.command()
-def global_register_existing(
-    root_path: Path,
-    num_gpus: int = 1,
-    create_max_proj_tiff: bool = True,
-    zstride_level: int = 0,
-    verbose: int = 1,
-) -> None:
-    """Run global tile registration and fusion on an existing datastore.
-
-    This skips local tile registration and starts from the locally registered
-    reference fiducials already stored in the datastore.
-
-    Parameters
-    ----------
-    root_path : pathlib.Path
-        Path to experiment root.
-    num_gpus : int, default=1
-        Number of GPUs available for CuPy-backed fusion batches.
-    create_max_proj_tiff : bool, default=True
-        If True, write the fused fiducial max-projection TIFF.
-    zstride_level : int, default=0
-        Use ``qi2labdatastore_zstrideXX`` when greater than zero.
-    verbose : int, default=1
-        Progress verbosity. Set to 0 to suppress routine progress prints.
-    """
-
-    from merfish3danalysis.DataRegistration import DataRegistration
-
-    if zstride_level == 0:
-        datastore_path = root_path / Path(r"qi2labdatastore")
-    else:
-        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
-    datastore = qi2labDataStore(datastore_path)
-    print(f"Using datastore at {datastore_path}")
-
-    registration_factory = DataRegistration(
-        datastore=datastore,
-        num_gpus=num_gpus,
-        global_registration=False,
-        verbose=verbose,
-    )
-    registration_factory.global_register(create_max_proj_tiff=create_max_proj_tiff)
 
 
 def main() -> None:
