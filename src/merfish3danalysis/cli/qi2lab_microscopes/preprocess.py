@@ -102,6 +102,51 @@ def local_register_data(
     datastore.datastore_state = datastore_state
 
 
+@app.command()
+def global_register_existing(
+    root_path: Path,
+    num_gpus: int = 1,
+    create_max_proj_tiff: bool = True,
+    zstride_level: int = 0,
+    verbose: int = 1,
+) -> None:
+    """Run global tile registration and fusion on an existing datastore.
+
+    This skips local tile registration and starts from the locally registered
+    reference fiducials already stored in the datastore.
+
+    Parameters
+    ----------
+    root_path : pathlib.Path
+        Path to experiment root.
+    num_gpus : int, default=1
+        Number of GPUs available for CuPy-backed fusion batches.
+    create_max_proj_tiff : bool, default=True
+        If True, write the fused fiducial max-projection TIFF.
+    zstride_level : int, default=0
+        Use ``qi2labdatastore_zstrideXX`` when greater than zero.
+    verbose : int, default=1
+        Progress verbosity. Set to 0 to suppress routine progress prints.
+    """
+
+    from merfish3danalysis.DataRegistration import DataRegistration
+
+    if zstride_level == 0:
+        datastore_path = root_path / Path(r"qi2labdatastore")
+    else:
+        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
+    datastore = qi2labDataStore(datastore_path)
+    print(f"Using datastore at {datastore_path}")
+
+    registration_factory = DataRegistration(
+        datastore=datastore,
+        num_gpus=num_gpus,
+        global_registration=False,
+        verbose=verbose,
+    )
+    registration_factory.global_register(create_max_proj_tiff=create_max_proj_tiff)
+
+
 def main() -> None:
     """
     Main.

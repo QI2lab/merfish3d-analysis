@@ -720,6 +720,38 @@ def _read_registered_fiducial_sim(
     )
 
 
+def _sim_fusion_summary(sim: Any) -> str:
+    """
+    Return a compact summary of one SpatialImage used for global fusion.
+
+    Parameters
+    ----------
+    sim : Any
+        SpatialImage-like object.
+
+    Returns
+    -------
+    str
+        Shape, dtype, chunk, and backend details for diagnostics.
+    """
+
+    data = getattr(sim, "data", None)
+    encoding = getattr(sim, "encoding", {}) or {}
+    attrs = getattr(sim, "attrs", {}) or {}
+    chunks = getattr(data, "chunks", None)
+    chunksize = getattr(data, "chunksize", None)
+    preferred_chunks = encoding.get("preferred_chunks")
+    zarr_chunks = attrs.get("_zarr_chunks")
+    return (
+        f"dims={tuple(getattr(sim, 'dims', ()))!r} "
+        f"shape={tuple(int(v) for v in getattr(sim, 'shape', ()))!r} "
+        f"dtype={getattr(data, 'dtype', None)} "
+        f"data_type={type(data).__module__}.{type(data).__name__} "
+        f"chunks={chunks!r} chunksize={chunksize!r} "
+        f"preferred_chunks={preferred_chunks!r} zarr_chunks={zarr_chunks!r}"
+    )
+
+
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
     Deconvolve readout bits, run U-FISH, and save native-frame outputs.
@@ -1374,67 +1406,34 @@ class DataRegistration:
         self.tile_id = tile_id
         self._apply_registration_to_bits()
 
-    def global_register(
+    def _load_global_fiducial_msims(
         self,
-        create_max_proj_tiff: bool = True,
-    ) -> None:
+        *,
+        ngff_utils: Any,
+        msi_utils: Any,
+        si_utils: Any,
+        use_stored_global_transforms: bool,
+    ) -> list[Any]:
         """
-        Globally register first-round fiducial tiles and write fused OME-Zarr.
-
-        The method reads the locally registered first fiducial round for every
-        tile, combines stage metadata with GPU phase-correlation global
-        registration, saves per-tile global transforms back to the datastore,
-        and fuses the registered views directly into the datastore as OME-Zarr
-        v0.5 using CuPy-backed fusion.
+        Load locally registered reference fiducials as multiscale images.
 
         Parameters
         ----------
-        create_max_proj_tiff : bool, default=True
-            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
-            from the full-resolution fused OME-Zarr.
+        ngff_utils : Any
+            ``multiview_stitcher.ngff_utils`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+        si_utils : Any
+            ``multiview_stitcher.spatial_image_utils`` module.
+        use_stored_global_transforms : bool
+            If True, attach stored ``global_registered`` transforms instead of
+            preparing images for a fresh global registration.
 
         Returns
         -------
-        None
-            Global transforms, fused fiducial OME-Zarr, datastore state, and
-            optional max projection are written to the datastore.
+        list[Any]
+            MultiscaleSpatialImages for global registration or fusion.
         """
-
-        import shutil
-
-        from dask import config as dask_config
-        from multiview_stitcher import (
-            fusion,
-            misc_utils,
-            msi_utils,
-            ngff_utils,
-            registration,
-        )
-        from multiview_stitcher import spatial_image_utils as si_utils
-        from tifffile import TiffWriter
-
-        from merfish3danalysis.utils.multiview_registration import (
-            cucim_phase_correlation_registration,
-            registration_binning_from_spacing,
-        )
-
-        if len(self._tile_ids) <= 1:
-            self._datastore.save_global_coord_xforms_um(
-                affine_zyx_um=np.eye(4, dtype=np.float32),
-                origin_zyx_um=np.zeros(3, dtype=np.float32),
-                spacing_zyx_um=np.asarray(
-                    self._datastore.voxel_size_zyx_um,
-                    dtype=np.float32,
-                ),
-                tile=self._tile_ids[0],
-            )
-            self._datastore.datastore_state = {"GlobalRegistered": True}
-            if self._verbose >= 1:
-                print(
-                    time_stamp(),
-                    "Skipping global registration because datastore has one tile.",
-                )
-            return
 
         voxel_zyx_um = self._datastore.voxel_size_zyx_um
         scale = {
@@ -1444,9 +1443,6 @@ class DataRegistration:
         }
         reference_round_id = self._round_ids[0]
         msims = []
-
-        if self._verbose >= 1:
-            print(time_stamp(), "Starting global fiducial registration.")
 
         for tile_id in self._tile_ids:
             tile_position_zyx_um, affine_zyx_px = (
@@ -1472,41 +1468,153 @@ class DataRegistration:
                 ngff_utils=ngff_utils,
                 si_utils=si_utils,
             )
-            msims.append(msi_utils.get_msim_from_sim(sim, scale_factors=[]))
+            msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
+
+            if use_stored_global_transforms:
+                affine_zyx_um, _origin_zyx_um, _spacing_zyx_um = (
+                    self._datastore.load_global_coord_xforms_um(tile=tile_id)
+                )
+                if affine_zyx_um is None:
+                    raise RuntimeError(
+                        "Stored global transform is required for direct global "
+                        f"fusion, but none was found for tile {tile_id!r}."
+                    )
+                msi_utils.set_affine_transform(
+                    msim,
+                    np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
+                    transform_key="global_registered",
+                )
+
+            msims.append(msim)
             gc.collect()
 
-        with dask_config.set(scheduler="single-threaded"):
-            global_transforms = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="stage_metadata",
-                new_transform_key="global_registered",
-                pairwise_reg_func=cucim_phase_correlation_registration,
-                registration_binning=registration_binning_from_spacing(voxel_zyx_um),
-                groupwise_resolution_kwargs={
-                    "reference_view": 0,
-                    "transform": "translation",
+        return msims
+
+    def _print_global_fusion_diagnostics(
+        self,
+        *,
+        msims: list[Any],
+        output_zarr_path: Path,
+        batch_options: dict[str, Any],
+        fusion: Any,
+        msi_utils: Any,
+    ) -> None:
+        """
+        Print geometry, chunking, and batching diagnostics for global fusion.
+
+        Parameters
+        ----------
+        msims : list[Any]
+            Multiscale images passed to fusion.
+        output_zarr_path : pathlib.Path
+            Destination OME-Zarr root.
+        batch_options : dict[str, Any]
+            Fusion batch options.
+        fusion : Any
+            ``multiview_stitcher.fusion`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+
+        Returns
+        -------
+        None
+            Diagnostics are printed when ``verbose >= 1``.
+        """
+
+        if self._verbose < 1:
+            return
+
+        print(time_stamp(), "Global fusion diagnostics:")
+        print(time_stamp(), f"  output_zarr_path={output_zarr_path}")
+        print(time_stamp(), "  backend=cupy output_on_backend=False")
+        print(time_stamp(), f"  batch_options={batch_options!r}")
+
+        try:
+            scale0_sims = [
+                msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims
+            ]
+            output_stack_properties = fusion.process_output_stack_properties(
+                sims=scale0_sims,
+                output_spacing={
+                    "z": float(self._datastore.voxel_size_zyx_um[0]),
+                    "y": float(self._datastore.voxel_size_zyx_um[1]),
+                    "x": float(self._datastore.voxel_size_zyx_um[2]),
                 },
-                n_parallel_pairwise_regs=1,
+                output_stack_mode="union",
+                transform_key="global_registered",
             )
+            output_chunksize = fusion.process_output_chunksize(scale0_sims, None)
+            spatial_shape = output_stack_properties["shape"]
+            nblocks = {
+                dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
+                for dim in output_chunksize
+            }
+            total_blocks = int(np.prod(list(nblocks.values())))
+            print(time_stamp(), f"  output_shape={spatial_shape}")
+            print(time_stamp(), f"  output_chunksize={output_chunksize}")
+            print(time_stamp(), f"  output_blocks={nblocks} total={total_blocks}")
+        except Exception as exc:
+            print(time_stamp(), f"  output geometry diagnostics failed: {exc!r}")
 
-        for tile_idx, (msim, transform) in enumerate(
-            zip(msims, global_transforms, strict=False)
-        ):
-            affine = np.asarray(
-                transform.data if hasattr(transform, "data") else transform
-            )
-            affine = np.round(np.squeeze(affine), 2)
-            sim = msi_utils.get_sim_from_msim(msim)
-            origin = si_utils.get_origin_from_sim(sim, asarray=True)
-            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
-            self._datastore.save_global_coord_xforms_um(
-                affine_zyx_um=affine,
-                origin_zyx_um=origin,
-                spacing_zyx_um=spacing,
-                tile=tile_idx,
-            )
+        for tile_idx, msim in enumerate(msims):
+            try:
+                sim = msi_utils.get_sim_from_msim(msim, scale="scale0")
+                print(
+                    time_stamp(),
+                    f"  input_tile_index={tile_idx} {_sim_fusion_summary(sim)}",
+                )
+            except Exception as exc:
+                print(
+                    time_stamp(),
+                    f"  input_tile_index={tile_idx} summary failed: {exc!r}",
+                )
 
+    def _fuse_global_registered_msims(
+        self,
+        *,
+        msims: list[Any],
+        create_max_proj_tiff: bool,
+        fusion: Any,
+        misc_utils: Any,
+        msi_utils: Any,
+        si_utils: Any,
+        TiffWriter: Any,
+    ) -> None:
+        """
+        Fuse globally registered fiducial views and write datastore metadata.
+
+        Parameters
+        ----------
+        msims : list[Any]
+            MultiscaleSpatialImages with ``global_registered`` transforms.
+        create_max_proj_tiff : bool
+            If True, write a fused fiducial max-projection TIFF.
+        fusion : Any
+            ``multiview_stitcher.fusion`` module.
+        misc_utils : Any
+            ``multiview_stitcher.misc_utils`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+        si_utils : Any
+            ``multiview_stitcher.spatial_image_utils`` module.
+        TiffWriter : Any
+            ``tifffile.TiffWriter`` class.
+
+        Returns
+        -------
+        None
+            Fused OME-Zarr, metadata, datastore state, and optional TIFF are
+            written to disk.
+        """
+
+        import shutil
+
+        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        scale = {
+            "z": float(voxel_zyx_um[0]),
+            "y": float(voxel_zyx_um[1]),
+            "x": float(voxel_zyx_um[2]),
+        }
         output_zarr_path = self._datastore._image_store_path(
             self._datastore._fused_root_path
             / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
@@ -1514,6 +1622,25 @@ class DataRegistration:
         if output_zarr_path.exists():
             shutil.rmtree(output_zarr_path)
 
+        batch_options = {
+            "batch_func": misc_utils.process_batch_using_joblib,
+            "n_batch": 20,
+            "batch_func_kwargs": {
+                "n_jobs": min(4, max(1, int(self._num_gpus))),
+                "backend": "threading",
+            },
+        }
+        self._print_global_fusion_diagnostics(
+            msims=msims,
+            output_zarr_path=output_zarr_path,
+            batch_options=batch_options,
+            fusion=fusion,
+            msi_utils=msi_utils,
+        )
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Starting global fiducial fusion.")
+        fusion_start_time = timeit.default_timer()
         fused_sim = fusion.fuse(
             images=msims,
             transform_key="global_registered",
@@ -1524,18 +1651,18 @@ class DataRegistration:
                 "ngff_version": "0.5",
                 "overwrite": True,
             },
-            batch_options={
-                "batch_func": misc_utils.process_batch_using_joblib,
-                "n_batch": 20,
-                "batch_func_kwargs": {
-                    "n_jobs": min(4, max(1, int(self._num_gpus))),
-                    "backend": "threading",
-                },
-            },
+            batch_options=batch_options,
             backend="cupy",
             output_on_backend=False,
         )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished fusion.fuse direct-to-zarr "
+                f"elapsed_s={timeit.default_timer() - fusion_start_time:.2f}",
+            )
 
+        metadata_start_time = timeit.default_timer()
         if not hasattr(fused_sim, "data"):
             fused_sim = msi_utils.get_sim_from_msim(fused_sim, scale="scale0")
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
@@ -1555,6 +1682,12 @@ class DataRegistration:
             },
             merge=True,
         )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished fused metadata write "
+                f"elapsed_s={timeit.default_timer() - metadata_start_time:.2f}",
+            )
 
         del fused_msim, fused_sim
         gc.collect()
@@ -1564,6 +1697,7 @@ class DataRegistration:
         self._datastore.datastore_state = datastore_state
 
         if create_max_proj_tiff:
+            projection_start_time = timeit.default_timer()
             loaded = self._datastore.load_global_fidicual_image(return_future=False)
             if loaded is None:
                 raise RuntimeError(
@@ -1601,9 +1735,191 @@ class DataRegistration:
                         "PhysicalSizeYUnit": "µm",
                     },
                 )
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Finished fused max-projection TIFF "
+                    f"elapsed_s={timeit.default_timer() - projection_start_time:.2f}",
+                )
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished global fiducial fusion "
+                f"elapsed_s={timeit.default_timer() - fusion_start_time:.2f}",
+            )
+
+    def global_register(
+        self,
+        create_max_proj_tiff: bool = True,
+    ) -> None:
+        """
+        Globally register first-round fiducial tiles and write fused OME-Zarr.
+
+        The method reads the locally registered first fiducial round for every
+        tile, combines stage metadata with multiview-stitcher global
+        registration, saves per-tile global transforms back to the datastore,
+        and fuses the registered views directly into the datastore as OME-Zarr
+        v0.5 using CuPy-backed fusion.
+
+        Parameters
+        ----------
+        create_max_proj_tiff : bool, default=True
+            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            from the full-resolution fused OME-Zarr.
+
+        Returns
+        -------
+        None
+            Global transforms, fused fiducial OME-Zarr, datastore state, and
+            optional max projection are written to the datastore.
+        """
+
+        from dask import config as dask_config
+        from multiview_stitcher import (
+            fusion,
+            misc_utils,
+            msi_utils,
+            ngff_utils,
+            registration,
+        )
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from tifffile import TiffWriter
+
+        from merfish3danalysis.utils.multiview_registration import (
+            registration_binning_from_spacing,
+        )
+
+        if len(self._tile_ids) <= 1:
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=np.eye(4, dtype=np.float32),
+                origin_zyx_um=np.zeros(3, dtype=np.float32),
+                spacing_zyx_um=np.asarray(
+                    self._datastore.voxel_size_zyx_um,
+                    dtype=np.float32,
+                ),
+                tile=self._tile_ids[0],
+            )
+            self._datastore.datastore_state = {"GlobalRegistered": True}
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Skipping global registration because datastore has one tile.",
+                )
+            return
+
+        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Starting global fiducial registration.")
+
+        msims = self._load_global_fiducial_msims(
+            ngff_utils=ngff_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            use_stored_global_transforms=False,
+        )
+
+        with dask_config.set(scheduler="single-threaded"):
+            global_transforms = registration.register(
+                msims,
+                reg_channel_index=0,
+                transform_key="stage_metadata",
+                new_transform_key="global_registered",
+                registration_binning=registration_binning_from_spacing(voxel_zyx_um),
+                groupwise_resolution_kwargs={
+                    "reference_view": 0,
+                    "transform": "translation",
+                },
+                n_parallel_pairwise_regs=1,
+            )
+
+        for tile_idx, (msim, transform) in enumerate(
+            zip(msims, global_transforms, strict=False)
+        ):
+            affine = np.asarray(
+                transform.data if hasattr(transform, "data") else transform
+            )
+            affine = np.round(np.squeeze(affine), 2)
+            sim = msi_utils.get_sim_from_msim(msim)
+            origin = si_utils.get_origin_from_sim(sim, asarray=True)
+            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=affine,
+                origin_zyx_um=origin,
+                spacing_zyx_um=spacing,
+                tile=tile_idx,
+            )
+
+        self._fuse_global_registered_msims(
+            msims=msims,
+            create_max_proj_tiff=create_max_proj_tiff,
+            fusion=fusion,
+            misc_utils=misc_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            TiffWriter=TiffWriter,
+        )
 
         if self._verbose >= 1:
             print(time_stamp(), "Finished global fiducial registration.")
+
+    def fuse_global_registered(
+        self,
+        create_max_proj_tiff: bool = True,
+    ) -> None:
+        """
+        Fuse fiducials using stored global transforms without registering tiles.
+
+        This method is intended for existing datastores that already have
+        saved per-tile global transforms. It loads locally registered reference
+        fiducials, attaches the stored ``global_registered`` transforms, and
+        runs only the fused OME-Zarr creation path.
+
+        Parameters
+        ----------
+        create_max_proj_tiff : bool, default=True
+            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            from the full-resolution fused OME-Zarr.
+
+        Returns
+        -------
+        None
+            Fused fiducial OME-Zarr, datastore state, and optional max
+            projection are written to the datastore.
+        """
+
+        from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from tifffile import TiffWriter
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Starting global fiducial fusion from stored transforms.",
+            )
+
+        msims = self._load_global_fiducial_msims(
+            ngff_utils=ngff_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            use_stored_global_transforms=True,
+        )
+        self._fuse_global_registered_msims(
+            msims=msims,
+            create_max_proj_tiff=create_max_proj_tiff,
+            fusion=fusion,
+            misc_utils=misc_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            TiffWriter=TiffWriter,
+        )
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished global fiducial fusion from stored transforms.",
+            )
 
     def _load_raw_data(self) -> None:
         """
