@@ -109,6 +109,8 @@ def run_cellpose(
     # initialize cellpose model and options
     import torch
 
+    torch.sparse.check_sparse_tensor_invariants.disable()
+
     cuda_available = torch.cuda.is_available()
     if use_gpu and not cuda_available:
         raise RuntimeError(
@@ -146,7 +148,7 @@ def run_cellpose(
         fiducial_max_projection,
         diameter=diameter,
         flow_threshold=flow_threshold,
-        cellprob_threshold=-cellprob_threshold,
+        cellprob_threshold=cellprob_threshold,
         niter=200,
         normalize=normalize,
     )
