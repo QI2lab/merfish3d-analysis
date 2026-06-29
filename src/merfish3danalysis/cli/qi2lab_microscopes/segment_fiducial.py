@@ -70,7 +70,9 @@ def run_cellpose(
         datastore._fused_root_path / Path(f"fused_{datastore.fiducial_folder_name}_zyx")
     )
     if not fused_image_path.exists():
-        raise FileNotFoundError(f"Globally registered fused image not found: {fused_image_path}")
+        raise FileNotFoundError(
+            f"Globally registered fused image not found: {fused_image_path}"
+        )
 
     attributes = datastore._read_extra_attributes(fused_image_path)
     affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
@@ -84,7 +86,10 @@ def run_cellpose(
         / Path("fiducial_max_projection.ome.tiff")
     )
     if max_projection_path.exists():
-        print(f"Loading fused fiducial max projection from {max_projection_path}", flush=True)
+        print(
+            f"Loading fused fiducial max projection from {max_projection_path}",
+            flush=True,
+        )
         fiducial_max_projection = imread(max_projection_path)
     else:
         print(
@@ -94,7 +99,9 @@ def run_cellpose(
         )
         loaded = datastore.load_global_fidicual_image(return_future=False)
         if loaded is None:
-            raise RuntimeError("Could not load globally registered fused fiducial image.")
+            raise RuntimeError(
+                "Could not load globally registered fused fiducial image."
+            )
         fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
         fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
         del fiducial_fused
@@ -106,7 +113,7 @@ def run_cellpose(
     if use_gpu and not cuda_available:
         raise RuntimeError(
             "Cellpose GPU mode was requested, but torch.cuda.is_available() is False. "
-            "Run `uv run python -c \"import torch; print(torch.cuda.is_available())\"` "
+            'Run `uv run python -c "import torch; print(torch.cuda.is_available())"` '
             "to verify the environment, or rerun with `--no-use-gpu` for slow CPU mode."
         )
     use_bfloat16 = False
