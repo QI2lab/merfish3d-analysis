@@ -35,6 +35,9 @@ def run_cellpose(
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
     niter: int = 0,
+    min_size: int = 15,
+    pretrained_model: str = "cpsam_v2",
+    roi_multiprocessing: bool = False,
     use_gpu: bool = True,
     zstride_level: int = 0,
 ) -> None:
@@ -55,6 +58,13 @@ def run_cellpose(
     niter : int, default=0
         Number of Cellpose dynamics iterations. The GUI default is 0, which
         lets Cellpose choose the iteration count from the diameter.
+    min_size : int, default=15
+        Minimum mask size. This matches the Cellpose GUI default.
+    pretrained_model : str, default="cpsam_v2"
+        Cellpose model name or path. Built-in GUI names include cpsam_v2,
+        cpdino, cpdino-vitb, and cpsam.
+    roi_multiprocessing : bool, default=False
+        Use Cellpose multiprocessing for ImageJ ROI outline extraction.
     use_gpu : bool, default=True
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
@@ -147,14 +157,20 @@ def run_cellpose(
         **models.normalize_default,
         "percentile": normalization,
     }
-    model = models.CellposeModel(gpu=use_gpu, use_bfloat16=use_bfloat16)
+    print(f"Loading Cellpose model {pretrained_model!r}.", flush=True)
+    model = models.CellposeModel(
+        gpu=use_gpu,
+        pretrained_model=pretrained_model,
+        use_bfloat16=use_bfloat16,
+    )
+    print(f"Loaded Cellpose model from {model.pretrained_model!r}.", flush=True)
 
     # run cellpose on fiducial max projection
     print(
         "Running Cellpose "
         f"image_shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
         f"diameter={diameter} flow_threshold={flow_threshold} "
-        f"cellprob_threshold={cellprob_threshold} niter={niter} "
+        f"cellprob_threshold={cellprob_threshold} niter={niter} min_size={min_size} "
         f"normalize={normalize!r}.",
         flush=True,
     )
@@ -165,6 +181,7 @@ def run_cellpose(
         cellprob_threshold=cellprob_threshold,
         niter=niter,
         normalize=normalize,
+        min_size=min_size,
         channel_axis=-1,
         z_axis=None,
     )
@@ -193,8 +210,12 @@ def run_cellpose(
     if not (imagej_roi_path_dir.exists()):
         imagej_roi_path_dir.mkdir()
     imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
-    print(f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip.", flush=True)
-    io.save_rois(masks, str(imagej_roi_path))
+    print(
+        f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip "
+        f"multiprocessing={roi_multiprocessing}.",
+        flush=True,
+    )
+    io.save_rois(masks, str(imagej_roi_path), multiprocessing=roi_multiprocessing)
     print(
         f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
         flush=True,
