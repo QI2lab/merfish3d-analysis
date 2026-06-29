@@ -31,10 +31,10 @@ app.pretty_exceptions_enable = False
 def run_cellpose(
     root_path: Path,
     normalization: tuple[float, float] = [1.0, 99.0],
-    diameter: int = 30,
+    diameter: float | None = None,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
-    niter: int = 0,
+    niter: int = 200,
     min_size: int = 15,
     pretrained_model: str = "cpsam_v2",
     roi_multiprocessing: bool = False,
@@ -49,15 +49,16 @@ def run_cellpose(
         path to experiment.
     normalization: tuple[float,float], default = [1.0,99.0]
         normalization values [low,high].
-    diameter: int, default = 30
-        cell size in integers.
+    diameter: float | None, default = None
+        Cell size in pixels. The Cellpose GUI default is blank, which passes
+        None and does not force a cell size.
     flow_threshold: float, default = 0.4
         flow threshold.
     cellprob_threshold: float, default = 0.0
         cell probability threshold.
-    niter : int, default=0
-        Number of Cellpose dynamics iterations. The GUI default is 0, which
-        lets Cellpose choose the iteration count from the diameter.
+    niter : int, default=200
+        Number of Cellpose dynamics iterations. The GUI text box starts at 0,
+        but its getter passes 200 to Cellpose when the value is less than 1.
     min_size : int, default=15
         Minimum mask size. This matches the Cellpose GUI default.
     pretrained_model : str, default="cpsam_v2"
