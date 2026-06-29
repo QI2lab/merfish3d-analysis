@@ -31,6 +31,7 @@ dependencies = [
     "pylibraft-cu12==26.6.*; sys_platform == 'linux'",
     "cuvs-cu12==26.6.*; sys_platform == 'linux'",
     "torch",
+    "torchvision",
     "onnxruntime-gpu",
     "ndv[vispy,pyqt]",
     "cellpose[gui]",

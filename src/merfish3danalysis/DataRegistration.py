@@ -1444,7 +1444,13 @@ class DataRegistration:
         reference_round_id = self._round_ids[0]
         msims = []
 
-        for tile_id in self._tile_ids:
+        for tile_index, tile_id in enumerate(self._tile_ids):
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Loading global registration input "
+                    f"tile={tile_id} ({tile_index + 1}/{len(self._tile_ids)})",
+                )
             tile_position_zyx_um, affine_zyx_px = (
                 self._datastore.load_local_stage_position_zyx_um(
                     tile_id, reference_round_id
@@ -1486,6 +1492,12 @@ class DataRegistration:
                 )
 
             msims.append(msim)
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Loaded global registration input "
+                    f"tile={tile_id} {_sim_fusion_summary(sim)}",
+                )
             gc.collect()
 
         return msims
@@ -1543,7 +1555,7 @@ class DataRegistration:
                 output_stack_mode="union",
                 transform_key="global_registered",
             )
-            output_chunksize = fusion.process_output_chunksize(scale0_sims, None)
+            output_chunksize = fusion.process_output_chunksize(scale0_sims, 512)
             spatial_shape = output_stack_properties["shape"]
             nblocks = {
                 dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
@@ -1642,9 +1654,11 @@ class DataRegistration:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
         fused_sim = fusion.fuse(
-            images=msims,
+            images=[msi_utils.get_sim_from_msim(msim) for msim in msims],
             transform_key="global_registered",
             output_spacing=scale,
+            output_chunksize=512,
+            overlap_in_pixels=64,
             output_zarr_url=str(output_zarr_path),
             zarr_options={
                 "ome_zarr": True,
@@ -1776,6 +1790,7 @@ class DataRegistration:
         """
 
         from dask import config as dask_config
+        from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
             fusion,
             misc_utils,
@@ -1785,10 +1800,6 @@ class DataRegistration:
         )
         from multiview_stitcher import spatial_image_utils as si_utils
         from tifffile import TiffWriter
-
-        from merfish3danalysis.utils.multiview_registration import (
-            registration_binning_from_spacing,
-        )
 
         if len(self._tile_ids) <= 1:
             self._datastore.save_global_coord_xforms_um(
@@ -1808,7 +1819,6 @@ class DataRegistration:
                 )
             return
 
-        voxel_zyx_um = self._datastore.voxel_size_zyx_um
 
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial registration.")
@@ -1820,18 +1830,54 @@ class DataRegistration:
             use_stored_global_transforms=False,
         )
 
+        registration_binning = {"z": 3, "y": 6, "x": 6}
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Running multiview-stitcher global registration "
+                f"tiles={len(msims)} registration_binning={registration_binning} "
+                "pre_registration_pruning_method=keep_axis_aligned "
+                "post_registration_do_quality_filter=True "
+                "n_parallel_pairwise_regs=1",
+            )
+        registration_start_time = timeit.default_timer()
         with dask_config.set(scheduler="single-threaded"):
-            global_transforms = registration.register(
-                msims,
-                reg_channel_index=0,
-                transform_key="stage_metadata",
-                new_transform_key="global_registered",
-                registration_binning=registration_binning_from_spacing(voxel_zyx_um),
-                groupwise_resolution_kwargs={
-                    "reference_view": 0,
-                    "transform": "translation",
-                },
-                n_parallel_pairwise_regs=1,
+            if self._verbose >= 1:
+                with ProgressBar():
+                    global_transforms = registration.register(
+                        msims,
+                        reg_channel_index=0,
+                        transform_key="stage_metadata",
+                        new_transform_key="global_registered",
+                        pre_registration_pruning_method="keep_axis_aligned",
+                        registration_binning=registration_binning,
+                        post_registration_do_quality_filter=True,
+                        groupwise_resolution_kwargs={
+                            "reference_view": 0,
+                            "transform": "translation",
+                        },
+                        n_parallel_pairwise_regs=1,
+                    )
+            else:
+                global_transforms = registration.register(
+                    msims,
+                    reg_channel_index=0,
+                    transform_key="stage_metadata",
+                    new_transform_key="global_registered",
+                    pre_registration_pruning_method="keep_axis_aligned",
+                    registration_binning=registration_binning,
+                    post_registration_do_quality_filter=True,
+                    groupwise_resolution_kwargs={
+                        "reference_view": 0,
+                        "transform": "translation",
+                    },
+                    n_parallel_pairwise_regs=1,
+                )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished multiview-stitcher global registration "
+                f"elapsed_s={timeit.default_timer() - registration_start_time:.2f}",
             )
 
         for tile_idx, (msim, transform) in enumerate(
