@@ -17,9 +17,8 @@ from pathlib import Path
 
 import numpy as np
 import typer
-from cellpose import io, models
+from cellpose import io, models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
-from tifffile import imread
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -34,6 +33,7 @@ def run_cellpose(
     diameter: int = 30,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
+    niter: int = 0,
     use_gpu: bool = True,
     zstride_level: int = 0,
 ) -> None:
@@ -51,6 +51,9 @@ def run_cellpose(
         flow threshold.
     cellprob_threshold: float, default = 0.0
         cell probability threshold.
+    niter : int, default=0
+        Number of Cellpose dynamics iterations. The GUI default is 0, which
+        lets Cellpose choose the iteration count from the diameter.
     use_gpu : bool, default=True
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
@@ -90,7 +93,7 @@ def run_cellpose(
             f"Loading fused fiducial max projection from {max_projection_path}",
             flush=True,
         )
-        fiducial_max_projection = imread(max_projection_path)
+        fiducial_max_projection = io.imread_2D(str(max_projection_path))
     else:
         print(
             "Max projection TIFF not found; loading full fused Zarr to compute one. "
@@ -105,6 +108,15 @@ def run_cellpose(
         fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
         fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
         del fiducial_fused
+    fiducial_max_projection = _prepare_cellpose_gui_image(fiducial_max_projection)
+    print(
+        "Prepared Cellpose GUI-style image "
+        f"shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
+        f"dtype={fiducial_max_projection.dtype} "
+        f"min={float(np.min(fiducial_max_projection)):.3f} "
+        f"max={float(np.max(fiducial_max_projection)):.3f}.",
+        flush=True,
+    )
 
     # initialize cellpose model and options
     import torch
@@ -130,18 +142,19 @@ def run_cellpose(
     else:
         print("Using Cellpose CPU mode.", flush=True)
 
-    model = models.CellposeModel(gpu=use_gpu, use_bfloat16=use_bfloat16)
     normalize = {
-        "normalize": True,
+        **models.normalize_default,
         "percentile": normalization,
     }
+    model = models.CellposeModel(gpu=use_gpu, use_bfloat16=use_bfloat16)
 
     # run cellpose on fiducial max projection
     print(
         "Running Cellpose "
         f"image_shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
         f"diameter={diameter} flow_threshold={flow_threshold} "
-        f"cellprob_threshold={cellprob_threshold}.",
+        f"cellprob_threshold={cellprob_threshold} niter={niter} "
+        f"normalize={normalize!r}.",
         flush=True,
     )
     masks, _, _ = model.eval(
@@ -149,8 +162,10 @@ def run_cellpose(
         diameter=diameter,
         flow_threshold=flow_threshold,
         cellprob_threshold=cellprob_threshold,
-        niter=200,
+        niter=niter,
         normalize=normalize,
+        channel_axis=-1,
+        z_axis=None,
     )
     print(
         f"Cellpose finished; labels={int(np.max(masks)) if masks.size else 0}.",
@@ -238,6 +253,19 @@ def warp_point(
     )[:-1]
 
     return registered_space_point
+
+
+def _prepare_cellpose_gui_image(image: np.ndarray) -> np.ndarray:
+    """Match Cellpose GUI image preparation before 2D model evaluation."""
+    gui_image = transforms.convert_image(np.asarray(image), do_3D=False)
+    image_min = float(np.min(gui_image))
+    image_max = float(np.max(gui_image))
+    gui_image = gui_image.astype(np.float32, copy=False)
+    gui_image -= image_min
+    if image_max > image_min + 1e-3:
+        gui_image /= image_max - image_min
+    gui_image *= 255.0
+    return gui_image
 
 
 def main() -> None:
