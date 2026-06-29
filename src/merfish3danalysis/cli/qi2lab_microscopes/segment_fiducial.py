@@ -14,6 +14,7 @@ Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 import typer
@@ -173,41 +174,60 @@ def run_cellpose(
     )
 
     # save masks
+    step_start = perf_counter()
+    print(
+        "Saving Cellpose mask image "
+        f"shape={tuple(int(v) for v in masks.shape)} dtype={masks.dtype}.",
+        flush=True,
+    )
     datastore.save_global_cellpose_segmentation_image(masks, downsampling=[1, 3.5, 3.5])
+    print(f"Saved Cellpose mask image in {perf_counter() - step_start:.1f} s.", flush=True)
 
     # save pixel spaced ROIs
+    step_start = perf_counter()
     imagej_roi_path_dir = (
         datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
     )
     if not (imagej_roi_path_dir.exists()):
         imagej_roi_path_dir.mkdir()
     imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
+    print(f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip.", flush=True)
     io.save_rois(masks, str(imagej_roi_path))
+    print(f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.", flush=True)
 
     # load pixel spaced ROIs
+    step_start = perf_counter()
     cellpose_roi_path = imagej_roi_path_dir / Path("pixel_spacing_rois.zip")
+    print(f"Loading pixel-space ImageJ ROIs from {cellpose_roi_path}.", flush=True)
     pixel_spacing_rois = roiread(cellpose_roi_path)
+    print(
+        f"Loaded {len(pixel_spacing_rois)} pixel-space ROIs in "
+        f"{perf_counter() - step_start:.1f} s.",
+        flush=True,
+    )
 
     # warp ROIs into global coordinates
     # the ROIs are in (x,y) format. So we have to (1) fake a z dimension,
     # (2) flip xy to yx, (3) warp, (4) remove the z, (5) flip back to (x,y)
     # When we load to check if RNA are in an ROI, need to remember to flip
     # back to (y,x).
+    step_start = perf_counter()
+    print("Warping ImageJ ROIs into global coordinates.", flush=True)
     global_spacing_rois = []
     for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
         pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
-        padding = np.full((pixel_coordinates.shape[0], 1), 10)
-        padded_pixel_coordinates = np.hstack((padding, pixel_coordinates[:, ::-1]))
-        global_coordinates_padded = np.zeros_like(
-            padded_pixel_coordinates, dtype=np.float32
+        global_coordinates_padded = warp_points(
+            np.column_stack(
+                (
+                    np.full(pixel_coordinates.shape[0], 10, dtype=np.float32),
+                    pixel_coordinates[:, 1],
+                    pixel_coordinates[:, 0],
+                )
+            ),
+            spacing_zyx_um,
+            origin_zyx_um,
+            affine_zyx_um,
         )
-        for pt_idx, pts in enumerate(padded_pixel_coordinates):
-            global_coordinates_padded[pt_idx, :] = warp_point(
-                pts.copy().astype(np.float32),
-                spacing_zyx_um,
-                origin_zyx_um,
-                affine_zyx_um,
-            )
         global_coordinates = global_coordinates_padded[:, 1:]
         roi = ImagejRoi.frompoints(
             np.round(global_coordinates[:, ::-1], 2).astype(np.float32)
@@ -215,10 +235,26 @@ def run_cellpose(
         roi.name = "cell_" + str(cell_idx).zfill(7)
         global_spacing_rois.append(roi)
         del roi
+        if (cell_idx + 1) % 1000 == 0:
+            print(
+                f"Warped {cell_idx + 1}/{len(pixel_spacing_rois)} ROIs.",
+                flush=True,
+            )
+    print(
+        f"Warped {len(global_spacing_rois)} ImageJ ROIs in "
+        f"{perf_counter() - step_start:.1f} s.",
+        flush=True,
+    )
 
     # write global coordinate ROIs
+    step_start = perf_counter()
     global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
+    print(f"Saving global-coordinate ImageJ ROIs to {global_roi_path}.", flush=True)
     pixel_spacing_rois = roiwrite(global_roi_path, global_spacing_rois)
+    print(
+        f"Saved global-coordinate ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
+        flush=True,
+    )
 
 
 def warp_point(
@@ -253,6 +289,23 @@ def warp_point(
     )[:-1]
 
     return registered_space_point
+
+
+def warp_points(
+    pixel_space_points: np.ndarray,
+    spacing: np.ndarray,
+    origin: np.ndarray,
+    affine: np.ndarray,
+) -> np.ndarray:
+    """Warp points from pixel space to global space using known transforms."""
+    physical_space_points = pixel_space_points * spacing + origin
+    homogeneous_points = np.column_stack(
+        (
+            physical_space_points,
+            np.ones(physical_space_points.shape[0], dtype=physical_space_points.dtype),
+        )
+    )
+    return (np.asarray(affine) @ homogeneous_points.T).T[:, :3]
 
 
 def _prepare_cellpose_gui_image(image: np.ndarray) -> np.ndarray:
