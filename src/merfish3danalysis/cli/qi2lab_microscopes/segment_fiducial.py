@@ -181,7 +181,9 @@ def run_cellpose(
         flush=True,
     )
     datastore.save_global_cellpose_segmentation_image(masks, downsampling=[1, 3.5, 3.5])
-    print(f"Saved Cellpose mask image in {perf_counter() - step_start:.1f} s.", flush=True)
+    print(
+        f"Saved Cellpose mask image in {perf_counter() - step_start:.1f} s.", flush=True
+    )
 
     # save pixel spaced ROIs
     step_start = perf_counter()
@@ -193,7 +195,10 @@ def run_cellpose(
     imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
     print(f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip.", flush=True)
     io.save_rois(masks, str(imagej_roi_path))
-    print(f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.", flush=True)
+    print(
+        f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
+        flush=True,
+    )
 
     # load pixel spaced ROIs
     step_start = perf_counter()
