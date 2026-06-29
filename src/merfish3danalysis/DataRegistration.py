@@ -1819,7 +1819,6 @@ class DataRegistration:
                 )
             return
 
-
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial registration.")
 
