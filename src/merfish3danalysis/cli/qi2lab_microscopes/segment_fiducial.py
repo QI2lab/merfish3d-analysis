@@ -19,6 +19,7 @@ import numpy as np
 import typer
 from cellpose import io, models
 from roifile import ImagejRoi, roiread, roiwrite
+from tifffile import imread
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -33,6 +34,7 @@ def run_cellpose(
     diameter: int = 30,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
+    use_gpu: bool = True,
     zstride_level: int = 0,
 ) -> None:
     """Run cellpose and save ROIs
@@ -49,6 +51,9 @@ def run_cellpose(
         flow threshold.
     cellprob_threshold: float, default = 0.0
         cell probability threshold.
+    use_gpu : bool, default=True
+        Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
+        an error instead of silently falling back to slow CPU inference.
     zstride_level: int, default = 0
         look for a skip z dataset.
     """
@@ -61,23 +66,75 @@ def run_cellpose(
     datastore = qi2labDataStore(datastore_path)
     print(f"Using datastore at {datastore_path}")
 
-    # load downsampled, fused fiducial image and coordinates
-    fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = (
-        datastore.load_global_fidicual_image(return_future=False)
+    fused_image_path = datastore._image_store_path(
+        datastore._fused_root_path / Path(f"fused_{datastore.fiducial_folder_name}_zyx")
     )
+    if not fused_image_path.exists():
+        raise FileNotFoundError(f"Globally registered fused image not found: {fused_image_path}")
 
-    # create max projection
-    fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-    del fiducial_fused
+    attributes = datastore._read_extra_attributes(fused_image_path)
+    affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
+    origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
+    spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+
+    max_projection_path = (
+        datastore_path
+        / Path("segmentation")
+        / Path("cellpose")
+        / Path("fiducial_max_projection.ome.tiff")
+    )
+    if max_projection_path.exists():
+        print(f"Loading fused fiducial max projection from {max_projection_path}", flush=True)
+        fiducial_max_projection = imread(max_projection_path)
+    else:
+        print(
+            "Max projection TIFF not found; loading full fused Zarr to compute one. "
+            "This can be slow for large datasets.",
+            flush=True,
+        )
+        loaded = datastore.load_global_fidicual_image(return_future=False)
+        if loaded is None:
+            raise RuntimeError("Could not load globally registered fused fiducial image.")
+        fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
+        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+        del fiducial_fused
 
     # initialize cellpose model and options
-    model = models.CellposeModel(gpu=True)
+    import torch
+
+    cuda_available = torch.cuda.is_available()
+    if use_gpu and not cuda_available:
+        raise RuntimeError(
+            "Cellpose GPU mode was requested, but torch.cuda.is_available() is False. "
+            "Run `uv run python -c \"import torch; print(torch.cuda.is_available())\"` "
+            "to verify the environment, or rerun with `--no-use-gpu` for slow CPU mode."
+        )
+    use_bfloat16 = False
+    if use_gpu and cuda_available:
+        major, _minor = torch.cuda.get_device_capability(0)
+        use_bfloat16 = major >= 8
+        print(
+            "Using Cellpose GPU "
+            f"{torch.cuda.get_device_name(0)!r}; use_bfloat16={use_bfloat16}.",
+            flush=True,
+        )
+    else:
+        print("Using Cellpose CPU mode.", flush=True)
+
+    model = models.CellposeModel(gpu=use_gpu, use_bfloat16=use_bfloat16)
     normalize = {
         "normalize": True,
         "percentile": normalization,
     }
 
     # run cellpose on fiducial max projection
+    print(
+        "Running Cellpose "
+        f"image_shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
+        f"diameter={diameter} flow_threshold={flow_threshold} "
+        f"cellprob_threshold={cellprob_threshold}.",
+        flush=True,
+    )
     masks, _, _ = model.eval(
         fiducial_max_projection,
         diameter=diameter,
@@ -85,6 +142,10 @@ def run_cellpose(
         cellprob_threshold=-cellprob_threshold,
         niter=200,
         normalize=normalize,
+    )
+    print(
+        f"Cellpose finished; labels={int(np.max(masks)) if masks.size else 0}.",
+        flush=True,
     )
 
     # save masks
