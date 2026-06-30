@@ -120,9 +120,9 @@ def run_cellpose(
         fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
         fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
         del fiducial_fused
-    fiducial_max_projection = _prepare_cellpose_gui_image(fiducial_max_projection)
+    fiducial_max_projection = _prepare_cellpose_input_image(fiducial_max_projection)
     print(
-        "Prepared Cellpose GUI-style image "
+        "Prepared Cellpose input image "
         f"shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
         f"dtype={fiducial_max_projection.dtype} "
         f"min={float(np.min(fiducial_max_projection)):.3f} "
@@ -339,17 +339,9 @@ def warp_points(
     return (np.asarray(affine) @ homogeneous_points.T).T[:, :3]
 
 
-def _prepare_cellpose_gui_image(image: np.ndarray) -> np.ndarray:
-    """Match Cellpose GUI image preparation before 2D model evaluation."""
-    gui_image = transforms.convert_image(np.asarray(image), do_3D=False)
-    image_min = float(np.min(gui_image))
-    image_max = float(np.max(gui_image))
-    gui_image = gui_image.astype(np.float32, copy=False)
-    gui_image -= image_min
-    if image_max > image_min + 1e-3:
-        gui_image /= image_max - image_min
-    gui_image *= 255.0
-    return gui_image
+def _prepare_cellpose_input_image(image: np.ndarray) -> np.ndarray:
+    """Prepare image axes for 2D Cellpose evaluation without intensity scaling."""
+    return transforms.convert_image(np.asarray(image), do_3D=False)
 
 
 def main() -> None:
