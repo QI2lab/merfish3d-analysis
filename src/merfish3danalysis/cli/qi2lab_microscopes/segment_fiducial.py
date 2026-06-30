@@ -186,8 +186,12 @@ def run_cellpose(
         channel_axis=-1,
         z_axis=None,
     )
+    mask_labels = np.unique(masks)
+    mask_count = len(mask_labels) - int(mask_labels[0] == 0) if mask_labels.size else 0
+    max_label_id = int(mask_labels[-1]) if mask_labels.size else 0
     print(
-        f"Cellpose finished; labels={int(np.max(masks)) if masks.size else 0}.",
+        "Cellpose finished; "
+        f"masks={mask_count} max_label_id={max_label_id}.",
         flush=True,
     )
 
