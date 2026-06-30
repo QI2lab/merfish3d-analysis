@@ -177,7 +177,7 @@ def run_cellpose(
         "Running Cellpose "
         f"image_shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
         f"diameter={diameter} flow_threshold={flow_threshold} "
-        f"cellprob_threshold={cellprob_threshold} niter={niter} min_size={min_size} "
+        f"cellprob_threshold={cellprob_threshold} min_size={min_size} "
         f"normalize={normalize!r}.",
         flush=True,
     )
