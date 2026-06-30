@@ -208,7 +208,9 @@ def run_cellpose(
         flush=True,
     )
     if not save_outputs:
-        print("Skipping Cellpose mask/ROI outputs because save_outputs=False.", flush=True)
+        print(
+            "Skipping Cellpose mask/ROI outputs because save_outputs=False.", flush=True
+        )
         return
 
     # save masks
