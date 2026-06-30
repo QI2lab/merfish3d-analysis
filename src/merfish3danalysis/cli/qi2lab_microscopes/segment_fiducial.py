@@ -34,10 +34,9 @@ def run_cellpose(
     diameter: float | None = None,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
-    niter: int = 200,
     min_size: int = 15,
     pretrained_model: str = "cpsam_v2",
-    roi_multiprocessing: bool = False,
+    roi_multiprocessing: bool = True,
     save_outputs: bool = True,
     use_gpu: bool = True,
     zstride_level: int = 0,
@@ -57,9 +56,6 @@ def run_cellpose(
         flow threshold.
     cellprob_threshold: float, default = 0.0
         cell probability threshold.
-    niter : int, default=200
-        Number of Cellpose dynamics iterations. The GUI text box starts at 0,
-        but its getter passes 200 to Cellpose when the value is less than 1.
     min_size : int, default=15
         Minimum mask size. This matches the Cellpose GUI default.
     pretrained_model : str, default="cpsam_v2"
@@ -190,7 +186,6 @@ def run_cellpose(
         diameter=diameter,
         flow_threshold=flow_threshold,
         cellprob_threshold=cellprob_threshold,
-        niter=niter,
         normalize=normalize,
         do_3D=False,
         stitch_threshold=0.0,
