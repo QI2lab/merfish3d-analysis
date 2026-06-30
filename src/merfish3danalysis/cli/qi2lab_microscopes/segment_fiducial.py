@@ -38,6 +38,7 @@ def run_cellpose(
     min_size: int = 15,
     pretrained_model: str = "cpsam_v2",
     roi_multiprocessing: bool = False,
+    save_outputs: bool = True,
     use_gpu: bool = True,
     zstride_level: int = 0,
 ) -> None:
@@ -66,6 +67,9 @@ def run_cellpose(
         cpdino, cpdino-vitb, and cpsam.
     roi_multiprocessing : bool, default=False
         Use Cellpose multiprocessing for ImageJ ROI outline extraction.
+    save_outputs : bool, default=True
+        Save mask image and ImageJ ROIs after Cellpose finishes. Disable this
+        for fast parameter comparison against the Cellpose GUI.
     use_gpu : bool, default=True
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
@@ -156,7 +160,13 @@ def run_cellpose(
 
     normalize = {
         **models.normalize_default,
-        "percentile": normalization,
+        "percentile": list(normalization),
+        "norm3D": True,
+        "sharpen_radius": 0.0,
+        "smooth_radius": 0.0,
+        "tile_norm_blocksize": 0.0,
+        "tile_norm_smooth3D": 0.0,
+        "invert": False,
     }
     print(f"Loading Cellpose model {pretrained_model!r}.", flush=True)
     model = models.CellposeModel(
@@ -182,6 +192,10 @@ def run_cellpose(
         cellprob_threshold=cellprob_threshold,
         niter=niter,
         normalize=normalize,
+        do_3D=False,
+        stitch_threshold=0.0,
+        anisotropy=1.0,
+        flow3D_smooth=0.0,
         min_size=min_size,
         channel_axis=-1,
         z_axis=None,
@@ -193,6 +207,9 @@ def run_cellpose(
         f"Cellpose finished; masks={mask_count} max_label_id={max_label_id}.",
         flush=True,
     )
+    if not save_outputs:
+        print("Skipping Cellpose mask/ROI outputs because save_outputs=False.", flush=True)
+        return
 
     # save masks
     step_start = perf_counter()
