@@ -190,8 +190,7 @@ def run_cellpose(
     mask_count = len(mask_labels) - int(mask_labels[0] == 0) if mask_labels.size else 0
     max_label_id = int(mask_labels[-1]) if mask_labels.size else 0
     print(
-        "Cellpose finished; "
-        f"masks={mask_count} max_label_id={max_label_id}.",
+        f"Cellpose finished; masks={mask_count} max_label_id={max_label_id}.",
         flush=True,
     )
 
