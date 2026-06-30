@@ -197,7 +197,6 @@ def run_cellpose(
         anisotropy=1.0,
         flow3D_smooth=0.0,
         min_size=min_size,
-        channel_axis=-1,
         z_axis=None,
     )
     mask_labels = np.unique(masks)
