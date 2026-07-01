@@ -300,6 +300,7 @@ def _optimize_norm_worker(
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
     feature_predictor_threshold: float,
+    collect_chromatic_centroids: bool,
 ) -> None:
     """
     Worker that runs one iteration of normalization-by-decoding on a GPU.
@@ -330,6 +331,9 @@ def _optimize_norm_worker(
         Function argument.
     feature_predictor_threshold : float
         Function argument.
+    collect_chromatic_centroids : bool
+        If True, collect per-on-bit centroid features needed for chromatic
+        affine estimation.
 
     Returns
     -------
@@ -361,6 +365,7 @@ def _optimize_norm_worker(
         lowpass_sigma=lowpass_sigma,
     )
     local_decoder._optimize_normalization_weights = True
+    local_decoder._collect_chromatic_centroids = bool(collect_chromatic_centroids)
     local_decoder._temp_dir = temp_dir
 
     # Seed the first iteration from global normalization, then refine iteratively.
@@ -514,6 +519,7 @@ class PixelDecoder:
 
         self._codebook_style = 1
         self._optimize_normalization_weights = False
+        self._collect_chromatic_centroids = False
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._blank_fraction_filter_results: dict[str, object] | None = None
@@ -2297,6 +2303,21 @@ class PixelDecoder:
         extra_df = pd.DataFrame(extra_columns, index=df_barcode.index)
         region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
         fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
+        labels_cp = codewords_label_image.astype(cp.int32, copy=False)
+        labels_flat = labels_cp.ravel()
+        max_label = int(cp.max(labels_cp).get()) if labels_cp.size else 0
+        if max_label < 1:
+            return pd.concat([df_barcode, extra_df], axis=1)
+        label_lookup = cp.asarray(region_labels, dtype=cp.int32)
+        label_lookup = cp.clip(label_lookup, 0, max_label)
+        minlength = max_label + 1
+        area_by_label = cp.bincount(labels_flat, minlength=minlength).astype(
+            cp.float32,
+            copy=False,
+        )
+        z_coords = cp.arange(labels_cp.shape[0], dtype=cp.float32)[:, None, None]
+        y_coords = cp.arange(labels_cp.shape[1], dtype=cp.float32)[None, :, None]
+        x_coords = cp.arange(labels_cp.shape[2], dtype=cp.float32)[None, None, :]
 
         for bit_idx in range(1, self._n_merfish_bits + 1):
             active_rows = np.flatnonzero(np.any(on_bits_1based == bit_idx, axis=1))
@@ -2307,89 +2328,62 @@ class PixelDecoder:
                 intensity_image[..., bit_idx - 1],
                 cp.float32(0),
             )
-            props = gpu_regionprops_table(
-                codewords_label_image,
-                intensity_image=bit_image,
-                properties=[
-                    "label",
-                    "area",
-                    "weighted_centroid",
-                    "intensity_mean",
-                    "intensity_max",
-                ],
+            weights_flat = bit_image.ravel()
+            weight_by_label = cp.bincount(
+                labels_flat,
+                weights=weights_flat,
+                minlength=minlength,
             )
-            bit_props = pd.DataFrame(
-                {
-                    key: (
-                        cp.asnumpy(value)
-                        if isinstance(value, cp.ndarray)
-                        else np.asarray(value)
-                    )
-                    for key, value in props.items()
-                }
+            z_sum_by_label = cp.bincount(
+                labels_flat,
+                weights=(bit_image * z_coords).ravel(),
+                minlength=minlength,
             )
-            if bit_props.empty:
-                continue
+            y_sum_by_label = cp.bincount(
+                labels_flat,
+                weights=(bit_image * y_coords).ravel(),
+                minlength=minlength,
+            )
+            x_sum_by_label = cp.bincount(
+                labels_flat,
+                weights=(bit_image * x_coords).ravel(),
+                minlength=minlength,
+            )
+            peak_by_label = cp.zeros(minlength, dtype=cp.float32)
+            cp.maximum.at(peak_by_label, labels_flat, weights_flat)
 
-            bit_props = bit_props.set_index("label", drop=True)
-            selected = bit_props.reindex(region_labels[active_rows])
-            centers = selected[
-                [
-                    "weighted_centroid-0",
-                    "weighted_centroid-1",
-                    "weighted_centroid-2",
-                ]
-            ].to_numpy(dtype=np.float64)
+            active_labels = label_lookup[active_rows]
+            weight_sum_cp = weight_by_label[active_labels]
+            centers_cp = cp.column_stack(
+                (
+                    z_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                    y_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                    x_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                )
+            )
+            centers = cp.asnumpy(centers_cp).astype(np.float64, copy=False)
             fallback = fallback_centers[active_rows]
-            invalid_centers = ~np.all(np.isfinite(centers), axis=1)
+            weight_sum = cp.asnumpy(weight_sum_cp).astype(np.float64, copy=False)
+            invalid_centers = (~np.all(np.isfinite(centers), axis=1)) | (
+                weight_sum <= 0
+            )
             centers[invalid_centers] = fallback[invalid_centers]
-            z_radius = 4
-            yx_radius = 6
-            for center_idx, row_idx in enumerate(active_rows):
-                center = fallback_centers[row_idx]
-                if not np.all(np.isfinite(center)):
-                    continue
-                zc, yc, xc = np.rint(center).astype(np.int64)
-                z0 = max(int(zc) - z_radius, 0)
-                z1 = min(int(zc) + z_radius + 1, bit_image.shape[0])
-                y0 = max(int(yc) - yx_radius, 0)
-                y1 = min(int(yc) + yx_radius + 1, bit_image.shape[1])
-                x0 = max(int(xc) - yx_radius, 0)
-                x1 = min(int(xc) + yx_radius + 1, bit_image.shape[2])
-                if z0 >= z1 or y0 >= y1 or x0 >= x1:
-                    continue
-
-                patch = bit_image[z0:z1, y0:y1, x0:x1]
-                peak = float(cp.max(patch))
-                if not np.isfinite(peak) or peak <= 0:
-                    continue
-                support = patch >= cp.float32(0.25 * peak)
-                weights_patch = cp.where(support, patch, cp.float32(0))
-                weight_total = float(cp.sum(weights_patch))
-                if not np.isfinite(weight_total) or weight_total <= 0:
-                    continue
-
-                zz = cp.arange(z0, z1, dtype=cp.float32)[:, None, None]
-                yy = cp.arange(y0, y1, dtype=cp.float32)[None, :, None]
-                xx = cp.arange(x0, x1, dtype=cp.float32)[None, None, :]
-                centers[center_idx, 0] = (
-                    float(cp.sum(weights_patch * zz)) / weight_total
-                )
-                centers[center_idx, 1] = (
-                    float(cp.sum(weights_patch * yy)) / weight_total
-                )
-                centers[center_idx, 2] = (
-                    float(cp.sum(weights_patch * xx)) / weight_total
-                )
 
             if self._z_crop or self._zstride != 1:
                 centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
 
-            area = selected["area"].to_numpy(dtype=np.float64)
-            intensity_mean = selected["intensity_mean"].to_numpy(dtype=np.float64)
-            intensity_peak = selected["intensity_max"].to_numpy(dtype=np.float64)
-            weight_sum = intensity_mean * area
-            missing = ~np.isfinite(weight_sum)
+            area = cp.asnumpy(area_by_label[active_labels]).astype(
+                np.float64,
+                copy=False,
+            )
+            intensity_peak = cp.asnumpy(peak_by_label[active_labels]).astype(
+                np.float64,
+                copy=False,
+            )
+            missing = (~np.isfinite(weight_sum)) | (weight_sum <= 0)
             area[missing] = 0.0
             intensity_peak[~np.isfinite(intensity_peak)] = 0.0
             weight_sum[missing] = 0.0
@@ -2613,7 +2607,10 @@ class PixelDecoder:
             df_barcode = df_barcode.rename(
                 columns={"centroid-0": "z", "centroid-1": "y", "centroid-2": "x"}
             )
-            if self._optimize_normalization_weights:
+            if (
+                self._optimize_normalization_weights
+                and self._collect_chromatic_centroids
+            ):
                 df_barcode = self._add_on_bit_weighted_centroids(
                     df_barcode,
                     codewords_label_image_cp,
@@ -4704,6 +4701,7 @@ class PixelDecoder:
                         magnitude_threshold,
                         minimum_pixels,
                         feature_predictor_threshold,
+                        run_chromatic_estimation,
                     ),
                     physical_gpu_id=gpu,
                 )
