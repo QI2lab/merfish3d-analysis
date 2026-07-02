@@ -245,12 +245,12 @@ def _validate_filter_arguments(
         Function result.
     """
 
-    if filter_method in ("blank_fraction", "blank_bit_enrichment"):
+    if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
                 "--lr-fdr-target only applies with --filter-method lr. "
                 "Use --target-gross-misid-rate with --filter-method "
-                "blank_fraction or blank_bit_enrichment."
+                "blank_fraction."
             )
         return
 
@@ -264,8 +264,7 @@ def _validate_filter_arguments(
         return
 
     raise typer.BadParameter(
-        "filter_method must be one of 'blank_fraction', "
-        "'blank_bit_enrichment', or 'lr'."
+        "filter_method must be one of 'blank_fraction' or 'lr'."
     )
 
 
@@ -308,8 +307,7 @@ def decode_pixels(
         axial sampling relative to the 0.315 um Nyquist reference:
         ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
     filter_method : str, default "blank_fraction"
-        downstream transcript filter. Supported values are "blank_fraction",
-        "blank_bit_enrichment", and "lr".
+        downstream transcript filter. Supported values are "blank_fraction" and "lr".
     target_gross_misid_rate : float
         gross misidentification-rate target for blank-fraction filtering. Default = .05
     lr_fdr_target : float

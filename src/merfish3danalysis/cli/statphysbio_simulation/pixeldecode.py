@@ -172,12 +172,12 @@ def _validate_filter_arguments(
         Function result.
     """
 
-    if filter_method in ("blank_fraction", "blank_bit_enrichment"):
+    if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
                 "--lr-fdr-target only applies with --filter-method lr. "
                 "Use --target-gross-misid-rate with --filter-method "
-                "blank_fraction or blank_bit_enrichment."
+                "blank_fraction."
             )
         return
 
@@ -191,8 +191,7 @@ def _validate_filter_arguments(
         return
 
     raise typer.BadParameter(
-        "filter_method must be one of 'blank_fraction', "
-        "'blank_bit_enrichment', or 'lr'."
+        "filter_method must be one of 'blank_fraction' or 'lr'."
     )
 
 
@@ -239,8 +238,7 @@ def decode_pixels(
     duplicate_radius_z : float, optional
         override Z radius, in microns, for within-tile duplicate collapse.
     filter_method : str, default "blank_fraction"
-        downstream transcript filter. Supported values are "blank_fraction",
-        "blank_bit_enrichment", and "lr".
+        downstream transcript filter. Supported values are "blank_fraction" and "lr".
     target_gross_misid_rate : float, default .05
         gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float, default .05
