@@ -4416,9 +4416,7 @@ class PixelDecoder:
                 )
             return
 
-        raise ValueError(
-            "filter_method must be one of 'blank_fraction' or 'lr'."
-        )
+        raise ValueError("filter_method must be one of 'blank_fraction' or 'lr'.")
 
     def _apply_filter_method(
         self,

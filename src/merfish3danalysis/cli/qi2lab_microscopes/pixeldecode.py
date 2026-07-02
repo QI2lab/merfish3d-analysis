@@ -263,9 +263,7 @@ def _validate_filter_arguments(
             )
         return
 
-    raise typer.BadParameter(
-        "filter_method must be one of 'blank_fraction' or 'lr'."
-    )
+    raise typer.BadParameter("filter_method must be one of 'blank_fraction' or 'lr'.")
 
 
 @app.command()
