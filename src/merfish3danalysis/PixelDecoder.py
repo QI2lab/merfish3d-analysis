@@ -1142,9 +1142,7 @@ class PixelDecoder:
         }
 
         on_bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
-        if not all(
-            column in barcode_table.columns for column in on_bit_columns
-        ):
+        if not all(column in barcode_table.columns for column in on_bit_columns):
             return
         on_bits = barcode_table[on_bit_columns].to_numpy(dtype=np.int16)
         num_barcodes = len(barcode_table)
