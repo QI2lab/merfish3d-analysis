@@ -1081,6 +1081,22 @@ class PixelDecoder:
 
         if self._df_barcodes_loaded.empty:
             return
+        if "gene_id" not in self._df_barcodes_loaded.columns:
+            return
+
+        keep_coding_transcripts = ~(
+            self._df_barcodes_loaded["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+        )
+        barcode_table = self._df_barcodes_loaded.loc[
+            keep_coding_transcripts
+            & self._df_barcodes_loaded["gene_id"].notna()
+            & self._df_barcodes_loaded["gene_id"].astype(str).str.strip().ne("")
+        ].reset_index(drop=True)
+        if barcode_table.empty:
+            return
 
         bit_wavelengths = {}
         bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
@@ -1127,11 +1143,11 @@ class PixelDecoder:
 
         on_bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
         if not all(
-            column in self._df_barcodes_loaded.columns for column in on_bit_columns
+            column in barcode_table.columns for column in on_bit_columns
         ):
             return
-        on_bits = self._df_barcodes_loaded[on_bit_columns].to_numpy(dtype=np.int16)
-        num_barcodes = len(self._df_barcodes_loaded)
+        on_bits = barcode_table[on_bit_columns].to_numpy(dtype=np.int16)
+        num_barcodes = len(barcode_table)
         centers_by_wavelength_um = {}
         weights_by_wavelength = {}
         valid_by_wavelength = {}
@@ -1147,18 +1163,12 @@ class PixelDecoder:
                     f"bit{bit:02d}_center_y",
                     f"bit{bit:02d}_center_x",
                 ]
-                if not all(
-                    col in self._df_barcodes_loaded.columns for col in center_cols
-                ):
+                if not all(col in barcode_table.columns for col in center_cols):
                     continue
-                centers = self._df_barcodes_loaded[center_cols].to_numpy(
-                    dtype=np.float64
-                )
+                centers = barcode_table[center_cols].to_numpy(dtype=np.float64)
                 intensity_col = f"bit{bit:02d}_intensity_sum"
-                if intensity_col in self._df_barcodes_loaded.columns:
-                    weights = self._df_barcodes_loaded[intensity_col].to_numpy(
-                        dtype=np.float64
-                    )
+                if intensity_col in barcode_table.columns:
+                    weights = barcode_table[intensity_col].to_numpy(dtype=np.float64)
                 else:
                     weights = np.ones(num_barcodes, dtype=np.float64)
                 bit_is_on = np.any(on_bits == int(bit), axis=1)
