@@ -1221,7 +1221,6 @@ class qi2labDataStore:
         kind: str,
         normalization_vector: ArrayLike,
         background_vector: ArrayLike,
-        zstride_level: int | None = None,
         decode_mode: str | None = None,
     ) -> None:
         """
@@ -1237,8 +1236,6 @@ class qi2labDataStore:
             Foreground normalization vector.
         background_vector : ArrayLike
             Background vector.
-        zstride_level : int or None, default None
-            Decode-time z stride metadata.
         decode_mode : str or None, default None
             Decode mode metadata.
         """
@@ -1264,8 +1261,6 @@ class qi2labDataStore:
         calib_attrs = self._load_calibrations_attributes()
         runs = dict(calib_attrs.get("decode_normalization_runs", {}))
         run_attrs = dict(runs.get(decode_run_key, {}))
-        if zstride_level is not None:
-            run_attrs["zstride_level"] = int(zstride_level)
         if decode_mode is not None:
             run_attrs["decode_mode"] = str(decode_mode)
         run_attrs[norm_key] = np.asarray(normalization_vector, dtype=np.float32)
@@ -2971,7 +2966,7 @@ class qi2labDataStore:
         tile: int | str,
         round: int | str,
     ) -> Sequence[int] | None:
-        """Load readout bits linked to fidicual round for one tile.
+        """Load readout bits linked to fiducial round for one tile.
 
         Parameters
         ----------
@@ -2983,7 +2978,7 @@ class qi2labDataStore:
         Returns
         -------
         bit_linker : Optional[Sequence[int]]
-            Readout bits linked to fidicual round for one tile.
+            Readout bits linked to fiducial round for one tile.
         """
 
         if isinstance(tile, int):
@@ -3038,12 +3033,12 @@ class qi2labDataStore:
         tile: int | str,
         round: int | str,
     ) -> None:
-        """Save readout bits linked to fidicual round for one tile.
+        """Save readout bits linked to fiducial round for one tile.
 
         Parameters
         ----------
         bit_linker : Sequence[int]
-            Readout bits linked to fidicual round for one tile.
+            Readout bits linked to fiducial round for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         round : Union[int, str]
@@ -3100,7 +3095,7 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
     ) -> Sequence[int] | None:
-        """Load fidicual round linked to readout bit for one tile.
+        """Load fiducial round linked to readout bit for one tile.
 
         Parameters
         ----------
@@ -3112,7 +3107,7 @@ class qi2labDataStore:
         Returns
         -------
         round_linker : Optional[Sequence[int]]
-            Fidicual round linked to readout bit for one tile.
+            Fiducial round linked to readout bit for one tile.
         """
 
         if isinstance(tile, int):
@@ -3167,12 +3162,12 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
     ) -> None:
-        """Save fidicual round linker attribute to readout bit for one tile.
+        """Save fiducial round linker attribute to readout bit for one tile.
 
         Parameters
         ----------
         round_linker : int
-            Fidicual round linked to readout bit for one tile.
+            Fiducial round linked to readout bit for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         bit : Union[int, str]
@@ -3374,7 +3369,7 @@ class qi2labDataStore:
         round: int | str | None = None,
         bit: int | str | None = None,
     ) -> tuple[float, float] | None:
-        """Load wavelengths for fidicual OR readout bit for one tile.
+        """Load wavelengths for fiducial OR readout bit for one tile.
 
         Parameters
         ----------
@@ -3388,7 +3383,7 @@ class qi2labDataStore:
         Returns
         -------
         wavelengths_um : Optional[tuple[float, float]]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -3462,12 +3457,12 @@ class qi2labDataStore:
         round: int | str | None = None,
         bit: int | str | None = None,
     ) -> tuple[float, float] | None:
-        """Save wavelengths for fidicual OR readout bit for one tile.
+        """Save wavelengths for fiducial OR readout bit for one tile.
 
         Parameters
         ----------
         wavelengths_um : tuple[float, float]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         round : Optional[Union[int, str]]
@@ -3478,7 +3473,7 @@ class qi2labDataStore:
         Returns
         -------
         wavelengths_um : Optional[tuple[float, float]]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -4060,7 +4055,7 @@ class qi2labDataStore:
         round: int | str | None,
         return_future: bool | None = True,
     ) -> tuple[ArrayLike, ArrayLike] | None:
-        """Local fidicual optical flow matrix for one round and tile.
+        """Local fiducial optical flow matrix for one round and tile.
 
         Parameters
         ----------
@@ -4074,7 +4069,7 @@ class qi2labDataStore:
         Returns
         -------
         of_xform_px : Optional[ArrayLike]
-            Local fidicual optical flow matrix for one round and tile.
+            Local fiducial optical flow matrix for one round and tile.
         downsampling : Optional[ArrayLike]
             Downsampling factor.
         """
@@ -4147,12 +4142,12 @@ class qi2labDataStore:
         round: int | str,
         return_future: bool | None = False,
     ) -> None:
-        """Save fidicual optical flow matrix for one round and tile.
+        """Save fiducial optical flow matrix for one round and tile.
 
         Parameters
         ----------
         of_xform_px : ArrayLike
-            Local fidicual optical flow matrix for one round and tile.
+            Local fiducial optical flow matrix for one round and tile.
         tile : Union[int, str]
             Tile index or tile id.
         block_size : Sequence[float]
@@ -5117,11 +5112,11 @@ class qi2labDataStore:
             print(e)
             print("Could not save global coordinate transforms.")
 
-    def load_global_fidicual_image(
+    def load_global_fiducial_image(
         self,
         return_future: bool | None = True,
     ) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike] | None:
-        """Load downsampled, fused fidicual image.
+        """Load downsampled, fused fiducial image.
 
         Parameters
         ----------
@@ -5131,7 +5126,7 @@ class qi2labDataStore:
         Returns
         -------
         fused_image : Optional[ArrayLike]
-            Downsampled, fused fidicual image.
+            Downsampled, fused fiducial image.
         affine_zyx_um : Optional[ArrayLike]
             Global affine registration transform for fused image.
         origin_zyx_um : Optional[ArrayLike]
@@ -5164,7 +5159,7 @@ class qi2labDataStore:
             print("Error loading globally registered, fused image.")
             return None
 
-    def save_global_fidicual_image(
+    def save_global_fiducial_image(
         self,
         fused_image: ArrayLike,
         affine_zyx_um: ArrayLike,
@@ -5173,12 +5168,12 @@ class qi2labDataStore:
         fusion_type: str = "fiducial",
         return_future: bool | None = False,
     ) -> None:
-        """Save downsampled, fused fidicual image.
+        """Save downsampled, fused fiducial image.
 
         Parameters
         ----------
         fused_image : ArrayLike
-            Downsampled, fused fidicual image.
+            Downsampled, fused fiducial image.
         affine_zyx_um : ArrayLike
             Global affine registration transform for fused image.
         origin_zyx_um : ArrayLike

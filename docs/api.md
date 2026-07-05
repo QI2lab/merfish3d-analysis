@@ -53,8 +53,8 @@ Current behavior:
 ## Datastore PSFs
 
 Datastore creation writes a 3D PSF for each channel. The PSF z-size follows the
-stored image z-size, including z-strided datastores. This is true even when the
-datastore is marked as a `2D` experiment for downstream pixel decoding.
+stored image z-size. This is true even when the datastore is marked as a `2D`
+experiment for downstream pixel decoding.
 
 The `2D` or `3D` microscope designation controls downstream decoding policy; it
 does not force the deconvolution PSF to be a single plane.
@@ -64,23 +64,14 @@ does not force the deconvolution PSF to be a single plane.
 The local preprocessing command uses the same API defaults:
 
 ```bash
-python -m merfish3danalysis.cli.qi2lab_microscopes.preprocess \
+uv run qi2lab-preprocess \
   /path/to/experiment \
   --decon \
   --crop-yx-decon 2048 \
   --ufish-model simfish
 ```
 
-For z-strided datastores, preprocessing still uses `--zstride-level` to select
-the corresponding `qi2labdatastore_zstrideXX` directory.
-
 ## Pixel Decoding CLI
-
-For decode-time z-striding, `qi2lab-decode --zstride-level N` reads the normal
-`qi2labdatastore` source data and decodes planes `0, N, 2N...`. Values `0` and
-`1` keep all planes. Non-default decode runs are written under decode subfolders
-such as `decoded/zstride_03_2d/` and
-`all_tiles_filtered_decoded_features/zstride_03_2d/`.
 
 Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
 datastore microscope type; explicit modes also select the matching default

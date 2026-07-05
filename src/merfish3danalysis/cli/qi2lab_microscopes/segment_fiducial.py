@@ -1,11 +1,4 @@
-"""
-Run cellpose, save ROIs, reload ROIs, warp ROIs to global system, save again.
-
-Eventually, this will be re-integrated back into the library - but it is
-helpful to see it split out for now.
-
-IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
-then fill in the dictionary at the bottom of the script.
+"""Run Cellpose and save segmentation outputs in datastore coordinates.
 
 Shepherd 2025/10 - change to CLI.
 Shepherd 2025/07 - refactor for CellposeSAM
@@ -21,6 +14,7 @@ import typer
 from cellpose import io, models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
 
+from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 app = typer.Typer()
@@ -30,7 +24,7 @@ app.pretty_exceptions_enable = False
 @app.command()
 def run_cellpose(
     root_path: Path,
-    normalization: tuple[float, float] = [1.0, 99.0],
+    normalization: tuple[float, float] = (1.0, 99.0),
     diameter: float | None = None,
     flow_threshold: float = 0.4,
     cellprob_threshold: float = 0.0,
@@ -39,29 +33,28 @@ def run_cellpose(
     roi_multiprocessing: bool = True,
     save_outputs: bool = True,
     use_gpu: bool = True,
-    zstride_level: int = 0,
 ) -> None:
-    """Run cellpose and save ROIs
+    """Run Cellpose and save masks plus ImageJ ROIs.
 
     Parameters
     ----------
-    root_path: Path
-        path to experiment.
-    normalization: tuple[float,float], default = [1.0,99.0]
-        normalization values [low,high].
-    diameter: float | None, default = None
+    root_path : Path
+        Experiment root directory.
+    normalization : tuple[float, float], default=(1.0, 99.0)
+        Percentile normalization range.
+    diameter : float | None, default=None
         Cell size in pixels. The Cellpose GUI default is blank, which passes
         None and does not force a cell size.
-    flow_threshold: float, default = 0.4
-        flow threshold.
-    cellprob_threshold: float, default = 0.0
-        cell probability threshold.
+    flow_threshold : float, default=0.4
+        Flow threshold.
+    cellprob_threshold : float, default=0.0
+        Cell-probability threshold.
     min_size : int, default=15
         Minimum mask size. This matches the Cellpose GUI default.
     pretrained_model : str, default="cpsam_v2"
         Cellpose model name or path. Built-in GUI names include cpsam_v2,
         cpdino, cpdino-vitb, and cpsam.
-    roi_multiprocessing : bool, default=False
+    roi_multiprocessing : bool, default=True
         Use Cellpose multiprocessing for ImageJ ROI outline extraction.
     save_outputs : bool, default=True
         Save mask image and ImageJ ROIs after Cellpose finishes. Disable this
@@ -69,20 +62,15 @@ def run_cellpose(
     use_gpu : bool, default=True
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
-    zstride_level: int, default = 0
-        look for a skip z dataset.
     """
 
     # initialize datastore
-    if zstride_level == 0:
-        datastore_path = root_path / Path(r"qi2labdatastore")
-    else:
-        datastore_path = root_path / Path(f"qi2labdatastore_zstride0{zstride_level}")
+    datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
     print(f"Using datastore at {datastore_path}")
 
     fused_image_path = datastore._image_store_path(
-        datastore._fused_root_path / Path(f"fused_{datastore.fiducial_folder_name}_zyx")
+        datastore._fused_root_path / f"fused_{datastore.fiducial_folder_name}_zyx"
     )
     if not fused_image_path.exists():
         raise FileNotFoundError(
@@ -95,10 +83,7 @@ def run_cellpose(
     spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
 
     max_projection_path = (
-        datastore_path
-        / Path("segmentation")
-        / Path("cellpose")
-        / Path("fiducial_max_projection.ome.tiff")
+        datastore_path / "segmentation" / "cellpose" / "fiducial_max_projection.ome.tiff"
     )
     if max_projection_path.exists():
         print(
@@ -112,7 +97,7 @@ def run_cellpose(
             "This can be slow for large datasets.",
             flush=True,
         )
-        loaded = datastore.load_global_fidicual_image(return_future=False)
+        loaded = datastore.load_global_fiducial_image(return_future=False)
         if loaded is None:
             raise RuntimeError(
                 "Could not load globally registered fused fiducial image."
@@ -221,12 +206,9 @@ def run_cellpose(
 
     # save pixel spaced ROIs
     step_start = perf_counter()
-    imagej_roi_path_dir = (
-        datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
-    )
-    if not (imagej_roi_path_dir.exists()):
-        imagej_roi_path_dir.mkdir()
-    imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
+    imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
+    imagej_roi_path_dir.mkdir(exist_ok=True)
+    imagej_roi_path = imagej_roi_path_dir / "pixel_spacing"
     print(
         f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip "
         f"multiprocessing={roi_multiprocessing}.",
@@ -240,7 +222,7 @@ def run_cellpose(
 
     # load pixel spaced ROIs
     step_start = perf_counter()
-    cellpose_roi_path = imagej_roi_path_dir / Path("pixel_spacing_rois.zip")
+    cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
     print(f"Loading pixel-space ImageJ ROIs from {cellpose_roi_path}.", flush=True)
     pixel_spacing_rois = roiread(cellpose_roi_path)
     print(
@@ -249,33 +231,17 @@ def run_cellpose(
         flush=True,
     )
 
-    # warp ROIs into global coordinates
-    # the ROIs are in (x,y) format. So we have to (1) fake a z dimension,
-    # (2) flip xy to yx, (3) warp, (4) remove the z, (5) flip back to (x,y)
-    # When we load to check if RNA are in an ROI, need to remember to flip
-    # back to (y,x).
     step_start = perf_counter()
     print("Warping ImageJ ROIs into global coordinates.", flush=True)
     global_spacing_rois = []
     for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
-        pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
-        global_coordinates_padded = warp_points(
-            np.column_stack(
-                (
-                    np.full(pixel_coordinates.shape[0], 10, dtype=np.float32),
-                    pixel_coordinates[:, 1],
-                    pixel_coordinates[:, 0],
-                )
-            ),
+        roi = _global_roi_from_pixel_roi(
+            pixel_spaced_roi,
+            cell_idx,
             spacing_zyx_um,
             origin_zyx_um,
             affine_zyx_um,
         )
-        global_coordinates = global_coordinates_padded[:, 1:]
-        roi = ImagejRoi.frompoints(
-            np.round(global_coordinates[:, ::-1], 2).astype(np.float32)
-        )
-        roi.name = "cell_" + str(cell_idx).zfill(7)
         global_spacing_rois.append(roi)
         del roi
         if (cell_idx + 1) % 1000 == 0:
@@ -291,47 +257,46 @@ def run_cellpose(
 
     # write global coordinate ROIs
     step_start = perf_counter()
-    global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
+    global_roi_path = imagej_roi_path_dir / "global_coords_rois.zip"
     print(f"Saving global-coordinate ImageJ ROIs to {global_roi_path}.", flush=True)
-    pixel_spacing_rois = roiwrite(global_roi_path, global_spacing_rois)
+    roiwrite(global_roi_path, global_spacing_rois)
     print(
         f"Saved global-coordinate ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
         flush=True,
     )
 
 
-def warp_point(
-    pixel_space_point: np.ndarray,
-    spacing: np.ndarray,
-    origin: np.ndarray,
-    affine: np.ndarray,
-) -> np.ndarray:
-    """Warp point from pixel space to global space using known transforms.
+def _global_roi_from_pixel_roi(
+    pixel_spaced_roi: ImagejRoi,
+    cell_idx: int,
+    spacing_zyx_um: np.ndarray,
+    origin_zyx_um: np.ndarray,
+    affine_zyx_um: np.ndarray,
+) -> ImagejRoi:
+    """Warp one pixel-space ROI into global ImageJ xy coordinates.
 
-    Parameters
-    ----------
-    pixel_space_point : np.ndarray
-        point in the image coordinate system, zyx order
-    spacing: np.ndarray
-        pixel size in microns, zyx order
-    origin: np.ndarray
-        world coordinate origin (um), zyx order
-    affine: np.ndarray
-        4x4 affine matrix (um), zyx order
-
-    Returns
-    -------
-    registered_space_point: np.ndarray
-        point in the world coordinate system (um), zyx order
-
+    Pixel-space ROIs are stored as xy points. The global transform expects zyx
+    points, so this pads a dummy z plane, flips xy to yx for the transform, then
+    drops z and flips back to xy for ImageJ ROI storage.
     """
-
-    physical_space_point = pixel_space_point * spacing + origin
-    registered_space_point = (
-        np.array(affine) @ np.array([*list(physical_space_point), 1])
-    )[:-1]
-
-    return registered_space_point
+    pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
+    global_coordinates_padded = warp_points(
+        np.column_stack(
+            (
+                np.full(pixel_coordinates.shape[0], 10, dtype=np.float32),
+                pixel_coordinates[:, 1],
+                pixel_coordinates[:, 0],
+            )
+        ),
+        spacing_zyx_um,
+        origin_zyx_um,
+        affine_zyx_um,
+    )
+    roi = ImagejRoi.frompoints(
+        np.round(global_coordinates_padded[:, 1:][:, ::-1], 2).astype(np.float32)
+    )
+    roi.name = "cell_" + str(cell_idx).zfill(7)
+    return roi
 
 
 def warp_points(
@@ -357,14 +322,7 @@ def _prepare_cellpose_input_image(image: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
-    """
-    Main.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the Typer app."""
     app()
 
 

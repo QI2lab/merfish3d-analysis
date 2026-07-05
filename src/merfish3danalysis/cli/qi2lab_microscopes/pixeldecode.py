@@ -4,7 +4,7 @@ Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 Shepherd 2025/07 - refactor for multiple GPU support.
 Shepherd 2024/12 - refactor
 Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
-Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
+Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Literal
 
 import typer
 
+from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -21,7 +22,6 @@ app.pretty_exceptions_enable = False
 QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD = (1.5, 10.0)
 QI2LAB_2D_DEFAULT_MINIMUM_PIXELS = 7
 QI2LAB_3D_DEFAULT_MINIMUM_PIXELS = 16
-QI2LAB_ZSTRIDE_3D_DEFAULT_MINIMUM_PIXELS = 10
 QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
     5.0: 0.2,
@@ -74,7 +74,7 @@ def _effective_decode_mode(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore used to infer microscope type when ``decode_mode`` is "auto".
     decode_mode : {'auto', '2d', '3d'}
         Requested decode mode.
 
@@ -94,7 +94,6 @@ def _effective_decode_mode(
 def _default_qi2lab_minimum_pixels(
     datastore: qi2labDataStore,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
-    zstride_level: int = 0,
 ) -> int:
     """
     Return the default minimum-pixel threshold for qi2lab decoding.
@@ -102,22 +101,18 @@ def _default_qi2lab_minimum_pixels(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore used to infer microscope type when ``decode_mode`` is "auto".
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Decode mode used for default selection.
-    zstride_level : int, default 0
-        Decode-time z stride.
 
     Returns
     -------
     int
-        Function result.
+        Default minimum-pixel threshold.
     """
 
     if _effective_decode_mode(datastore, decode_mode) == "2d":
         return QI2LAB_2D_DEFAULT_MINIMUM_PIXELS
-    if zstride_level > 1:
-        return QI2LAB_ZSTRIDE_3D_DEFAULT_MINIMUM_PIXELS
     return QI2LAB_3D_DEFAULT_MINIMUM_PIXELS
 
 
@@ -131,14 +126,14 @@ def _default_qi2lab_magnitude_threshold(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore used to infer microscope type and axial sampling.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Decode mode used for default selection.
 
     Returns
     -------
     tuple[float, float]
-        Function result.
+        Default magnitude threshold range.
     """
 
     if _effective_decode_mode(datastore, decode_mode) != "2d":
@@ -161,14 +156,12 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
-    decode_mode : {'auto', '2d', '3d'}, default 'auto'
-        Decode mode used for default selection.
+        Datastore containing registered readout metadata.
 
     Returns
     -------
     bool
-        Function result.
+        True if the first registered readout records deconvolution metadata.
     """
 
     tile_ids = datastore.tile_ids
@@ -198,14 +191,14 @@ def _default_qi2lab_feature_predictor_threshold(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore used to infer microscope type and axial sampling.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Decode mode used for default selection.
 
     Returns
     -------
     float
-        Function result.
+        Default feature-predictor threshold.
     """
 
     if _effective_decode_mode(
@@ -223,7 +216,7 @@ def _default_qi2lab_feature_predictor_threshold(
 
 
 def _validate_filter_arguments(
-    filter_method: str,
+    filter_method: Literal["blank_fraction", "lr"],
     target_gross_misid_rate: float,
     lr_fdr_target: float,
 ) -> None:
@@ -232,17 +225,17 @@ def _validate_filter_arguments(
 
     Parameters
     ----------
-    filter_method : str
-        Function argument.
+    filter_method : {'blank_fraction', 'lr'}
+        Transcript filtering method.
     target_gross_misid_rate : float
-        Function argument.
+        Gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float
-        Function argument.
+        False-discovery-rate target for LR filtering.
 
     Returns
     -------
     None
-        Function result.
+        This function raises when arguments are inconsistent.
     """
 
     if filter_method == "blank_fraction":
@@ -273,67 +266,61 @@ def decode_pixels(
     minimum_pixels_per_RNA: int | None = None,
     feature_predictor_threshold: float | None = None,
     magnitude_threshold: tuple[float, float] | None = None,
-    filter_method: str = "blank_fraction",
+    filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
     lr_fdr_target: float = 0.05,
     merfish_bits: int | None = None,
     skip_optimization: bool = False,
-    normalization_method: str = "iterative",
+    normalization_method: Literal["iterative", "global", "none"] = "iterative",
     estimate_chromatic_affines: bool = False,
     reprocess_existing: bool = False,
-    zstride_level: int = 0,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> None:
     """Perform pixel decoding.
 
     Parameters
     ----------
-    root_path: Path
-        path to experiment
-    num_gpus : int
-        number of gpus to use. Default = 1.
+    root_path : Path
+        Experiment root directory.
+    num_gpus : int, default=1
+        Number of GPUs to use.
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
-        Defaults to 7 for 2D data, 16 for 3D data, and 10 for strided 3D data.
+        Defaults to 7 for 2D data and 16 for 3D data.
     feature_predictor_threshold : float, optional
         Legacy option retained for compatibility. Readout images are now
         weighted by the feature-predictor image before lowpass filtering rather
         than thresholded by this value.
-    magnitude_threshold : tuple[float,float], optional
-        list of two floats [min, max] magnitude thresholds to accept a decoded
-        pixel. Defaults to (1.5, 10.0) for 3D data and a 2D lookup keyed by
+    magnitude_threshold : tuple[float, float], optional
+        Magnitude threshold range to accept a decoded pixel. Defaults to
+        (1.5, 10.0) for 3D data and a 2D lookup keyed by
         axial sampling relative to the 0.315 um Nyquist reference:
         ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
-    filter_method : str, default "blank_fraction"
+    filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
         downstream transcript filter. Supported values are "blank_fraction" and "lr".
-    target_gross_misid_rate : float
-        gross misidentification-rate target for blank-fraction filtering. Default = .05
-    lr_fdr_target : float
-        false discovery rate target for LR filtering. Default = .05
-    merfish_bits : int. default = None
-        number of bits in codebook. By default uses all bits in codebook.
-    skip_optimization: bool, default = False
-        skip running iterative optimization.
+    target_gross_misid_rate : float, default=0.05
+        Gross misidentification-rate target for blank-fraction filtering.
+    lr_fdr_target : float, default=0.05
+        False discovery rate target for LR filtering.
+    merfish_bits : int | None, default=None
+        Number of bits in codebook. By default uses all bits in codebook.
+    skip_optimization : bool, default=False
+        Skip running iterative optimization.
     normalization_method : {"iterative", "global", "none"}, default "iterative"
         normalization source for pixel decoding.
     estimate_chromatic_affines : bool, default=False
         If True, estimate chromatic affine transforms during iterative
         normalization. Existing datastore calibration is still used by default.
-    reprocess_existing : bool, default = False
-        flag to reprocess existing exact-called decoded data. Legacy decoded
+    reprocess_existing : bool, default=False
+        Reprocess existing exact-called decoded data. Legacy decoded
         parquet files from the old caller are not supported.
-    zstride_level: int, default = 0
-        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2
-        decode planes 0, N, 2N...
     decode_mode : {"auto", "2d", "3d"}, default "auto"
         Decode mode. ``auto`` follows the datastore microscope type; explicit
         values control connected-component extraction and default thresholds.
     """
 
     # initialize datastore
-    if zstride_level < 0:
-        raise typer.BadParameter("zstride_level must be greater than or equal to 0.")
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)
     _effective_decode_mode(datastore, decode_mode)
     print(f"Using datastore at {datastore_path}")
@@ -343,7 +330,6 @@ def decode_pixels(
         minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(
             datastore,
             decode_mode=decode_mode,
-            zstride_level=zstride_level,
         )
     if feature_predictor_threshold is None:
         feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
@@ -360,19 +346,13 @@ def decode_pixels(
         target_gross_misid_rate=target_gross_misid_rate,
         lr_fdr_target=lr_fdr_target,
     )
-    if normalization_method not in {"iterative", "global", "none"}:
-        raise typer.BadParameter(
-            "normalization_method must be one of 'iterative', 'global', or 'none'."
-        )
-
-    # initialize decodor class
+    # initialize decoder class
     decoder = PixelDecoder(
         datastore=datastore,
         use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=num_gpus,
         verbose=1,
-        zstride_level=zstride_level,
         decode_mode=decode_mode,
         estimate_chromatic_affines=estimate_chromatic_affines,
     )
@@ -400,7 +380,6 @@ def decode_pixels(
             lr_fdr_target=lr_fdr_target,
         )
     else:
-        decoder._verbose = 2
         decoder.optimize_filtering(
             assign_to_cells=True,
             filter_method=filter_method,
@@ -410,14 +389,7 @@ def decode_pixels(
 
 
 def main() -> None:
-    """
-    Main.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the Typer app."""
     app()
 
 

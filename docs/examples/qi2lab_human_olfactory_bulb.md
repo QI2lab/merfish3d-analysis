@@ -45,7 +45,7 @@ uv run qi2lab-decode --help
 ### Datastore creation including hot pixel correction, camera ADU to photoelectron conversion, illumination estimation, and flatfield correction
 
 ```bash
-uv run qi2lab-datastore /path/to/data --num-gpus 2 --hot-pixel-image hot_pixel_flir.tiff
+uv run qi2lab-datastore /path/to/data --hot-pixel-image-path hot_pixel_flir.tiff
 ```
 
 ### Pre-processing including deconvolution, drift correction, neural network prediction of spots, and global fiducial fusion
@@ -59,7 +59,7 @@ uv run qi2lab-preprocess /path/to/data --num-gpus 2
 The values for Cellpose-SAM need to be pre-determined using the Cellpose GUI.
 
 ```bash
-uv run qi2lab-segment /path/to/data --diameter 90 --normalization-low 0.5 --normalization-high 99.0 --cellprobthreshold
+uv run qi2lab-segment /path/to/data --diameter 90 --normalization 0.5 99.0 --cellprob-threshold 0.0
 ```
 
 ### Pixel decoding including FDR filtering
@@ -67,5 +67,5 @@ uv run qi2lab-segment /path/to/data --diameter 90 --normalization-low 0.5 --norm
 Because there are 2 smFISH bits at the end of the codebook, we instruct the `merfish3d-analysis` pixel decoder to process only the initial 16 bits of the codebook.
 
 ```bash
-uv run qi2lab-decode /path/to/data --perform-baysor True --num-gpus 2 --merfish-bits 16
+uv run qi2lab-decode /path/to/data --num-gpus 2 --merfish-bits 16
 ```

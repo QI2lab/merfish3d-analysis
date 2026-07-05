@@ -151,7 +151,7 @@ def fuse_all_channels(
     for ch_idx in tqdm(range(len(channel_ids)), desc="channel"):
         msims_full = []
         for tile_idx, msim in enumerate(tqdm(msims, desc="tile")):
-            # parse the registered fidicual channel to get the registration metadata
+            # parse the registered fiducial channel to get the registration metadata
             affine = msi_utils.get_transform_from_msim(
                 msim, transform_key="affine_registered"
             ).data.squeeze()

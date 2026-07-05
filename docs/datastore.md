@@ -285,15 +285,10 @@ warped image as applying the in-memory field returned by the estimator.
     │       └── imagej_rois/global_coords_rois.zip
     ├── decoded/
     │   ├── tile0000_decoded_features.parquet
-    │   └── zstride_03_2d/
-    │       ├── tile0000_decoded_features.parquet
-    │       └── temporary/iteration_000/tile000_temp_decoded.parquet
+    │   └── temporary/iteration_000/tile000_temp_decoded.parquet
     ├── all_tiles_filtered_decoded_features/
     │   ├── decoded_features.parquet
-    │   ├── decoded_features.csv.gz
-    │   └── zstride_03_2d/
-    │       ├── decoded_features.parquet
-    │       └── decoded_features.csv.gz
+    │   └── decoded_features.csv.gz
     └── mtx_output/
 ```
 

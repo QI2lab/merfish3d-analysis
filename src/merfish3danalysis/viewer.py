@@ -1148,7 +1148,7 @@ def load_global_image_channels(
         Function result.
     """
 
-    loaded = datastore.load_global_fidicual_image(return_future=False)
+    loaded = datastore.load_global_fiducial_image(return_future=False)
     if loaded is None:
         raise ValueError("No fused global polyDT image was available to display.")
 

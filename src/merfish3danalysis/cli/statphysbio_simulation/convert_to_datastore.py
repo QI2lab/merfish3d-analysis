@@ -237,8 +237,8 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
     num_z = metadata["num_z"]
-    num_z_strided = len(range(0, int(num_z), int(z_step)))
-    if num_z_strided <= 0:
+    output_z_planes = len(range(0, int(num_z), int(z_step)))
+    if output_z_planes <= 0:
         raise ValueError(
             f"z_step={z_step} does not retain any planes from num_z={num_z}."
         )
@@ -317,7 +317,7 @@ def convert_data(
 
     # generate PSFs
     # --------------
-    psf_z = int(num_z_strided)
+    psf_z = int(output_z_planes)
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
@@ -395,7 +395,7 @@ def convert_data(
                 raw_correct_shape = raw_image.shape
                 correct_shape = (
                     raw_image.shape[0],
-                    num_z_strided,
+                    output_z_planes,
                     raw_image.shape[2],
                     raw_image.shape[3],
                 )
@@ -444,7 +444,7 @@ def convert_data(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
 
-            # write fidicual data (ch_idx = 0) and metadata
+            # write fiducial data (ch_idx = 0) and metadata
             datastore.save_local_corrected_image(
                 np.squeeze(raw_image[0, :]).astype(np.uint16),
                 tile=tile_idx,
