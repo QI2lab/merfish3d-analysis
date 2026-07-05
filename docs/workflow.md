@@ -95,7 +95,9 @@ flowchart TD
 ```
 
 Fiducial registration stores the affine transform for each round relative to
-round 1. When deformable registration is enabled, it also stores a SOFIMA
+round 1. Local affine registration uses the qi2lab GPU registration path:
+lateral XY registration on a max-Z projection, followed by XYZ registration.
+When deformable registration is enabled, preprocessing then stores a SOFIMA
 residual flow field in the moving fiducial round. Readout preprocessing saves
 unwarped deconvolved images and feature-prediction images. Pixel decoding loads
 those arrays and applies chromatic, affine, and SOFIMA transforms in one
@@ -133,6 +135,13 @@ flowchart TD
     n8@{ shape: notch-rect}
 ```
 
+Global registration follows the multiview-stitcher registration and fusion
+workflow using the stage positions stored in the datastore as the starting
+geometry. The registration stage is CPU/Dask controlled; GPU acceleration is
+used by the direct OME-Zarr fusion backend. The full global stage can be rerun
+on an existing locally registered datastore with `uv run qi2lab-preprocess
+/path/to/experiment --global-registration-only`.
+
 ## Pixel decoding
 
 
@@ -144,7 +153,7 @@ flowchart TD
     n3["Global normalization estimate"]
     n4["Iterative normalization estimate"]
     n5["Pixel decoding"]
-    n6["False-positive filtering"]
+    n6["Blank-fraction or LR filtering"]
     n7["Overlap cleanup"]
     n8["Cell assignment"]
     n9["Data prep for resegmentation"]
@@ -171,6 +180,11 @@ flowchart TD
     n9@{ shape: procs}
 ```
 
+Chromatic affine estimation is optional during iterative normalization. When
+enabled, it estimates channel affines from decoded RNA centroids assigned to
+valid nonblank codewords and writes the calibration back to the datastore for
+subsequent decode-time warping.
+
 ## 3D segmentation based on decoded RNA
 
 ```mermaid
@@ -178,7 +192,7 @@ flowchart TD
 flowchart TD
  subgraph s1["3D segmentation"]
     n3["Decoded, cell-assigned RNA"]
-    n4["Baysor"]
+    n4["Proseg"]
     n6["User optimized parameters"]
  end
  n1["qi2labdatastore"]

@@ -55,7 +55,7 @@ The Zenodo link contains four types of simulations: (1) MERFISH in cells; (2) ME
     ├── experiment_and_GT.h5
     ├── norm_offset.json
     └── scan_metadata.csv
-├── example_16bit_uniform/
+├── example_16bit_flat/
 ...
 ```
 
@@ -90,13 +90,15 @@ uv run sim-f1score /path/to/simulation/example_16bit_cells/0.315
 
 ## Ensuring a successful run
 
-If the runs are successful, you should have F1 scores that match the following values:
+If the runs are successful with the default `simfish` model, deconvolution
+enabled, and the default feature-prediction threshold, the standard simulation
+matrix should produce F1 scores close to the following values:
 
 | Simulation Type | Axial Spacing (µm) | Precision | Recall | F1 score |
 | --------------- | ------------------ | --------- | ------ | -------- |
-| Uniform MERFISH | 0.315              | 1.00      | 1.00   | 1.00     |
-| Uniform MERFISH | 1.0                | 0.93      | 0.92   | 0.93     |
-| Uniform MERFISH | 1.5                | 0.66      | 0.65   | 0.66     |
-| Cells MERFISH   | 0.315              | 1.00      | 1.00   | 1.00     |
-| Cells MERFISH   | 1.0                | 0.96      | 1.00   | 0.98     |
-| Cells MERFISH   | 1.5                | 0.70      | 0.62   | 0.66     |
+| Cells MERFISH   | 0.315              | 0.986     | 0.983  | 0.985    |
+| Cells MERFISH   | 1.0                | 0.918     | 1.000  | 0.957    |
+| Cells MERFISH   | 1.5                | 0.237     | 0.934  | 0.378    |
+| Uniform MERFISH | 0.315              | 0.987     | 0.993  | 0.990    |
+| Uniform MERFISH | 1.0                | 0.937     | 1.000  | 0.967    |
+| Uniform MERFISH | 1.5                | 0.449     | 0.961  | 0.612    |

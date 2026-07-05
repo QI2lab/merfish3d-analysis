@@ -20,9 +20,11 @@ uv sync --group dev
 All package entry points can then be run through `uv run`, for example
 `uv run qi2lab-preprocess /path/to/experiment`.
 
-## (Optional) Installing Baysor
+## (Optional) Installing Proseg
 
-Please follow the [Baysor documentation](https://github.com/kharchenkolab/Baysor?tab=readme-ov-file#installation) to install for Linux. Keep track of the installation directory for use with `merfish3d-analysis`.
+Please follow the [Proseg documentation](https://github.com/dcjones/proseg) to
+install the command line tool used for downstream RNA-based segmentation
+refinement.
 
 # Documentation
 

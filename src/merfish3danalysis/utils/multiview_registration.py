@@ -1,7 +1,6 @@
 """Small multiview-stitcher adapters for MERFISH registration."""
 
 import gc
-import os
 import timeit
 from collections.abc import Sequence
 from typing import Any
@@ -11,25 +10,7 @@ import numpy as np
 LOCAL_ROUND_TRANSFORM_KEY = "local_round_registered"
 
 
-def _diagnostics_enabled() -> bool:
-    """
-    Return whether registration timing diagnostics should be printed.
-
-    Returns
-    -------
-    bool
-        True when ``MERFISH3D_REGISTRATION_DIAGNOSTICS`` is set to a truthy
-        value.
-    """
-
-    return os.environ.get("MERFISH3D_REGISTRATION_DIAGNOSTICS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
-def _diag(message: str) -> None:
+def _diag(message: str, *, enabled: bool) -> None:
     """
     Print one multiview registration diagnostic message when enabled.
 
@@ -37,6 +18,8 @@ def _diag(message: str) -> None:
     ----------
     message : str
         Diagnostic message body.
+    enabled : bool
+        If True, print the diagnostic message.
 
     Returns
     -------
@@ -44,7 +27,7 @@ def _diag(message: str) -> None:
         The message is printed only when diagnostics are enabled.
     """
 
-    if _diagnostics_enabled():
+    if enabled:
         print(f"[multiview-registration] {message}", flush=True)
 
 
@@ -263,6 +246,7 @@ def register_pair_to_fixed(
     registration_binning: dict[str, int] | None = None,
     axial_refinement_radius_px: int = 12,
     axial_refinement_step_px: float = 0.25,
+    diagnostics: bool = False,
 ) -> np.ndarray:
     """
     Register a moving image to a fixed image with staged GPU phase correlation.
@@ -289,6 +273,8 @@ def register_pair_to_fixed(
         Unused compatibility argument retained for current callers.
     axial_refinement_step_px : float, default=0.25
         Unused compatibility argument retained for current callers.
+    diagnostics : bool, default=False
+        If True, print detailed timing diagnostics.
 
     Returns
     -------
@@ -308,7 +294,8 @@ def register_pair_to_fixed(
         "register_pair_to_fixed_start "
         f"fixed_shape={tuple(int(v) for v in fixed.shape)} "
         f"moving_shape={tuple(int(v) for v in moving.shape)} "
-        f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
+        f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}",
+        enabled=diagnostics,
     )
     if fixed.shape != moving.shape or fixed.ndim != 3:
         raise ValueError(
@@ -339,6 +326,7 @@ def register_pair_to_fixed(
         spacing_zyx_um=spacing,
         reference_shape=fixed.shape,
         order=1,
+        diagnostics=diagnostics,
     )
 
     fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
@@ -370,7 +358,8 @@ def register_pair_to_fixed(
         f"xy_pull_shift_px=(0.000, {float(xy_pull_shift_px[0]):.3f}, {float(xy_pull_shift_px[1]):.3f}) "
         f"residual_pull_shift_px={tuple(float(v) for v in residual_pull_shift_px)} "
         f"total_pull_shift_px={tuple(float(v) for v in total_shift_px)} "
-        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+        enabled=diagnostics,
     )
     _clear_cupy_memory(cp)
     return transform
@@ -471,6 +460,7 @@ def _refine_axial_translation(
     spacing_zyx_um: Sequence[float],
     radius_px: int,
     step_px: float,
+    diagnostics: bool = False,
 ) -> np.ndarray:
     """
     Refine only the axial component of a phase-correlation transform.
@@ -489,6 +479,8 @@ def _refine_axial_translation(
         Search radius centered on the phase-derived z shift.
     step_px : float
         Fine search step in pixels.
+    diagnostics : bool, default=False
+        If True, print detailed timing diagnostics.
 
     Returns
     -------
@@ -513,6 +505,7 @@ def _refine_axial_translation(
         spacing_zyx_um=spacing,
         reference_shape=fixed.shape,
         order=1,
+        diagnostics=diagnostics,
     )
 
     coarse_candidates = np.arange(
@@ -552,7 +545,8 @@ def _refine_axial_translation(
         f"coarse_z_px={best_integer_z_px:.3f} "
         f"refined_z_px={best_z_px:.3f} "
         f"step_px={step_px:.3f} "
-        f"score={best_score:.6f}"
+        f"score={best_score:.6f}",
+        enabled=diagnostics,
     )
     return refined.astype(np.float32, copy=False)
 
@@ -850,6 +844,7 @@ def warp_array_to_reference_gpu(
     order: int = 1,
     gpu_id: int = 0,
     z_batch_size: int = 4,
+    diagnostics: bool = False,
 ) -> np.ndarray:
     """
     Warp an image into a reference ZYX grid using CuPy affine interpolation.
@@ -888,6 +883,8 @@ def warp_array_to_reference_gpu(
     z_batch_size : int, default=4
         Number of output z planes to process per GPU batch. Keeping this small
         avoids allocating full-volume coordinate grids for large tiles.
+    diagnostics : bool, default=False
+        If True, print detailed timing diagnostics.
 
     Returns
     -------
@@ -917,7 +914,8 @@ def warp_array_to_reference_gpu(
         f"mode={mode} "
         f"cval={float(cval)} "
         f"order={order} "
-        f"gpu_id={gpu_id}"
+        f"gpu_id={gpu_id}",
+        enabled=diagnostics,
     )
     start_time = timeit.default_timer()
     image_gpu = cp.asarray(image)
@@ -937,7 +935,8 @@ def warp_array_to_reference_gpu(
     cp.get_default_pinned_memory_pool().free_all_blocks()
     _diag(
         "warp_array_to_reference_gpu_done "
-        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+        enabled=diagnostics,
     )
     return np.asarray(warped)
 
@@ -957,6 +956,7 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     order: int = 1,
     gpu_id: int = 0,
     z_batch_size: int = 4,
+    diagnostics: bool = False,
 ) -> np.ndarray:
     """
     Warp an image with a stored affine transform and SOFIMA flow field.
@@ -1008,6 +1008,8 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
         CUDA device ID to use.
     z_batch_size : int, default=4
         Number of output z planes to process per GPU batch.
+    diagnostics : bool, default=False
+        If True, print detailed timing diagnostics.
 
     Returns
     -------
@@ -1050,7 +1052,8 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
         f"cval={float(cval)} "
         f"order={order} "
         f"gpu_id={gpu_id} "
-        f"z_batch_size={int(z_batch_size)}"
+        f"z_batch_size={int(z_batch_size)}",
+        enabled=diagnostics,
     )
     start_time = timeit.default_timer()
 
@@ -1162,7 +1165,8 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
 
     _diag(
         "warp_array_to_reference_with_affine_and_sofima_flow_gpu_done "
-        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+        enabled=diagnostics,
     )
     return np.asarray(warped)
 

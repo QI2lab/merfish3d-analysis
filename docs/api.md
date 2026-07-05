@@ -71,8 +71,71 @@ uv run qi2lab-preprocess \
   --ufish-model simfish
 ```
 
+By default, `qi2lab-preprocess` runs local preprocessing and then global
+fiducial registration/fusion. Local registration uses the qi2lab GPU path:
+fiducial rounds are first registered laterally on a max-Z projection, then in
+XYZ, and optional SOFIMA residual flow fields are estimated after the affine
+fiducial alignment. Global registration uses multiview-stitcher registration
+and direct OME-Zarr fusion. GPU acceleration is used for the fusion backend;
+the multiview-stitcher registration step itself is configured through CPU
+parallelism and Dask scheduler options.
+
+To rerun the global registration and fusion stage on an existing datastore
+without redoing local preprocessing:
+
+```bash
+uv run qi2lab-preprocess \
+  /path/to/experiment \
+  --num-gpus 2 \
+  --global-registration-only \
+  --overwrite
+```
+
+Useful global-stage diagnostics and performance controls are exposed as CLI
+flags:
+
+- `--registration-diagnostics` prints per-step geometry and registration
+  diagnostics.
+- `--global-registration-parallel-jobs` sets multiview-stitcher pairwise
+  registration parallelism.
+- `--global-registration-scheduler` sets the Dask scheduler used around global
+  registration.
+- `--global-fusion-n-batch`, `--global-fusion-n-jobs`,
+  `--global-fusion-output-chunksize`, and
+  `--global-fusion-overlap-in-pixels` control direct-to-Zarr fusion batching.
+- `--sofima-*` flags parameterize SOFIMA residual registration. These are CLI
+  parameters, not environment variables.
+
 ## Pixel Decoding CLI
 
 Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
 datastore microscope type; explicit modes also select the matching default
 minimum-pixel, magnitude, and feature-predictor thresholds.
+
+Chromatic affine estimation is opt-in during iterative normalization:
+
+```bash
+uv run qi2lab-decode \
+  /path/to/experiment \
+  --num-gpus 2 \
+  --estimate-chromatic-affines
+```
+
+The estimator uses decoded RNA on-bit centroids from valid codewords only.
+Blank codewords are excluded before pairing transcripts across wavelengths.
+The fitting thresholds, RANSAC settings, and centroid support are exposed as
+`--chromatic-*` flags and map directly to
+`ChromaticAffineEstimationConfig`.
+
+Transcript filtering now uses either the blank-fraction filter or the logistic
+regression filter selected by `--filter-method blank_fraction|lr`. The removed
+enriched blank-barcode filtering path and its options are no longer part of the
+CLI flow.
+
+## Cellpose Segmentation CLI
+
+`qi2lab-segment` defaults to `cpsam_v2`, matching the current Cellpose-SAM v2
+GUI model. The default diameter is `None`, so the command does not force a cell
+size unless `--diameter` is explicitly provided. The fused fiducial max
+projection is passed to Cellpose without rescaling to 8-bit; Cellpose handles
+normalization through the supplied percentile settings.

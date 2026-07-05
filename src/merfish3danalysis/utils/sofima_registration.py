@@ -1,36 +1,54 @@
 """SOFIMA flow-field estimation utilities."""
 
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import numpy as np
 
-SOFIMA_RESIDUAL_ITERATIONS = 2
-SOFIMA_PATCH_SIZE_ZYX = (10, 32, 32)
-SOFIMA_PEAK_MIN_DISTANCE = 2
-SOFIMA_PEAK_RADIUS = 8
-SOFIMA_BATCH_SIZE = 32
-SOFIMA_MAX_MASKED = 0.75
-SOFIMA_MIN_PEAK_RATIO = 1.2
-SOFIMA_MIN_PEAK_SHARPNESS = 1.2
-SOFIMA_MAX_MAGNITUDE = 30.0
-SOFIMA_MAX_DEVIATION = 5.0
-SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX = 5.0
-SOFIMA_SUBPIXEL_OFFSETS = (-0.5, 0.0, 0.5)
-SOFIMA_SUBPIXEL_BATCH_SIZE = 32
-SOFIMA_MESH_DT = 0.001
-SOFIMA_MESH_GAMMA = 0.0
-SOFIMA_MESH_K0 = 1.0
-SOFIMA_MESH_K = 0.01
-SOFIMA_MESH_NUM_ITERS = 1000
-SOFIMA_MESH_MAX_ITERS = 20000
-SOFIMA_MESH_STOP_V_MAX = 0.001
-SOFIMA_MESH_DT_MAX = 100.0
-SOFIMA_MESH_START_CAP = 0.1
-SOFIMA_MESH_FINAL_CAP = 10.0
+
+@dataclass(frozen=True)
+class SofimaRegistrationConfig:
+    """Explicit SOFIMA deformable registration parameters."""
+
+    residual_iterations: int = 2
+    patch_size_zyx: tuple[int, int, int] = (10, 32, 32)
+    minimum_patch_size_px: int = 4
+    step_divisor: int = 2
+    peak_min_distance: int = 2
+    peak_radius: int = 8
+    batch_size: int = 32
+    max_masked: float = 0.75
+    min_peak_ratio: float = 1.2
+    min_peak_sharpness: float = 1.2
+    max_magnitude: float = 30.0
+    max_deviation: float = 5.0
+    max_local_z_displacement_px: float = 5.0
+    subpixel_offsets: tuple[float, ...] = (-0.5, 0.0, 0.5)
+    subpixel_batch_size: int = 32
+    normalization_epsilon: float = 1e-6
+    mesh_dt: float = 0.001
+    mesh_gamma: float = 0.0
+    mesh_k0: float = 1.0
+    mesh_k: float = 0.01
+    mesh_num_iters: int = 1000
+    mesh_max_iters: int = 20000
+    mesh_stop_v_max: float = 0.001
+    mesh_dt_max: float = 100.0
+    mesh_start_cap: float = 0.1
+    mesh_final_cap: float = 10.0
+
+    def as_metadata(self) -> dict[str, Any]:
+        """Return JSON-compatible config metadata."""
+
+        metadata = asdict(self)
+        metadata["patch_size_zyx"] = [int(v) for v in self.patch_size_zyx]
+        metadata["subpixel_offsets"] = [float(v) for v in self.subpixel_offsets]
+        return metadata
 
 
 def _resolve_patch_and_step(
     shape_zyx: tuple[int, int, int],
+    config: SofimaRegistrationConfig,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """
     Resolve SOFIMA patch size and stride for one fixed/moving volume pair.
@@ -39,27 +57,30 @@ def _resolve_patch_and_step(
     ----------
     shape_zyx : tuple[int, int, int]
         Shape of the fixed and moving volumes in Z, Y, X order.
+    config : SofimaRegistrationConfig
+        Explicit SOFIMA parameter set.
     Returns
     -------
     tuple[tuple[int, int, int], tuple[int, int, int]]
         Patch size and step in Z, Y, X order, clipped to the image shape.
     """
 
-    default_patch_size = tuple(
-        max(4, min(axis_size, patch_size))
+    patch_size = tuple(
+        max(config.minimum_patch_size_px, min(axis_size, patch_size))
         for axis_size, patch_size in zip(
             shape_zyx,
-            SOFIMA_PATCH_SIZE_ZYX,
+            config.patch_size_zyx,
             strict=False,
         )
     )
-    patch_size = tuple(int(v) for v in default_patch_size)
-    step = tuple(max(1, size // 2) for size in patch_size)
+    patch_size = tuple(int(v) for v in patch_size)
+    step = tuple(max(1, size // int(config.step_divisor)) for size in patch_size)
     return patch_size, step
 
 
 def _stabilize_axial_flow_component(
     flow_xyz: np.ndarray,
+    config: SofimaRegistrationConfig,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Clip unstable local axial residuals in a SOFIMA flow field.
@@ -75,6 +96,8 @@ def _stabilize_axial_flow_component(
     flow_xyz : numpy.ndarray
         SOFIMA flow field with channels ordered X, Y, Z and spatial axes Z, Y,
         X.
+    config : SofimaRegistrationConfig
+        Explicit SOFIMA parameter set.
 
     Returns
     -------
@@ -95,24 +118,30 @@ def _stabilize_axial_flow_component(
             "axial_flow_stabilized": True,
             "axial_flow_valid_vectors": 0,
             "axial_flow_median_px": 0.0,
-            "axial_flow_max_local_displacement_px": SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX,
+            "axial_flow_max_local_displacement_px": (
+                float(config.max_local_z_displacement_px)
+            ),
             "axial_flow_clipped_vectors": int(axial_flow.size),
         }
 
     finite_values = axial_flow[finite_mask]
     median_z = float(np.median(finite_values))
-    lower = median_z - SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX
-    upper = median_z + SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX
+    lower = median_z - float(config.max_local_z_displacement_px)
+    upper = median_z + float(config.max_local_z_displacement_px)
     clipped = np.clip(axial_flow, lower, upper)
     clipped = np.where(finite_mask, clipped, median_z)
-    clipped_count = int(np.sum(np.abs(clipped - axial_flow) > 1e-6))
+    clipped_count = int(
+        np.sum(np.abs(clipped - axial_flow) > config.normalization_epsilon)
+    )
     stabilized[2] = clipped.astype(np.float32, copy=False)
 
     return stabilized, {
         "axial_flow_stabilized": True,
         "axial_flow_valid_vectors": int(np.sum(finite_mask)),
         "axial_flow_median_px": median_z,
-        "axial_flow_max_local_displacement_px": SOFIMA_MAX_LOCAL_Z_DISPLACEMENT_PX,
+        "axial_flow_max_local_displacement_px": (
+            float(config.max_local_z_displacement_px)
+        ),
         "axial_flow_clipped_vectors": clipped_count,
         "axial_flow_preclip_min_px": float(np.min(finite_values)),
         "axial_flow_preclip_max_px": float(np.max(finite_values)),
@@ -192,6 +221,7 @@ def _refine_flow_vectors_subpixel(
     *,
     patch_size_zyx: tuple[int, int, int],
     step_zyx: tuple[int, int, int],
+    config: SofimaRegistrationConfig,
 ) -> tuple[np.ndarray, int]:
     """
     Refine valid SOFIMA integer vectors by local fractional patch matching.
@@ -214,6 +244,8 @@ def _refine_flow_vectors_subpixel(
         Patch size used for SOFIMA flow estimation.
     step_zyx : tuple[int, int, int]
         Flow-grid step used for SOFIMA flow estimation.
+    config : SofimaRegistrationConfig
+        Explicit SOFIMA parameter set.
     Returns
     -------
     tuple[numpy.ndarray, int]
@@ -226,7 +258,7 @@ def _refine_flow_vectors_subpixel(
     import jax.numpy as jnp
     from jax.scipy.ndimage import map_coordinates
 
-    offsets = np.asarray(SOFIMA_SUBPIXEL_OFFSETS, dtype=np.float32)
+    offsets = np.asarray(config.subpixel_offsets, dtype=np.float32)
 
     valid_indices = np.argwhere(np.isfinite(flow_xyz[0]))
     if valid_indices.size == 0:
@@ -260,7 +292,8 @@ def _refine_flow_vectors_subpixel(
         list(itertools.product(offsets, offsets, offsets)),
         dtype=np.float32,
     )
-    batch_size = SOFIMA_SUBPIXEL_BATCH_SIZE
+    batch_size = int(config.subpixel_batch_size)
+    normalization_epsilon = jnp.float32(config.normalization_epsilon)
     pre_image = jnp.asarray(pre_image_zyx, dtype=jnp.float32)
     post_image = jnp.asarray(post_image_zyx, dtype=jnp.float32)
     candidate_offsets = jnp.asarray(offset_grid_zyx, dtype=jnp.float32)
@@ -294,7 +327,7 @@ def _refine_flow_vectors_subpixel(
         post_patch = post_patch - jnp.mean(post_patch, axis=(1, 2, 3), keepdims=True)
         post_patch = post_patch / jnp.maximum(
             jnp.sqrt(jnp.mean(post_patch**2, axis=(1, 2, 3), keepdims=True)),
-            jnp.float32(1e-6),
+            normalization_epsilon,
         )
 
         pre_starts = (
@@ -320,7 +353,7 @@ def _refine_flow_vectors_subpixel(
         )
         pre_patch = pre_patch / jnp.maximum(
             jnp.sqrt(jnp.mean(pre_patch**2, axis=(2, 3, 4), keepdims=True)),
-            jnp.float32(1e-6),
+            normalization_epsilon,
         )
         scores = jnp.mean(
             (pre_patch - post_patch[:, jnp.newaxis, ...]) ** 2,
@@ -398,6 +431,7 @@ def _relax_flow_field(
     cleaned_flow_xyz: np.ndarray,
     initial_flow_xyz: np.ndarray,
     step_zyx: tuple[int, int, int],
+    config: SofimaRegistrationConfig,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Relax a sparse SOFIMA flow field with SOFIMA's elastic mesh solver.
@@ -417,6 +451,8 @@ def _relax_flow_field(
         Initial dense flow field in ``(3, z, y, x)`` order.
     step_zyx : tuple[int, int, int]
         Flow-grid spacing in image pixels in Z, Y, X order.
+    config : SofimaRegistrationConfig
+        Explicit SOFIMA parameter set.
     Returns
     -------
     tuple[numpy.ndarray, dict[str, Any]]
@@ -429,18 +465,18 @@ def _relax_flow_field(
 
     stride_xyz = (float(step_zyx[2]), float(step_zyx[1]), float(step_zyx[0]))
     mesh_config = mesh.IntegrationConfig(
-        dt=SOFIMA_MESH_DT,
-        gamma=SOFIMA_MESH_GAMMA,
-        k0=SOFIMA_MESH_K0,
-        k=SOFIMA_MESH_K,
+        dt=float(config.mesh_dt),
+        gamma=float(config.mesh_gamma),
+        k0=float(config.mesh_k0),
+        k=float(config.mesh_k),
         stride=stride_xyz,
-        num_iters=SOFIMA_MESH_NUM_ITERS,
-        max_iters=SOFIMA_MESH_MAX_ITERS,
-        stop_v_max=SOFIMA_MESH_STOP_V_MAX,
-        dt_max=SOFIMA_MESH_DT_MAX,
+        num_iters=int(config.mesh_num_iters),
+        max_iters=int(config.mesh_max_iters),
+        stop_v_max=float(config.mesh_stop_v_max),
+        dt_max=float(config.mesh_dt_max),
         prefer_orig_order=False,
-        start_cap=SOFIMA_MESH_START_CAP,
-        final_cap=SOFIMA_MESH_FINAL_CAP,
+        start_cap=float(config.mesh_start_cap),
+        final_cap=float(config.mesh_final_cap),
         remove_drift=False,
     )
     relaxed_flow, kinetic_energy, iterations = mesh.relax_mesh(
@@ -464,6 +500,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
     fixed_zyx: np.ndarray,
     moving_affine_initialized_zyx: np.ndarray,
     *,
+    config: SofimaRegistrationConfig,
     single_residual_pass: bool = False,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
@@ -493,6 +530,8 @@ def _estimate_sofima_flow_field_xyz_px_impl(
     single_residual_pass : bool, default=False
         Internal recursion control. Public callers always use the fixed
         production path with two residual passes.
+    config : SofimaRegistrationConfig
+        Explicit SOFIMA parameter set.
 
     Returns
     -------
@@ -512,7 +551,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
     :func:`merfish3danalysis.utils.multiview_registration.warp_array_to_reference_with_affine_and_sofima_flow_gpu`.
     """
 
-    residual_iterations = 1 if single_residual_pass else SOFIMA_RESIDUAL_ITERATIONS
+    residual_iterations = 1 if single_residual_pass else int(config.residual_iterations)
     if residual_iterations > 1:
         from merfish3danalysis.utils.multiview_registration import (
             warp_array_to_reference_with_affine_and_sofima_flow_gpu,
@@ -521,6 +560,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         total_flow, total_metadata = _estimate_sofima_flow_field_xyz_px_impl(
             fixed_zyx,
             moving_affine_initialized_zyx,
+            config=config,
             single_residual_pass=True,
         )
         corrected = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
@@ -538,6 +578,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             residual_flow, residual_metadata = _estimate_sofima_flow_field_xyz_px_impl(
                 fixed_zyx,
                 corrected,
+                config=config,
                 single_residual_pass=True,
             )
             if residual_metadata["status"] != "ok":
@@ -550,7 +591,10 @@ def _estimate_sofima_flow_field_xyz_px_impl(
                     float(v) for v in total_metadata["map_box_start_xyz_px"]
                 ),
             )
-            total_flow, axial_metadata = _stabilize_axial_flow_component(total_flow)
+            total_flow, axial_metadata = _stabilize_axial_flow_component(
+                total_flow,
+                config,
+            )
             total_metadata.update(axial_metadata)
             total_metadata["valid_flow_vectors"] = int(
                 total_metadata["valid_flow_vectors"]
@@ -571,7 +615,10 @@ def _estimate_sofima_flow_field_xyz_px_impl(
                     mode="nearest",
                 ).astype(np.float32, copy=False)
         total_metadata["residual_iterations"] = completed_iterations
-        total_flow, axial_metadata = _stabilize_axial_flow_component(total_flow)
+        total_flow, axial_metadata = _stabilize_axial_flow_component(
+            total_flow,
+            config,
+        )
         total_metadata.update(axial_metadata)
         return total_flow.astype(np.float32, copy=False), total_metadata
 
@@ -585,27 +632,27 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         )
 
     shape_zyx = tuple(int(v) for v in fixed_zyx.shape)
-    patch_size, step = _resolve_patch_and_step(shape_zyx)
+    patch_size, step = _resolve_patch_and_step(shape_zyx, config)
 
     calculator = flow_field.JAXMaskedXCorrWithStatsCalculator(
         mean=None,
-        peak_min_distance=SOFIMA_PEAK_MIN_DISTANCE,
-        peak_radius=SOFIMA_PEAK_RADIUS,
+        peak_min_distance=int(config.peak_min_distance),
+        peak_radius=int(config.peak_radius),
     )
     flow = calculator.flow_field(
         moving_affine_initialized_zyx.astype(np.float32, copy=False),
         fixed_zyx.astype(np.float32, copy=False),
         patch_size=patch_size,
         step=step,
-        batch_size=SOFIMA_BATCH_SIZE,
-        max_masked=SOFIMA_MAX_MASKED,
+        batch_size=int(config.batch_size),
+        max_masked=float(config.max_masked),
     )
     cleaned_flow = flow_utils.clean_flow(
         flow,
-        min_peak_ratio=SOFIMA_MIN_PEAK_RATIO,
-        min_peak_sharpness=SOFIMA_MIN_PEAK_SHARPNESS,
-        max_magnitude=SOFIMA_MAX_MAGNITUDE,
-        max_deviation=SOFIMA_MAX_DEVIATION,
+        min_peak_ratio=float(config.min_peak_ratio),
+        min_peak_sharpness=float(config.min_peak_sharpness),
+        max_magnitude=float(config.max_magnitude),
+        max_deviation=float(config.max_deviation),
         dim=3,
     )
     cleaned_flow, subpixel_refined_vectors = _refine_flow_vectors_subpixel(
@@ -614,6 +661,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         fixed_zyx.astype(np.float32, copy=False),
         patch_size_zyx=patch_size,
         step_zyx=step,
+        config=config,
     )
     valid_flow_mask = np.isfinite(cleaned_flow[0])
     valid_flow_vectors = int(np.sum(valid_flow_mask))
@@ -631,9 +679,11 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             cleaned_flow,
             initial_flow_field,
             step,
+            config,
         )
         sofima_flow_field, axial_metadata = _stabilize_axial_flow_component(
-            sofima_flow_field
+            sofima_flow_field,
+            config,
         )
         flow_status = "ok"
     map_stride_zyx_px = [float(v) for v in step]
@@ -655,6 +705,7 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             float((sofima_flow_field.shape[1] - 1) * map_stride_zyx_px[0] + 1),
         ],
         "mesh_initializer": "median_valid_flow",
+        "sofima_config": config.as_metadata(),
     }
     metadata.update(relaxation_metadata)
     if valid_flow_vectors > 0:
@@ -665,14 +716,11 @@ def _estimate_sofima_flow_field_xyz_px_impl(
 def estimate_sofima_flow_field_xyz_px(
     fixed_zyx: np.ndarray,
     moving_affine_initialized_zyx: np.ndarray,
+    *,
+    config: SofimaRegistrationConfig | None = None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     """
     Estimate the production SOFIMA flow field after affine initialization.
-
-    This public entry point intentionally exposes no tuning parameters. If
-    deformable registration is enabled, the package always runs the same
-    production path: two residual SOFIMA passes, accepted-vector subpixel
-    refinement, and SOFIMA 3D elastic mesh relaxation.
 
     Parameters
     ----------
@@ -681,6 +729,9 @@ def estimate_sofima_flow_field_xyz_px(
     moving_affine_initialized_zyx : numpy.ndarray
         Moving fiducial image already rendered into the reference grid by the
         stored affine transform.
+    config : SofimaRegistrationConfig or None, optional
+        Explicit SOFIMA parameter set. If omitted, use
+        ``SofimaRegistrationConfig()``.
 
     Returns
     -------
@@ -689,8 +740,12 @@ def estimate_sofima_flow_field_xyz_px(
         the map spacing/origin.
     """
 
+    if config is None:
+        config = SofimaRegistrationConfig()
+
     return _estimate_sofima_flow_field_xyz_px_impl(
         fixed_zyx,
         moving_affine_initialized_zyx,
+        config=config,
         single_residual_pass=False,
     )

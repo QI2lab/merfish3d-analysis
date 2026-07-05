@@ -31,12 +31,40 @@ import sys
 import tempfile
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from random import sample
 from typing import Literal
 
 _CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+
+
+@dataclass(frozen=True)
+class ChromaticAffineEstimationConfig:
+    """Explicit RNA-derived chromatic affine estimation parameters."""
+
+    min_pairs: int = 20
+    distance_filter_min_pairs_multiplier: int = 4
+    distance_filter_percentile: float = 25.0
+    weight_filter_min_pairs_multiplier: int = 2
+    weight_filter_percentile: float = 25.0
+    residual_threshold_um: float = 0.35
+    residual_threshold_z_spacing_fraction: float = 0.5
+    z_limit_spacing_multiplier: float = 3.5
+    lateral_scale_min: float = 0.85
+    lateral_scale_max: float = 1.05
+    lateral_shear_max: float = 0.08
+    max_iterations: int = 6
+    scale_regularization: float = 0.0
+    robust_z_mad_multiplier: float = 3.0
+    robust_z_mad_scale: float = 1.4826
+    ransac_seed: int = 1729
+    ransac_min_iterations: int = 64
+    ransac_max_iterations: int = 512
+    ransac_sample_size: int = 3
+    centroid_z_support: int = 7
+    centroid_weight_epsilon: float = 1e-6
 
 
 def preload_cuda_libraries() -> None:
@@ -423,6 +451,7 @@ class PixelDecoder:
         z_range: Sequence[int] | None = None,
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
         estimate_chromatic_affines: bool = False,
+        chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
     ) -> None:
         """
         Initialize the object.
@@ -448,6 +477,8 @@ class PixelDecoder:
             transforms from decoded on-bit centroids. If False, decoding uses
             existing datastore chromatic calibration metadata with identity
             fallback.
+        chromatic_affine_config : ChromaticAffineEstimationConfig or None
+            Explicit RNA-derived chromatic affine estimation parameters.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -462,6 +493,9 @@ class PixelDecoder:
 
         self._decode_mode = decode_mode
         self._estimate_chromatic_affines = bool(estimate_chromatic_affines)
+        self._chromatic_affine_config = (
+            chromatic_affine_config or ChromaticAffineEstimationConfig()
+        )
         if decode_mode == "auto":
             effective_decode_mode = (
                 "2d" if self._datastore.microscope_type == "2D" else "3d"
@@ -1034,16 +1068,9 @@ class PixelDecoder:
 
     def _estimate_chromatic_affines_from_barcodes(
         self,
-        min_pairs: int = 20,
     ) -> None:
         """
         Estimate 3D chromatic affine matrices from decoded RNA on-bit centroids.
-
-        Parameters
-        ----------
-        min_pairs : int, default=20
-            Minimum number of paired on-bit centroid measurements required to
-            estimate a wavelength-pair affine.
 
         Returns
         -------
@@ -1051,6 +1078,9 @@ class PixelDecoder:
             Chromatic affine metadata are saved into the datastore calibration
             sidecar.
         """
+
+        config = self._chromatic_affine_config
+        min_pairs = int(config.min_pairs)
 
         if self._df_barcodes_loaded.empty:
             return
@@ -1073,9 +1103,15 @@ class PixelDecoder:
         if "distance_min" in barcode_table.columns:
             distances = barcode_table["distance_min"].to_numpy(dtype=np.float64)
             finite_distances = np.isfinite(distances)
-            if int(np.sum(finite_distances)) >= 4 * int(min_pairs):
+            required_distances = (
+                int(config.distance_filter_min_pairs_multiplier) * min_pairs
+            )
+            if int(np.sum(finite_distances)) >= required_distances:
                 distance_threshold = float(
-                    np.nanpercentile(distances[finite_distances], 25)
+                    np.nanpercentile(
+                        distances[finite_distances],
+                        float(config.distance_filter_percentile),
+                    )
                 )
                 high_confidence = finite_distances & (distances <= distance_threshold)
                 if int(np.sum(high_confidence)) >= int(min_pairs):
@@ -1198,8 +1234,14 @@ class PixelDecoder:
                     finite_pair
                 ]
                 pair_weights = pair_weights[finite_pair]
-                if pair_weights.size >= 2 * int(min_pairs):
-                    min_weight = np.percentile(pair_weights, 25)
+                required_weights = (
+                    int(config.weight_filter_min_pairs_multiplier) * min_pairs
+                )
+                if pair_weights.size >= required_weights:
+                    min_weight = np.percentile(
+                        pair_weights,
+                        float(config.weight_filter_percentile),
+                    )
                     strong = pair_weights >= min_weight
                     if int(np.sum(strong)) >= int(min_pairs):
                         source_points = source_points[strong]
@@ -1222,7 +1264,12 @@ class PixelDecoder:
                 target_points,
                 weights=pair_weights,
                 min_pairs=min_pairs,
-                residual_threshold_um=max(0.35, 0.5 * float(spacing[0])),
+                config=config,
+                residual_threshold_um=max(
+                    float(config.residual_threshold_um),
+                    float(config.residual_threshold_z_spacing_fraction)
+                    * float(spacing[0]),
+                ),
             )
             diagnostics["candidate_pairs"] = int(source_points.shape[0])
             edge_diagnostics[wavelength_pair] = diagnostics
@@ -1326,14 +1373,17 @@ class PixelDecoder:
             if np.isclose(wavelength, reference_wavelength):
                 cumulative_affine = np.eye(4, dtype=np.float32)
             elif not np.allclose(previous_affine, np.eye(4, dtype=np.float32)):
-                z_limit_um = 3.5 * float(spacing[0])
+                z_limit_um = float(config.z_limit_spacing_multiplier) * float(
+                    spacing[0]
+                )
                 lateral_scale = np.diag(cumulative_affine[1:3, 1:3])
                 lateral_shear = cumulative_affine[1:3, 1:3] - np.diag(lateral_scale)
                 plausible_cumulative = (
                     abs(float(cumulative_affine[0, 3])) <= z_limit_um
-                    and np.all(lateral_scale >= 0.85)
-                    and np.all(lateral_scale <= 1.05)
-                    and float(np.max(np.abs(lateral_shear))) <= 0.08
+                    and np.all(lateral_scale >= float(config.lateral_scale_min))
+                    and np.all(lateral_scale <= float(config.lateral_scale_max))
+                    and float(np.max(np.abs(lateral_shear)))
+                    <= float(config.lateral_shear_max)
                 )
                 if not plausible_cumulative:
                     cumulative_affine = previous_affine.astype(
@@ -1650,9 +1700,8 @@ class PixelDecoder:
         *,
         weights: np.ndarray | None = None,
         min_pairs: int,
+        config: ChromaticAffineEstimationConfig,
         residual_threshold_um: float = 0.35,
-        max_iterations: int = 6,
-        scale_regularization: float = 0.0,
     ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
         """
         Fit a robust chromatic affine from decoded transcript centroids.
@@ -1676,13 +1725,10 @@ class PixelDecoder:
             influence of bright, well-supported transcript centroids.
         min_pairs : int
             Minimum number of retained point correspondences.
+        config : ChromaticAffineEstimationConfig
+            Explicit fitting parameters.
         residual_threshold_um : float, default=0.35
             Residual threshold used for iterative outlier rejection.
-        max_iterations : int, default=6
-            Number of robust refit iterations.
-        scale_regularization : float, default=0.0
-            Penalty against lateral scale changes away from identity. The
-            default leaves radial scale unconstrained.
 
         Returns
         -------
@@ -1754,8 +1800,8 @@ class PixelDecoder:
             weighted_design = design * stacked_weights[:, np.newaxis]
             weighted_target = target_values * stacked_weights
 
-            if scale_regularization > 0:
-                penalty = np.sqrt(float(scale_regularization))
+            if config.scale_regularization > 0:
+                penalty = np.sqrt(float(config.scale_regularization))
                 weighted_design = np.vstack(
                     [weighted_design, np.asarray([[penalty, 0.0, 0.0]])]
                 )
@@ -1783,24 +1829,32 @@ class PixelDecoder:
             center = float(np.median(offsets))
             spread = float(np.median(np.abs(offsets - center)))
             if spread > 0:
-                keep_offsets = np.abs(offsets - center) <= 3.0 * 1.4826 * spread
+                keep_offsets = (
+                    np.abs(offsets - center)
+                    <= float(config.robust_z_mad_multiplier)
+                    * float(config.robust_z_mad_scale)
+                    * spread
+                )
                 if np.any(keep_offsets):
                     offsets = offsets[keep_offsets]
                     local_weights = local_weights[keep_offsets]
             return float(np.average(offsets, weights=local_weights))
 
-        rng = np.random.default_rng(1729)
+        rng = np.random.default_rng(int(config.ransac_seed))
         keep = np.ones(source.shape[0], dtype=bool)
         best_keep = None
         best_score = -1
         best_weighted_score = -1.0
         best_median_residual = np.inf
-        max_ransac_iterations = min(512, max(64, source.shape[0]))
+        max_ransac_iterations = min(
+            int(config.ransac_max_iterations),
+            max(int(config.ransac_min_iterations), source.shape[0]),
+        )
         sample_probability = weights_arr / np.sum(weights_arr)
         for _iteration in range(max_ransac_iterations):
             sample_indices = rng.choice(
                 source.shape[0],
-                size=3,
+                size=int(config.ransac_sample_size),
                 replace=False,
                 p=sample_probability,
             )
@@ -1864,7 +1918,7 @@ class PixelDecoder:
         if best_keep is not None:
             keep = best_keep
         affine = np.eye(4, dtype=np.float64)
-        for _iteration in range(max(1, int(max_iterations))):
+        for _iteration in range(max(1, int(config.max_iterations))):
             scale, y_translation, x_translation = solve_yx_radial_scale(
                 source[keep, 1:3],
                 target[keep, 1:3],
@@ -2314,7 +2368,11 @@ class PixelDecoder:
         region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
         fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
         labels_cp = codewords_label_image.astype(cp.int32, copy=False)
-        z_support = min(7, labels_cp.shape[0] if labels_cp.ndim == 3 else 1)
+        config = self._chromatic_affine_config
+        z_support = min(
+            int(config.centroid_z_support),
+            labels_cp.shape[0] if labels_cp.ndim == 3 else 1,
+        )
         if z_support % 2 == 0:
             z_support -= 1
         centroid_labels_cp = grey_dilation(labels_cp, size=(z_support, 1, 1))
@@ -2369,14 +2427,15 @@ class PixelDecoder:
 
             active_labels = label_lookup[active_rows]
             weight_sum_cp = weight_by_label[active_labels]
+            centroid_epsilon = cp.float32(config.centroid_weight_epsilon)
             centers_cp = cp.column_stack(
                 (
                     z_sum_by_label[active_labels]
-                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
                     y_sum_by_label[active_labels]
-                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
                     x_sum_by_label[active_labels]
-                    / cp.maximum(weight_sum_cp, cp.float32(1e-6)),
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
                 )
             )
             centers = cp.asnumpy(centers_cp).astype(np.float64, copy=False)

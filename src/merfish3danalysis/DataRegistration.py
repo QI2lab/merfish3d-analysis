@@ -47,6 +47,7 @@ import gc
 import queue
 import timeit
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ from typing import Any
 import numpy as np
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.sofima_registration import SofimaRegistrationConfig
 
 UFISH_MODEL_ALIASES = {
     "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
@@ -66,25 +68,47 @@ UFISH_MODEL_ALIASES = {
 DEFAULT_UFISH_MODEL = "simfish"
 
 
-def _registration_diagnostics_enabled() -> bool:
-    """
-    Return whether registration diagnostics should be printed.
+@dataclass(frozen=True)
+class GlobalRegistrationConfig:
+    """Explicit multiview-stitcher global registration parameters."""
 
-    Returns
-    -------
-    bool
-        True when ``MERFISH3D_REGISTRATION_DIAGNOSTICS`` is set to a truthy
-        value.
-    """
+    registration_binning_zyx: tuple[int, int, int] = (3, 6, 6)
+    reg_channel_index: int = 0
+    transform_key: str = "stage_metadata"
+    new_transform_key: str = "global_registered"
+    pre_registration_pruning_method: str = "keep_axis_aligned"
+    post_registration_do_quality_filter: bool = True
+    reference_view: int = 0
+    transform: str = "translation"
+    n_parallel_pairwise_regs: int = 1
+    dask_scheduler: str = "single-threaded"
+    affine_round_decimals: int | None = 2
 
-    return os.environ.get("MERFISH3D_REGISTRATION_DIAGNOSTICS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    @property
+    def registration_binning(self) -> dict[str, int]:
+        """Return binning keyed by multiview-stitcher spatial dimension name."""
+
+        return {
+            "z": int(self.registration_binning_zyx[0]),
+            "y": int(self.registration_binning_zyx[1]),
+            "x": int(self.registration_binning_zyx[2]),
+        }
 
 
-def _registration_diag(message: str) -> None:
+@dataclass(frozen=True)
+class GlobalFusionConfig:
+    """Explicit multiview-stitcher global fusion parameters."""
+
+    n_batch: int = 20
+    n_jobs: int | None = None
+    joblib_backend: str = "threading"
+    output_chunksize: int = 512
+    overlap_in_pixels: int = 64
+    backend: str = "cupy"
+    output_on_backend: bool = False
+
+
+def _registration_diag(message: str, *, enabled: bool) -> None:
     """
     Print one timestamped registration diagnostic message when enabled.
 
@@ -92,6 +116,8 @@ def _registration_diag(message: str) -> None:
     ----------
     message : str
         Diagnostic message body.
+    enabled : bool
+        If True, print the diagnostic message.
 
     Returns
     -------
@@ -99,7 +125,7 @@ def _registration_diag(message: str) -> None:
         The message is printed only when diagnostics are enabled.
     """
 
-    if _registration_diagnostics_enabled():
+    if enabled:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
 
@@ -354,7 +380,8 @@ def _load_deconvolve_fiducial_round(
     _registration_diag(
         "fiducial_decon_start "
         f"tile={dr._tile_id} round={round_id} "
-        f"raw_shape={tuple(int(v) for v in raw.shape)}"
+        f"raw_shape={tuple(int(v) for v in raw.shape)}",
+        enabled=dr._registration_diagnostics,
     )
     start_time = timeit.default_timer()
     if dr._decon_fiducial:
@@ -374,7 +401,8 @@ def _load_deconvolve_fiducial_round(
         f"tile={dr._tile_id} round={round_id} "
         f"input_shape={tuple(int(v) for v in raw.shape)} "
         f"output_shape={tuple(int(v) for v in decon.shape)} "
-        f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+        enabled=dr._registration_diagnostics,
     )
     del raw
     gc.collect()
@@ -447,13 +475,15 @@ def _process_fiducial_rounds_on_gpu(
                 f"tile={dr._tile_id} round={round_id} "
                 f"fixed_shape={tuple(int(v) for v in reference_image.shape)} "
                 f"moving_shape={tuple(int(v) for v in decon.shape)} "
-                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}",
+                enabled=dr._registration_diagnostics,
             )
             start_time = timeit.default_timer()
             local_transform_zyx_um = register_pair_to_fixed(
                 reference_float,
                 decon.astype(np.float32, copy=False),
                 spacing_zyx_um=spacing_zyx_um,
+                diagnostics=dr._registration_diagnostics,
             )
             dr._datastore.save_local_round_transform_zyx_um(
                 transform_zyx_um=local_transform_zyx_um,
@@ -463,7 +493,8 @@ def _process_fiducial_rounds_on_gpu(
             _registration_diag(
                 "fiducial_phase_registration_done "
                 f"tile={dr._tile_id} round={round_id} "
-                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
             )
 
             if dr.save_all_fiducial_registered or dr._perform_deformable_registration:
@@ -474,12 +505,14 @@ def _process_fiducial_rounds_on_gpu(
                     spacing_zyx_um=spacing_zyx_um,
                     reference_shape=reference_image.shape,
                     gpu_id=local_gpu_id,
+                    diagnostics=dr._registration_diagnostics,
                 )
                 _registration_diag(
                     "fiducial_affine_warp "
                     f"tile={dr._tile_id} round={round_id} "
                     f"shape={tuple(int(v) for v in decon.shape)} "
-                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}"
+                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}",
+                    enabled=dr._registration_diagnostics,
                 )
 
                 registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
@@ -536,9 +569,6 @@ def _process_sofima_rounds_on_gpu(
     """
 
     local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
-    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-    os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.65")
-    os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 
     import cupy as cp
 
@@ -585,6 +615,7 @@ def _process_sofima_rounds_on_gpu(
             sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
                 fixed,
                 moving_affine,
+                config=dr._sofima_config,
             )
             dr._datastore.save_local_sofima_flow_field(
                 sofima_flow_field,
@@ -625,7 +656,8 @@ def _process_sofima_rounds_on_gpu(
                 f"tile={dr._tile_id} round={round_id} "
                 f"status={metadata.get('status', 'ok')} "
                 f"valid_flow_vectors={metadata.get('valid_flow_vectors')} "
-                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
             )
             result_queue.put(("result", round_id, None))
             del moving_affine, sofima_flow_field
@@ -674,6 +706,7 @@ def _read_registered_fiducial_sim(
     scale: dict[str, float],
     translation: dict[str, float],
     affine_zyx_px: Any,
+    transform_key: str,
     ngff_utils: Any,
     si_utils: Any,
 ) -> Any:
@@ -690,6 +723,8 @@ def _read_registered_fiducial_sim(
         Stage-derived physical origin by spatial dimension.
     affine_zyx_px : Any
         Camera-to-stage affine transform loaded from datastore metadata.
+    transform_key : str
+        Transform key used for stage metadata in the returned SpatialImage.
     ngff_utils : Any
         ``multiview_stitcher.ngff_utils`` module.
     si_utils : Any
@@ -705,7 +740,7 @@ def _read_registered_fiducial_sim(
     sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
         input_path,
         resolution_level=0,
-        transform_key="stage_metadata",
+        transform_key=transform_key,
         use_dask=False,
     )
     return si_utils.get_sim_from_array(
@@ -714,7 +749,7 @@ def _read_registered_fiducial_sim(
         scale=scale,
         translation=translation,
         affine=affine_zyx_px,
-        transform_key="stage_metadata",
+        transform_key=transform_key,
         c_coords=sim_on_disk.coords["c"].values if "c" in sim_on_disk.coords else None,
         t_coords=sim_on_disk.coords["t"].values if "t" in sim_on_disk.coords else None,
     )
@@ -821,7 +856,8 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 "bit_start "
                 f"tile={dr._tile_id} bit={bit_id} linked_round={dr._round_ids[r_idx]} "
                 f"raw_shape={tuple(int(v) for v in corrected_image.shape)} "
-                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}"
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}",
+                enabled=dr._registration_diagnostics,
             )
 
             # deconvolution
@@ -841,7 +877,8 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     f"tile={dr._tile_id} bit={bit_id} "
                     f"input_shape={tuple(int(v) for v in corrected_image.shape)} "
                     f"output_shape={tuple(int(v) for v in decon_image.shape)} "
-                    f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                    f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                    enabled=dr._registration_diagnostics,
                 )
             else:
                 decon_image = corrected_image.copy()
@@ -857,7 +894,8 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 f"tile={dr._tile_id} bit={bit_id} "
                 f"image_shape={tuple(int(v) for v in decon_image.shape)} "
                 f"spots={len(feature_predictor_loc)} "
-                f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
             )
             feature_predictor_loc = feature_predictor_loc.rename(
                 columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
@@ -873,7 +911,8 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 f"round={dr._round_ids[r_idx]} "
                 f"image_shape={tuple(int(v) for v in data_reg.shape)} "
                 f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
-                f"spots={len(feature_predictor_loc)}"
+                f"spots={len(feature_predictor_loc)}",
+                enabled=dr._registration_diagnostics,
             )
 
             # clip to uint16
@@ -1014,6 +1053,10 @@ class DataRegistration:
         crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
         global_registration: bool = False,
+        registration_diagnostics: bool = False,
+        sofima_config: SofimaRegistrationConfig | None = None,
+        global_registration_config: GlobalRegistrationConfig | None = None,
+        global_fusion_config: GlobalFusionConfig | None = None,
         verbose: int = 1,
     ) -> None:
         """
@@ -1051,6 +1094,14 @@ class DataRegistration:
         global_registration : bool, default=False
             If True, run global tile registration and fused fiducial OME-Zarr
             generation after local tile preprocessing.
+        registration_diagnostics : bool, default=False
+            If True, print detailed registration diagnostics.
+        sofima_config : SofimaRegistrationConfig or None, default=None
+            Explicit SOFIMA deformable registration parameters.
+        global_registration_config : GlobalRegistrationConfig or None, default=None
+            Explicit multiview-stitcher global registration parameters.
+        global_fusion_config : GlobalFusionConfig or None, default=None
+            Explicit multiview-stitcher global fusion parameters.
         verbose : int
             Verbosity level for progress messages.
         """
@@ -1070,6 +1121,12 @@ class DataRegistration:
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
         self._global_registration = global_registration
+        self._registration_diagnostics = bool(registration_diagnostics)
+        self._sofima_config = sofima_config or SofimaRegistrationConfig()
+        self._global_registration_config = (
+            global_registration_config or GlobalRegistrationConfig()
+        )
+        self._global_fusion_config = global_fusion_config or GlobalFusionConfig()
         self._original_print = builtins.print
         self._verbose = verbose
 
@@ -1471,6 +1528,7 @@ class DataRegistration:
                 scale=scale,
                 translation=tile_grid_positions,
                 affine_zyx_px=affine_zyx_px,
+                transform_key=self._global_registration_config.transform_key,
                 ngff_utils=ngff_utils,
                 si_utils=si_utils,
             )
@@ -1488,7 +1546,7 @@ class DataRegistration:
                 msi_utils.set_affine_transform(
                     msim,
                     np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
-                    transform_key="global_registered",
+                    transform_key=self._global_registration_config.new_transform_key,
                 )
 
             msims.append(msim)
@@ -1538,7 +1596,12 @@ class DataRegistration:
 
         print(time_stamp(), "Global fusion diagnostics:")
         print(time_stamp(), f"  output_zarr_path={output_zarr_path}")
-        print(time_stamp(), "  backend=cupy output_on_backend=False")
+        print(
+            time_stamp(),
+            "  backend="
+            f"{self._global_fusion_config.backend} "
+            f"output_on_backend={self._global_fusion_config.output_on_backend}",
+        )
         print(time_stamp(), f"  batch_options={batch_options!r}")
 
         try:
@@ -1553,9 +1616,12 @@ class DataRegistration:
                     "x": float(self._datastore.voxel_size_zyx_um[2]),
                 },
                 output_stack_mode="union",
-                transform_key="global_registered",
+                transform_key=self._global_registration_config.new_transform_key,
             )
-            output_chunksize = fusion.process_output_chunksize(scale0_sims, 512)
+            output_chunksize = fusion.process_output_chunksize(
+                scale0_sims,
+                int(self._global_fusion_config.output_chunksize),
+            )
             spatial_shape = output_stack_properties["shape"]
             nblocks = {
                 dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
@@ -1634,12 +1700,18 @@ class DataRegistration:
         if output_zarr_path.exists():
             shutil.rmtree(output_zarr_path)
 
+        fusion_config = self._global_fusion_config
+        n_jobs = (
+            min(4, max(1, int(self._num_gpus)))
+            if fusion_config.n_jobs is None
+            else int(fusion_config.n_jobs)
+        )
         batch_options = {
             "batch_func": misc_utils.process_batch_using_joblib,
-            "n_batch": 20,
+            "n_batch": int(fusion_config.n_batch),
             "batch_func_kwargs": {
-                "n_jobs": min(4, max(1, int(self._num_gpus))),
-                "backend": "threading",
+                "n_jobs": n_jobs,
+                "backend": fusion_config.joblib_backend,
             },
         }
         self._print_global_fusion_diagnostics(
@@ -1655,10 +1727,10 @@ class DataRegistration:
         fusion_start_time = timeit.default_timer()
         fused_sim = fusion.fuse(
             images=[msi_utils.get_sim_from_msim(msim) for msim in msims],
-            transform_key="global_registered",
+            transform_key=self._global_registration_config.new_transform_key,
             output_spacing=scale,
-            output_chunksize=512,
-            overlap_in_pixels=64,
+            output_chunksize=int(fusion_config.output_chunksize),
+            overlap_in_pixels=int(fusion_config.overlap_in_pixels),
             output_zarr_url=str(output_zarr_path),
             zarr_options={
                 "ome_zarr": True,
@@ -1666,8 +1738,8 @@ class DataRegistration:
                 "overwrite": True,
             },
             batch_options=batch_options,
-            backend="cupy",
-            output_on_backend=False,
+            backend=fusion_config.backend,
+            output_on_backend=bool(fusion_config.output_on_backend),
         )
         if self._verbose >= 1:
             print(
@@ -1681,7 +1753,8 @@ class DataRegistration:
             fused_sim = msi_utils.get_sim_from_msim(fused_sim, scale="scale0")
         fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
         affine = msi_utils.get_transform_from_msim(
-            fused_msim, transform_key="global_registered"
+            fused_msim,
+            transform_key=self._global_registration_config.new_transform_key,
         ).data.squeeze()
         fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
         origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
@@ -1829,48 +1902,66 @@ class DataRegistration:
             use_stored_global_transforms=False,
         )
 
-        registration_binning = {"z": 3, "y": 6, "x": 6}
+        registration_config = self._global_registration_config
+        registration_binning = registration_config.registration_binning
         if self._verbose >= 1:
             print(
                 time_stamp(),
                 "Running multiview-stitcher global registration "
                 f"tiles={len(msims)} registration_binning={registration_binning} "
-                "pre_registration_pruning_method=keep_axis_aligned "
-                "post_registration_do_quality_filter=True "
-                "n_parallel_pairwise_regs=1",
+                "pre_registration_pruning_method="
+                f"{registration_config.pre_registration_pruning_method} "
+                "post_registration_do_quality_filter="
+                f"{registration_config.post_registration_do_quality_filter} "
+                "n_parallel_pairwise_regs="
+                f"{registration_config.n_parallel_pairwise_regs}",
             )
         registration_start_time = timeit.default_timer()
-        with dask_config.set(scheduler="single-threaded"):
+        with dask_config.set(scheduler=registration_config.dask_scheduler):
             if self._verbose >= 1:
                 with ProgressBar():
                     global_transforms = registration.register(
                         msims,
-                        reg_channel_index=0,
-                        transform_key="stage_metadata",
-                        new_transform_key="global_registered",
-                        pre_registration_pruning_method="keep_axis_aligned",
+                        reg_channel_index=int(registration_config.reg_channel_index),
+                        transform_key=registration_config.transform_key,
+                        new_transform_key=registration_config.new_transform_key,
+                        pre_registration_pruning_method=(
+                            registration_config.pre_registration_pruning_method
+                        ),
                         registration_binning=registration_binning,
-                        post_registration_do_quality_filter=True,
+                        post_registration_do_quality_filter=(
+                            bool(
+                                registration_config.post_registration_do_quality_filter
+                            )
+                        ),
                         groupwise_resolution_kwargs={
-                            "reference_view": 0,
-                            "transform": "translation",
+                            "reference_view": int(registration_config.reference_view),
+                            "transform": registration_config.transform,
                         },
-                        n_parallel_pairwise_regs=1,
+                        n_parallel_pairwise_regs=int(
+                            registration_config.n_parallel_pairwise_regs
+                        ),
                     )
             else:
                 global_transforms = registration.register(
                     msims,
-                    reg_channel_index=0,
-                    transform_key="stage_metadata",
-                    new_transform_key="global_registered",
-                    pre_registration_pruning_method="keep_axis_aligned",
+                    reg_channel_index=int(registration_config.reg_channel_index),
+                    transform_key=registration_config.transform_key,
+                    new_transform_key=registration_config.new_transform_key,
+                    pre_registration_pruning_method=(
+                        registration_config.pre_registration_pruning_method
+                    ),
                     registration_binning=registration_binning,
-                    post_registration_do_quality_filter=True,
+                    post_registration_do_quality_filter=(
+                        bool(registration_config.post_registration_do_quality_filter)
+                    ),
                     groupwise_resolution_kwargs={
-                        "reference_view": 0,
-                        "transform": "translation",
+                        "reference_view": int(registration_config.reference_view),
+                        "transform": registration_config.transform,
                     },
-                    n_parallel_pairwise_regs=1,
+                    n_parallel_pairwise_regs=int(
+                        registration_config.n_parallel_pairwise_regs
+                    ),
                 )
         if self._verbose >= 1:
             print(
@@ -1885,7 +1976,12 @@ class DataRegistration:
             affine = np.asarray(
                 transform.data if hasattr(transform, "data") else transform
             )
-            affine = np.round(np.squeeze(affine), 2)
+            affine = np.squeeze(affine)
+            if registration_config.affine_round_decimals is not None:
+                affine = np.round(
+                    affine,
+                    int(registration_config.affine_round_decimals),
+                )
             sim = msi_utils.get_sim_from_msim(msim)
             origin = si_utils.get_origin_from_sim(sim, asarray=True)
             spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
@@ -2185,7 +2281,8 @@ class DataRegistration:
         _registration_diag(
             "fiducial_registration_all_done "
             f"tile={self._tile_id} rounds={len(self._round_ids)} "
-            f"elapsed_s={timeit.default_timer() - start_time:.2f}"
+            f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+            enabled=self._registration_diagnostics,
         )
 
         del reference_image

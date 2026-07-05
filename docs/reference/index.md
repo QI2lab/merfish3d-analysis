@@ -12,5 +12,4 @@ Select a module or class below for detailed documentation:
 ## Modules
 - [Data IO Module](modules/dataio.md)
 - [Image Processing Module](modules/imageprocessing.md)
-- [OPM Tools Module](modules/opmtools.md)
 - [Registration Module](modules/registration.md)

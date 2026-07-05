@@ -189,6 +189,14 @@ def convert_data(
     output_path: Path | None = None,
     codebook_path: Path | None = None,
     bit_order_path: Path | None = None,
+    fallback_na: float = 1.35,
+    fallback_ri: float = 1.51,
+    excitation_wavelengths_um: tuple[float, float, float] = (0.488, 0.561, 0.635),
+    emission_wavelengths_um: tuple[float, float, float] = (0.520, 0.580, 0.670),
+    default_tile_overlap: float = 0.2,
+    noise_map_shape_yx: tuple[int, int] = (2048, 2048),
+    hot_pixel_threshold: int = 100,
+    max_flatfield_images: int = 100,
 ) -> None:
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -215,6 +223,23 @@ def convert_data(
         Bit-order CSV path. This file defines the bits present in each imaging
         round, in channel order. When omitted, read ``bit_order.csv`` under
         ``root_path``.
+    fallback_na : float, default=1.35
+        Numerical aperture used when microscope metadata omit ``na``.
+    fallback_ri : float, default=1.51
+        Immersion refractive index used when microscope metadata omit ``ri``.
+    excitation_wavelengths_um : tuple[float, float, float]
+        Excitation wavelengths for blue, yellow, and red channels.
+    emission_wavelengths_um : tuple[float, float, float]
+        Emission wavelengths for blue, yellow, and red channels.
+    default_tile_overlap : float, default=0.2
+        Tile overlap used when microscope metadata omit ``tile_overlap``.
+    noise_map_shape_yx : tuple[int, int], default=(2048, 2048)
+        Shape of the generated camera-offset noise map when no hot-pixel image
+        is supplied.
+    hot_pixel_threshold : int, default=100
+        Threshold passed to hot-pixel detection when estimating illuminations.
+    max_flatfield_images : int, default=100
+        Maximum number of tiles used to estimate flatfield illuminations.
     """
 
     # load illuminations if requested
@@ -309,7 +334,7 @@ def convert_data(
     try:
         na = metadata["na"]
     except (KeyError, TypeError, ValueError):
-        na = 1.35
+        na = fallback_na
 
     # this entry was not contained in pre-v8 microscope csv, it was instead stored
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
@@ -317,10 +342,10 @@ def convert_data(
     try:
         ri = metadata["ri"]
     except (KeyError, TypeError, ValueError):
-        ri = 1.51
+        ri = fallback_ri
 
-    ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
-    em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
+    ex_wavelengths_um = list(excitation_wavelengths_um)
+    em_wavelengths_um = list(emission_wavelengths_um)
     channel_idxs = list(range(num_ch))
     channels_in_data = list(compress(channel_idxs, channels_active))
 
@@ -334,7 +359,10 @@ def convert_data(
     # The defaults are the "known" defaults for this camera configuration.
 
     if hot_pixel_image_path is None:
-        noise_map = offset * np.ones((2048, 2048), dtype=np.uint16)
+        noise_map = offset * np.ones(
+            tuple(int(v) for v in noise_map_shape_yx),
+            dtype=np.uint16,
+        )
     else:
         noise_map = imread(hot_pixel_image_path)
 
@@ -407,14 +435,15 @@ def convert_data(
         try:
             datastore.tile_overlap = metadata["tile_overlap"]
         except (KeyError, TypeError, ValueError):
-            datastore.tile_overlap = 0.2
+            datastore.tile_overlap = default_tile_overlap
         datastore.e_per_ADU = e_per_ADU
         datastore.na = na
         datastore.ri = ri
         datastore.binning = binning
         datastore.noise_map = noise_map
         datastore._shading_maps = np.ones(
-            (3, 2048, 2048), dtype=np.float32
+            (len(channel_names), *tuple(int(v) for v in noise_map_shape_yx)),
+            dtype=np.float32,
         )  # not used yet
         datastore.voxel_size_zyx_um = voxel_size_zyx_um
         datastore.channel_psfs = channel_psfs
@@ -508,7 +537,9 @@ def convert_data(
                 if camera == "flir":
                     raw_image = replace_hot_pixels(noise_map, raw_image)
                     raw_image = replace_hot_pixels(
-                        np.max(raw_image, axis=0), raw_image, threshold=100
+                        np.max(raw_image, axis=0),
+                        raw_image,
+                        threshold=hot_pixel_threshold,
                     )
                     hot_pixel_corrected = True
                 else:
@@ -572,8 +603,8 @@ def convert_data(
         del datastore
         datastore = qi2labDataStore(datastore_path)
 
-        if datastore.num_tiles > 100:
-            n_flatfield_images = 100
+        if datastore.num_tiles > max_flatfield_images:
+            n_flatfield_images = max_flatfield_images
         else:
             n_flatfield_images = datastore.num_tiles
         sample_indices = np.asarray(
@@ -597,7 +628,11 @@ def convert_data(
 
         if save_illuminations:
             illuminations = np.zeros(
-                (3, fiducial_illumination.shape[0], fiducial_illumination.shape[1]),
+                (
+                    len(channel_names),
+                    fiducial_illumination.shape[0],
+                    fiducial_illumination.shape[1],
+                ),
                 dtype=np.float32,
             )
             illuminations[0, :] = fiducial_illumination

@@ -53,7 +53,11 @@ uv run qi2lab-preprocess /path/to/experiment
 
 ## Registration conventions
 
-Local deformable registration uses SOFIMA residual flow fields after fiducial registration.
+Local fiducial registration uses the qi2lab GPU registration path: lateral XY
+registration on max-Z projections, XYZ registration, and optional SOFIMA
+residual flow fields after affine fiducial alignment. Global registration and
+fused fiducial OME-Zarr creation follow the multiview-stitcher workflow; GPU
+acceleration is used in the direct fusion step.
 
 ## View a qi2lab datastore
 
@@ -83,7 +87,7 @@ Example calls to proseg:
 
 2D segmentation optimization (ignore z coordinate)
 ```bash
-mkdir /path/to/qi2labdatastore/proseg/3D
+mkdir /path/to/qi2labdatastore/proseg/2D
 
 /path/to/proseg --gene-column gene_id -x global_x -y global_y -z global_z --fov-column tile_idx --cell-id-column cell_id --cell-id-unassigned 0 --excluded-genes ^[Bb]lank.*$ --ignore-z-coord --density-bins 1 --burnin-samples 1000 --samples 2000 --voxel-size 1.0 --burnin-voxel-size 4.0 --enforce-connectivity --diffusion-probability 0.0 --output-spatialdata /path/to/data/qi2labdatastore/proseg/2D/spatialdata_2D.zarr --output-counts /path/to/data/qi2labdatastore/proseg/2D/counts_2D.mtx.gz --output-cell-polygons /path/to/data/qi2labdatastore/proseg/2D/cell_polygons_2D.geojson.gz --output-transcript-metadata /path/to/data/qi2labdatastore/proseg/2D/transcript_metadata_2D.csv.gz /path/to/data/qi2labdatastore/all_tiles_filtered_decoded_features/decoded_features.csv.gz
 ```
@@ -114,6 +118,10 @@ Full feature-prediction probability threshold sweep:
 ```bash
 uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
 ```
+
+The simulation suite currently runs the default `simfish` U-FISH model. The
+exhaustive mode expands the feature-prediction probability threshold and
+preprocessing matrix for that default model.
 
 ### Simulation Results
 

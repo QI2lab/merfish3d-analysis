@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import ChromaticAffineEstimationConfig, PixelDecoder
 
 
 @dataclass
@@ -212,12 +212,13 @@ def test_chromatic_estimator_recovers_affine_with_distractors() -> None:
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._datastore = datastore
     decoder._n_merfish_bits = 4
+    decoder._chromatic_affine_config = ChromaticAffineEstimationConfig(min_pairs=20)
     decoder._df_barcodes_loaded = _make_chromatic_barcode_table(
         spacing_zyx_um=spacing_zyx_um,
         true_affine_zyx_um=true_affine,
     )
 
-    decoder._estimate_chromatic_affines_from_barcodes(min_pairs=20)
+    decoder._estimate_chromatic_affines_from_barcodes()
 
     channel = datastore.calibration["channels"]["wavelength_0.670000"]
     fit = channel["diagnostics"]["path_fits"][0]["fit"]
@@ -285,12 +286,13 @@ def test_chromatic_estimator_counts_only_valid_nonblank_cross_wavelength_rows() 
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._datastore = datastore
     decoder._n_merfish_bits = 4
+    decoder._chromatic_affine_config = ChromaticAffineEstimationConfig(min_pairs=5)
     decoder._df_barcodes_loaded = pd.concat(
         [barcode_table, pd.DataFrame(invalid_rows)],
         ignore_index=True,
     )
 
-    decoder._estimate_chromatic_affines_from_barcodes(min_pairs=5)
+    decoder._estimate_chromatic_affines_from_barcodes()
 
     channel = datastore.calibration["channels"]["wavelength_0.670000"]
     fit = channel["diagnostics"]["path_fits"][0]["fit"]

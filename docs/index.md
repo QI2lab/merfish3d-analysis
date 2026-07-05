@@ -16,7 +16,7 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
 
 - Decode both 2D and 3D iterative barcoded experiments that use a codebook. Our focus on 3D MERFISH, but this library can be extended to any iterative imaging and barcoded RNA imaging approach.
 - [Datastore](datastore.md) optimized for large-scale imaging data.
-    - Read and write compressed Zarr v2 using Tensorstore library for performance.
+    - Read and write OME-NGFF v0.5 images through yaozarrs and TensorStore.
 - Processing capabilities for widefield, standard light-sheet, and skewed light-sheet data.
 - Rigid, affine, and deformable local tile registration.
     - GPU-accelerated affine registration, SOFIMA residual flow-field
@@ -26,7 +26,7 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
     - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels. All non-GPU accelerated functions are [Numba](https://numba.pydata.org/) accelerated.
     - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
 - Iterative estimation of background and normalization vectors across codebook bits to remove subjective normalization by user that often leads to non-optimal decoding solutions.
-- Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Baysor](https://kharchenkolab.github.io/Baysor/dev/), and [U-FISH](https://github.com/UFISH-Team/U-FISH).
+- Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Proseg](https://github.com/dcjones/proseg), and [U-FISH](https://github.com/UFISH-Team/U-FISH).
 - Read-only [NDV datastore viewer](viewer.md) for local tile inspection and fused
   global overlays.
 
@@ -37,7 +37,8 @@ Multiple examples are provided with the library, including [qi2lab data](example
 ## Current API behavior
 
 The [current API notes](api.md) summarize the active RLGC, PSF generation,
-chunking, and U-FISH defaults used by the processing wrappers.
+registration, chromatic estimation, segmentation, and decoding defaults used by
+the processing wrappers.
 
 ## API reference
 

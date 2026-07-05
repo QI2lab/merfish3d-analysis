@@ -72,9 +72,6 @@ datastore = qi2labDataStore(root_path / Path("qi2labdatastore"))
 
 # required metadata
 datastore.channels_in_data = ["alexa488","alexa561","alexa647"]
-datastore.baysor_path = Path(r"/path/to/Baysor/bin/baysor/bin/./baysor")
-datastore.baysor_options = Path(r"/path/to/baysor_options.toml")
-datastore.julia_threads = 8
 datastore.num_rounds = 1
 datastore.codebook = Path(r"/path/to/dataset/raw_data/codebook.csv")
 datastore.experiment_order = Path(r"/path/to/dataset/raw_data/exp_order.csv")

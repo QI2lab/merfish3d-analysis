@@ -13,7 +13,10 @@ from typing import Literal
 import typer
 
 from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
-from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import (
+    ChromaticAffineEstimationConfig,
+    PixelDecoder,
+)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 app = typer.Typer()
@@ -273,6 +276,27 @@ def decode_pixels(
     skip_optimization: bool = False,
     normalization_method: Literal["iterative", "global", "none"] = "iterative",
     estimate_chromatic_affines: bool = False,
+    chromatic_min_pairs: int = 20,
+    chromatic_distance_filter_min_pairs_multiplier: int = 4,
+    chromatic_distance_filter_percentile: float = 25.0,
+    chromatic_weight_filter_min_pairs_multiplier: int = 2,
+    chromatic_weight_filter_percentile: float = 25.0,
+    chromatic_residual_threshold_um: float = 0.35,
+    chromatic_residual_threshold_z_spacing_fraction: float = 0.5,
+    chromatic_z_limit_spacing_multiplier: float = 3.5,
+    chromatic_lateral_scale_min: float = 0.85,
+    chromatic_lateral_scale_max: float = 1.05,
+    chromatic_lateral_shear_max: float = 0.08,
+    chromatic_max_iterations: int = 6,
+    chromatic_scale_regularization: float = 0.0,
+    chromatic_robust_z_mad_multiplier: float = 3.0,
+    chromatic_robust_z_mad_scale: float = 1.4826,
+    chromatic_ransac_seed: int = 1729,
+    chromatic_ransac_min_iterations: int = 64,
+    chromatic_ransac_max_iterations: int = 512,
+    chromatic_ransac_sample_size: int = 3,
+    chromatic_centroid_z_support: int = 7,
+    chromatic_centroid_weight_epsilon: float = 1e-6,
     reprocess_existing: bool = False,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> None:
@@ -311,6 +335,48 @@ def decode_pixels(
     estimate_chromatic_affines : bool, default=False
         If True, estimate chromatic affine transforms during iterative
         normalization. Existing datastore calibration is still used by default.
+    chromatic_min_pairs : int, default=20
+        Minimum paired transcripts required for each chromatic affine fit.
+    chromatic_distance_filter_min_pairs_multiplier : int, default=4
+        Required multiple of ``chromatic_min_pairs`` before distance filtering.
+    chromatic_distance_filter_percentile : float, default=25.0
+        Distance percentile retained for high-confidence chromatic pairs.
+    chromatic_weight_filter_min_pairs_multiplier : int, default=2
+        Required multiple of ``chromatic_min_pairs`` before weight filtering.
+    chromatic_weight_filter_percentile : float, default=25.0
+        Weight percentile used for chromatic pair filtering.
+    chromatic_residual_threshold_um : float, default=0.35
+        Minimum residual threshold in microns for robust affine fitting.
+    chromatic_residual_threshold_z_spacing_fraction : float, default=0.5
+        Z-spacing fraction used to derive the residual threshold.
+    chromatic_z_limit_spacing_multiplier : float, default=3.5
+        Z-spacing multiplier used for cumulative affine plausibility checks.
+    chromatic_lateral_scale_min : float, default=0.85
+        Minimum plausible cumulative lateral scale.
+    chromatic_lateral_scale_max : float, default=1.05
+        Maximum plausible cumulative lateral scale.
+    chromatic_lateral_shear_max : float, default=0.08
+        Maximum plausible cumulative lateral shear.
+    chromatic_max_iterations : int, default=6
+        Robust affine refit iteration count.
+    chromatic_scale_regularization : float, default=0.0
+        Lateral scale regularization toward identity.
+    chromatic_robust_z_mad_multiplier : float, default=3.0
+        MAD multiplier used for robust Z-translation filtering.
+    chromatic_robust_z_mad_scale : float, default=1.4826
+        MAD-to-sigma scale factor for robust Z filtering.
+    chromatic_ransac_seed : int, default=1729
+        Random seed for chromatic affine RANSAC sampling.
+    chromatic_ransac_min_iterations : int, default=64
+        Minimum chromatic affine RANSAC iteration count.
+    chromatic_ransac_max_iterations : int, default=512
+        Maximum chromatic affine RANSAC iteration count.
+    chromatic_ransac_sample_size : int, default=3
+        Number of paired transcripts sampled per RANSAC proposal.
+    chromatic_centroid_z_support : int, default=7
+        Z-support window for on-bit weighted centroid extraction.
+    chromatic_centroid_weight_epsilon : float, default=1e-6
+        Epsilon used for weighted-centroid normalization.
     reprocess_existing : bool, default=False
         Reprocess existing exact-called decoded data. Legacy decoded
         parquet files from the old caller are not supported.
@@ -355,6 +421,35 @@ def decode_pixels(
         verbose=1,
         decode_mode=decode_mode,
         estimate_chromatic_affines=estimate_chromatic_affines,
+        chromatic_affine_config=ChromaticAffineEstimationConfig(
+            min_pairs=chromatic_min_pairs,
+            distance_filter_min_pairs_multiplier=(
+                chromatic_distance_filter_min_pairs_multiplier
+            ),
+            distance_filter_percentile=chromatic_distance_filter_percentile,
+            weight_filter_min_pairs_multiplier=(
+                chromatic_weight_filter_min_pairs_multiplier
+            ),
+            weight_filter_percentile=chromatic_weight_filter_percentile,
+            residual_threshold_um=chromatic_residual_threshold_um,
+            residual_threshold_z_spacing_fraction=(
+                chromatic_residual_threshold_z_spacing_fraction
+            ),
+            z_limit_spacing_multiplier=chromatic_z_limit_spacing_multiplier,
+            lateral_scale_min=chromatic_lateral_scale_min,
+            lateral_scale_max=chromatic_lateral_scale_max,
+            lateral_shear_max=chromatic_lateral_shear_max,
+            max_iterations=chromatic_max_iterations,
+            scale_regularization=chromatic_scale_regularization,
+            robust_z_mad_multiplier=chromatic_robust_z_mad_multiplier,
+            robust_z_mad_scale=chromatic_robust_z_mad_scale,
+            ransac_seed=chromatic_ransac_seed,
+            ransac_min_iterations=chromatic_ransac_min_iterations,
+            ransac_max_iterations=chromatic_ransac_max_iterations,
+            ransac_sample_size=chromatic_ransac_sample_size,
+            centroid_z_support=chromatic_centroid_z_support,
+            centroid_weight_epsilon=chromatic_centroid_weight_epsilon,
+        ),
     )
 
     if not (reprocess_existing):

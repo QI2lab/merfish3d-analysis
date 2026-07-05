@@ -16,7 +16,6 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 
 from merfish3danalysis.DataRegistration import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
@@ -47,7 +46,6 @@ SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     5.0: 0.2,
 }
 F1_ABS_TOLERANCE = 0.02
-COLLECT_FULL_BASELINES = False
 F1_RADIUS_BY_AXIAL_SPACING_UM = {
     "0.315": 1.0,
     "1.0": 1.0,
@@ -153,12 +151,10 @@ def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
 
 
 UFISH_MODELS = _available_ufish_models()
-REGISTRATION_MODES = (
-    (("affine", False), ("deformable", True))
-    if os.environ.get("MERFISH3D_SIM_INCLUDE_DEFORMABLE", "").lower()
-    in {"1", "true", "yes"}
-    else (("affine", False),)
+DEFAULT_UFISH_MODELS = tuple(
+    model for model in UFISH_MODELS if model[0] == DEFAULT_UFISH_MODEL
 )
+REGISTRATION_MODES = (("affine", False),)
 STANDARD_SIMULATION_MATRIX = tuple(
     {
         "dataset_variant": dataset_variant,
@@ -181,7 +177,7 @@ STANDARD_SIMULATION_MATRIX = tuple(
     ) in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
         REGISTRATION_MODES,
     )
 )
@@ -210,7 +206,7 @@ FULL_SIMULATION_MATRIX = tuple(
     ), feature_predictor_threshold in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
         PREPROCESS_MODES.items(),
         REGISTRATION_MODES,
         FEATURE_PREDICTOR_THRESHOLDS,
@@ -240,7 +236,7 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
     ) in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
         PREPROCESS_MODES.items(),
         REGISTRATION_MODES,
     )
@@ -682,8 +678,6 @@ def _run_simulation_case_setup(
     ufish_model: str | None,
     perform_deformable_registration: bool,
     case_label: str,
-    synthetic_chromatic_aberration: bool = False,
-    synthetic_chromatic_aberration_scale: float = 1.0,
 ) -> dict[str, float]:
     """
     Run simulation case setup.
@@ -701,10 +695,6 @@ def _run_simulation_case_setup(
     perform_deformable_registration : bool
         Function argument.
     case_label : str
-        Function argument.
-    synthetic_chromatic_aberration : bool
-        Function argument.
-    synthetic_chromatic_aberration_scale : float
         Function argument.
 
     Returns
@@ -726,11 +716,7 @@ def _run_simulation_case_setup(
 
     start = time.perf_counter()
     print(f"[{case_label}] convert_data: start", flush=True)
-    simulation_api["convert_data"](
-        acquisition_root,
-        synthetic_chromatic_aberration=synthetic_chromatic_aberration,
-        synthetic_chromatic_aberration_scale=synthetic_chromatic_aberration_scale,
-    )
+    simulation_api["convert_data"](acquisition_root)
     timings_seconds["convert_data"] = time.perf_counter() - start
     print(
         f"[{case_label}] convert_data: done ({timings_seconds['convert_data']:.2f}s)",
@@ -877,7 +863,6 @@ def _run_simulation_decode_and_f1(
     duplicate_radius_xy: float | None = None,
     duplicate_radius_z: float | None = None,
     normalization_iterations: int = 3,
-    estimate_chromatic_affines: bool = False,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """
     Run simulation decode and f1.
@@ -908,8 +893,6 @@ def _run_simulation_decode_and_f1(
         Function argument.
     normalization_iterations : int
         Function argument.
-    estimate_chromatic_affines : bool
-        If True, enable chromatic affine estimation during iterative decoding.
 
     Returns
     -------
@@ -931,7 +914,6 @@ def _run_simulation_decode_and_f1(
         duplicate_radius_xy=duplicate_radius_xy,
         duplicate_radius_z=duplicate_radius_z,
         normalization_iterations=normalization_iterations,
-        estimate_chromatic_affines=estimate_chromatic_affines,
     )
     timings_seconds["decode_pixels"] = time.perf_counter() - start
     print(
@@ -980,8 +962,6 @@ def _run_simulation_pipeline(
     magnitude_threshold: tuple[float, float] = (0.9, 10.0),
     minimum_pixels_per_rna: int | None = None,
     case_label: str | None = None,
-    synthetic_chromatic_aberration: bool = False,
-    synthetic_chromatic_aberration_scale: float = 1.0,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """
     Run simulation pipeline.
@@ -1010,10 +990,6 @@ def _run_simulation_pipeline(
         Function argument.
     case_label : str | None
         Function argument.
-    synthetic_chromatic_aberration : bool
-        Function argument.
-    synthetic_chromatic_aberration_scale : float
-        Function argument.
 
     Returns
     -------
@@ -1029,8 +1005,6 @@ def _run_simulation_pipeline(
         ufish_model=ufish_model,
         perform_deformable_registration=perform_deformable_registration,
         case_label=case_label,
-        synthetic_chromatic_aberration=synthetic_chromatic_aberration,
-        synthetic_chromatic_aberration_scale=synthetic_chromatic_aberration_scale,
     )
     decode_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
         case_root,
@@ -1395,296 +1369,22 @@ def test_simulation_standard_matrix(
         / "qi2labdatastore"
     )
     case_spec = simulation_standard_case_result["case_spec"]
-    ufish_model_name = case_spec["ufish_model_name"]
-    expected_f1 = (
-        STANDARD_EXPECTED_F1_SCORES[
-            (case_spec["dataset_variant"], case_spec["axial_spacing_um"])
-        ]
-        if ufish_model_name == DEFAULT_UFISH_MODEL
-        else None
-    )
+    expected_f1 = STANDARD_EXPECTED_F1_SCORES[
+        (case_spec["dataset_variant"], case_spec["axial_spacing_um"])
+    ]
 
     assert datastore_path.exists()
     assert isinstance(simulation_standard_case_result["f1_results"], dict)
     assert RESULT_KEYS.issubset(simulation_standard_case_result["f1_results"])
-    if expected_f1 is not None:
-        assert simulation_standard_case_result["performance_metrics"][
-            "f1_score"
-        ] == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
+    assert simulation_standard_case_result["performance_metrics"][
+        "f1_score"
+    ] == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
     assert simulation_standard_case_result["performance_metrics"]["true_positives"] >= 0
     assert (
         simulation_standard_case_result["performance_metrics"]["false_positives"] >= 0
     )
     assert (
         simulation_standard_case_result["performance_metrics"]["false_negatives"] >= 0
-    )
-
-
-def _apply_affine_to_points(affine_zyx_um: np.ndarray, points_zyx_um: np.ndarray):
-    """
-    Apply one homogeneous ZYX affine to physical points.
-
-    Parameters
-    ----------
-    affine_zyx_um : numpy.ndarray
-        Homogeneous 4x4 affine in Z, Y, X physical coordinates.
-    points_zyx_um : numpy.ndarray
-        Points in Z, Y, X physical coordinates.
-
-    Returns
-    -------
-    numpy.ndarray
-        Transformed points in Z, Y, X physical coordinates.
-    """
-
-    homogeneous = np.concatenate(
-        [points_zyx_um, np.ones((points_zyx_um.shape[0], 1), dtype=np.float32)],
-        axis=1,
-    )
-    return (homogeneous @ affine_zyx_um.T)[:, :3]
-
-
-def _format_matrix_fixed(matrix: np.ndarray) -> str:
-    """
-    Format a matrix without scientific notation.
-
-    Parameters
-    ----------
-    matrix : numpy.ndarray
-        Matrix to format.
-
-    Returns
-    -------
-    str
-        Fixed-decimal matrix representation.
-    """
-
-    return np.array2string(
-        np.asarray(matrix, dtype=np.float64),
-        precision=8,
-        suppress_small=True,
-        floatmode="fixed",
-    )
-
-
-@pytest.mark.simulation_exhaustive
-@pytest.mark.parametrize(
-    ("chromatic_shift_label", "chromatic_shift_scale"),
-    (
-        ("smaller", 0.5),
-        ("larger", 1.0),
-        ("larger_x2", 2.0),
-        ("larger_x4", 4.0),
-        ("larger_x8", 8.0),
-        ("larger_x16", 16.0),
-    ),
-)
-@pytest.mark.parametrize("axial_spacing_um", AXIAL_SPACING_UM)
-def test_simulation_chromatic_affine_recovery_cells_decon(
-    simulation_dataset_dirs: dict[str, Path],
-    simulation_api: dict[str, Any],
-    tmp_path: Path,
-    axial_spacing_um: str,
-    chromatic_shift_label: str,
-    chromatic_shift_scale: float,
-) -> None:
-    """
-    Verify iterative decoding recovers known synthetic chromatic affines.
-
-    Parameters
-    ----------
-    simulation_dataset_dirs : dict[str, Path]
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    tmp_path : Path
-        Function argument.
-    axial_spacing_um : str
-        Function argument.
-    chromatic_shift_label : str
-        Function argument.
-    chromatic_shift_scale : float
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
-
-    try:
-        from merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore import (
-            synthetic_chromatic_affines_zyx_um,
-        )
-    except Exception as exc:
-        pytest.skip(f"Synthetic chromatic helper unavailable: {exc!r}")
-
-    default_model = next(
-        (
-            (ufish_model_name, ufish_model)
-            for ufish_model_name, ufish_model in UFISH_MODELS
-            if ufish_model_name == DEFAULT_UFISH_MODEL
-        ),
-        None,
-    )
-    if default_model is None:
-        pytest.skip(f"Default U-FISH model is unavailable: {DEFAULT_UFISH_MODEL}")
-    ufish_model_name, ufish_model = default_model
-
-    source_case_dir = simulation_dataset_dirs["cells"] / axial_spacing_um
-    if not source_case_dir.exists():
-        pytest.skip(f"Dataset case missing: {source_case_dir}")
-
-    search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM[axial_spacing_um]
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
-    case_root = _prepare_case_workspace(source_case_dir, tmp_path)
-    case_label = (
-        f"cells-{axial_spacing_um}-{ufish_model_name}-decon-affine-"
-        f"synthetic-chromatic-{chromatic_shift_label}"
-    )
-    setup_timings = _run_simulation_case_setup(
-        case_root,
-        simulation_api,
-        decon_readout=True,
-        ufish_model=ufish_model,
-        perform_deformable_registration=False,
-        case_label=case_label,
-        synthetic_chromatic_aberration=True,
-        synthetic_chromatic_aberration_scale=chromatic_shift_scale,
-    )
-    f1_results, _decode_timings, performance_metrics = _run_simulation_decode_and_f1(
-        case_root,
-        simulation_api,
-        search_radius,
-        feature_predictor_threshold=DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
-        lowpass_sigma=DEFAULT_LOWPASS_SIGMA,
-        magnitude_threshold=default_magnitude_threshold,
-        minimum_pixels_per_rna=default_minimum_pixels,
-        case_label=case_label,
-        normalization_iterations=10,
-        estimate_chromatic_affines=True,
-    )
-    print(
-        (
-            f"[{case_label}] setup_seconds={sum(setup_timings.values()):.2f}, "
-            f"F1={performance_metrics['f1_score']:.4f}, results={f1_results}"
-        ),
-        flush=True,
-    )
-
-    datastore = simulation_api["qi2labDataStore"](
-        case_root / "sim_acquisition" / "qi2labdatastore",
-        validate=False,
-    )
-    calibration = datastore.load_chromatic_affine_transforms_zyx_um()
-    corrected_image = np.asarray(
-        datastore.load_local_corrected_image(tile=0, bit=0, return_future=False)
-    )
-    spacing = np.asarray(datastore.voxel_size_zyx_um, dtype=np.float32)
-    readout_relative_affines = synthetic_chromatic_affines_zyx_um(
-        tuple(int(v) for v in corrected_image.shape),
-        datastore.voxel_size_zyx_um,
-        (0.580, 0.670),
-        shift_scale=chromatic_shift_scale,
-    )
-    assert np.allclose(readout_relative_affines[0.580], np.eye(4, dtype=np.float32))
-    red_radial_scale = readout_relative_affines[0.670][1, 1]
-    assert red_radial_scale < 1.0
-
-    expected_affines = {
-        0.580: np.eye(4, dtype=np.float32),
-        0.670: readout_relative_affines[0.670],
-    }
-    recovered_red_to_green = datastore.load_chromatic_affine_transform_zyx_um(
-        wavelength_um=0.670
-    )
-    print(
-        (
-            f"[{case_label}] actual_green_readout_reference_zyx_um=\n"
-            f"{_format_matrix_fixed(readout_relative_affines[0.580])}\n"
-            f"[{case_label}] actual_red_to_green_zyx_um=\n"
-            f"{_format_matrix_fixed(readout_relative_affines[0.670])}\n"
-            f"[{case_label}] expected_red_to_green_zyx_um=\n"
-            f"{_format_matrix_fixed(expected_affines[0.670])}\n"
-            f"[{case_label}] recovered_red_to_green_zyx_um=\n"
-            f"{_format_matrix_fixed(recovered_red_to_green)}"
-        ),
-        flush=True,
-    )
-
-    shape = np.asarray(corrected_image.shape, dtype=np.float32)
-    source_points_px = np.asarray(
-        [
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, shape[2] - 1.0],
-            [0.0, shape[1] - 1.0, 0.0],
-            [0.0, shape[1] - 1.0, shape[2] - 1.0],
-            [shape[0] - 1.0, 0.0, 0.0],
-            [shape[0] - 1.0, 0.0, shape[2] - 1.0],
-            [shape[0] - 1.0, shape[1] - 1.0, 0.0],
-            [shape[0] - 1.0, shape[1] - 1.0, shape[2] - 1.0],
-            (shape - 1.0) / 2.0,
-        ],
-        dtype=np.float32,
-    )
-    source_points_um = source_points_px * spacing
-
-    expected_f1 = STANDARD_EXPECTED_F1_SCORES[("cells", axial_spacing_um)]
-    assert performance_metrics["f1_score"] >= expected_f1 - 0.03
-    reference_affine = datastore.load_chromatic_affine_transform_zyx_um(
-        wavelength_um=0.580
-    )
-    np.testing.assert_allclose(reference_affine, np.eye(4), atol=1e-6)
-
-    radial_shifts_px = {}
-    for wavelength in (0.670,):
-        recovered = recovered_red_to_green
-        assert not np.allclose(recovered, np.eye(4, dtype=np.float32))
-        assert recovered[1, 1] < 1.0
-        assert recovered[2, 2] < 1.0
-
-        expected_points_um = _apply_affine_to_points(
-            expected_affines[wavelength],
-            source_points_um,
-        )
-        recovered_points_um = _apply_affine_to_points(recovered, source_points_um)
-        error_px = (recovered_points_um - expected_points_um) / spacing
-        xy_error_px = np.linalg.norm(error_px[:, 1:3], axis=1)
-
-        reference_points_um = source_points_um
-        expected_shift_px = (expected_points_um - reference_points_um) / spacing
-        recovered_shift_px = (recovered_points_um - reference_points_um) / spacing
-        expected_radial_shift = np.linalg.norm(expected_shift_px[:, 1:3], axis=1)
-        recovered_radial_shift = np.linalg.norm(recovered_shift_px[:, 1:3], axis=1)
-        radial_tolerance_px = max(0.75, 0.25 * float(np.max(expected_radial_shift)))
-
-        assert float(np.max(xy_error_px)) <= radial_tolerance_px
-        assert float(np.max(np.abs(error_px[:, 0]))) <= 0.5
-
-        expected_z_translation_px = float(
-            expected_affines[wavelength][0, 3] / spacing[0]
-        )
-        assert float(np.max(recovered_radial_shift)) > 0.0
-        if abs(expected_z_translation_px) > 0.5:
-            assert recovered[0, 3] < 0.0
-            assert np.sign(float(np.mean(recovered[0, 3]))) == np.sign(
-                float(expected_affines[wavelength][0, 3])
-            )
-        radial_shifts_px[wavelength] = float(np.max(recovered_radial_shift))
-        assert radial_shifts_px[wavelength] == pytest.approx(
-            float(np.max(expected_radial_shift)),
-            abs=radial_tolerance_px,
-        )
-
-    assert radial_shifts_px[0.670] > 0.0
-    assert calibration["channels"]["wavelength_0.580000"]["status"] == (
-        "identity_reference"
-    )
-    assert calibration["channels"]["wavelength_0.670000"]["status"] == (
-        "affine_estimated"
     )
 
 
@@ -1710,28 +1410,25 @@ def test_simulation_exhaustive_matrix(
         simulation_full_case_result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     )
     case_spec = simulation_full_case_result["case_spec"]
-    ufish_model_name = case_spec["ufish_model_name"]
 
     assert datastore_path.exists()
     assert len(simulation_full_case_result["results"]) == len(
         FEATURE_PREDICTOR_THRESHOLDS
     )
-    collect_only = COLLECT_FULL_BASELINES or ufish_model_name != DEFAULT_UFISH_MODEL
     for result in simulation_full_case_result["results"]:
         assert isinstance(result["f1_results"], dict)
         assert RESULT_KEYS.issubset(result["f1_results"])
-        if not collect_only:
-            expected_f1 = FULL_EXPECTED_F1_SCORES[
-                (
-                    case_spec["dataset_variant"],
-                    case_spec["axial_spacing_um"],
-                    case_spec["preprocess_mode"],
-                    result["feature_predictor_threshold"],
-                )
-            ]
-            assert result["performance_metrics"]["f1_score"] == pytest.approx(
-                expected_f1, abs=F1_ABS_TOLERANCE
+        expected_f1 = FULL_EXPECTED_F1_SCORES[
+            (
+                case_spec["dataset_variant"],
+                case_spec["axial_spacing_um"],
+                case_spec["preprocess_mode"],
+                result["feature_predictor_threshold"],
             )
+        ]
+        assert result["performance_metrics"]["f1_score"] == pytest.approx(
+            expected_f1, abs=F1_ABS_TOLERANCE
+        )
         assert result["performance_metrics"]["true_positives"] >= 0
         assert result["performance_metrics"]["false_positives"] >= 0
         assert result["performance_metrics"]["false_negatives"] >= 0
