@@ -381,7 +381,9 @@ def convert_data(
         channel_psfs.append(psf)
 
     # initialize datastore
-    datastore_path = qi2lab_datastore_path(root_path) if output_path is None else output_path
+    datastore_path = (
+        qi2lab_datastore_path(root_path) if output_path is None else output_path
+    )
     existing_store = datastore_path.exists()
     datastore = qi2labDataStore(datastore_path)
 

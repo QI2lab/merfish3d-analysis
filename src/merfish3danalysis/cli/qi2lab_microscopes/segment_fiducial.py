@@ -83,7 +83,10 @@ def run_cellpose(
     spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
 
     max_projection_path = (
-        datastore_path / "segmentation" / "cellpose" / "fiducial_max_projection.ome.tiff"
+        datastore_path
+        / "segmentation"
+        / "cellpose"
+        / "fiducial_max_projection.ome.tiff"
     )
     if max_projection_path.exists():
         print(
