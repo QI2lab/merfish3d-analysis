@@ -85,7 +85,7 @@ import rtree
 from cucim.skimage.measure import label
 from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter
+from cupyx.scipy.ndimage import gaussian_filter, grey_dilation
 from cuvs.distance import pairwise_distance
 from roifile import roiread
 from scipy.spatial import cKDTree
@@ -100,7 +100,6 @@ DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
 DEFAULT_2D_MINIMUM_PIXELS = 7.0
 DEFAULT_3D_MINIMUM_PIXELS = 16.0
-DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS = 10.0
 
 # filter warning from skimage
 warnings.filterwarnings(
@@ -184,7 +183,6 @@ def decode_tiles_worker(
     gpu_id: int,
     merfish_bits: int,
     verbose: int,
-    zstride_level: int,
     decode_mode: Literal["auto", "2d", "3d"],
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
@@ -207,8 +205,6 @@ def decode_tiles_worker(
         Function argument.
     verbose : int
         Function argument.
-    zstride_level : int
-        Decode-time z stride.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     lowpass_sigma : Sequence[float]
@@ -243,7 +239,6 @@ def decode_tiles_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
-        zstride_level=zstride_level,
         decode_mode=decode_mode,
     )
 
@@ -292,7 +287,6 @@ def _optimize_norm_worker(
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
-    zstride_level: int,
     decode_mode: Literal["auto", "2d", "3d"],
     temp_dir: Path,
     iteration: int,
@@ -315,8 +309,6 @@ def _optimize_norm_worker(
         Function argument.
     merfish_bits : int
         Function argument.
-    zstride_level : int
-        Decode-time z stride.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     temp_dir : Path
@@ -356,7 +348,6 @@ def _optimize_norm_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
-        zstride_level=zstride_level,
         decode_mode=decode_mode,
     )
 
@@ -413,9 +404,6 @@ class PixelDecoder:
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.
-    zstride_level : int, default 0
-        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2 keep
-        planes 0, N, 2N...
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Connected-component and filtering mode. ``auto`` follows the datastore
         microscope type.
@@ -433,7 +421,6 @@ class PixelDecoder:
         verbose: int = 1,
         use_mask: bool | None = False,
         z_range: Sequence[int] | None = None,
-        zstride_level: int = 0,
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
         estimate_chromatic_affines: bool = False,
     ) -> None:
@@ -454,8 +441,6 @@ class PixelDecoder:
             Function argument.
         z_range : Sequence[int] | None
             Function argument.
-        zstride_level : int
-            Function argument.
         decode_mode : Literal['auto', '2d', '3d']
             Function argument.
         estimate_chromatic_affines : bool
@@ -472,15 +457,11 @@ class PixelDecoder:
 
         self._n_merfish_bits = merfish_bits
 
-        if zstride_level < 0:
-            raise ValueError("zstride_level must be greater than or equal to 0.")
         if decode_mode not in {"auto", "2d", "3d"}:
             raise ValueError("decode_mode must be one of 'auto', '2d', or '3d'.")
 
         self._decode_mode = decode_mode
         self._estimate_chromatic_affines = bool(estimate_chromatic_affines)
-        self._zstride_level = int(zstride_level)
-        self._zstride = max(1, int(zstride_level))
         if decode_mode == "auto":
             effective_decode_mode = (
                 "2d" if self._datastore.microscope_type == "2D" else "3d"
@@ -493,18 +474,14 @@ class PixelDecoder:
             self._is_3D = False
         else:
             self._is_3D = True
-        self._decode_run_key = (
-            None
-            if self._zstride <= 1
-            else f"zstride_{self._zstride:02d}_{effective_decode_mode}"
-        )
+        self._decode_run_key = None
         if z_range is None:
             self._z_crop = False
             self._z_range = [0, None]
         else:
             self._z_crop = True
             self._z_range = [z_range[0], z_range[1]]
-        self._z_slice = slice(self._z_range[0], self._z_range[1], self._zstride)
+        self._z_slice = slice(self._z_range[0], self._z_range[1])
 
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
@@ -850,7 +827,6 @@ class PixelDecoder:
                 "global",
                 cp.asnumpy(normalization_vector).astype(np.float32),
                 cp.asnumpy(background_vector).astype(np.float32),
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -944,7 +920,6 @@ class PixelDecoder:
                     "iterative",
                     old_iterative_normalization_vector.astype(np.float32),
                     old_iterative_background_vector.astype(np.float32),
-                    zstride_level=self._zstride,
                     decode_mode=self._effective_decode_mode,
                 )
                 return
@@ -1024,7 +999,6 @@ class PixelDecoder:
                 "iterative",
                 barcode_based_normalization_vector.astype(np.float32),
                 barcode_based_background_vector.astype(np.float32),
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -1047,7 +1021,6 @@ class PixelDecoder:
                 "iterative",
                 barcode_based_normalization_vector,
                 barcode_based_background_vector,
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -1097,6 +1070,18 @@ class PixelDecoder:
         ].reset_index(drop=True)
         if barcode_table.empty:
             return
+        if "distance_min" in barcode_table.columns:
+            distances = barcode_table["distance_min"].to_numpy(dtype=np.float64)
+            finite_distances = np.isfinite(distances)
+            if int(np.sum(finite_distances)) >= 4 * int(min_pairs):
+                distance_threshold = float(
+                    np.nanpercentile(distances[finite_distances], 25)
+                )
+                high_confidence = finite_distances & (distances <= distance_threshold)
+                if int(np.sum(high_confidence)) >= int(min_pairs):
+                    barcode_table = barcode_table.loc[high_confidence].reset_index(
+                        drop=True
+                    )
 
         bit_wavelengths = {}
         bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
@@ -1237,6 +1222,7 @@ class PixelDecoder:
                 target_points,
                 weights=pair_weights,
                 min_pairs=min_pairs,
+                residual_threshold_um=max(0.35, 0.5 * float(spacing[0])),
             )
             diagnostics["candidate_pairs"] = int(source_points.shape[0])
             edge_diagnostics[wavelength_pair] = diagnostics
@@ -1508,7 +1494,7 @@ class PixelDecoder:
         if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
             raise ValueError(
                 "decode_mode='3d' requires at least two z planes after applying "
-                "z_range and zstride_level."
+                "z_range."
             )
         voxel_size_zyx_um = self._datastore.voxel_size_zyx_um
         self._pixel_size = voxel_size_zyx_um[1]
@@ -1641,21 +1627,13 @@ class PixelDecoder:
     def _effective_lowpass_sigma(
         self, sigma: Sequence[float] | None
     ) -> tuple[float, float, float] | None:
-        """
-        Resolve lowpass sigma in the sampled decoding volume.
-
-        Public decode arguments are expressed in source-image voxel units. For
-        strided 3D decoding, the sampled z axis has fewer planes, so the z sigma
-        must be divided by the stride to preserve the same physical smoothing.
-        """
+        """Return a validated sigma tuple for lowpass filtering."""
 
         if sigma is None:
             return None
         sigma_zyx = tuple(float(v) for v in sigma)
         if len(sigma_zyx) != 3:
             raise ValueError("lowpass_sigma must contain three values: z, y, x.")
-        if self._is_3D and self._zstride > 1:
-            sigma_zyx = (sigma_zyx[0] / float(self._zstride), *sigma_zyx[1:])
         return sigma_zyx
 
     def _default_minimum_pixels(self) -> float:
@@ -1663,8 +1641,6 @@ class PixelDecoder:
 
         if not self._is_3D:
             return DEFAULT_2D_MINIMUM_PIXELS
-        if self._zstride > 1:
-            return DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS
         return DEFAULT_3D_MINIMUM_PIXELS
 
     @staticmethod
@@ -2276,7 +2252,7 @@ class PixelDecoder:
 
     def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
         """
-        Map z coordinates from the strided decoding volume back to source planes.
+        Map z coordinates from a cropped decoding volume back to source planes.
 
         Parameters
         ----------
@@ -2289,7 +2265,7 @@ class PixelDecoder:
             Z coordinate in the source image.
         """
 
-        return float(self._z_range[0]) + decoded_z * float(self._zstride)
+        return float(self._z_range[0]) + decoded_z
 
     def _add_on_bit_weighted_centroids(
         self,
@@ -2338,7 +2314,12 @@ class PixelDecoder:
         region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
         fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
         labels_cp = codewords_label_image.astype(cp.int32, copy=False)
+        z_support = min(7, labels_cp.shape[0] if labels_cp.ndim == 3 else 1)
+        if z_support % 2 == 0:
+            z_support -= 1
+        centroid_labels_cp = grey_dilation(labels_cp, size=(z_support, 1, 1))
         labels_flat = labels_cp.ravel()
+        centroid_labels_flat = centroid_labels_cp.ravel()
         max_label = int(cp.max(labels_cp).get()) if labels_cp.size else 0
         if max_label < 1:
             return pd.concat([df_barcode, extra_df], axis=1)
@@ -2364,22 +2345,22 @@ class PixelDecoder:
             )
             weights_flat = bit_image.ravel()
             weight_by_label = cp.bincount(
-                labels_flat,
+                centroid_labels_flat,
                 weights=weights_flat,
                 minlength=minlength,
             )
             z_sum_by_label = cp.bincount(
-                labels_flat,
+                centroid_labels_flat,
                 weights=(bit_image * z_coords).ravel(),
                 minlength=minlength,
             )
             y_sum_by_label = cp.bincount(
-                labels_flat,
+                centroid_labels_flat,
                 weights=(bit_image * y_coords).ravel(),
                 minlength=minlength,
             )
             x_sum_by_label = cp.bincount(
-                labels_flat,
+                centroid_labels_flat,
                 weights=(bit_image * x_coords).ravel(),
                 minlength=minlength,
             )
@@ -2406,7 +2387,7 @@ class PixelDecoder:
             )
             centers[invalid_centers] = fallback[invalid_centers]
 
-            if self._z_crop or self._zstride != 1:
+            if self._z_crop:
                 centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
 
             area = cp.asnumpy(area_by_label[active_labels]).astype(
@@ -2652,7 +2633,7 @@ class PixelDecoder:
                     on_sel,
                 )
 
-            if self._z_crop or self._zstride != 1:
+            if self._z_crop:
                 df_barcode["z"] = self._decoded_z_to_source_z(df_barcode["z"])
 
             df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
@@ -4224,7 +4205,6 @@ class PixelDecoder:
                         subset,
                         0,
                         self._n_merfish_bits,
-                        self._zstride_level,
                         self._decode_mode,
                         iteration_temp_dir,
                         iteration,
@@ -4339,7 +4319,6 @@ class PixelDecoder:
                     0,
                     self._n_merfish_bits,
                     self._verbose,
-                    self._zstride_level,
                     self._decode_mode,
                     lowpass_sigma,
                     magnitude_threshold,

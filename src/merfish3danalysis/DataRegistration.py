@@ -1712,7 +1712,7 @@ class DataRegistration:
 
         if create_max_proj_tiff:
             projection_start_time = timeit.default_timer()
-            loaded = self._datastore.load_global_fidicual_image(return_future=False)
+            loaded = self._datastore.load_global_fiducial_image(return_future=False)
             if loaded is None:
                 raise RuntimeError(
                     "Fused fiducial image was not readable after fusion."
