@@ -1,15 +1,20 @@
 """
-Register qi2lab 3D MERFISH data using cross-correlation and optical flow.
+Register qi2lab 3D MERFISH data using multiview-stitcher.
 
-This module enables the registration of MERFISH datasets by utilizing
-cross-correlation and optical flow techniques.
+This module registers fiducial rounds to the first fiducial round, saves the
+unwarped deconvolved readout data and U-FISH predictions, and records the
+transforms needed by pixel decoding. If enabled, SOFIMA estimates a residual
+deformable field after affine registration. The field is saved as an
+``(3, z, y, x)`` XYZ-channel map whose vectors point from round001 reference
+pixels toward the affine-initialized moving round; the map origin is the
+SOFIMA patch center, not the image corner.
 
 History:
 --------
 - **2025/07**:
     - Implement anistropic downsampling for registration.
     - Implement RLGC deconvolution.
-    - Implement new GPU based pixel-warping strategy using warpfield
+    - Implement GPU based pixel-warping strategy.
     - Implement multi-GPU processing.
 - **2024/12**: Refactor repo structure.
 - **2024/08**:
@@ -39,14 +44,18 @@ warnings.filterwarnings(
 
 import builtins
 import gc
+import queue
+import timeit
+import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import SimpleITK as sitk
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.sofima_registration import SofimaRegistrationConfig
 
 UFISH_MODEL_ALIASES = {
     "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
@@ -59,6 +68,87 @@ UFISH_MODEL_ALIASES = {
 DEFAULT_UFISH_MODEL = "simfish"
 
 
+@dataclass(frozen=True)
+class GlobalRegistrationConfig:
+    """Explicit multiview-stitcher global registration parameters."""
+
+    registration_binning_zyx: tuple[int, int, int] = (3, 6, 6)
+    reg_channel_index: int = 0
+    transform_key: str = "stage_metadata"
+    new_transform_key: str = "global_registered"
+    pre_registration_pruning_method: str = "keep_axis_aligned"
+    post_registration_do_quality_filter: bool = True
+    reference_view: int = 0
+    transform: str = "translation"
+    n_parallel_pairwise_regs: int = 1
+    dask_scheduler: str = "single-threaded"
+    affine_round_decimals: int | None = 2
+
+    @property
+    def registration_binning(self) -> dict[str, int]:
+        """Return binning keyed by multiview-stitcher spatial dimension name."""
+
+        return {
+            "z": int(self.registration_binning_zyx[0]),
+            "y": int(self.registration_binning_zyx[1]),
+            "x": int(self.registration_binning_zyx[2]),
+        }
+
+
+@dataclass(frozen=True)
+class GlobalFusionConfig:
+    """Explicit multiview-stitcher global fusion parameters."""
+
+    n_batch: int = 20
+    n_jobs: int | None = None
+    joblib_backend: str = "threading"
+    output_chunksize: int = 512
+    overlap_in_pixels: int = 64
+    backend: str = "cupy"
+    output_on_backend: bool = False
+
+
+def _registration_diag(message: str, *, enabled: bool) -> None:
+    """
+    Print one timestamped registration diagnostic message when enabled.
+
+    Parameters
+    ----------
+    message : str
+        Diagnostic message body.
+    enabled : bool
+        If True, print the diagnostic message.
+
+    Returns
+    -------
+    None
+        The message is printed only when diagnostics are enabled.
+    """
+
+    if enabled:
+        print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
+
+
+def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
+    """
+    Restrict a spawned worker process to one physical CUDA device.
+
+    Parameters
+    ----------
+    gpu_id : int
+        Physical GPU index assigned by the parent process.
+
+    Returns
+    -------
+    int
+        Local CUDA device index visible inside the restricted worker. This is
+        always 0 after setting ``CUDA_VISIBLE_DEVICES``.
+    """
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_id))
+    return 0
+
+
 def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
     """
     Resolve a U-FISH model alias or path without requiring U-FISH imports.
@@ -66,12 +156,14 @@ def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
     Parameters
     ----------
     model : str | Path | None
-        Function argument.
+        U-FISH model alias, weights filename, local path, or None to use the
+        default model.
 
     Returns
     -------
     Path | str | None
-        Function result.
+        Existing local path when one is found; otherwise a U-FISH weights file
+        name accepted by ``UFish.load_weights``.
     """
 
     if model is None:
@@ -103,14 +195,15 @@ def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
     Parameters
     ----------
     ufish : Any
-        Function argument.
+        U-FISH instance.
     model : str | Path | None
-        Function argument.
+        U-FISH model alias, weights filename, local path, or None to use the
+        default model.
 
     Returns
     -------
     None
-        Function result.
+        The weights are loaded into ``ufish`` in place.
     """
 
     weights = _resolve_ufish_weights_path(model)
@@ -130,14 +223,15 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     Parameters
     ----------
     psfs : Any
-        Function argument.
+        PSF container. This may be a list of arrays or a stacked numpy-like
+        array whose first axis indexes channels.
     psf_idx : int
-        Function argument.
+        Channel PSF index to return.
 
     Returns
     -------
-    np.ndarray
-        Function result.
+    numpy.ndarray
+        Selected PSF as a float32 array.
     """
 
     if isinstance(psfs, list):
@@ -155,6 +249,28 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     return np.asarray(psf_array[psf_idx], dtype=np.float32)
 
 
+def _release_worker_gpu_memory(cp: Any) -> None:
+    """
+    Release cached CuPy allocations in a worker process.
+
+    Parameters
+    ----------
+    cp : Any
+        Imported CuPy module for the worker process.
+
+    Returns
+    -------
+    None
+        The current CUDA stream is synchronized and CuPy memory pools are
+        released.
+    """
+
+    cp.cuda.Stream.null.synchronize()
+    cp.get_default_memory_pool().free_all_blocks()
+    cp.get_default_pinned_memory_pool().free_all_blocks()
+    gc.collect()
+
+
 def _run_chunked_rlgc_remembering_crop(
     dr: Any,
     chunked_rlgc: Any,
@@ -169,41 +285,52 @@ def _run_chunked_rlgc_remembering_crop(
     Parameters
     ----------
     dr : Any
-        Function argument.
+        DataRegistration-like object containing the current cached
+        ``_crop_yx_decon`` value.
     chunked_rlgc : Any
-        Function argument.
+        RLGC callable. It must accept ``on_successful_crop_yx``.
     image : np.ndarray
-        Function argument.
+        Image to deconvolve.
     psf : np.ndarray
-        Function argument.
+        PSF to use for deconvolution.
     gpu_id : int
-        Function argument.
-    release_memory : bool
-        Function argument.
+        CUDA device index.
+    release_memory : bool, default=False
+        If True, ask RLGC to release its CuPy memory pools before returning.
 
     Returns
     -------
-    np.ndarray
-        Function result.
+    numpy.ndarray
+        Deconvolved image returned by ``chunked_rlgc``.
     """
+
+    image_arr = np.asarray(image)
+    if image_arr.ndim == 2:
+        image_max_yx = max(image_arr.shape)
+    else:
+        image_max_yx = max(image_arr.shape[-2:])
 
     def _remember_successful_crop(successful_crop_yx: int) -> None:
         """
-        Remember successful crop.
+        Cache the successful RLGC crop size on the registration object.
 
         Parameters
         ----------
         successful_crop_yx : int
-            Function argument.
+            Lateral crop size that completed without GPU memory fallback.
 
         Returns
         -------
         None
-            Function result.
+            The crop size is stored on ``dr``.
         """
         previous_crop_yx = int(dr._crop_yx_decon)
+        requested_crop_yx = min(previous_crop_yx, int(image_max_yx))
+        if int(successful_crop_yx) >= requested_crop_yx:
+            return
+
         dr._crop_yx_decon = int(successful_crop_yx)
-        if successful_crop_yx < previous_crop_yx and dr._verbose >= 1:
+        if dr._verbose >= 1:
             print(
                 time_stamp(),
                 "RLGC reduced crop_yx after GPU memory fallback: "
@@ -221,263 +348,473 @@ def _run_chunked_rlgc_remembering_crop(
     )
 
 
-def _apply_first_fiducial_on_gpu(dr, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _load_deconvolve_fiducial_round(
+    dr,  # noqa: ANN001
+    round_id: str,
+    gpu_id: int,
+    chunked_rlgc: Any,
+) -> np.ndarray:
     """
-    Apply first fiducial on gpu.
+    Load and optionally deconvolve one fiducial round.
 
     Parameters
     ----------
-    dr : Any
-        Function argument.
+    dr : DataRegistration
+        Registration object containing datastore and deconvolution settings.
+    round_id : str
+        Fiducial round identifier to load.
     gpu_id : int
-        Function argument.
+        CUDA device index used for RLGC.
+    chunked_rlgc : Any
+        RLGC function imported in the process using this helper.
 
     Returns
     -------
-    bool
-        Function result.
+    numpy.ndarray
+        Deconvolved or copied fiducial image as ``uint16``.
     """
-    import cupy as cp
 
-    cp.cuda.Device(gpu_id).use()
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
-
-    raw0 = dr._datastore.load_local_corrected_image(
-        tile=dr._tile_id, round=0, return_future=False
+    raw = dr._datastore.load_local_corrected_image(
+        tile=dr._tile_id, round=round_id, return_future=False
     )
-
-    ref_image_decon = _run_chunked_rlgc_remembering_crop(
-        dr=dr,
-        chunked_rlgc=chunked_rlgc,
-        image=raw0,
-        psf=_resolve_psf(dr._psfs, 0),
-        gpu_id=0,
+    _registration_diag(
+        "fiducial_decon_start "
+        f"tile={dr._tile_id} round={round_id} "
+        f"raw_shape={tuple(int(v) for v in raw.shape)}",
+        enabled=dr._registration_diagnostics,
     )
-
-    dr._datastore.save_local_registered_image(
-        ref_image_decon.clip(0, 2**16 - 1).astype(np.uint16),
-        tile=dr._tile_id,
-        deconvolution=True,
-        round=dr._round_ids[0],
-    )
-    if dr._verbose >= 1:
-        print(
-            time_stamp(),
-            f"Finished fiducial tile id: {dr._tile_id}; round id: round001.",
+    start_time = timeit.default_timer()
+    if dr._decon_fiducial:
+        decon = _run_chunked_rlgc_remembering_crop(
+            dr=dr,
+            chunked_rlgc=chunked_rlgc,
+            image=raw,
+            psf=_resolve_psf(dr._psfs, 0),
+            gpu_id=gpu_id,
+            release_memory=True,
         )
-
-    del raw0, ref_image_decon
+        decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
+    else:
+        decon = raw.copy().astype(np.uint16)
+    _registration_diag(
+        "fiducial_decon_done "
+        f"tile={dr._tile_id} round={round_id} "
+        f"input_shape={tuple(int(v) for v in raw.shape)} "
+        f"output_shape={tuple(int(v) for v in decon.shape)} "
+        f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+        enabled=dr._registration_diagnostics,
+    )
+    del raw
     gc.collect()
-    clear_rlgc_caches(clear_memory_pool=False)
-    cp.cuda.Stream.null.synchronize()
-    cp.get_default_memory_pool().free_all_blocks()
-    return True
+    return decon
 
 
-def _apply_fiducial_on_gpu(dr, round_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _process_fiducial_rounds_on_gpu(
+    dr,  # noqa: ANN001
+    round_list: list,
+    reference_image: np.ndarray,
+    gpu_id: int,
+    result_queue: Any,
+) -> None:
     """
-    Run the “deconvolve→rigid+optical-flow” loop for a subset of fiducial rounds on a single GPU.
+    Deconvolve, register, warp, and optionally save fiducials on one GPU.
 
     Parameters
     ----------
-    dr : Registration
-        DataRegistration instance (pickled into this process)
+    dr : DataRegistration
+        Registration object pickled into the worker process. The worker uses its
+        datastore, PSF list, deconvolution settings, and current tile id.
     round_list : list
-        round_ids to process on this GPU
+        Moving fiducial round identifiers assigned to this worker.
+    reference_image : numpy.ndarray
+        Round-1 deconvolved fiducial image in Z, Y, X order.
     gpu_id : int
-        physical GPU to bind in this process
+        CUDA device index visible within the worker process.
+    result_queue : multiprocessing.Queue
+        Queue used to send ``("result", round_id, crop_yx)`` messages back to
+        the parent. On failure the worker sends an ``"error"`` message
+        containing the formatted traceback.
+
+    Returns
+    -------
+    None
+        Results are saved to the datastore and status is returned through
+        ``result_queue``.
     """
+
+    assigned_gpu_id = int(gpu_id)
+    local_gpu_id = _restrict_worker_to_assigned_gpu(assigned_gpu_id)
+
+    import cupy as cp
     import torch
 
-    torch.cuda.set_device(gpu_id)
-    import cupy as cp
+    try:
+        torch.cuda.set_device(local_gpu_id)
+        cp.cuda.Device(local_gpu_id).use()
 
-    cp.cuda.Device(gpu_id).use()
+        from merfish3danalysis.utils.multiview_registration import (
+            register_pair_to_fixed,
+            warp_array_to_reference_gpu,
+        )
+        from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
-    from merfish3danalysis.utils.imageprocessing import downsample_image_anisotropic
-    from merfish3danalysis.utils.registration import (
-        apply_transform,
-        compute_rigid_transform,
-        compute_warpfield,
-    )
-    from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
+        reference_float = reference_image.astype(np.float32, copy=False)
+        for round_id in round_list:
+            decon = _load_deconvolve_fiducial_round(
+                dr=dr,
+                round_id=round_id,
+                gpu_id=local_gpu_id,
+                chunked_rlgc=chunked_rlgc,
+            )
+            clear_rlgc_caches(clear_memory_pool=True)
+            _release_worker_gpu_memory(cp)
 
-    for _r_idx, round_id in enumerate(round_list):
-        has_reg_decon_data = dr._has_valid_registered_image(round_id=round_id)
-
-        if not (has_reg_decon_data) or dr._overwrite_registered:
-            if dr._decon_fiducial:
-                ref_image_decon_float = dr._datastore.load_local_registered_image(
-                    tile=dr._tile_id, round=dr._round_ids[0], return_future=False
-                ).astype(np.float32)
-            else:
-                ref_image = dr._datastore.load_local_corrected_image(
-                    tile=dr._tile_id, round=dr._round_ids[0], return_future=False
-                )
-                ref_image_decon_float = ref_image.copy().astype(np.float32)
-                del ref_image
-
-            raw = dr._datastore.load_local_corrected_image(
-                tile=dr._tile_id, round=round_id, return_future=False
+            _registration_diag(
+                "fiducial_phase_registration_start "
+                f"tile={dr._tile_id} round={round_id} "
+                f"fixed_shape={tuple(int(v) for v in reference_image.shape)} "
+                f"moving_shape={tuple(int(v) for v in decon.shape)} "
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}",
+                enabled=dr._registration_diagnostics,
+            )
+            start_time = timeit.default_timer()
+            local_transform_zyx_um = register_pair_to_fixed(
+                reference_float,
+                decon.astype(np.float32, copy=False),
+                spacing_zyx_um=spacing_zyx_um,
+                diagnostics=dr._registration_diagnostics,
+            )
+            dr._datastore.save_local_round_transform_zyx_um(
+                transform_zyx_um=local_transform_zyx_um,
+                tile=dr._tile_id,
+                round=round_id,
+            )
+            _registration_diag(
+                "fiducial_phase_registration_done "
+                f"tile={dr._tile_id} round={round_id} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
             )
 
-            if dr._decon_fiducial:
-                fiducial_image = raw.copy()
-                del raw
-
-                mov_image_decon = _run_chunked_rlgc_remembering_crop(
-                    dr=dr,
-                    chunked_rlgc=chunked_rlgc,
-                    image=fiducial_image,
-                    psf=_resolve_psf(dr._psfs, 0),
-                    gpu_id=gpu_id,
+            if dr.save_all_fiducial_registered or dr._perform_deformable_registration:
+                warp_start_time = timeit.default_timer()
+                warped = warp_array_to_reference_gpu(
+                    decon,
+                    transform_zyx_um=local_transform_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    reference_shape=reference_image.shape,
+                    gpu_id=local_gpu_id,
+                    diagnostics=dr._registration_diagnostics,
                 )
-                mov_image_decon = mov_image_decon.clip(0, 2**16 - 1).astype(np.uint16)
-                del fiducial_image
-            else:
-                mov_image_decon = raw.copy().astype(np.uint16)
-                del raw
-
-            mov_image_decon_float = mov_image_decon.copy().astype(np.float32)
-            del mov_image_decon
-
-            if dr._datastore.microscope_type == "3D":
-                downsample_factors = [3, 9, 9]
-                if max(downsample_factors) > 1:
-                    ref_image_decon_float_ds = downsample_image_anisotropic(
-                        ref_image_decon_float, downsample_factors
-                    )
-                    mov_image_decon_float_ds = downsample_image_anisotropic(
-                        mov_image_decon_float, downsample_factors
-                    )
-                else:
-                    ref_image_decon_float_ds = ref_image_decon_float.copy()
-                    mov_image_decon_float_ds = mov_image_decon_float.copy()
-            else:
-                downsample_factors = [1, 3, 3]
-                if max(downsample_factors) > 1:
-                    ref_image_decon_float_ds = downsample_image_anisotropic(
-                        ref_image_decon_float, downsample_factors
-                    )
-                    mov_image_decon_float_ds = downsample_image_anisotropic(
-                        mov_image_decon_float, downsample_factors
-                    )
-                else:
-                    ref_image_decon_float_ds = ref_image_decon_float.copy()
-                    mov_image_decon_float_ds = mov_image_decon_float.copy()
-
-            _, lowres_xyz_shift = compute_rigid_transform(
-                ref_image_decon_float_ds,
-                mov_image_decon_float_ds,
-                downsample_factors=downsample_factors,
-                mask=None,
-                projection=None,
-                gpu_id=gpu_id,
-            )
-
-            xyz_shift = np.asarray(lowres_xyz_shift, dtype=np.float32)
-            xyz_shift_float = [round(float(v), 1) for v in lowres_xyz_shift]
-
-            initial_xyz_transform = sitk.TranslationTransform(3, xyz_shift_float)
-            warped_mov_image_decon_float = apply_transform(
-                ref_image_decon_float, mov_image_decon_float, initial_xyz_transform
-            )
-            del mov_image_decon_float
-            gc.collect()
-
-            mov_image_decon_float = warped_mov_image_decon_float.copy().astype(
-                np.float32
-            )
-            del warped_mov_image_decon_float
-            gc.collect()
-
-            dr._datastore.save_local_rigid_xform_xyz_px(
-                rigid_xform_xyz_px=xyz_shift, tile=dr._tile_id, round=round_id
-            )
-
-            if dr._perform_optical_flow:
-                data_registered, warp_field, block_size, block_stride = (
-                    compute_warpfield(
-                        ref_image_decon_float, mov_image_decon_float, gpu_id=gpu_id
-                    )
+                _registration_diag(
+                    "fiducial_affine_warp "
+                    f"tile={dr._tile_id} round={round_id} "
+                    f"shape={tuple(int(v) for v in decon.shape)} "
+                    f"elapsed_s={timeit.default_timer() - warp_start_time:.2f}",
+                    enabled=dr._registration_diagnostics,
                 )
 
-                dr._datastore.save_coord_of_xform_px(
-                    of_xform_px=warp_field,
-                    tile=dr._tile_id,
-                    block_size=block_size,
-                    block_stride=block_stride,
-                    round=round_id,
-                )
+                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
 
-                data_registered = data_registered.clip(0, 2**16 - 1).astype(np.uint16)
-
-                del warp_field
-                gc.collect()
-            else:
-                data_registered = mov_image_decon_float.clip(0, 2**16 - 1).astype(
-                    np.uint16
-                )
-
-            if dr.save_all_fiducial_registered:
                 dr._datastore.save_local_registered_image(
-                    registered_image=data_registered.astype(np.uint16),
+                    registered_image=registered_image,
                     tile=dr._tile_id,
                     deconvolution=dr._decon_fiducial,
                     round=round_id,
                 )
+                del warped, registered_image
+
             if dr._verbose >= 1:
                 print(
                     time_stamp(),
                     f"Finished fiducial tile id: {dr._tile_id}; round id: {round_id}.",
                 )
+            result_queue.put(("result", round_id, int(dr._crop_yx_decon)))
+            del decon
+            clear_rlgc_caches(clear_memory_pool=True)
+            _release_worker_gpu_memory(cp)
 
-            del data_registered
-            gc.collect()
-    try:
-        clear_rlgc_caches(clear_memory_pool=False)
-        cp.cuda.Stream.null.synchronize()
-        cp.get_default_memory_pool().free_all_blocks()
-        cp.get_default_pinned_memory_pool().free_all_blocks()
-        try:
-            import cupyx
-
-            cupyx.scipy.fft.clear_plan_cache()
-        except Exception:
-            pass
-        try:
-            cp.fft.config.get_plan_cache().clear()
-        except Exception:
-            pass
+        clear_rlgc_caches(clear_memory_pool=True)
+        _release_worker_gpu_memory(cp)
     except Exception:
-        pass
+        result_queue.put(("error", None, traceback.format_exc()))
+        raise
 
-    return True
 
-
-def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
+def _process_sofima_rounds_on_gpu(
+    dr,  # noqa: ANN001
+    round_list: list,
+    gpu_id: int,
+    result_queue: Any,
+) -> None:
     """
-    Run the “deconvolve→rigid+optical-flow→feature_predictor” loop for a subset of bits on a single GPU.
+    Estimate SOFIMA residual flow fields in an isolated GPU worker.
 
     Parameters
     ----------
     dr : DataRegistration
-        DataRegistration instance (pickled into this process)
-    bit_list : list
-        bit_ids to process on this GPU
+        Registration object pickled into the worker process.
+    round_list : list
+        Moving fiducial round identifiers assigned to this worker.
     gpu_id : int
-        physical GPU to bind in this process
+        Physical GPU index assigned by the parent process.
+    result_queue : multiprocessing.Queue
+        Queue used to send completion or error messages to the parent.
+
+    Returns
+    -------
+    None
+        SOFIMA flow fields are saved to the datastore.
     """
+
+    local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
+
+    import cupy as cp
+
+    try:
+        cp.cuda.Device(local_gpu_id).use()
+
+        from merfish3danalysis.utils.decode_warping import (
+            warp_image_with_sofima_metadata,
+        )
+        from merfish3danalysis.utils.sofima_registration import (
+            estimate_sofima_flow_field_xyz_px,
+        )
+
+        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
+        reference_round_id = dr._round_ids[0]
+        fixed = dr._datastore.load_local_registered_image(
+            tile=dr._tile_id,
+            round=reference_round_id,
+            return_future=False,
+        )
+        if fixed is None:
+            raise RuntimeError(
+                f"Missing affine registered reference fiducial for tile={dr._tile_id} "
+                f"round={reference_round_id}."
+            )
+        fixed = fixed.astype(np.float32, copy=False)
+
+        identity_transform = np.eye(4, dtype=np.float32)
+        for round_id in round_list:
+            moving_affine = dr._datastore.load_local_registered_image(
+                tile=dr._tile_id,
+                round=round_id,
+                return_future=False,
+            )
+            if moving_affine is None:
+                raise RuntimeError(
+                    f"Missing affine registered fiducial for tile={dr._tile_id} "
+                    f"round={round_id}."
+                )
+            moving_affine = moving_affine.astype(np.float32, copy=False)
+            _release_worker_gpu_memory(cp)
+
+            start_time = timeit.default_timer()
+            sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
+                fixed,
+                moving_affine,
+                config=dr._sofima_config,
+            )
+            dr._datastore.save_local_sofima_flow_field(
+                sofima_flow_field,
+                tile=dr._tile_id,
+                round=round_id,
+                reference_round=reference_round_id,
+                map_stride_zyx_px=metadata["map_stride_zyx_px"],
+                map_box_start_xyz_px=metadata["map_box_start_xyz_px"],
+                map_box_size_xyz_px=metadata["map_box_size_xyz_px"],
+                reference_shape_zyx_px=fixed.shape,
+                moving_shape_zyx_px=moving_affine.shape,
+                sofima_status=metadata.get("status", "ok"),
+                valid_flow_vectors=metadata.get("valid_flow_vectors"),
+                return_future=False,
+            )
+
+            if dr.save_all_fiducial_registered:
+                warped = warp_image_with_sofima_metadata(
+                    moving_affine,
+                    transform_zyx_um=identity_transform,
+                    spacing_zyx_um=spacing_zyx_um,
+                    sofima_flow_field_xyz_px=sofima_flow_field,
+                    flow_attrs=metadata,
+                    reference_shape=fixed.shape,
+                    gpu_id=local_gpu_id,
+                )
+                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
+                dr._datastore.save_local_registered_image(
+                    registered_image=registered_image,
+                    tile=dr._tile_id,
+                    deconvolution=dr._decon_fiducial,
+                    round=round_id,
+                )
+                del warped, registered_image
+
+            _registration_diag(
+                "fiducial_sofima_done "
+                f"tile={dr._tile_id} round={round_id} "
+                f"status={metadata.get('status', 'ok')} "
+                f"valid_flow_vectors={metadata.get('valid_flow_vectors')} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
+            )
+            result_queue.put(("result", round_id, None))
+            del moving_affine, sofima_flow_field
+            _release_worker_gpu_memory(cp)
+
+        del fixed
+        _release_worker_gpu_memory(cp)
+    except Exception:
+        result_queue.put(("error", None, traceback.format_exc()))
+        raise
+
+
+def _local_registered_fiducial_path(
+    datastore: qi2labDataStore,
+    tile_id: str,
+    round_id: str,
+) -> Path:
+    """
+    Return the registered fiducial OME-Zarr path for one tile and round.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Open datastore containing registered fiducial images.
+    tile_id : str
+        Tile identifier, such as ``tile0000``.
+    round_id : str
+        Round identifier, such as ``round001``.
+
+    Returns
+    -------
+    pathlib.Path
+        Path to ``registered_decon_data.ome.zarr``.
+    """
+
+    return datastore._image_store_path(
+        datastore._fiducial_root_path
+        / Path(tile_id)
+        / Path(round_id)
+        / Path("registered_decon_data")
+    )
+
+
+def _read_registered_fiducial_sim(
+    input_path: Path,
+    scale: dict[str, float],
+    translation: dict[str, float],
+    affine_zyx_px: Any,
+    transform_key: str,
+    ngff_utils: Any,
+    si_utils: Any,
+) -> Any:
+    """
+    Read one registered fiducial OME-Zarr as a SpatialImage.
+
+    Parameters
+    ----------
+    input_path : pathlib.Path
+        Local registered fiducial OME-Zarr path.
+    scale : dict[str, float]
+        Physical pixel spacing by spatial dimension.
+    translation : dict[str, float]
+        Stage-derived physical origin by spatial dimension.
+    affine_zyx_px : Any
+        Camera-to-stage affine transform loaded from datastore metadata.
+    transform_key : str
+        Transform key used for stage metadata in the returned SpatialImage.
+    ngff_utils : Any
+        ``multiview_stitcher.ngff_utils`` module.
+    si_utils : Any
+        ``multiview_stitcher.spatial_image_utils`` module.
+
+    Returns
+    -------
+    Any
+        SpatialImage with datastore stage metadata attached under
+        ``stage_metadata``.
+    """
+
+    sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
+        input_path,
+        resolution_level=0,
+        transform_key=transform_key,
+        use_dask=False,
+    )
+    return si_utils.get_sim_from_array(
+        sim_on_disk.data,
+        dims=sim_on_disk.dims,
+        scale=scale,
+        translation=translation,
+        affine=affine_zyx_px,
+        transform_key=transform_key,
+        c_coords=sim_on_disk.coords["c"].values if "c" in sim_on_disk.coords else None,
+        t_coords=sim_on_disk.coords["t"].values if "t" in sim_on_disk.coords else None,
+    )
+
+
+def _sim_fusion_summary(sim: Any) -> str:
+    """
+    Return a compact summary of one SpatialImage used for global fusion.
+
+    Parameters
+    ----------
+    sim : Any
+        SpatialImage-like object.
+
+    Returns
+    -------
+    str
+        Shape, dtype, chunk, and backend details for diagnostics.
+    """
+
+    data = getattr(sim, "data", None)
+    encoding = getattr(sim, "encoding", {}) or {}
+    attrs = getattr(sim, "attrs", {}) or {}
+    chunks = getattr(data, "chunks", None)
+    chunksize = getattr(data, "chunksize", None)
+    preferred_chunks = encoding.get("preferred_chunks")
+    zarr_chunks = attrs.get("_zarr_chunks")
+    return (
+        f"dims={tuple(getattr(sim, 'dims', ()))!r} "
+        f"shape={tuple(int(v) for v in getattr(sim, 'shape', ()))!r} "
+        f"dtype={getattr(data, 'dtype', None)} "
+        f"data_type={type(data).__module__}.{type(data).__name__} "
+        f"chunks={chunks!r} chunksize={chunksize!r} "
+        f"preferred_chunks={preferred_chunks!r} zarr_chunks={zarr_chunks!r}"
+    )
+
+
+def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
+    """
+    Deconvolve readout bits, run U-FISH, and save native-frame outputs.
+
+    Parameters
+    ----------
+    dr : DataRegistration
+        DataRegistration instance pickled into this process.
+    bit_list : list
+        Bit identifiers to process on this GPU.
+    gpu_id : int
+        CUDA device index visible within this worker process.
+
+    Returns
+    -------
+    bool
+        True after all assigned bits are processed.
+    """
+
+    local_gpu_id = _restrict_worker_to_assigned_gpu(gpu_id)
 
     import cupy as cp
     import torch
 
-    torch.cuda.set_device(gpu_id)
-    cp.cuda.Device(gpu_id).use()
+    torch.cuda.set_device(local_gpu_id)
+    cp.cuda.Device(local_gpu_id).use()
 
     import os
-
-    from warpfield.warp import warp_volume
 
     os.environ["ORT_LOG_SEVERITY_LEVEL"] = "3"
     import onnxruntime as ort
@@ -485,9 +822,9 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     ort.set_default_logger_severity(3)
     from ufish.api import UFish
 
-    from merfish3danalysis.utils.registration import apply_transform
     from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
 
+    spacing_zyx_um = dr._datastore.voxel_size_zyx_um
     for bit_id in bit_list:
         r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
         ex_wl, _em_wl = dr._datastore.load_local_wavelengths_um(
@@ -506,78 +843,82 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if reg_on_disk and feature_predictor_on_disk and not dr._overwrite_registered:
             continue
 
-        if reg_on_disk and not dr._overwrite_registered:
-            data_reg = dr._datastore.load_local_registered_image(
-                tile=dr._tile_id, bit=bit_id, return_future=False
-            ).astype(np.uint16, copy=False)
-        else:
+        if (
+            (not reg_on_disk)
+            or (not feature_predictor_on_disk)
+            or dr._overwrite_registered
+        ):
             # load data
             corrected_image = dr._datastore.load_local_corrected_image(
                 tile=dr._tile_id, bit=bit_id, return_future=False
             )
+            _registration_diag(
+                "bit_start "
+                f"tile={dr._tile_id} bit={bit_id} linked_round={dr._round_ids[r_idx]} "
+                f"raw_shape={tuple(int(v) for v in corrected_image.shape)} "
+                f"spacing_zyx_um={tuple(float(v) for v in spacing_zyx_um)}",
+                enabled=dr._registration_diagnostics,
+            )
 
             # deconvolution
             if dr._decon_readout:
+                start_time = timeit.default_timer()
                 decon_image = _run_chunked_rlgc_remembering_crop(
                     dr=dr,
                     chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
                     psf=_resolve_psf(dr._psfs, psf_idx),
-                    gpu_id=gpu_id,
+                    gpu_id=local_gpu_id,
                     release_memory=True,
                 )
                 decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
+                _registration_diag(
+                    "bit_decon "
+                    f"tile={dr._tile_id} bit={bit_id} "
+                    f"input_shape={tuple(int(v) for v in corrected_image.shape)} "
+                    f"output_shape={tuple(int(v) for v in decon_image.shape)} "
+                    f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                    enabled=dr._registration_diagnostics,
+                )
             else:
                 decon_image = corrected_image.copy()
 
-            # apply rigid + (optional) optical-flow if r_idx > 0
-            if r_idx > 0:
-                rigid_xyz_px = dr._datastore.load_local_rigid_xform_xyz_px(
-                    tile=dr._tile_id, round=dr._round_ids[r_idx]
-                )
-                shift_xyz = [float(v) for v in rigid_xyz_px]
-                xyz_tx = sitk.TranslationTransform(3, np.asarray(shift_xyz))
+            ufish = UFish(device=f"cuda:{local_gpu_id}")
+            _load_ufish_model(ufish, dr._ufish_model)
+            start_time = timeit.default_timer()
+            feature_predictor_loc, feature_predictor_data = ufish.predict(
+                decon_image, axes="zyx", blend_3d=False, batch_size=1
+            )
+            _registration_diag(
+                "bit_ufish "
+                f"tile={dr._tile_id} bit={bit_id} "
+                f"image_shape={tuple(int(v) for v in decon_image.shape)} "
+                f"spots={len(feature_predictor_loc)} "
+                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+                enabled=dr._registration_diagnostics,
+            )
+            feature_predictor_loc = feature_predictor_loc.rename(
+                columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
+            )
+            del ufish
+            torch.cuda.empty_cache()
+            gc.collect()
 
-                # apply rigid
-                decon_image_rigid = apply_transform(decon_image, decon_image, xyz_tx)
-                del decon_image
-
-                if dr._perform_optical_flow:
-                    warp_field, block_size, block_stride = (
-                        dr._datastore.load_coord_of_xform_px(
-                            tile=dr._tile_id,
-                            round=dr._round_ids[r_idx],
-                            return_future=False,
-                        )
-                    )
-
-                    block_size = cp.asarray(block_size, dtype=cp.float32)
-                    block_stride = cp.asarray(block_stride, dtype=cp.float32)
-                    decon_image_warped_cp = warp_volume(
-                        decon_image_rigid,
-                        warp_field,
-                        block_stride,
-                        cp.array(-block_size / block_stride / 2),
-                        out=None,
-                        gpu_id=gpu_id,
-                    )
-                    data_reg = cp.asnumpy(decon_image_warped_cp).astype(np.float32)
-                    del decon_image_warped_cp
-                    gc.collect()
-
-                else:
-                    data_reg = decon_image_rigid.copy()
-                    del decon_image_rigid
-                gc.collect()
-            else:
-                data_reg = decon_image.copy()
-                del decon_image
-                gc.collect()
+            data_reg = decon_image
+            _registration_diag(
+                "bit_save_unwarped "
+                f"tile={dr._tile_id} bit={bit_id} "
+                f"round={dr._round_ids[r_idx]} "
+                f"image_shape={tuple(int(v) for v in data_reg.shape)} "
+                f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
+                f"spots={len(feature_predictor_loc)}",
+                enabled=dr._registration_diagnostics,
+            )
 
             # clip to uint16
             data_reg = data_reg.clip(0, 2**16 - 1).astype(np.uint16)
 
-            # save registered readout immediately so overwrite does not depend on U-FISH
+            # Save unwarped readout immediately so overwrite does not depend on U-FISH.
             dr._datastore.save_local_registered_image(
                 data_reg,
                 tile=dr._tile_id,
@@ -585,43 +926,27 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 bit=bit_id,
             )
 
-        if (not feature_predictor_on_disk) or dr._overwrite_registered:
-            # UFISH
-            ufish = UFish(device=f"cuda:{gpu_id}")
-            _load_ufish_model(ufish, dr._ufish_model)
-            feature_predictor_loc, feature_predictor_data = ufish.predict(
-                data_reg, axes="zyx", blend_3d=False, batch_size=1
-            )
-
-            feature_predictor_loc = feature_predictor_loc.rename(
-                columns={"axis-0": "z", "axis-1": "y", "axis-2": "x"}
-            )
-            del ufish
-            gc.collect()
-
-            torch.cuda.empty_cache()
-            gc.collect()
-
             # feature_predictor ROI sums
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
                 """
-                Sum pixels in roi.
+                Sum image intensities in a fixed-size ROI centered on one spot.
 
                 Parameters
                 ----------
                 row : Any
-                    Function argument.
+                    Feature predictor spot row containing ``z``, ``y``, and
+                    ``x`` coordinates.
                 image : Any
-                    Function argument.
+                    Image from which to sample intensities.
                 roi_dims : Any
-                    Function argument.
+                    ROI shape in Z, Y, X order.
 
                 Returns
                 -------
-                Any
-                    Function result.
+                float
+                    Sum of pixel intensities inside the clipped ROI.
                 """
                 z, y, x = row["z"], row["y"], row["x"]
                 rz, ry, rx = roi_dims
@@ -693,11 +1018,13 @@ class DataRegistration:
         Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
         stitching.
     decon_readout: bool, default False
-        Deconvolve readout images before registration to fiducials.
+        Deconvolve readout images before saving unwarped readout data for
+        decode-time registration.
     overwrite_registered: bool, default False
         Overwrite existing registered data and registrations
-    perform_optical_flow: bool, default False
-        Perform optical flow registration
+    perform_deformable_registration: bool, default True
+        Estimate and save a residual SOFIMA deformable flow field after affine
+        fiducial registration.
     save_all_fiducial_registered: bool, default True
         Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
@@ -720,11 +1047,16 @@ class DataRegistration:
         decon_fiducial: bool = True,
         decon_readout: bool = False,
         overwrite_registered: bool = False,
-        perform_optical_flow: bool = True,
+        perform_deformable_registration: bool = True,
         save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
+        global_registration: bool = False,
+        registration_diagnostics: bool = False,
+        sofima_config: SofimaRegistrationConfig | None = None,
+        global_registration_config: GlobalRegistrationConfig | None = None,
+        global_fusion_config: GlobalFusionConfig | None = None,
         verbose: int = 1,
     ) -> None:
         """
@@ -733,25 +1065,45 @@ class DataRegistration:
         Parameters
         ----------
         datastore : qi2labDataStore
-            Function argument.
+            Datastore containing corrected images, PSFs, metadata, and output
+            groups.
         decon_fiducial : bool
-            Function argument.
+            If True, deconvolve fiducial images before registration.
         decon_readout : bool
-            Function argument.
+            If True, deconvolve readout images before U-FISH prediction and
+            warping.
         overwrite_registered : bool
-            Function argument.
-        perform_optical_flow : bool
-            Function argument.
+            If True, regenerate registered images and feature predictor outputs
+            even when they already exist.
+        perform_deformable_registration : bool
+            If True, estimate a SOFIMA flow field after affine registration.
+            The saved field uses channel order X, Y, Z; spatial order Z, Y, X;
+            and a patch-centered map origin. Pixel decoding composes this field
+            with affine and chromatic transforms when readout images are loaded.
         save_all_fiducial_registered : bool
-            Function argument.
+            If True, save warped fiducial image volumes for all rounds. The
+            first fiducial round is always saved.
         num_gpus : int
-            Function argument.
+            Number of GPUs available for deconvolution and readout processing.
         crop_yx_decon : int
-            Function argument.
+            Initial lateral RLGC crop size. GPU memory fallback can reduce this
+            value and cache the successful size.
         ufish_model : str | Path | None
-            Function argument.
+            U-FISH model alias, weights filename, local path, or None for the
+            default model.
+        global_registration : bool, default=False
+            If True, run global tile registration and fused fiducial OME-Zarr
+            generation after local tile preprocessing.
+        registration_diagnostics : bool, default=False
+            If True, print detailed registration diagnostics.
+        sofima_config : SofimaRegistrationConfig or None, default=None
+            Explicit SOFIMA deformable registration parameters.
+        global_registration_config : GlobalRegistrationConfig or None, default=None
+            Explicit multiview-stitcher global registration parameters.
+        global_fusion_config : GlobalFusionConfig or None, default=None
+            Explicit multiview-stitcher global fusion parameters.
         verbose : int
-            Function argument.
+            Verbosity level for progress messages.
         """
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
@@ -761,13 +1113,20 @@ class DataRegistration:
         self._psfs = self._datastore.channel_psfs
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
-        self._perform_optical_flow = perform_optical_flow
+        self._perform_deformable_registration = perform_deformable_registration
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
         self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
+        self._global_registration = global_registration
+        self._registration_diagnostics = bool(registration_diagnostics)
+        self._sofima_config = sofima_config or SofimaRegistrationConfig()
+        self._global_registration_config = (
+            global_registration_config or GlobalRegistrationConfig()
+        )
+        self._global_fusion_config = global_fusion_config or GlobalFusionConfig()
         self._original_print = builtins.print
         self._verbose = verbose
 
@@ -844,28 +1203,28 @@ class DataRegistration:
                 self._tile_id = value
 
     @property
-    def perform_optical_flow(self) -> bool:
-        """Get the perform_optical_flow flag.
+    def perform_deformable_registration(self) -> bool:
+        """Get the deformable registration flag.
 
         Returns
         -------
-        perform_optical_flow: bool
-            Perform optical flow registration
+        bool
+            True when SOFIMA deformable flow-field registration is enabled.
         """
 
-        return self._perform_optical_flow
+        return self._perform_deformable_registration
 
-    @perform_optical_flow.setter
-    def perform_optical_flow(self, value: bool) -> None:
-        """Set the perform_optical_flow flag.
+    @perform_deformable_registration.setter
+    def perform_deformable_registration(self, value: bool) -> None:
+        """Set the deformable registration flag.
 
         Parameters
         ----------
         value : bool
-            Perform optical flow registration
+            True to enable SOFIMA deformable flow-field registration.
         """
 
-        self._perform_optical_flow = value
+        self._perform_deformable_registration = value
 
     @property
     def overwrite_registered(self) -> bool:
@@ -953,9 +1312,8 @@ class DataRegistration:
         corrected_shape = self._datastore._image_shape(
             entity_root / Path("corrected_data")
         )
-        registered_shape = self._datastore._image_shape(
-            entity_root / Path("registered_decon_data")
-        )
+        image_name = "registered_decon_data" if round_id is not None else "decon_data"
+        registered_shape = self._datastore._image_shape(entity_root / Path(image_name))
         return corrected_shape is not None and registered_shape == corrected_shape
 
     def _has_valid_feature_predictor_outputs(
@@ -987,11 +1345,10 @@ class DataRegistration:
             entity_root / Path("corrected_data")
         )
         registered_shape = self._datastore._image_shape(
-            entity_root / Path("registered_decon_data")
+            entity_root / Path("decon_data")
         )
         feature_shape = self._datastore._image_shape(
-            entity_root
-            / Path(f"registered_{self._datastore.feature_predictor_folder_name}_data")
+            entity_root / Path(f"{self._datastore.feature_predictor_folder_name}_data")
         )
         spots_path = (
             self._datastore._feature_predictor_localizations_root_path
@@ -1080,6 +1437,9 @@ class DataRegistration:
             self._generate_registrations()
             self._apply_registration_to_bits()
 
+        if self._global_registration:
+            self.global_register()
+
     def register_one_tile(self, tile_id: int | str) -> None:
         """Helper function to register one tile.
 
@@ -1096,12 +1456,611 @@ class DataRegistration:
     def apply_registration_to_one_tile(self, tile_id: int | str) -> None:
         """Apply existing local registrations to readout bits for one tile.
 
-        This uses the rigid and optical-flow transforms already stored in the
-        datastore. It does not estimate or overwrite fiducial registrations.
+        This uses the local transforms already stored in the datastore. It does
+        not estimate or overwrite fiducial registrations.
         """
 
         self.tile_id = tile_id
         self._apply_registration_to_bits()
+
+    def _load_global_fiducial_msims(
+        self,
+        *,
+        ngff_utils: Any,
+        msi_utils: Any,
+        si_utils: Any,
+        use_stored_global_transforms: bool,
+    ) -> list[Any]:
+        """
+        Load locally registered reference fiducials as multiscale images.
+
+        Parameters
+        ----------
+        ngff_utils : Any
+            ``multiview_stitcher.ngff_utils`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+        si_utils : Any
+            ``multiview_stitcher.spatial_image_utils`` module.
+        use_stored_global_transforms : bool
+            If True, attach stored ``global_registered`` transforms instead of
+            preparing images for a fresh global registration.
+
+        Returns
+        -------
+        list[Any]
+            MultiscaleSpatialImages for global registration or fusion.
+        """
+
+        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        scale = {
+            "z": float(voxel_zyx_um[0]),
+            "y": float(voxel_zyx_um[1]),
+            "x": float(voxel_zyx_um[2]),
+        }
+        reference_round_id = self._round_ids[0]
+        msims = []
+
+        for tile_index, tile_id in enumerate(self._tile_ids):
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Loading global registration input "
+                    f"tile={tile_id} ({tile_index + 1}/{len(self._tile_ids)})",
+                )
+            tile_position_zyx_um, affine_zyx_px = (
+                self._datastore.load_local_stage_position_zyx_um(
+                    tile_id, reference_round_id
+                )
+            )
+            tile_grid_positions = {
+                "z": float(np.round(tile_position_zyx_um[0], 2)),
+                "y": float(np.round(tile_position_zyx_um[1], 2)),
+                "x": float(np.round(tile_position_zyx_um[2], 2)),
+            }
+            input_path = _local_registered_fiducial_path(
+                datastore=self._datastore,
+                tile_id=tile_id,
+                round_id=reference_round_id,
+            )
+            sim = _read_registered_fiducial_sim(
+                input_path=input_path,
+                scale=scale,
+                translation=tile_grid_positions,
+                affine_zyx_px=affine_zyx_px,
+                transform_key=self._global_registration_config.transform_key,
+                ngff_utils=ngff_utils,
+                si_utils=si_utils,
+            )
+            msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
+
+            if use_stored_global_transforms:
+                affine_zyx_um, _origin_zyx_um, _spacing_zyx_um = (
+                    self._datastore.load_global_coord_xforms_um(tile=tile_id)
+                )
+                if affine_zyx_um is None:
+                    raise RuntimeError(
+                        "Stored global transform is required for direct global "
+                        f"fusion, but none was found for tile {tile_id!r}."
+                    )
+                msi_utils.set_affine_transform(
+                    msim,
+                    np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
+                    transform_key=self._global_registration_config.new_transform_key,
+                )
+
+            msims.append(msim)
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Loaded global registration input "
+                    f"tile={tile_id} {_sim_fusion_summary(sim)}",
+                )
+            gc.collect()
+
+        return msims
+
+    def _print_global_fusion_diagnostics(
+        self,
+        *,
+        msims: list[Any],
+        output_zarr_path: Path,
+        batch_options: dict[str, Any],
+        fusion: Any,
+        msi_utils: Any,
+    ) -> None:
+        """
+        Print geometry, chunking, and batching diagnostics for global fusion.
+
+        Parameters
+        ----------
+        msims : list[Any]
+            Multiscale images passed to fusion.
+        output_zarr_path : pathlib.Path
+            Destination OME-Zarr root.
+        batch_options : dict[str, Any]
+            Fusion batch options.
+        fusion : Any
+            ``multiview_stitcher.fusion`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+
+        Returns
+        -------
+        None
+            Diagnostics are printed when ``verbose >= 1``.
+        """
+
+        if self._verbose < 1:
+            return
+
+        print(time_stamp(), "Global fusion diagnostics:")
+        print(time_stamp(), f"  output_zarr_path={output_zarr_path}")
+        print(
+            time_stamp(),
+            "  backend="
+            f"{self._global_fusion_config.backend} "
+            f"output_on_backend={self._global_fusion_config.output_on_backend}",
+        )
+        print(time_stamp(), f"  batch_options={batch_options!r}")
+
+        try:
+            scale0_sims = [
+                msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims
+            ]
+            output_stack_properties = fusion.process_output_stack_properties(
+                sims=scale0_sims,
+                output_spacing={
+                    "z": float(self._datastore.voxel_size_zyx_um[0]),
+                    "y": float(self._datastore.voxel_size_zyx_um[1]),
+                    "x": float(self._datastore.voxel_size_zyx_um[2]),
+                },
+                output_stack_mode="union",
+                transform_key=self._global_registration_config.new_transform_key,
+            )
+            output_chunksize = fusion.process_output_chunksize(
+                scale0_sims,
+                int(self._global_fusion_config.output_chunksize),
+            )
+            spatial_shape = output_stack_properties["shape"]
+            nblocks = {
+                dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
+                for dim in output_chunksize
+            }
+            total_blocks = int(np.prod(list(nblocks.values())))
+            print(time_stamp(), f"  output_shape={spatial_shape}")
+            print(time_stamp(), f"  output_chunksize={output_chunksize}")
+            print(time_stamp(), f"  output_blocks={nblocks} total={total_blocks}")
+        except Exception as exc:
+            print(time_stamp(), f"  output geometry diagnostics failed: {exc!r}")
+
+        for tile_idx, msim in enumerate(msims):
+            try:
+                sim = msi_utils.get_sim_from_msim(msim, scale="scale0")
+                print(
+                    time_stamp(),
+                    f"  input_tile_index={tile_idx} {_sim_fusion_summary(sim)}",
+                )
+            except Exception as exc:
+                print(
+                    time_stamp(),
+                    f"  input_tile_index={tile_idx} summary failed: {exc!r}",
+                )
+
+    def _fuse_global_registered_msims(
+        self,
+        *,
+        msims: list[Any],
+        create_max_proj_tiff: bool,
+        fusion: Any,
+        misc_utils: Any,
+        msi_utils: Any,
+        si_utils: Any,
+        TiffWriter: Any,
+    ) -> None:
+        """
+        Fuse globally registered fiducial views and write datastore metadata.
+
+        Parameters
+        ----------
+        msims : list[Any]
+            MultiscaleSpatialImages with ``global_registered`` transforms.
+        create_max_proj_tiff : bool
+            If True, write a fused fiducial max-projection TIFF.
+        fusion : Any
+            ``multiview_stitcher.fusion`` module.
+        misc_utils : Any
+            ``multiview_stitcher.misc_utils`` module.
+        msi_utils : Any
+            ``multiview_stitcher.msi_utils`` module.
+        si_utils : Any
+            ``multiview_stitcher.spatial_image_utils`` module.
+        TiffWriter : Any
+            ``tifffile.TiffWriter`` class.
+
+        Returns
+        -------
+        None
+            Fused OME-Zarr, metadata, datastore state, and optional TIFF are
+            written to disk.
+        """
+
+        import shutil
+
+        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        scale = {
+            "z": float(voxel_zyx_um[0]),
+            "y": float(voxel_zyx_um[1]),
+            "x": float(voxel_zyx_um[2]),
+        }
+        output_zarr_path = self._datastore._image_store_path(
+            self._datastore._fused_root_path
+            / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
+        )
+        if output_zarr_path.exists():
+            shutil.rmtree(output_zarr_path)
+
+        fusion_config = self._global_fusion_config
+        n_jobs = (
+            min(4, max(1, int(self._num_gpus)))
+            if fusion_config.n_jobs is None
+            else int(fusion_config.n_jobs)
+        )
+        batch_options = {
+            "batch_func": misc_utils.process_batch_using_joblib,
+            "n_batch": int(fusion_config.n_batch),
+            "batch_func_kwargs": {
+                "n_jobs": n_jobs,
+                "backend": fusion_config.joblib_backend,
+            },
+        }
+        self._print_global_fusion_diagnostics(
+            msims=msims,
+            output_zarr_path=output_zarr_path,
+            batch_options=batch_options,
+            fusion=fusion,
+            msi_utils=msi_utils,
+        )
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Starting global fiducial fusion.")
+        fusion_start_time = timeit.default_timer()
+        fused_sim = fusion.fuse(
+            images=[msi_utils.get_sim_from_msim(msim) for msim in msims],
+            transform_key=self._global_registration_config.new_transform_key,
+            output_spacing=scale,
+            output_chunksize=int(fusion_config.output_chunksize),
+            overlap_in_pixels=int(fusion_config.overlap_in_pixels),
+            output_zarr_url=str(output_zarr_path),
+            zarr_options={
+                "ome_zarr": True,
+                "ngff_version": "0.5",
+                "overwrite": True,
+            },
+            batch_options=batch_options,
+            backend=fusion_config.backend,
+            output_on_backend=bool(fusion_config.output_on_backend),
+        )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished fusion.fuse direct-to-zarr "
+                f"elapsed_s={timeit.default_timer() - fusion_start_time:.2f}",
+            )
+
+        metadata_start_time = timeit.default_timer()
+        if not hasattr(fused_sim, "data"):
+            fused_sim = msi_utils.get_sim_from_msim(fused_sim, scale="scale0")
+        fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
+        affine = msi_utils.get_transform_from_msim(
+            fused_msim,
+            transform_key=self._global_registration_config.new_transform_key,
+        ).data.squeeze()
+        fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
+        origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
+        spacing = si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+
+        qi2labDataStore._write_extra_attributes(
+            image_path=output_zarr_path,
+            extra_attributes={
+                "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
+                "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
+                "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+            },
+            merge=True,
+        )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished fused metadata write "
+                f"elapsed_s={timeit.default_timer() - metadata_start_time:.2f}",
+            )
+
+        del fused_msim, fused_sim
+        gc.collect()
+
+        datastore_state = self._datastore.datastore_state
+        datastore_state.update({"GlobalRegistered": True, "Fused": True})
+        self._datastore.datastore_state = datastore_state
+
+        if create_max_proj_tiff:
+            projection_start_time = timeit.default_timer()
+            loaded = self._datastore.load_global_fiducial_image(return_future=False)
+            if loaded is None:
+                raise RuntimeError(
+                    "Fused fiducial image was not readable after fusion."
+                )
+            fiducial_fused, _, _, spacing_zyx_um = loaded
+            fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+            del fiducial_fused
+
+            cellpose_path = (
+                self._datastore._datastore_path
+                / Path("segmentation")
+                / Path("cellpose")
+            )
+            cellpose_path.mkdir(exist_ok=True)
+            filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
+            with TiffWriter(filename_path, bigtiff=True) as tif:
+                tif.write(
+                    fiducial_max_projection,
+                    resolution=(
+                        1e4 / float(spacing_zyx_um[2]),
+                        1e4 / float(spacing_zyx_um[1]),
+                    ),
+                    compression="zlib",
+                    compressionargs={"level": 8},
+                    predictor=True,
+                    photometric="minisblack",
+                    resolutionunit="CENTIMETER",
+                    metadata={
+                        "axes": "YX",
+                        "SignificantBits": 16,
+                        "PhysicalSizeX": float(spacing_zyx_um[2]),
+                        "PhysicalSizeXUnit": "µm",
+                        "PhysicalSizeY": float(spacing_zyx_um[1]),
+                        "PhysicalSizeYUnit": "µm",
+                    },
+                )
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Finished fused max-projection TIFF "
+                    f"elapsed_s={timeit.default_timer() - projection_start_time:.2f}",
+                )
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished global fiducial fusion "
+                f"elapsed_s={timeit.default_timer() - fusion_start_time:.2f}",
+            )
+
+    def global_register(
+        self,
+        create_max_proj_tiff: bool = True,
+    ) -> None:
+        """
+        Globally register first-round fiducial tiles and write fused OME-Zarr.
+
+        The method reads the locally registered first fiducial round for every
+        tile, combines stage metadata with multiview-stitcher global
+        registration, saves per-tile global transforms back to the datastore,
+        and fuses the registered views directly into the datastore as OME-Zarr
+        v0.5 using CuPy-backed fusion.
+
+        Parameters
+        ----------
+        create_max_proj_tiff : bool, default=True
+            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            from the full-resolution fused OME-Zarr.
+
+        Returns
+        -------
+        None
+            Global transforms, fused fiducial OME-Zarr, datastore state, and
+            optional max projection are written to the datastore.
+        """
+
+        from dask import config as dask_config
+        from dask.diagnostics import ProgressBar
+        from multiview_stitcher import (
+            fusion,
+            misc_utils,
+            msi_utils,
+            ngff_utils,
+            registration,
+        )
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from tifffile import TiffWriter
+
+        if len(self._tile_ids) <= 1:
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=np.eye(4, dtype=np.float32),
+                origin_zyx_um=np.zeros(3, dtype=np.float32),
+                spacing_zyx_um=np.asarray(
+                    self._datastore.voxel_size_zyx_um,
+                    dtype=np.float32,
+                ),
+                tile=self._tile_ids[0],
+            )
+            self._datastore.datastore_state = {"GlobalRegistered": True}
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Skipping global registration because datastore has one tile.",
+                )
+            return
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Starting global fiducial registration.")
+
+        msims = self._load_global_fiducial_msims(
+            ngff_utils=ngff_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            use_stored_global_transforms=False,
+        )
+
+        registration_config = self._global_registration_config
+        registration_binning = registration_config.registration_binning
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Running multiview-stitcher global registration "
+                f"tiles={len(msims)} registration_binning={registration_binning} "
+                "pre_registration_pruning_method="
+                f"{registration_config.pre_registration_pruning_method} "
+                "post_registration_do_quality_filter="
+                f"{registration_config.post_registration_do_quality_filter} "
+                "n_parallel_pairwise_regs="
+                f"{registration_config.n_parallel_pairwise_regs}",
+            )
+        registration_start_time = timeit.default_timer()
+        with dask_config.set(scheduler=registration_config.dask_scheduler):
+            if self._verbose >= 1:
+                with ProgressBar():
+                    global_transforms = registration.register(
+                        msims,
+                        reg_channel_index=int(registration_config.reg_channel_index),
+                        transform_key=registration_config.transform_key,
+                        new_transform_key=registration_config.new_transform_key,
+                        pre_registration_pruning_method=(
+                            registration_config.pre_registration_pruning_method
+                        ),
+                        registration_binning=registration_binning,
+                        post_registration_do_quality_filter=(
+                            bool(
+                                registration_config.post_registration_do_quality_filter
+                            )
+                        ),
+                        groupwise_resolution_kwargs={
+                            "reference_view": int(registration_config.reference_view),
+                            "transform": registration_config.transform,
+                        },
+                        n_parallel_pairwise_regs=int(
+                            registration_config.n_parallel_pairwise_regs
+                        ),
+                    )
+            else:
+                global_transforms = registration.register(
+                    msims,
+                    reg_channel_index=int(registration_config.reg_channel_index),
+                    transform_key=registration_config.transform_key,
+                    new_transform_key=registration_config.new_transform_key,
+                    pre_registration_pruning_method=(
+                        registration_config.pre_registration_pruning_method
+                    ),
+                    registration_binning=registration_binning,
+                    post_registration_do_quality_filter=(
+                        bool(registration_config.post_registration_do_quality_filter)
+                    ),
+                    groupwise_resolution_kwargs={
+                        "reference_view": int(registration_config.reference_view),
+                        "transform": registration_config.transform,
+                    },
+                    n_parallel_pairwise_regs=int(
+                        registration_config.n_parallel_pairwise_regs
+                    ),
+                )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished multiview-stitcher global registration "
+                f"elapsed_s={timeit.default_timer() - registration_start_time:.2f}",
+            )
+
+        for tile_idx, (msim, transform) in enumerate(
+            zip(msims, global_transforms, strict=False)
+        ):
+            affine = np.asarray(
+                transform.data if hasattr(transform, "data") else transform
+            )
+            affine = np.squeeze(affine)
+            if registration_config.affine_round_decimals is not None:
+                affine = np.round(
+                    affine,
+                    int(registration_config.affine_round_decimals),
+                )
+            sim = msi_utils.get_sim_from_msim(msim)
+            origin = si_utils.get_origin_from_sim(sim, asarray=True)
+            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
+            self._datastore.save_global_coord_xforms_um(
+                affine_zyx_um=affine,
+                origin_zyx_um=origin,
+                spacing_zyx_um=spacing,
+                tile=tile_idx,
+            )
+
+        self._fuse_global_registered_msims(
+            msims=msims,
+            create_max_proj_tiff=create_max_proj_tiff,
+            fusion=fusion,
+            misc_utils=misc_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            TiffWriter=TiffWriter,
+        )
+
+        if self._verbose >= 1:
+            print(time_stamp(), "Finished global fiducial registration.")
+
+    def fuse_global_registered(
+        self,
+        create_max_proj_tiff: bool = True,
+    ) -> None:
+        """
+        Fuse fiducials using stored global transforms without registering tiles.
+
+        This method is intended for existing datastores that already have
+        saved per-tile global transforms. It loads locally registered reference
+        fiducials, attaches the stored ``global_registered`` transforms, and
+        runs only the fused OME-Zarr creation path.
+
+        Parameters
+        ----------
+        create_max_proj_tiff : bool, default=True
+            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            from the full-resolution fused OME-Zarr.
+
+        Returns
+        -------
+        None
+            Fused fiducial OME-Zarr, datastore state, and optional max
+            projection are written to the datastore.
+        """
+
+        from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from tifffile import TiffWriter
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Starting global fiducial fusion from stored transforms.",
+            )
+
+        msims = self._load_global_fiducial_msims(
+            ngff_utils=ngff_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            use_stored_global_transforms=True,
+        )
+        self._fuse_global_registered_msims(
+            msims=msims,
+            create_max_proj_tiff=create_max_proj_tiff,
+            fusion=fusion,
+            misc_utils=misc_utils,
+            msi_utils=msi_utils,
+            si_utils=si_utils,
+            TiffWriter=TiffWriter,
+        )
+
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                "Finished global fiducial fusion from stored transforms.",
+            )
 
     def _load_raw_data(self) -> None:
         """
@@ -1136,69 +2095,207 @@ class DataRegistration:
 
     def _generate_registrations(self) -> None:
         """
-        Generate registered, deconvolved fiducial data and save to datastore.
+        Deconvolve fiducials, register rounds, and save local transforms.
+
+        The first fiducial round is loaded, optionally deconvolved, saved, and
+        stored as the local reference for the tile. Remaining fiducial rounds
+        are split across GPU worker processes. Each worker loads its assigned
+        rounds, optionally deconvolves them, registers them to round 1, saves the
+        physical-space transform, and warps/saves registered fiducials when
+        requested.
 
         Returns
         -------
         None
-            Function result.
+            Results are written to the datastore.
         """
-        has_reg_decon_data = self._has_valid_registered_image(
-            round_id=self._round_ids[0]
-        )
-
-        if not (has_reg_decon_data) or self._overwrite_registered:
-            p_first = mp.Process(target=_apply_first_fiducial_on_gpu, args=(self, 0))
-            p_first.start()
-            p_first.join()
-
-        # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(
                 "No GPUs detected. Cannot run _generate_registrations()."
             )
 
-        # 2) Grab all rounds IDs after round 0 and split into `num_gpus` chunks
-        all_rounds = list(self._round_ids[1:])
-        chunk_size = (
-            len(all_rounds) + self._num_gpus - 1
-        ) // self._num_gpus  # ceiling division
+        start_time = timeit.default_timer()
+        reference_round_id = self._round_ids[0]
 
-        # 3) Launch one process per GPU (only as many as needed)
+        import cupy as cp
+
+        from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+
+        cp.cuda.Device(0).use()
+        reference_image = _load_deconvolve_fiducial_round(
+            dr=self,
+            round_id=reference_round_id,
+            gpu_id=0,
+            chunked_rlgc=chunked_rlgc,
+        )
+        self._datastore.save_local_registered_image(
+            reference_image,
+            tile=self._tile_id,
+            deconvolution=self._decon_fiducial,
+            round=reference_round_id,
+        )
+        self._datastore.save_local_round_transform_zyx_um(
+            np.eye(4, dtype=np.float32),
+            tile=self._tile_id,
+            round=reference_round_id,
+        )
+        if self._verbose >= 1:
+            print(
+                time_stamp(),
+                f"Finished fiducial tile id: {self._tile_id}; round id: {reference_round_id}.",
+            )
+
+        clear_rlgc_caches(clear_memory_pool=True)
+
+        moving_rounds = list(self._round_ids[1:])
+        if not moving_rounds:
+            del reference_image
+            gc.collect()
+            return
+
+        result_queue = mp.Queue()
+        num_workers = min(self._num_gpus, len(moving_rounds))
+        chunk_size = (len(moving_rounds) + num_workers - 1) // num_workers
         processes = []
-        for gpu_id in range(self._num_gpus):
+
+        for gpu_id in range(num_workers):
             start = gpu_id * chunk_size
-            end = min(start + chunk_size, len(all_rounds))
+            end = min(start + chunk_size, len(moving_rounds))
             if start >= end:
-                break  # no more rounds to assign
+                break
 
-            subset = all_rounds[start:end]
+            subset = moving_rounds[start:end]
+            process = mp.Process(
+                target=_process_fiducial_rounds_on_gpu,
+                args=(self, subset, reference_image, gpu_id, result_queue),
+            )
+            process.start()
+            processes.append(process)
 
-            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        completed_rounds = set()
+        errors = []
+        while len(completed_rounds) + len(errors) < len(moving_rounds):
             try:
-                # Inside child, logical device 0 maps to this physical GPU.
-                p = mp.Process(target=_apply_fiducial_on_gpu, args=(self, subset, 0))
-                p.start()
-                processes.append(p)
-            finally:
-                if old_vis is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+                status, round_id, payload = result_queue.get(timeout=5)
+            except queue.Empty:
+                if any(process.exitcode not in (None, 0) for process in processes):
+                    break
+                if all(process.exitcode is not None for process in processes):
+                    break
+                continue
+            if status == "result":
+                completed_rounds.add(round_id)
+                if payload is not None:
+                    requested_crop_yx = min(
+                        int(self._crop_yx_decon),
+                        int(max(reference_image.shape[-2:])),
+                    )
+                    if int(payload) < requested_crop_yx:
+                        self._crop_yx_decon = int(payload)
+            else:
+                errors.append(payload)
 
-        # 4) Wait for all GPU-workers to finish
-        for p in processes:
-            p.join()
+        for process in processes:
+            process.join()
+            if process.exitcode not in (0, None):
+                errors.append(
+                    f"Fiducial worker pid={process.pid} failed with "
+                    f"exitcode={process.exitcode}."
+                )
+
+        missing_rounds = [
+            round_id for round_id in moving_rounds if round_id not in completed_rounds
+        ]
+        if missing_rounds:
+            errors.append(f"Missing processed fiducial rounds: {missing_rounds}")
+        if errors:
+            raise RuntimeError("Fiducial registration failed:\n" + "\n".join(errors))
+
+        if self._perform_deformable_registration:
+            sofima_queue = mp.Queue()
+            sofima_processes = []
+            sofima_workers = min(self._num_gpus, len(moving_rounds))
+            sofima_chunk_size = (
+                len(moving_rounds) + sofima_workers - 1
+            ) // sofima_workers
+
+            for gpu_id in range(sofima_workers):
+                start = gpu_id * sofima_chunk_size
+                end = min(start + sofima_chunk_size, len(moving_rounds))
+                if start >= end:
+                    break
+
+                subset = moving_rounds[start:end]
+                process = mp.Process(
+                    target=_process_sofima_rounds_on_gpu,
+                    args=(self, subset, gpu_id, sofima_queue),
+                )
+                process.start()
+                sofima_processes.append(process)
+
+            completed_sofima_rounds = set()
+            sofima_errors = []
+            while len(completed_sofima_rounds) + len(sofima_errors) < len(
+                moving_rounds
+            ):
+                try:
+                    status, round_id, payload = sofima_queue.get(timeout=5)
+                except queue.Empty:
+                    if any(
+                        process.exitcode not in (None, 0)
+                        for process in sofima_processes
+                    ):
+                        break
+                    if all(
+                        process.exitcode is not None for process in sofima_processes
+                    ):
+                        break
+                    continue
+                if status == "result":
+                    completed_sofima_rounds.add(round_id)
+                else:
+                    sofima_errors.append(payload)
+
+            for process in sofima_processes:
+                process.join()
+                if process.exitcode not in (0, None):
+                    sofima_errors.append(
+                        f"SOFIMA worker pid={process.pid} failed with "
+                        f"exitcode={process.exitcode}."
+                    )
+
+            missing_sofima_rounds = [
+                round_id
+                for round_id in moving_rounds
+                if round_id not in completed_sofima_rounds
+            ]
+            if missing_sofima_rounds:
+                sofima_errors.append(
+                    f"Missing SOFIMA fiducial rounds: {missing_sofima_rounds}"
+                )
+            if sofima_errors:
+                raise RuntimeError(
+                    "SOFIMA registration failed:\n" + "\n".join(sofima_errors)
+                )
+
+        _registration_diag(
+            "fiducial_registration_all_done "
+            f"tile={self._tile_id} rounds={len(self._round_ids)} "
+            f"elapsed_s={timeit.default_timer() - start_time:.2f}",
+            enabled=self._registration_diagnostics,
+        )
+
+        del reference_image
+        gc.collect()
 
     def _apply_registration_to_bits(self) -> None:
         """
-        Generate feature_predictor + deconvolved, registered readout data and save to datastore.
+        Deconvolve readout bits, run U-FISH, and save unwarped outputs.
 
         Returns
         -------
         None
-            Function result.
+            Results are written to the datastore.
         """
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
@@ -1221,22 +2318,20 @@ class DataRegistration:
                 break  # no more bits to assign
 
             subset = all_bits[start:end]
-
-            old_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
-            os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            try:
-                p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, 0))
-                p.start()
-                processes.append(p)
-            finally:
-                if old_vis is None:
-                    os.environ.pop("CUDA_VISIBLE_DEVICES", None)
-                else:
-                    os.environ["CUDA_VISIBLE_DEVICES"] = old_vis
+            p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, gpu_id))
+            p.start()
+            processes.append(p)
 
         # 4) Wait for all GPU-workers to finish
+        errors = []
         for p in processes:
             p.join()
+            if p.exitcode not in (0, None):
+                errors.append(
+                    f"Readout worker pid={p.pid} failed with exitcode={p.exitcode}."
+                )
+        if errors:
+            raise RuntimeError("Readout preprocessing failed:\n" + "\n".join(errors))
 
 
 def no_op(*args: Any, **kwargs: Any) -> None:
@@ -1255,11 +2350,11 @@ def no_op(*args: Any, **kwargs: Any) -> None:
 
 def time_stamp() -> str:
     """
-    Time stamp.
+    Return a human-readable timestamp for progress messages.
 
     Returns
     -------
     str
-        Function result.
+        Current local time formatted as ``YYYY-MM-DD HH:MM:SS``.
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

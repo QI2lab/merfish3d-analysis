@@ -39,6 +39,150 @@ app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 
+def synthetic_chromatic_affines_zyx_um(
+    image_shape_zyx: tuple[int, int, int],
+    voxel_size_zyx_um: tuple[float, float, float] | list[float],
+    emission_wavelengths_um: tuple[float, ...] | list[float],
+    shift_scale: float = 1.0,
+    edge_shifts_px: tuple[float, ...] = (0.0, 0.5, 1.0),
+    z_shifts_px: tuple[float, ...] = (0.0, 0.25, 0.5),
+    max_z_shifts_px: tuple[float, ...] = (0.0, 1.25, 2.5),
+) -> dict[float, np.ndarray]:
+    """
+    Return deterministic synthetic chromatic correction affines.
+
+    The returned matrices map a chromatically shifted channel coordinate back
+    into the lowest supplied wavelength coordinate system. The reference
+    wavelength gets an identity transform. Longer wavelengths receive XY radial
+    affine scaling about the image center plus a Z translation. The lateral
+    shift is scaled directly for stress testing. The axial shift is capped so
+    all synthetic cases remain below three z pixels, because larger axial
+    displacements stop representing a plausible chromatic aberration.
+
+    Parameters
+    ----------
+    image_shape_zyx : tuple[int, int, int]
+        Image shape in Z, Y, X order.
+    voxel_size_zyx_um : tuple[float, float, float] or list[float]
+        Voxel size in microns in Z, Y, X order.
+    emission_wavelengths_um : tuple[float, ...] or list[float]
+        Emission wavelengths in microns.
+    shift_scale : float, default=1.0
+        Multiplier applied to the deterministic synthetic shift amplitudes.
+    edge_shifts_px : tuple[float, ...], default=(0.0, 0.5, 1.0)
+        Lateral edge-shift amplitude by sorted wavelength index.
+    z_shifts_px : tuple[float, ...], default=(0.0, 0.25, 0.5)
+        Axial shift amplitude by sorted wavelength index.
+    max_z_shifts_px : tuple[float, ...], default=(0.0, 1.25, 2.5)
+        Maximum axial shift by sorted wavelength index.
+
+    Returns
+    -------
+    dict[float, numpy.ndarray]
+        Mapping from emission wavelength to channel-to-reference affine in
+        Z/Y/X microns.
+    """
+
+    spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    shape = np.asarray(image_shape_zyx, dtype=np.float32)
+    center_um = (shape - 1.0) * spacing / 2.0
+    yx_radius_px = max(float(shape[1] - 1.0), float(shape[2] - 1.0)) / 2.0
+    affines = {}
+    sorted_wavelengths = sorted(float(v) for v in emission_wavelengths_um)
+    reference_wavelength = sorted_wavelengths[0]
+    for wavelength_index, wavelength in enumerate(sorted_wavelengths):
+        wavelength = float(wavelength)
+        shift_index = min(wavelength_index, len(edge_shifts_px) - 1)
+        edge_shift_px = edge_shifts_px[shift_index] * float(shift_scale)
+        z_shift_px = min(
+            z_shifts_px[shift_index] * float(shift_scale),
+            max_z_shifts_px[shift_index],
+        )
+        if np.isclose(wavelength, reference_wavelength):
+            edge_shift_px = 0.0
+            z_shift_px = 0.0
+
+        source_scale = 1.0 + edge_shift_px / yx_radius_px
+        correction_scale = 1.0 / source_scale
+        affine = np.eye(4, dtype=np.float32)
+        affine[1, 1] = correction_scale
+        affine[2, 2] = correction_scale
+        affine[1, 3] = center_um[1] * (1.0 - correction_scale)
+        affine[2, 3] = center_um[2] * (1.0 - correction_scale)
+        affine[0, 3] = -z_shift_px * spacing[0]
+        affines[wavelength] = affine
+    return affines
+
+
+def _apply_synthetic_chromatic_aberration(
+    image_zyx: np.ndarray,
+    *,
+    emission_wavelength_um: float,
+    voxel_size_zyx_um: tuple[float, float, float] | list[float],
+    emission_wavelengths_um: tuple[float, ...] | list[float],
+    shift_scale: float,
+    edge_shifts_px: tuple[float, ...],
+    z_shifts_px: tuple[float, ...],
+    max_z_shifts_px: tuple[float, ...],
+) -> np.ndarray:
+    """
+    Apply synthetic chromatic aberration to one simulation readout image.
+
+    Parameters
+    ----------
+    image_zyx : numpy.ndarray
+        Input readout image in Z, Y, X order.
+    emission_wavelength_um : float
+        Emission wavelength in microns for the channel being written.
+    voxel_size_zyx_um : tuple[float, float, float] or list[float]
+        Voxel size in microns in Z, Y, X order.
+    emission_wavelengths_um : tuple[float, ...] or list[float]
+        Emission wavelengths in microns for all simulation channels.
+    shift_scale : float
+        Multiplier applied to the deterministic synthetic shift amplitudes.
+    edge_shifts_px : tuple[float, ...]
+        Lateral edge-shift amplitude by sorted wavelength index.
+    z_shifts_px : tuple[float, ...]
+        Axial shift amplitude by sorted wavelength index.
+    max_z_shifts_px : tuple[float, ...]
+        Maximum axial shift by sorted wavelength index.
+
+    Returns
+    -------
+    numpy.ndarray
+        Chromatically shifted image with the same shape and dtype as input.
+    """
+
+    from merfish3danalysis.utils.multiview_registration import (
+        warp_array_to_reference_gpu,
+    )
+
+    affines = synthetic_chromatic_affines_zyx_um(
+        tuple(int(v) for v in image_zyx.shape),
+        voxel_size_zyx_um,
+        emission_wavelengths_um,
+        shift_scale=shift_scale,
+        edge_shifts_px=edge_shifts_px,
+        z_shifts_px=z_shifts_px,
+        max_z_shifts_px=max_z_shifts_px,
+    )
+    affine = affines[float(emission_wavelength_um)]
+    if np.allclose(affine, np.eye(4, dtype=np.float32)):
+        return image_zyx
+
+    warped = warp_array_to_reference_gpu(
+        image_zyx.astype(np.float32, copy=False),
+        transform_zyx_um=affine,
+        spacing_zyx_um=voxel_size_zyx_um,
+        reference_shape=image_zyx.shape,
+        mode="constant",
+        cval=0.0,
+        order=1,
+    )
+    warped = np.clip(np.rint(warped), 0, np.iinfo(image_zyx.dtype).max)
+    return warped.astype(image_zyx.dtype, copy=False)
+
+
 @app.command()
 def convert_data(
     root_path: Path,
@@ -48,6 +192,19 @@ def convert_data(
     codebook_path: Path | None = None,
     bit_order_path: Path | None = None,
     z_step: int = 1,
+    synthetic_chromatic_aberration: bool = False,
+    synthetic_chromatic_aberration_scale: float = 1.0,
+    synthetic_chromatic_edge_shifts_px: tuple[float, float, float] = (0.0, 0.5, 1.0),
+    synthetic_chromatic_z_shifts_px: tuple[float, float, float] = (0.0, 0.25, 0.5),
+    synthetic_chromatic_max_z_shifts_px: tuple[float, float, float] = (
+        0.0,
+        1.25,
+        2.5,
+    ),
+    excitation_wavelengths_um: tuple[float, float, float] = (0.488, 0.561, 0.635),
+    emission_wavelengths_um: tuple[float, float, float] = (0.520, 0.580, 0.670),
+    default_tile_overlap: float = 0.2,
+    three_dimensional_z_spacing_threshold_um: float = 0.5,
 ) -> None:
     """Convert qi2lab microscope data to qi2lab datastore.
 
@@ -73,6 +230,25 @@ def convert_data(
         Keep every z_step-th axial plane when writing the datastore. The
         datastore z voxel size and generated PSFs are updated to match the
         retained axial sampling.
+    synthetic_chromatic_aberration : bool, default=False
+        If True, apply deterministic synthetic chromatic aberration to readout
+        channels. This is intended only for simulation regression tests.
+    synthetic_chromatic_aberration_scale : float, default=1.0
+        Multiplier for the deterministic synthetic chromatic aberration.
+    synthetic_chromatic_edge_shifts_px : tuple[float, float, float]
+        Lateral edge-shift amplitudes by sorted wavelength index.
+    synthetic_chromatic_z_shifts_px : tuple[float, float, float]
+        Axial shift amplitudes by sorted wavelength index.
+    synthetic_chromatic_max_z_shifts_px : tuple[float, float, float]
+        Maximum axial shifts by sorted wavelength index.
+    excitation_wavelengths_um : tuple[float, float, float]
+        Excitation wavelengths for blue, yellow, and red channels.
+    emission_wavelengths_um : tuple[float, float, float]
+        Emission wavelengths for blue, yellow, and red channels.
+    default_tile_overlap : float, default=0.2
+        Tile overlap used when simulation metadata omit ``tile_overlap``.
+    three_dimensional_z_spacing_threshold_um : float, default=0.5
+        Z spacing below which the datastore is marked as 3D.
     """
     if z_step <= 0:
         raise ValueError("z_step must be greater than 0.")
@@ -104,8 +280,8 @@ def convert_data(
     num_tiles = metadata["num_xyz"]
     num_ch = metadata["num_ch"]
     num_z = metadata["num_z"]
-    num_z_strided = len(range(0, int(num_z), int(z_step)))
-    if num_z_strided <= 0:
+    output_z_planes = len(range(0, int(num_z), int(z_step)))
+    if output_z_planes <= 0:
         raise ValueError(
             f"z_step={z_step} does not retain any planes from num_z={num_z}."
         )
@@ -134,8 +310,8 @@ def convert_data(
     na = metadata["na"]
     ri = metadata["ri"]
 
-    ex_wavelengths_um = [0.488, 0.561, 0.635]  # selected by channel IDs
-    em_wavelengths_um = [0.520, 0.580, 0.670]  # selected by channel IDs
+    ex_wavelengths_um = list(excitation_wavelengths_um)
+    em_wavelengths_um = list(emission_wavelengths_um)
     channel_idxs = list(range(num_ch))
     channels_in_data = list(compress(channel_idxs, channels_active))
 
@@ -166,7 +342,7 @@ def convert_data(
     try:
         datastore.microscope_type = metadata["experiment_type"]
     except Exception:
-        if voxel_size_zyx_um[0] < 0.5:
+        if voxel_size_zyx_um[0] < three_dimensional_z_spacing_threshold_um:
             datastore.microscope_type = "3D"
         else:
             datastore.microscope_type = "2D"
@@ -175,7 +351,7 @@ def convert_data(
     try:
         datastore.tile_overlap = metadata["tile_overlap"]
     except Exception:
-        datastore.tile_overlap = 0.2
+        datastore.tile_overlap = default_tile_overlap
     datastore.e_per_ADU = e_per_ADU
     datastore.na = na
     datastore.ri = ri
@@ -184,7 +360,7 @@ def convert_data(
 
     # generate PSFs
     # --------------
-    psf_z = int(num_z_strided)
+    psf_z = int(output_z_planes)
     channel_psfs = []
     for channel_id in channels_in_data:
         psf = make_psf(
@@ -262,7 +438,7 @@ def convert_data(
                 raw_correct_shape = raw_image.shape
                 correct_shape = (
                     raw_image.shape[0],
-                    num_z_strided,
+                    output_z_planes,
                     raw_image.shape[2],
                     raw_image.shape[3],
                 )
@@ -311,7 +487,7 @@ def convert_data(
                 [stage_z, corrected_y, corrected_x], dtype=np.float32
             )
 
-            # write fidicual data (ch_idx = 0) and metadata
+            # write fiducial data (ch_idx = 0) and metadata
             datastore.save_local_corrected_image(
                 np.squeeze(raw_image[0, :]).astype(np.uint16),
                 tile=tile_idx,
@@ -333,8 +509,20 @@ def convert_data(
             )
 
             # write first readout channel (ch_idx = 1) and metadata
+            readout_one = np.squeeze(raw_image[1, :]).astype(np.uint16)
+            if synthetic_chromatic_aberration:
+                readout_one = _apply_synthetic_chromatic_aberration(
+                    readout_one,
+                    emission_wavelength_um=em_wavelengths_um[1],
+                    voxel_size_zyx_um=voxel_size_zyx_um,
+                    emission_wavelengths_um=em_wavelengths_um[1:],
+                    shift_scale=synthetic_chromatic_aberration_scale,
+                    edge_shifts_px=synthetic_chromatic_edge_shifts_px,
+                    z_shifts_px=synthetic_chromatic_z_shifts_px,
+                    max_z_shifts_px=synthetic_chromatic_max_z_shifts_px,
+                )
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[1, :]).astype(np.uint16),
+                readout_one,
                 tile=tile_idx,
                 psf_idx=1,
                 gain_correction=gain_corrected,
@@ -349,8 +537,20 @@ def convert_data(
             )
 
             # write second readout channel (ch_idx = 2) and metadata
+            readout_two = np.squeeze(raw_image[2, :]).astype(np.uint16)
+            if synthetic_chromatic_aberration:
+                readout_two = _apply_synthetic_chromatic_aberration(
+                    readout_two,
+                    emission_wavelength_um=em_wavelengths_um[2],
+                    voxel_size_zyx_um=voxel_size_zyx_um,
+                    emission_wavelengths_um=em_wavelengths_um[1:],
+                    shift_scale=synthetic_chromatic_aberration_scale,
+                    edge_shifts_px=synthetic_chromatic_edge_shifts_px,
+                    z_shifts_px=synthetic_chromatic_z_shifts_px,
+                    max_z_shifts_px=synthetic_chromatic_max_z_shifts_px,
+                )
             datastore.save_local_corrected_image(
-                np.squeeze(raw_image[2, :]).astype(np.uint16),
+                readout_two,
                 tile=tile_idx,
                 psf_idx=2,
                 gain_correction=gain_corrected,

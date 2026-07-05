@@ -28,6 +28,36 @@ SIMULATION_AXIAL_NYQUIST_STEP_UM = 0.315
 SIMULATION_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
+def _nearest_nyquist_multiple(
+    thresholds_by_multiple: dict[float, float],
+    nyquist_multiple: float,
+) -> float:
+    """
+    Return the configured Nyquist multiple nearest to a measured multiple.
+
+    Parameters
+    ----------
+    thresholds_by_multiple : dict[float, float]
+        Threshold table keyed by Nyquist sampling multiple.
+    nyquist_multiple : float
+        Measured axial step divided by the axial Nyquist step.
+
+    Returns
+    -------
+    float
+        Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
+    """
+
+    best_multiple = next(iter(thresholds_by_multiple))
+    best_distance = abs(best_multiple - nyquist_multiple)
+    for multiple in thresholds_by_multiple:
+        distance = abs(multiple - nyquist_multiple)
+        if distance < best_distance:
+            best_multiple = multiple
+            best_distance = distance
+    return best_multiple
+
+
 def _default_simulation_magnitude_threshold(
     datastore: qi2labDataStore,
 ) -> tuple[float, float]:
@@ -50,9 +80,9 @@ def _default_simulation_magnitude_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     lower_threshold = SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
     return (lower_threshold, 10.0)
@@ -85,7 +115,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     entity_root = datastore._readouts_root_path / tile_ids[0] / bit_ids[0]
     attributes = datastore._load_entity_attributes(
         entity_root,
-        image_names=("registered_decon_data",),
+        image_names=("decon_data",),
     )
     return bool(attributes.get("deconvolution", False))
 
@@ -112,9 +142,9 @@ def _default_simulation_feature_predictor_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     return SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
 
@@ -142,12 +172,12 @@ def _validate_filter_arguments(
         Function result.
     """
 
-    if filter_method in ("blank_fraction", "blank_bit_enrichment"):
+    if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
                 "--lr-fdr-target only applies with --filter-method lr. "
                 "Use --target-gross-misid-rate with --filter-method "
-                "blank_fraction or blank_bit_enrichment."
+                "blank_fraction."
             )
         return
 
@@ -160,10 +190,7 @@ def _validate_filter_arguments(
             )
         return
 
-    raise typer.BadParameter(
-        "filter_method must be one of 'blank_fraction', "
-        "'blank_bit_enrichment', or 'lr'."
-    )
+    raise typer.BadParameter("filter_method must be one of 'blank_fraction' or 'lr'.")
 
 
 @app.command()
@@ -179,6 +206,8 @@ def decode_pixels(
     filter_method: str = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
     lr_fdr_target: float = 0.05,
+    normalization_iterations: int = 3,
+    estimate_chromatic_affines: bool = False,
 ) -> None:
     """Perform pixel decoding.
 
@@ -207,12 +236,17 @@ def decode_pixels(
     duplicate_radius_z : float, optional
         override Z radius, in microns, for within-tile duplicate collapse.
     filter_method : str, default "blank_fraction"
-        downstream transcript filter. Supported values are "blank_fraction",
-        "blank_bit_enrichment", and "lr".
+        downstream transcript filter. Supported values are "blank_fraction" and "lr".
     target_gross_misid_rate : float, default .05
         gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float, default .05
         false discovery rate target for LR filtering.
+    normalization_iterations : int, default=3
+        Number of iterative normalization rounds to run before final decoding.
+    estimate_chromatic_affines : bool, default=False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. Existing datastore calibration is still used when this
+        is False, with identity fallback when no calibration is present.
     """
 
     # initialize datastore
@@ -244,11 +278,12 @@ def decode_pixels(
     if not skip_optimization:
         decoder.optimize_normalization_by_decoding(
             n_random_tiles=1,
-            n_iterations=3,
+            n_iterations=normalization_iterations,
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
             feature_predictor_threshold=feature_predictor_threshold,
+            estimate_chromatic_affines=estimate_chromatic_affines,
         )
 
     decoder.decode_all_tiles(

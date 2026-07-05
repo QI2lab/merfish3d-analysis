@@ -185,7 +185,7 @@ app.pretty_exceptions_enable = False
 
 
 @app.command()
-def calculate_F1(root_path: Path, search_radius: float = 1.0) -> None:
+def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
     """Calculate F1 using ground truth.
 
     Parameters
@@ -214,8 +214,11 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> None:
     gene_ids = np.array(gene_ids)
     image = datastore.load_local_corrected_image(tile=0, round=0, return_future=False)
 
-    # Extract coordinates and gene_ids from analyzed
+    # Extract coordinates and gene_ids from analyzed. Decoded feature z positions
+    # are voxel indices in physical units; simulation GT z positions are sampled
+    # within the voxel support. Shift decoded z to voxel centers before matching.
     qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy()
+    qi2lab_coords[:, 0] += datastore.voxel_size_zyx_um[0] / 2
     qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
 
     # Extract coordinates and gene_ids from ground truth
@@ -235,12 +238,23 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> None:
     gt_coords = gt_coords + gt_coords_offset
     gt_gene_ids = gene_ids[(gt_spots["Gene_label"].to_numpy(dtype=int) - 1)]
 
+    image_shape_zyx = np.squeeze(image).shape[-3:]
+    z_min_um = datastore.voxel_size_zyx_um[0] / 2
+    z_max_um = (image_shape_zyx[0] - 0.5) * datastore.voxel_size_zyx_um[0]
+    qi2lab_keep = (qi2lab_coords[:, 0] >= z_min_um) & (qi2lab_coords[:, 0] <= z_max_um)
+    gt_keep = (gt_coords[:, 0] >= z_min_um) & (gt_coords[:, 0] <= z_max_um)
+
     results, _, _, _ = calculate_F1_with_radius(
-        qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, search_radius
+        qi2lab_coords[qi2lab_keep],
+        qi2lab_gene_ids[qi2lab_keep],
+        gt_coords[gt_keep],
+        gt_gene_ids[gt_keep],
+        search_radius,
     )
 
     print("F1 Score Results:")
     print(results)
+    return results
 
 
 def main() -> None:

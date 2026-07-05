@@ -19,6 +19,22 @@ QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
 QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
 
 
+def _nearest_nyquist_multiple(
+    thresholds_by_multiple: dict[float, float],
+    nyquist_multiple: float,
+) -> float:
+    """Return the configured Nyquist multiple nearest to a measured multiple."""
+
+    best_multiple = next(iter(thresholds_by_multiple))
+    best_distance = abs(best_multiple - nyquist_multiple)
+    for multiple in thresholds_by_multiple:
+        distance = abs(multiple - nyquist_multiple)
+        if distance < best_distance:
+            best_multiple = multiple
+            best_distance = distance
+    return best_multiple
+
+
 def _default_minimum_pixels(datastore: qi2labDataStore) -> int:
     """Return the current qi2lab default minimum-pixel threshold."""
 
@@ -35,9 +51,9 @@ def _default_magnitude_threshold(
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     return (QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple], 10.0)
 

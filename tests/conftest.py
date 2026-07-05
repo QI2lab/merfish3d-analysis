@@ -21,6 +21,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run the exhaustive local simulation matrix tests.",
     )
+    parser.addoption(
+        "--sofima-output-png",
+        action="store",
+        default=None,
+        help="Optional path for writing the SOFIMA deformable recovery PNG.",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:

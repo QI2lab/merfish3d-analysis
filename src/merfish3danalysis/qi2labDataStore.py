@@ -172,6 +172,108 @@ class qi2labDataStore:
         attributes[str(key)] = self._to_json_compatible(value)
         self._save_calibrations_attributes(attributes)
 
+    def save_chromatic_affine_transforms_zyx_um(
+        self,
+        calibration: Mapping[str, Any],
+    ) -> None:
+        """
+        Save chromatic affine calibration metadata.
+
+        Parameters
+        ----------
+        calibration : Mapping[str, Any]
+            Calibration metadata containing one 4x4 ``affine_zyx_um`` matrix
+            per channel. Each affine maps that channel's physical Z, Y, X
+            coordinates onto the lowest-wavelength reference channel.
+
+        Returns
+        -------
+        None
+            Metadata are written to ``calibrations/attributes.json``.
+        """
+
+        self._set_calibration_attribute(
+            "chromatic_affine_transforms_zyx_um",
+            calibration,
+        )
+
+    def load_chromatic_affine_transforms_zyx_um(self) -> dict[str, Any]:
+        """
+        Load chromatic affine calibration metadata.
+
+        Returns
+        -------
+        dict[str, Any]
+            Stored calibration metadata. Returns an empty dictionary when no
+            chromatic calibration is present.
+        """
+
+        try:
+            attributes = self._load_calibrations_attributes()
+        except (FileNotFoundError, json.JSONDecodeError, ValueError):
+            return {}
+        calibration = attributes.get("chromatic_affine_transforms_zyx_um", {})
+        if isinstance(calibration, dict):
+            return calibration
+        return {}
+
+    def load_chromatic_affine_transform_zyx_um(
+        self,
+        channel_name: str | None = None,
+        channel_index: int | None = None,
+        wavelength_um: float | None = None,
+    ) -> np.ndarray:
+        """
+        Load one chromatic affine transform with identity fallback.
+
+        Parameters
+        ----------
+        channel_name : str or None, default=None
+            Channel name from the calibration metadata.
+        channel_index : int or None, default=None
+            Channel index from the calibration metadata.
+        wavelength_um : float or None, default=None
+            Channel wavelength in microns. Used only when channel name/index do
+            not find a match.
+
+        Returns
+        -------
+        numpy.ndarray
+            4x4 affine matrix in physical Z, Y, X microns. Identity is returned
+            if the calibration or requested channel is absent.
+        """
+
+        calibration = self.load_chromatic_affine_transforms_zyx_um()
+        channels = calibration.get("channels", {})
+        if not isinstance(channels, Mapping):
+            return np.eye(4, dtype=np.float32)
+
+        candidates = []
+        if channel_name is not None:
+            channel = channels.get(str(channel_name))
+            if isinstance(channel, Mapping):
+                candidates.append(channel)
+        if channel_index is not None:
+            for channel in channels.values():
+                if isinstance(channel, Mapping) and int(
+                    channel.get("channel_index", -1)
+                ) == int(channel_index):
+                    candidates.append(channel)
+        if wavelength_um is not None:
+            wavelength = float(wavelength_um)
+            for channel in channels.values():
+                if not isinstance(channel, Mapping):
+                    continue
+                stored = channel.get("wavelength_um")
+                if stored is not None and np.isclose(float(stored), wavelength):
+                    candidates.append(channel)
+
+        for channel in candidates:
+            affine = channel.get("affine_zyx_um")
+            if affine is not None:
+                return np.asarray(affine, dtype=np.float32)
+        return np.eye(4, dtype=np.float32)
+
     @staticmethod
     def _strict_id_sort_key(name: str, prefix: str, width: int) -> int:
         """
@@ -219,8 +321,11 @@ class qi2labDataStore:
             Function result.
         """
 
+        def sort_id(value: str) -> tuple[int, int, str]:
+            return cls._strict_id_sort_key(value, prefix, width)
+
         ids = [entry.name for entry in parent.iterdir() if entry.is_dir()]
-        ids.sort(key=lambda value: cls._strict_id_sort_key(value, prefix, width))
+        ids.sort(key=sort_id)
         return ids
 
     @property
@@ -1116,7 +1221,6 @@ class qi2labDataStore:
         kind: str,
         normalization_vector: ArrayLike,
         background_vector: ArrayLike,
-        zstride_level: int | None = None,
         decode_mode: str | None = None,
     ) -> None:
         """
@@ -1132,8 +1236,6 @@ class qi2labDataStore:
             Foreground normalization vector.
         background_vector : ArrayLike
             Background vector.
-        zstride_level : int or None, default None
-            Decode-time z stride metadata.
         decode_mode : str or None, default None
             Decode mode metadata.
         """
@@ -1159,8 +1261,6 @@ class qi2labDataStore:
         calib_attrs = self._load_calibrations_attributes()
         runs = dict(calib_attrs.get("decode_normalization_runs", {}))
         run_attrs = dict(runs.get(decode_run_key, {}))
-        if zstride_level is not None:
-            run_attrs["zstride_level"] = int(zstride_level)
         if decode_mode is not None:
             run_attrs["decode_mode"] = str(decode_mode)
         run_attrs[norm_key] = np.asarray(normalization_vector, dtype=np.float32)
@@ -1627,6 +1727,67 @@ class qi2labDataStore:
         return attrs
 
     @staticmethod
+    def _write_extra_attributes(
+        image_path: Path | str,
+        extra_attributes: Mapping[str, Any],
+        merge: bool = True,
+    ) -> None:
+        """
+        Write image-level extra attributes for externally-created OME-Zarr stores.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Image group path. Both the directory path and the corresponding
+            OME-Zarr store path are accepted.
+        extra_attributes : Mapping[str, Any]
+            Attribute updates to write at the image root.
+        merge : bool, default=True
+            If True, merge updates into existing attributes. If False, replace
+            the existing image-level attributes with ``extra_attributes``.
+
+        Returns
+        -------
+        None
+            Attributes are written to ``zarr.json`` for Zarr v3 stores or to
+            ``.zattrs`` for Zarr v2 stores.
+        """
+
+        image_root = qi2labDataStore._image_store_path(image_path)
+        payload = {
+            str(k): qi2labDataStore._to_json_compatible(v)
+            for k, v in dict(extra_attributes).items()
+        }
+
+        zarr_json_path = image_root / Path("zarr.json")
+        if zarr_json_path.exists():
+            with zarr_json_path.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            if merge:
+                attributes = metadata.get("attributes", {})
+                if not isinstance(attributes, dict):
+                    attributes = {}
+                attributes.update(payload)
+                metadata["attributes"] = attributes
+            else:
+                metadata["attributes"] = payload
+            with zarr_json_path.open("w", encoding="utf-8") as handle:
+                json.dump(metadata, handle, indent=2)
+            return
+
+        zattrs_path = image_root / Path(".zattrs")
+        if zattrs_path.exists() and merge:
+            with zattrs_path.open("r", encoding="utf-8") as handle:
+                attributes = json.load(handle)
+            if not isinstance(attributes, dict):
+                attributes = {}
+        else:
+            attributes = {}
+        attributes.update(payload)
+        with zattrs_path.open("w", encoding="utf-8") as handle:
+            json.dump(attributes, handle, indent=2)
+
+    @staticmethod
     def _to_json_compatible(value: Any) -> Any:
         """
         Convert numpy/scalar containers to JSON-compatible values.
@@ -1714,7 +1875,8 @@ class qi2labDataStore:
         default_images = (
             "corrected_data",
             "registered_decon_data",
-            f"registered_{self.feature_predictor_folder_name}_data",
+            "decon_data",
+            f"{self.feature_predictor_folder_name}_data",
             "opticalflow_xform_px",
         )
         candidate_names = image_names if image_names is not None else default_images
@@ -1816,6 +1978,49 @@ class qi2labDataStore:
             }
         return spec
 
+    def _update_image_translation_transform(
+        self,
+        image_root: Path,
+        stage_zyx_um: Sequence[float],
+    ) -> None:
+        """
+        Update an existing OME-Zarr image translation transform.
+
+        Parameters
+        ----------
+        image_root : Path
+            Image root path, without or with the ``.ome.zarr`` suffix.
+        stage_zyx_um : Sequence[float]
+            Physical Z, Y, X translation to write into the image metadata.
+
+        Returns
+        -------
+        None
+            The image metadata is updated in place when it already exists.
+        """
+
+        image_path = self._image_store_path(image_root)
+        metadata_path = image_path / Path("zarr.json")
+        if not metadata_path.exists():
+            return
+
+        metadata = self._load_from_json(metadata_path)
+        if not isinstance(metadata, dict):
+            return
+
+        transforms = (
+            metadata.get("attributes", {})
+            .get("ome", {})
+            .get("multiscales", [{}])[0]
+            .get("datasets", [{}])[0]
+            .get("coordinateTransformations", [])
+        )
+        for transform in transforms:
+            if transform.get("type") == "translation":
+                transform["translation"] = [float(v) for v in stage_zyx_um]
+                self._save_to_json(metadata, metadata_path)
+                return
+
     def _resolve_original_tile_position_zyx_um(
         self,
         tile_id: str,
@@ -1869,6 +2074,29 @@ class qi2labDataStore:
                 return [float(v) for v in stage]
         return None
 
+    def _resolve_reference_tile_position_zyx_um(
+        self, tile_id: str
+    ) -> list[float] | None:
+        """
+        Resolve the first-round reference stage position for registered outputs.
+
+        Parameters
+        ----------
+        tile_id : str
+            Tile identifier.
+
+        Returns
+        -------
+        list[float] or None
+            First fiducial round stage position in Z, Y, X microns.
+        """
+
+        if not getattr(self, "_round_ids", None):
+            return None
+        return self._resolve_original_tile_position_zyx_um(
+            tile_id=tile_id, round_id=self._round_ids[0]
+        )
+
     def _validate_core_image_shape(
         self,
         entity_root_path: Path | str,
@@ -1898,7 +2126,8 @@ class qi2labDataStore:
         required_names = {
             "corrected_data",
             "registered_decon_data",
-            f"registered_{self.feature_predictor_folder_name}_data",
+            "decon_data",
+            f"{self.feature_predictor_folder_name}_data",
         }
         for candidate_name in required_names:
             if candidate_name == image_name:
@@ -1910,8 +2139,8 @@ class qi2labDataStore:
                 raise ValueError(
                     f"Image shape mismatch in {entity_root.name}: "
                     f"{image_name}={shape} but {candidate_name}={candidate_shape}. "
-                    "corrected_data, registered_decon_data, and "
-                    "registered_feature_predictor_data must match."
+                    "corrected_data, decon/registered data, and "
+                    "feature_predictor_data must match."
                 )
 
     @staticmethod
@@ -2283,6 +2512,10 @@ class qi2labDataStore:
                 psf_root_path = self._calibrations_zarr_path / Path("psf_data")
                 try:
                     if psf_root_path.exists():
+
+                        def psf_sort_key(path: Path) -> int:
+                            return int(path.name[len("psf_") : len("psf_") + 3])
+
                         psf_dirs = sorted(
                             [
                                 entry
@@ -2290,7 +2523,7 @@ class qi2labDataStore:
                                 if entry.is_dir()
                                 and re.fullmatch(r"psf_\d{3}\.ome\.zarr", entry.name)
                             ],
-                            key=lambda p: int(p.name[len("psf_") : len("psf_") + 3]),
+                            key=psf_sort_key,
                         )
                     else:
                         psf_dirs = []
@@ -2423,12 +2656,12 @@ class qi2labDataStore:
                 if round_id != self._round_ids[0]:
                     attributes = self._load_entity_attributes(entity_root)
 
-                    keys_to_check = ["rigid_xform_xyz_px"]
+                    keys_to_check = ["local_round_transform_zyx_um"]
 
                     for key in keys_to_check:
                         if key not in attributes.keys():
                             raise KeyError(
-                                f"{round_id, tile_id} Rigid registration missing"
+                                f"{round_id, tile_id} local round transform missing"
                             )
 
                     current_local_zarr_path = str(
@@ -2475,8 +2708,19 @@ class qi2labDataStore:
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
                 entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
+                current_local_zarr_path = str(entity_root / Path("decon_data"))
+
+                try:
+                    self._check_for_zarr_array(
+                        self._get_kvstore_key(current_local_zarr_path),
+                        self._zarrv2_spec.copy(),
+                    )
+                except (OSError, ZarrError):
+                    print(tile_id, bit_id)
+                    print("Readout decon data missing.")
+
                 current_local_zarr_path = str(
-                    entity_root / Path("registered_decon_data")
+                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
 
                 try:
@@ -2486,30 +2730,13 @@ class qi2labDataStore:
                     )
                 except (OSError, ZarrError):
                     print(tile_id, bit_id)
-                    print("Registered readout data missing.")
-
-                current_local_zarr_path = str(
-                    entity_root
-                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
-                )
-
-                try:
-                    self._check_for_zarr_array(
-                        self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec.copy(),
-                    )
-                except (OSError, ZarrError):
-                    print(tile_id, bit_id)
-                    print("Registered feature_predictor prediction missing.")
+                    print("feature_predictor prediction missing.")
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(
-                    entity_root / Path("registered_decon_data")
-                )
+                registered_shape = self._image_shape(entity_root / Path("decon_data"))
                 feature_shape = self._image_shape(
-                    entity_root
-                    / Path(f"registered_{self.feature_predictor_folder_name}_data")
+                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
                 shapes = [
                     shape
@@ -2518,7 +2745,7 @@ class qi2labDataStore:
                 ]
                 if len(shapes) > 1 and any(shape != shapes[0] for shape in shapes[1:]):
                     raise ValueError(
-                        f"{tile_id} {bit_id} corrected/registered/feature image shapes differ: "
+                        f"{tile_id} {bit_id} corrected/decon/feature image shapes differ: "
                         f"{corrected_shape}, {registered_shape}, {feature_shape}"
                     )
 
@@ -2553,7 +2780,7 @@ class qi2labDataStore:
         # check and validate fused
         if self._datastore_state["Fused"] and validate:
             fused_image_path = self._fused_root_path / Path(
-                f"fused_{self.fiducial_folder_name}_iso_zyx"
+                f"fused_{self.fiducial_folder_name}_zyx"
             )
             attributes = self._read_extra_attributes(fused_image_path)
 
@@ -2739,7 +2966,7 @@ class qi2labDataStore:
         tile: int | str,
         round: int | str,
     ) -> Sequence[int] | None:
-        """Load readout bits linked to fidicual round for one tile.
+        """Load readout bits linked to fiducial round for one tile.
 
         Parameters
         ----------
@@ -2751,7 +2978,7 @@ class qi2labDataStore:
         Returns
         -------
         bit_linker : Optional[Sequence[int]]
-            Readout bits linked to fidicual round for one tile.
+            Readout bits linked to fiducial round for one tile.
         """
 
         if isinstance(tile, int):
@@ -2806,12 +3033,12 @@ class qi2labDataStore:
         tile: int | str,
         round: int | str,
     ) -> None:
-        """Save readout bits linked to fidicual round for one tile.
+        """Save readout bits linked to fiducial round for one tile.
 
         Parameters
         ----------
         bit_linker : Sequence[int]
-            Readout bits linked to fidicual round for one tile.
+            Readout bits linked to fiducial round for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         round : Union[int, str]
@@ -2868,7 +3095,7 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
     ) -> Sequence[int] | None:
-        """Load fidicual round linked to readout bit for one tile.
+        """Load fiducial round linked to readout bit for one tile.
 
         Parameters
         ----------
@@ -2880,7 +3107,7 @@ class qi2labDataStore:
         Returns
         -------
         round_linker : Optional[Sequence[int]]
-            Fidicual round linked to readout bit for one tile.
+            Fiducial round linked to readout bit for one tile.
         """
 
         if isinstance(tile, int):
@@ -2935,12 +3162,12 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
     ) -> None:
-        """Save fidicual round linker attribute to readout bit for one tile.
+        """Save fiducial round linker attribute to readout bit for one tile.
 
         Parameters
         ----------
         round_linker : int
-            Fidicual round linked to readout bit for one tile.
+            Fiducial round linked to readout bit for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         bit : Union[int, str]
@@ -3117,15 +3344,19 @@ class qi2labDataStore:
 
         try:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            stage_zyx_um = np.asarray(stage_zyx_um, dtype=np.float32)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
-                    "stage_zyx_um": np.asarray(stage_zyx_um, dtype=np.float32).tolist(),
+                    "stage_zyx_um": stage_zyx_um.tolist(),
                     "affine_zyx_px": np.asarray(
                         affine_zyx_px, dtype=np.float32
                     ).tolist(),
                 },
                 target_image_name="corrected_data",
+            )
+            self._update_image_translation_transform(
+                entity_root / Path("corrected_data"), stage_zyx_um
             )
         except (TypeError, ValueError):
             print(tile_id, round_id)
@@ -3138,7 +3369,7 @@ class qi2labDataStore:
         round: int | str | None = None,
         bit: int | str | None = None,
     ) -> tuple[float, float] | None:
-        """Load wavelengths for fidicual OR readout bit for one tile.
+        """Load wavelengths for fiducial OR readout bit for one tile.
 
         Parameters
         ----------
@@ -3152,7 +3383,7 @@ class qi2labDataStore:
         Returns
         -------
         wavelengths_um : Optional[tuple[float, float]]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -3226,12 +3457,12 @@ class qi2labDataStore:
         round: int | str | None = None,
         bit: int | str | None = None,
     ) -> tuple[float, float] | None:
-        """Save wavelengths for fidicual OR readout bit for one tile.
+        """Save wavelengths for fiducial OR readout bit for one tile.
 
         Parameters
         ----------
         wavelengths_um : tuple[float, float]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         tile : Union[int, str]
             Tile index or tile id.
         round : Optional[Union[int, str]]
@@ -3242,7 +3473,7 @@ class qi2labDataStore:
         Returns
         -------
         wavelengths_um : Optional[tuple[float, float]]
-            Wavelengths for fidicual OR readout bit for one tile.
+            Wavelengths for fiducial OR readout bit for one tile.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -3687,13 +3918,144 @@ class qi2labDataStore:
             print("Error writing rigid transform attribute.")
             return None
 
+    def load_local_round_transform_zyx_um(
+        self,
+        tile: int | str,
+        round: int | str,
+    ) -> ArrayLike | None:
+        """
+        Load the local fiducial round transform for one tile.
+
+        Parameters
+        ----------
+        tile : int | str
+            Tile index or tile identifier.
+        round : int | str
+            Fiducial round index or round identifier.
+
+        Returns
+        -------
+        ArrayLike or None
+            Homogeneous 4x4 affine transform in physical Z, Y, X microns. The
+            transform maps first-round reference coordinates to coordinates in
+            the requested moving round. Returns None when the transform is not
+            present.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+        try:
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            attributes = self._load_entity_attributes(entity_root)
+            return np.asarray(
+                attributes["local_round_transform_zyx_um"], dtype=np.float32
+            )
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            print(tile_id, round_id)
+            print("Local round transform mapping back to first round not found.")
+            return None
+
+    def save_local_round_transform_zyx_um(
+        self,
+        transform_zyx_um: ArrayLike,
+        tile: int | str,
+        round: int | str,
+    ) -> None:
+        """
+        Save the local fiducial round transform for one tile.
+
+        Parameters
+        ----------
+        transform_zyx_um : ArrayLike
+            Homogeneous 4x4 affine transform in physical Z, Y, X microns. The
+            transform maps first-round reference coordinates to coordinates in
+            the requested moving round.
+        tile : int | str
+            Tile index or tile identifier.
+        round : int | str
+            Fiducial round index or round identifier.
+
+        Returns
+        -------
+        None
+            The transform is stored in the entity attributes for the requested
+            fiducial tile and round.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+        try:
+            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates={
+                    "local_round_transform_zyx_um": np.asarray(
+                        transform_zyx_um, dtype=np.float32
+                    ).tolist()
+                },
+                target_image_name="registered_decon_data",
+            )
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+            print("Error writing local round transform attribute.")
+            return None
+
     def load_coord_of_xform_px(
         self,
         tile: int | str | None,
         round: int | str | None,
         return_future: bool | None = True,
     ) -> tuple[ArrayLike, ArrayLike] | None:
-        """Local fidicual optical flow matrix for one round and tile.
+        """Local fiducial optical flow matrix for one round and tile.
 
         Parameters
         ----------
@@ -3707,7 +4069,7 @@ class qi2labDataStore:
         Returns
         -------
         of_xform_px : Optional[ArrayLike]
-            Local fidicual optical flow matrix for one round and tile.
+            Local fiducial optical flow matrix for one round and tile.
         downsampling : Optional[ArrayLike]
             Downsampling factor.
         """
@@ -3780,12 +4142,12 @@ class qi2labDataStore:
         round: int | str,
         return_future: bool | None = False,
     ) -> None:
-        """Save fidicual optical flow matrix for one round and tile.
+        """Save fiducial optical flow matrix for one round and tile.
 
         Parameters
         ----------
         of_xform_px : ArrayLike
-            Local fidicual optical flow matrix for one round and tile.
+            Local fiducial optical flow matrix for one round and tile.
         tile : Union[int, str]
             Tile index or tile id.
         block_size : Sequence[float]
@@ -3859,6 +4221,245 @@ class qi2labDataStore:
             print("Error saving optical flow transform.")
             return None
 
+    def load_local_sofima_flow_field(
+        self,
+        *,
+        tile: int | str,
+        round: int | str,
+        return_future: bool | None = True,
+    ) -> tuple[ArrayLike, dict] | None:
+        """
+        Load the SOFIMA flow field for one local fiducial round.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile identifier.
+        round : int or str
+            Moving fiducial round index or identifier.
+        return_future : bool, default=True
+            If True, return the lazy array object used by the datastore backend.
+
+        Returns
+        -------
+        tuple[ArrayLike, dict] or None
+            SOFIMA flow field and metadata attributes. The map channels are X,
+            Y, Z and spatial axes are Z, Y, X. ``map_stride_zyx_px`` is stored
+            in Z, Y, X order. ``map_box_start_xyz_px`` is stored in X, Y, Z
+            order and gives the reference-grid coordinate of the first flow
+            sample. For fields produced by SOFIMA this is the patch center
+            coordinate, not the image corner.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        image_name = "local_sofima_flow_field"
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+        current_local_zarr_path = entity_root / Path(image_name)
+        image_path = self._image_store_path(current_local_zarr_path)
+        if not image_path.exists():
+            print("SOFIMA flow field not found.")
+            return None
+
+        try:
+            spec = self._build_image_write_spec(dtype="<f4")
+            sofima_flow_field = self._load_from_zarr_array(
+                self._get_kvstore_key(image_path),
+                spec,
+                return_future,
+            )
+            attributes = self._load_entity_attributes(
+                entity_root,
+                image_names=(image_name,),
+            )
+            return sofima_flow_field, attributes
+        except (OSError, ZarrError, KeyError) as e:
+            print(e)
+            print("Error loading SOFIMA flow field.")
+            return None
+
+    def save_local_sofima_flow_field(
+        self,
+        sofima_flow_field_xyz_px: ArrayLike,
+        *,
+        tile: int | str,
+        round: int | str,
+        reference_round: int | str,
+        map_stride_zyx_px: Sequence[float],
+        map_box_start_xyz_px: Sequence[float],
+        map_box_size_xyz_px: Sequence[float],
+        reference_shape_zyx_px: Sequence[int],
+        moving_shape_zyx_px: Sequence[int],
+        sofima_status: str = "ok",
+        valid_flow_vectors: int | None = None,
+        return_future: bool | None = False,
+    ) -> None:
+        """
+        Save the SOFIMA flow field for one local fiducial round.
+
+        The saved OME-Zarr image stores the raw float32 SOFIMA map exactly as
+        used in memory. The package convention is channel-first ``(3, z, y,
+        x)`` with channels ``X, Y, Z`` and spatial axes ``Z, Y, X``. Flow
+        values are relative displacements in reference-image pixels from a
+        reference coordinate to the affine-initialized moving coordinate.
+        ``map_box_start_xyz_px`` is the reference coordinate of the first flow
+        sample in ``X, Y, Z`` order. SOFIMA patch-correlation vectors are
+        patch-centered, so this is normally half the patch size.
+
+        Parameters
+        ----------
+        sofima_flow_field_xyz_px : ArrayLike
+            Relative SOFIMA flow field with channels X, Y, Z and spatial axes
+            Z, Y, X.
+        tile : int or str
+            Tile index or tile identifier.
+        round : int or str
+            Moving fiducial round index or identifier.
+        reference_round : int or str
+            Reference fiducial round index or identifier.
+        map_stride_zyx_px : Sequence[float]
+            Flow-field stride in reference pixels in Z, Y, X order.
+        map_box_start_xyz_px : Sequence[float]
+            Reference pixel coordinate of the first flow sample in X, Y, Z
+            order.
+        map_box_size_xyz_px : Sequence[float]
+            Flow-field sample-lattice extent in X, Y, Z order, measured from
+            ``map_box_start_xyz_px`` through the last stored map sample.
+        reference_shape_zyx_px : Sequence[int]
+            Reference image shape in Z, Y, X order.
+        moving_shape_zyx_px : Sequence[int]
+            Moving native image shape in Z, Y, X order.
+        sofima_status : str, default="ok"
+            Status reported by the SOFIMA estimator.
+        valid_flow_vectors : int or None, default=None
+            Number of valid local vectors before missing-vector fill.
+        return_future : bool, default=False
+            If True, return the asynchronous datastore write object.
+
+        Returns
+        -------
+        None
+            The flow field and attributes are written to the datastore.
+        """
+
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        if isinstance(reference_round, int):
+            reference_round_id = self._round_ids[reference_round]
+        else:
+            reference_round_id = str(reference_round)
+
+        image_name = "local_sofima_flow_field"
+        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
+        current_local_zarr_path = entity_root / Path(image_name)
+        attributes = {
+            "registration_backend": "sofima",
+            "initial_registration_source": "stored_local_affine_transform",
+            "flow_field_name": image_name,
+            "flow_direction": (
+                f"{reference_round_id}_reference_xyz_px_to_affine_initialized_"
+                f"{round_id}_xyz_px"
+            ),
+            "final_render_direction": (
+                f"{reference_round_id}_reference_xyz_px_to_moving_native_xyz_px"
+            ),
+            "flow_representation": "sofima_relative_coordinate_map",
+            "flow_channel_order": "xyz",
+            "flow_spatial_order": "zyx",
+            "map_stride_zyx_px": np.asarray(
+                map_stride_zyx_px, dtype=np.float32
+            ).tolist(),
+            "map_box_start_xyz_px": np.asarray(
+                map_box_start_xyz_px, dtype=np.float32
+            ).tolist(),
+            "map_box_size_xyz_px": np.asarray(
+                map_box_size_xyz_px, dtype=np.float32
+            ).tolist(),
+            "reference_shape_zyx_px": np.asarray(
+                reference_shape_zyx_px, dtype=np.int64
+            ).tolist(),
+            "moving_shape_zyx_px": np.asarray(
+                moving_shape_zyx_px, dtype=np.int64
+            ).tolist(),
+            "sofima_status": str(sofima_status),
+            "interpolation_count_final_image": 1,
+        }
+        if valid_flow_vectors is not None:
+            attributes["valid_flow_vectors"] = int(valid_flow_vectors)
+
+        try:
+            spec = self._build_image_write_spec(
+                dtype="<f4",
+                extra_attributes=attributes,
+            )
+            self._save_to_zarr_array(
+                np.asarray(sofima_flow_field_xyz_px, dtype=np.float32),
+                self._get_kvstore_key(current_local_zarr_path),
+                spec,
+                return_future,
+            )
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates=attributes,
+                target_image_name=image_name,
+                image_names=(image_name,),
+            )
+        except (OSError, TimeoutError):
+            print("Error saving SOFIMA flow field.")
+            return None
+
     def load_local_registered_image(
         self,
         tile: int | str,
@@ -3866,7 +4467,12 @@ class qi2labDataStore:
         bit: int | str | None = None,
         return_future: bool | None = True,
     ) -> ArrayLike | None:
-        """Local registered, deconvolved image for fidiculial OR readout bit for one tile.
+        """Load a fiducial registered image or an unwarped readout image.
+
+        Fiducial rounds are loaded from ``registered_decon_data`` after local
+        registration. Readout bits are loaded from ``decon_data`` in their
+        native, unwarped tile frame; pixel decoding applies fiducial, SOFIMA,
+        and chromatic transforms at load time.
 
         Parameters
         ----------
@@ -3881,8 +4487,8 @@ class qi2labDataStore:
 
         Returns
         -------
-        registered_decon_image : Optional[ArrayLike]
-            Registered, deconvolved image for fidiculial OR readout bit for one tile.
+        ArrayLike or None
+            Fiducial registered image or unwarped readout image.
         """
 
         if (round is None and bit is None) or (round is not None and bit is not None):
@@ -3925,7 +4531,7 @@ class qi2labDataStore:
                 self._readouts_root_path
                 / Path(tile_id)
                 / Path(local_id)
-                / Path("registered_decon_data")
+                / Path("decon_data")
             )
         else:
             if isinstance(round, int):
@@ -3958,15 +4564,15 @@ class qi2labDataStore:
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<u2"
-            registered_decon_image = self._load_from_zarr_array(
+            image = self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return registered_decon_image
+            return image
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error loading registered deconvolved image.")
+            print("Error loading local deconvolved image.")
             return None
 
     def save_local_registered_image(
@@ -3978,12 +4584,16 @@ class qi2labDataStore:
         bit: int | str | None = None,
         return_future: bool | None = False,
     ) -> None:
-        """Save registered, deconvolved image.
+        """Save a fiducial registered image or an unwarped readout image.
+
+        Fiducial rounds are saved under ``registered_decon_data`` after local
+        registration. Readout bits are saved under ``decon_data`` in their
+        native, unwarped tile frame.
 
         Parameters
         ----------
         registered_image : ArrayLike
-            Registered, deconvolved image.
+            Image to save.
         tile : Union[int, str]
             Tile index or tile id.
         deconvolution : bool
@@ -4033,7 +4643,7 @@ class qi2labDataStore:
                 print("'bit' must be integer index or string identifier")
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("registered_decon_data")
+            current_local_zarr_path = entity_root / Path("decon_data")
             stage_position = self._resolve_original_tile_position_zyx_um(
                 tile_id=tile_id, bit_id=local_id
             )
@@ -4055,14 +4665,12 @@ class qi2labDataStore:
                 return None
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, round_id=local_id
-            )
+            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
 
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name="registered_decon_data",
+                image_name="decon_data" if bit is not None else "registered_decon_data",
                 image=registered_image,
             )
             attributes = self._load_entity_attributes(entity_root)
@@ -4081,7 +4689,9 @@ class qi2labDataStore:
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name="registered_decon_data",
+                target_image_name=(
+                    "decon_data" if bit is not None else "registered_decon_data"
+                ),
             )
         except (OSError, TimeoutError, ValueError):
             print("Error saving corrected image.")
@@ -4106,7 +4716,7 @@ class qi2labDataStore:
 
         Returns
         -------
-        registered_feature_predictor_image : Optional[ArrayLike]
+        feature_predictor_image : Optional[ArrayLike]
             feature_predictor prediction image for one tile.
         """
 
@@ -4146,7 +4756,7 @@ class qi2labDataStore:
             self._readouts_root_path
             / Path(tile_id)
             / Path(bit_id)
-            / Path(f"registered_{self.feature_predictor_folder_name}_data")
+            / Path(f"{self.feature_predictor_folder_name}_data")
         )
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -4157,12 +4767,12 @@ class qi2labDataStore:
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<f4"
-            registered_feature_predictor_image = self._load_from_zarr_array(
+            feature_predictor_image = self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return registered_feature_predictor_image
+            return feature_predictor_image
         except (OSError, ZarrError) as e:
             print(e)
             print("Error loading feature_predictor image.")
@@ -4223,13 +4833,13 @@ class qi2labDataStore:
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
             current_local_zarr_path = entity_root / Path(
-                f"registered_{self.feature_predictor_folder_name}_data"
+                f"{self.feature_predictor_folder_name}_data"
             )
 
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name=f"registered_{self.feature_predictor_folder_name}_data",
+                image_name=f"{self.feature_predictor_folder_name}_data",
                 image=feature_predictor_image,
             )
             stage_position = self._resolve_original_tile_position_zyx_um(
@@ -4250,7 +4860,7 @@ class qi2labDataStore:
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name=f"registered_{self.feature_predictor_folder_name}_data",
+                target_image_name=f"{self.feature_predictor_folder_name}_data",
             )
         except (OSError, ZarrError, ValueError) as e:
             print(e)
@@ -4502,11 +5112,11 @@ class qi2labDataStore:
             print(e)
             print("Could not save global coordinate transforms.")
 
-    def load_global_fidicual_image(
+    def load_global_fiducial_image(
         self,
         return_future: bool | None = True,
     ) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike] | None:
-        """Load downsampled, fused fidicual image.
+        """Load downsampled, fused fiducial image.
 
         Parameters
         ----------
@@ -4516,7 +5126,7 @@ class qi2labDataStore:
         Returns
         -------
         fused_image : Optional[ArrayLike]
-            Downsampled, fused fidicual image.
+            Downsampled, fused fiducial image.
         affine_zyx_um : Optional[ArrayLike]
             Global affine registration transform for fused image.
         origin_zyx_um : Optional[ArrayLike]
@@ -4526,7 +5136,7 @@ class qi2labDataStore:
         """
 
         current_local_zarr_path = self._fused_root_path / Path(
-            f"fused_{self.fiducial_folder_name}_iso_zyx"
+            f"fused_{self.fiducial_folder_name}_zyx"
         )
 
         image_path = self._image_store_path(current_local_zarr_path)
@@ -4549,7 +5159,7 @@ class qi2labDataStore:
             print("Error loading globally registered, fused image.")
             return None
 
-    def save_global_fidicual_image(
+    def save_global_fiducial_image(
         self,
         fused_image: ArrayLike,
         affine_zyx_um: ArrayLike,
@@ -4558,12 +5168,12 @@ class qi2labDataStore:
         fusion_type: str = "fiducial",
         return_future: bool | None = False,
     ) -> None:
-        """Save downsampled, fused fidicual image.
+        """Save downsampled, fused fiducial image.
 
         Parameters
         ----------
         fused_image : ArrayLike
-            Downsampled, fused fidicual image.
+            Downsampled, fused fiducial image.
         affine_zyx_um : ArrayLike
             Global affine registration transform for fused image.
         origin_zyx_um : ArrayLike
@@ -4577,7 +5187,7 @@ class qi2labDataStore:
         """
 
         if fusion_type == "fiducial":
-            filename = f"fused_{self.fiducial_folder_name}_iso_zyx"
+            filename = f"fused_{self.fiducial_folder_name}_zyx"
         else:
             filename = "fused_all_channels_zyx"
         current_local_zarr_path = self._fused_root_path / Path(filename)

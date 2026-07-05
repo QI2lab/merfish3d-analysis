@@ -8,20 +8,71 @@ build-backend = "hatchling.build"
 name = "merfish3d-analysis"
 description = "GPU-accelerated MERFISH processing"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
 authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
 ]
 classifiers = [
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Operating System :: POSIX :: Linux",
     "License :: OSI Approved :: BSD License"
 ]
 dynamic = ["version"]
-dependencies = ["typer"]
-    
+dependencies = [
+    "typer",
+    "tqdm",
+    "ryomen",
+    "numpy",
+    "scipy",
+    "pandas",
+    "cupy-cuda12x[ctk]>=14.1.1; sys_platform == 'linux'",
+    "cucim-cu12==26.6.*; sys_platform == 'linux'",
+    "pylibraft-cu12==26.6.*; sys_platform == 'linux'",
+    "cuvs-cu12==26.6.*; sys_platform == 'linux'",
+    "torch",
+    "torchvision",
+    "onnxruntime-gpu",
+    "ndv[vispy,pyqt]",
+    "cellpose[gui]",
+    "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
+    "sofima @ git+https://github.com/google-research/sofima.git",
+    "jax[cuda12]; sys_platform == 'linux'",
+    "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
+    "multiview-stitcher[itk-elastix]>=0.1.56",
+    "tifffile==2025.9.20",
+    "psfmodels",
+    "ndstorage",
+    "roifile",
+    "scikit-learn",
+    "scikit-image",
+    "shapely",
+    "rtree",
+    "numba",
+    "zarr>3.0.8",
+    "fastparquet",
+    "joblib",
+    "matplotlib",
+    "yaozarrs[write-tensorstore,io] @ git+https://github.com/dpshepherd/yaozarrs.git@fix-v3-extra-attributes-location",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+
 [tool.hatch.version]
 path = "src/merfish3danalysis/__init__.py"
 
@@ -31,6 +82,9 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 only-include = ["src"]
 sources = ["src"]
+
+[tool.uv]
+default-groups = []
 
 [tool.ruff]
 line-length = 88
@@ -77,16 +131,14 @@ ban-relative-imports = "all"
 docstring-code-format = true
 skip-magic-trailing-comma = false
 
-# extras
-# https://peps.python.org/pep-0621/#dependencies-optional-dependencies
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "pytest-mock",
-    "ruff", 
+    "ruff",
     "ty",
     "pre-commit",
-    "pyinstrument"
+    "pyinstrument",
 ]
 docs = [
     "mkdocs",
@@ -95,7 +147,7 @@ docs = [
     "mkdocs-gen-files",
     "mkdocs-literate-nav",
     "mkdocs-minify-plugin",
-    "mkdocs-mermaid2-plugin"
+    "mkdocs-mermaid2-plugin",
 ]
 
 [project.urls]
@@ -103,8 +155,6 @@ Source = "https://github.com/qi2lab/merfish3d-analysis"
 Tracker = "https://github.com/qi2lab/merfish3d-analysis/issues"
 
 [project.scripts]
-setup-merfish3d = "merfish3danalysis.setup_merfish3d:main"
-setup-colab = "merfish3danalysis.setup_colab:main"
 sim-convert = "merfish3danalysis.cli.statphysbio_simulation.convert_simulation_to_experiment:main"
 sim-datastore = "merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore:main"
 sim-preprocess = "merfish3danalysis.cli.statphysbio_simulation.register_and_deconvolve:main"
@@ -112,9 +162,8 @@ sim-decode = "merfish3danalysis.cli.statphysbio_simulation.pixeldecode:main"
 sim-f1score = "merfish3danalysis.cli.statphysbio_simulation.calculate_F1:main"
 sim-buildfigure = "merfish3danalysis.cli.statphysbio_simulation.calculate_F1:main"
 qi2lab-datastore = "merfish3danalysis.cli.qi2lab_microscopes.create_datastore:main"
-qi2lab-datastore-skipz = "merfish3danalysis.cli.qi2lab_microscopes.create_datastore_skip_z:main"
 qi2lab-preprocess = "merfish3danalysis.cli.qi2lab_microscopes.preprocess:main"
-qi2lab-globalregister = "merfish3danalysis.cli.qi2lab_microscopes.global_register:main"
 qi2lab-segment = "merfish3danalysis.cli.qi2lab_microscopes.segment_fiducial:main"
 qi2lab-decode = "merfish3danalysis.cli.qi2lab_microscopes.pixeldecode:main"
+qi2lab-chromatic-calibration = "merfish3danalysis.cli.qi2lab_microscopes.chromatic_calibration:main"
 qi2lab-viewer = "merfish3danalysis.cli.qi2lab_microscopes.viewer:main"

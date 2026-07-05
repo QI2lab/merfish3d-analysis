@@ -1,7 +1,5 @@
 """View qi2lab datastores with an ndv/PyQt GUI."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -284,7 +282,7 @@ def global_fused_available(datastore: Any) -> bool:
         return False
 
     fiducial_name = getattr(datastore, "fiducial_folder_name", "polyDT")
-    fused_path = datastore_path / "fused" / f"fused_{fiducial_name}_iso_zyx"
+    fused_path = datastore_path / "fused" / f"fused_{fiducial_name}_zyx"
     return fused_path.exists()
 
 
@@ -1150,7 +1148,7 @@ def load_global_image_channels(
         Function result.
     """
 
-    loaded = datastore.load_global_fidicual_image(return_future=False)
+    loaded = datastore.load_global_fiducial_image(return_future=False)
     if loaded is None:
         raise ValueError("No fused global polyDT image was available to display.")
 
@@ -1296,8 +1294,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
         from qtpy import QtCore, QtWidgets
     except ImportError as exc:
         raise RuntimeError(
-            "The qi2lab viewer requires GUI dependencies. Run setup-merfish3d "
-            "without --headless to install ndv and Qt support."
+            "The qi2lab viewer requires GUI dependencies. Run "
+            "`uv sync` to install ndv and Qt support."
         ) from exc
 
     if hasattr(ndv, "set_gui_backend"):
@@ -1682,6 +1680,26 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 return
             apply_lut_channel_labels(self.array_viewer, labels)
 
+        def _apply_lut_names_callback(self, labels: list[str]) -> Any:
+            """
+            Return a callback that applies LUT names to the current viewer.
+
+            Parameters
+            ----------
+            labels : list[str]
+                Channel labels to apply when the callback runs.
+
+            Returns
+            -------
+            Any
+                Zero-argument callback for ``QTimer.singleShot``.
+            """
+
+            def apply_labels() -> None:
+                self._apply_lut_names(labels)
+
+            return apply_labels
+
         def _set_loading(self, is_loading: bool, message: str) -> None:
             """
             Set loading.
@@ -1953,12 +1971,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
             step += 1
             self._advance_progress(step, "Updated viewer")
             self._apply_lut_names(self.channel_labels)
-            QtCore.QTimer.singleShot(
-                50, lambda labels=stack.labels: self._apply_lut_names(labels)
-            )
-            QtCore.QTimer.singleShot(
-                250, lambda labels=stack.labels: self._apply_lut_names(labels)
-            )
+            QtCore.QTimer.singleShot(50, self._apply_lut_names_callback(stack.labels))
+            QtCore.QTimer.singleShot(250, self._apply_lut_names_callback(stack.labels))
             self.status_label.setText("Displayed: " + ", ".join(stack.labels))
 
         def display_selection(self) -> None:
@@ -2050,10 +2064,10 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 self._advance_progress(step, "Updated viewer")
                 self._apply_lut_names(self.channel_labels)
                 QtCore.QTimer.singleShot(
-                    50, lambda labels=stack.labels: self._apply_lut_names(labels)
+                    50, self._apply_lut_names_callback(stack.labels)
                 )
                 QtCore.QTimer.singleShot(
-                    250, lambda labels=stack.labels: self._apply_lut_names(labels)
+                    250, self._apply_lut_names_callback(stack.labels)
                 )
                 self.status_label.setText("Displayed: " + ", ".join(stack.labels))
             except ValueError as exc:

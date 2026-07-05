@@ -22,15 +22,89 @@ import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
+import ctypes
 import gc
+import operator
+import os
 import shutil
+import sys
 import tempfile
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from random import sample
 from typing import Literal
+
+_CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+
+
+@dataclass(frozen=True)
+class ChromaticAffineEstimationConfig:
+    """Explicit RNA-derived chromatic affine estimation parameters."""
+
+    min_pairs: int = 20
+    distance_filter_min_pairs_multiplier: int = 4
+    distance_filter_percentile: float = 25.0
+    weight_filter_min_pairs_multiplier: int = 2
+    weight_filter_percentile: float = 25.0
+    residual_threshold_um: float = 0.35
+    residual_threshold_z_spacing_fraction: float = 0.5
+    z_limit_spacing_multiplier: float = 3.5
+    lateral_scale_min: float = 0.85
+    lateral_scale_max: float = 1.05
+    lateral_shear_max: float = 0.08
+    max_iterations: int = 6
+    scale_regularization: float = 0.0
+    robust_z_mad_multiplier: float = 3.0
+    robust_z_mad_scale: float = 1.4826
+    ransac_seed: int = 1729
+    ransac_min_iterations: int = 64
+    ransac_max_iterations: int = 512
+    ransac_sample_size: int = 3
+    centroid_z_support: int = 7
+    centroid_weight_epsilon: float = 1e-6
+
+
+def preload_cuda_libraries() -> None:
+    """Preload CUDA libs from NVIDIA pip wheels so GPU libraries can resolve them."""
+
+    if _CUDA_LIBRARY_HANDLES:
+        return
+
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    base = Path(sys.prefix) / "lib" / pyver / "site-packages" / "nvidia"
+
+    package_libraries = [
+        ("cuda_runtime", ["libcudart.so.12"]),
+        ("cuda_nvrtc", ["libnvrtc.so.12"]),
+        ("cuda_cupti", ["libcupti.so.12"]),
+        ("cufft", ["libcufft.so.11"]),
+        ("cublas", ["libcublasLt.so.12", "libcublas.so.12"]),
+        ("curand", ["libcurand.so.10"]),
+        ("cusparse", ["libcusparse.so.12"]),
+        ("cusolver", ["libcusolver.so.11", "libcusolverMg.so.11"]),
+        ("nvjitlink", ["libnvJitLink.so.12"]),
+    ]
+
+    for package_dir, names in package_libraries:
+        directory = base / package_dir / "lib"
+        for name in names:
+            lib_path = directory / name
+            if not lib_path.exists():
+                continue
+            try:
+                _CUDA_LIBRARY_HANDLES.append(
+                    ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+                )
+            except OSError:
+                pass
+
+
+preload_cuda_libraries()
+
+import itertools
 
 import cupy as cp
 import numpy as np
@@ -39,7 +113,7 @@ import rtree
 from cucim.skimage.measure import label
 from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter
+from cupyx.scipy.ndimage import gaussian_filter, grey_dilation
 from cuvs.distance import pairwise_distance
 from roifile import roiread
 from scipy.spatial import cKDTree
@@ -48,12 +122,12 @@ from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
 DEFAULT_2D_MINIMUM_PIXELS = 7.0
 DEFAULT_3D_MINIMUM_PIXELS = 16.0
-DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS = 10.0
 
 # filter warning from skimage
 warnings.filterwarnings(
@@ -64,13 +138,79 @@ warnings.filterwarnings(
 # GPU helper functions
 
 
+def _start_gpu_worker_process(
+    *,
+    target: object,
+    args: tuple,
+    physical_gpu_id: int,
+) -> mp.Process:
+    """
+    Start one worker with only its assigned physical GPU visible.
+
+    Parameters
+    ----------
+    target : object
+        Worker function passed to :class:`multiprocessing.Process`.
+    args : tuple
+        Worker arguments. These should use local GPU index 0 because the child
+        process sees only ``physical_gpu_id``.
+    physical_gpu_id : int
+        Physical GPU index to expose to the child process.
+
+    Returns
+    -------
+    multiprocessing.Process
+        Started worker process.
+    """
+
+    previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
+    try:
+        process = mp.Process(target=target, args=args)
+        process.start()
+    finally:
+        if previous_visible_devices is None:
+            os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+        else:
+            os.environ["CUDA_VISIBLE_DEVICES"] = previous_visible_devices
+    return process
+
+
+def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
+    """
+    Join GPU workers and raise if any worker failed.
+
+    Parameters
+    ----------
+    processes : Sequence[multiprocessing.Process]
+        Worker processes to join.
+    label : str
+        Human-readable worker group name used in the error message.
+
+    Returns
+    -------
+    None
+        Raises RuntimeError when at least one worker exits nonzero.
+    """
+
+    errors = []
+    for process in processes:
+        process.join()
+        if process.exitcode not in (0, None):
+            errors.append(
+                f"{label} worker pid={process.pid} failed with "
+                f"exitcode={process.exitcode}."
+            )
+    if errors:
+        raise RuntimeError(f"{label} failed:\n" + "\n".join(errors))
+
+
 def decode_tiles_worker(
     datastore_path: Path,
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
     verbose: int,
-    zstride_level: int,
     decode_mode: Literal["auto", "2d", "3d"],
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
@@ -93,8 +233,6 @@ def decode_tiles_worker(
         Function argument.
     verbose : int
         Function argument.
-    zstride_level : int
-        Decode-time z stride.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     lowpass_sigma : Sequence[float]
@@ -113,6 +251,8 @@ def decode_tiles_worker(
     None
         Function result.
     """
+    preload_cuda_libraries()
+
     import cupy as cp
     import torch
 
@@ -127,7 +267,6 @@ def decode_tiles_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
-        zstride_level=zstride_level,
         decode_mode=decode_mode,
     )
 
@@ -176,7 +315,6 @@ def _optimize_norm_worker(
     tile_indices: Sequence[int],
     gpu_id: int,
     merfish_bits: int,
-    zstride_level: int,
     decode_mode: Literal["auto", "2d", "3d"],
     temp_dir: Path,
     iteration: int,
@@ -184,6 +322,7 @@ def _optimize_norm_worker(
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
     feature_predictor_threshold: float,
+    collect_chromatic_centroids: bool,
 ) -> None:
     """
     Worker that runs one iteration of normalization-by-decoding on a GPU.
@@ -198,8 +337,6 @@ def _optimize_norm_worker(
         Function argument.
     merfish_bits : int
         Function argument.
-    zstride_level : int
-        Decode-time z stride.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     temp_dir : Path
@@ -214,12 +351,17 @@ def _optimize_norm_worker(
         Function argument.
     feature_predictor_threshold : float
         Function argument.
+    collect_chromatic_centroids : bool
+        If True, collect per-on-bit centroid features needed for chromatic
+        affine estimation.
 
     Returns
     -------
     None
         Function result.
     """
+    preload_cuda_libraries()
+
     import cupy as cp
     import torch
 
@@ -234,7 +376,6 @@ def _optimize_norm_worker(
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
-        zstride_level=zstride_level,
         decode_mode=decode_mode,
     )
 
@@ -243,6 +384,7 @@ def _optimize_norm_worker(
         lowpass_sigma=lowpass_sigma,
     )
     local_decoder._optimize_normalization_weights = True
+    local_decoder._collect_chromatic_centroids = bool(collect_chromatic_centroids)
     local_decoder._temp_dir = temp_dir
 
     # Seed the first iteration from global normalization, then refine iteratively.
@@ -290,12 +432,13 @@ class PixelDecoder:
     z_range: Sequence[int], default None
         z range to analyze. In integer indices from [0,N] where N is number of
         z planes.
-    zstride_level : int, default 0
-        Decode-time z stride. Values 0 and 1 keep all planes; values >= 2 keep
-        planes 0, N, 2N...
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Connected-component and filtering mode. ``auto`` follows the datastore
         microscope type.
+    estimate_chromatic_affines : bool, default False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. If False, use existing datastore calibration metadata
+        with identity fallback.
     """
 
     def __init__(
@@ -306,8 +449,9 @@ class PixelDecoder:
         verbose: int = 1,
         use_mask: bool | None = False,
         z_range: Sequence[int] | None = None,
-        zstride_level: int = 0,
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
+        estimate_chromatic_affines: bool = False,
+        chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
     ) -> None:
         """
         Initialize the object.
@@ -326,10 +470,15 @@ class PixelDecoder:
             Function argument.
         z_range : Sequence[int] | None
             Function argument.
-        zstride_level : int
-            Function argument.
         decode_mode : Literal['auto', '2d', '3d']
             Function argument.
+        estimate_chromatic_affines : bool
+            If True, iterative normalization estimates chromatic affine
+            transforms from decoded on-bit centroids. If False, decoding uses
+            existing datastore chromatic calibration metadata with identity
+            fallback.
+        chromatic_affine_config : ChromaticAffineEstimationConfig or None
+            Explicit RNA-derived chromatic affine estimation parameters.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -339,14 +488,14 @@ class PixelDecoder:
 
         self._n_merfish_bits = merfish_bits
 
-        if zstride_level < 0:
-            raise ValueError("zstride_level must be greater than or equal to 0.")
         if decode_mode not in {"auto", "2d", "3d"}:
             raise ValueError("decode_mode must be one of 'auto', '2d', or '3d'.")
 
         self._decode_mode = decode_mode
-        self._zstride_level = int(zstride_level)
-        self._zstride = max(1, int(zstride_level))
+        self._estimate_chromatic_affines = bool(estimate_chromatic_affines)
+        self._chromatic_affine_config = (
+            chromatic_affine_config or ChromaticAffineEstimationConfig()
+        )
         if decode_mode == "auto":
             effective_decode_mode = (
                 "2d" if self._datastore.microscope_type == "2D" else "3d"
@@ -359,18 +508,14 @@ class PixelDecoder:
             self._is_3D = False
         else:
             self._is_3D = True
-        self._decode_run_key = (
-            None
-            if self._zstride <= 1
-            else f"zstride_{self._zstride:02d}_{effective_decode_mode}"
-        )
+        self._decode_run_key = None
         if z_range is None:
             self._z_crop = False
             self._z_range = [0, None]
         else:
             self._z_crop = True
             self._z_range = [z_range[0], z_range[1]]
-        self._z_slice = slice(self._z_range[0], self._z_range[1], self._zstride)
+        self._z_slice = slice(self._z_range[0], self._z_range[1])
 
         self._load_codebook()
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
@@ -385,10 +530,10 @@ class PixelDecoder:
 
         self._codebook_style = 1
         self._optimize_normalization_weights = False
+        self._collect_chromatic_centroids = False
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._blank_fraction_filter_results: dict[str, object] | None = None
-        self._blank_bit_enrichment_filter_results: dict[str, object] | None = None
 
     def _load_codebook(self) -> None:
         """
@@ -612,10 +757,23 @@ class PixelDecoder:
                             tile=tile_id, bit=bit_id, return_future=False
                         )
                     )
+                    _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                        tile=tile_id,
+                        bit=bit_id,
+                    )
 
-                    current_image = cp.asarray(
-                        decon_image, dtype=cp.float32
-                    ) * cp.asarray(feature_predictor_image, dtype=cp.float32)
+                    current_image = np.asarray(
+                        decon_image, dtype=np.float32
+                    ) * np.asarray(feature_predictor_image, dtype=np.float32)
+                    current_image = warp_bit_image_to_reference(
+                        current_image,
+                        datastore=self._datastore,
+                        tile=tile_id,
+                        bit_id=bit_id,
+                        emission_wavelength_um=em_wvl,
+                        gpu_id=gpu_id,
+                    )
+                    current_image = cp.asarray(current_image, dtype=cp.float32)
                     current_image[current_image > hot_pixel_threshold] = cp.median(
                         current_image[current_image.shape[0] // 2, :, :]
                     ).astype(cp.float32)
@@ -703,7 +861,6 @@ class PixelDecoder:
                 "global",
                 cp.asnumpy(normalization_vector).astype(np.float32),
                 cp.asnumpy(background_vector).astype(np.float32),
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -797,7 +954,6 @@ class PixelDecoder:
                     "iterative",
                     old_iterative_normalization_vector.astype(np.float32),
                     old_iterative_background_vector.astype(np.float32),
-                    zstride_level=self._zstride,
                     decode_mode=self._effective_decode_mode,
                 )
                 return
@@ -877,7 +1033,6 @@ class PixelDecoder:
                 "iterative",
                 barcode_based_normalization_vector.astype(np.float32),
                 barcode_based_background_vector.astype(np.float32),
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -900,7 +1055,6 @@ class PixelDecoder:
                 "iterative",
                 barcode_based_normalization_vector,
                 barcode_based_background_vector,
-                zstride_level=self._zstride,
                 decode_mode=self._effective_decode_mode,
             )
 
@@ -912,7 +1066,418 @@ class PixelDecoder:
             cp.get_default_memory_pool().free_all_blocks()
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    def _load_bit_data(self, feature_predictor_threshold: float | None = 0.1) -> None:
+    def _estimate_chromatic_affines_from_barcodes(
+        self,
+    ) -> None:
+        """
+        Estimate 3D chromatic affine matrices from decoded RNA on-bit centroids.
+
+        Returns
+        -------
+        None
+            Chromatic affine metadata are saved into the datastore calibration
+            sidecar.
+        """
+
+        config = self._chromatic_affine_config
+        min_pairs = int(config.min_pairs)
+
+        if self._df_barcodes_loaded.empty:
+            return
+        if "gene_id" not in self._df_barcodes_loaded.columns:
+            return
+
+        keep_coding_transcripts = ~(
+            self._df_barcodes_loaded["gene_id"]
+            .astype("string")
+            .str.lower()
+            .str.startswith("blank", na=False)
+        )
+        barcode_table = self._df_barcodes_loaded.loc[
+            keep_coding_transcripts
+            & self._df_barcodes_loaded["gene_id"].notna()
+            & self._df_barcodes_loaded["gene_id"].astype(str).str.strip().ne("")
+        ].reset_index(drop=True)
+        if barcode_table.empty:
+            return
+        if "distance_min" in barcode_table.columns:
+            distances = barcode_table["distance_min"].to_numpy(dtype=np.float64)
+            finite_distances = np.isfinite(distances)
+            required_distances = (
+                int(config.distance_filter_min_pairs_multiplier) * min_pairs
+            )
+            if int(np.sum(finite_distances)) >= required_distances:
+                distance_threshold = float(
+                    np.nanpercentile(
+                        distances[finite_distances],
+                        float(config.distance_filter_percentile),
+                    )
+                )
+                high_confidence = finite_distances & (distances <= distance_threshold)
+                if int(np.sum(high_confidence)) >= int(min_pairs):
+                    barcode_table = barcode_table.loc[high_confidence].reset_index(
+                        drop=True
+                    )
+
+        bit_wavelengths = {}
+        bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
+        reference_tile = self._datastore.tile_ids[0]
+        for bit_index, bit_id in enumerate(bit_ids, start=1):
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=reference_tile,
+                bit=bit_id,
+            )
+            bit_wavelengths[bit_index] = float(em_wvl)
+
+        unique_wavelengths = sorted(set(bit_wavelengths.values()))
+        reference_wavelength = unique_wavelengths[0]
+        spacing = np.asarray(self._datastore.voxel_size_zyx_um, dtype=np.float32)
+        wavelength_to_index = {
+            wavelength: index for index, wavelength in enumerate(unique_wavelengths)
+        }
+        previous_chromatic_affines = {}
+        previous_calibration = self._datastore.load_chromatic_affine_transforms_zyx_um()
+        if isinstance(previous_calibration, dict):
+            for channel in previous_calibration.get("channels", {}).values():
+                if not isinstance(channel, dict):
+                    continue
+                wavelength = channel.get("wavelength_um")
+                affine = channel.get("affine_zyx_um")
+                if wavelength is None or affine is None:
+                    continue
+                previous_chromatic_affines[float(wavelength)] = np.asarray(
+                    affine,
+                    dtype=np.float32,
+                )
+        pair_points: dict[
+            tuple[float, float], tuple[np.ndarray, np.ndarray, np.ndarray]
+        ] = {
+            (source_wavelength, target_wavelength): (
+                np.empty((0, 3), dtype=np.float32),
+                np.empty((0, 3), dtype=np.float32),
+                np.empty((0,), dtype=np.float32),
+            )
+            for source_wavelength in unique_wavelengths
+            for target_wavelength in unique_wavelengths
+            if not np.isclose(source_wavelength, target_wavelength)
+        }
+
+        on_bit_columns = ["on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4"]
+        if not all(column in barcode_table.columns for column in on_bit_columns):
+            return
+        on_bits = barcode_table[on_bit_columns].to_numpy(dtype=np.int16)
+        num_barcodes = len(barcode_table)
+        centers_by_wavelength_um = {}
+        weights_by_wavelength = {}
+        valid_by_wavelength = {}
+
+        for wavelength in unique_wavelengths:
+            weighted_sum = np.zeros((num_barcodes, 3), dtype=np.float64)
+            weight_sum = np.zeros(num_barcodes, dtype=np.float64)
+            for bit, bit_wavelength in bit_wavelengths.items():
+                if not np.isclose(bit_wavelength, wavelength):
+                    continue
+                center_cols = [
+                    f"bit{bit:02d}_center_z",
+                    f"bit{bit:02d}_center_y",
+                    f"bit{bit:02d}_center_x",
+                ]
+                if not all(col in barcode_table.columns for col in center_cols):
+                    continue
+                centers = barcode_table[center_cols].to_numpy(dtype=np.float64)
+                intensity_col = f"bit{bit:02d}_intensity_sum"
+                if intensity_col in barcode_table.columns:
+                    weights = barcode_table[intensity_col].to_numpy(dtype=np.float64)
+                else:
+                    weights = np.ones(num_barcodes, dtype=np.float64)
+                bit_is_on = np.any(on_bits == int(bit), axis=1)
+                valid = bit_is_on & np.all(np.isfinite(centers), axis=1)
+                valid &= np.isfinite(weights) & (weights > 0)
+                if not np.any(valid):
+                    continue
+                weighted_sum[valid] += centers[valid] * weights[valid, np.newaxis]
+                weight_sum[valid] += weights[valid]
+
+            valid_wavelength = weight_sum > 0
+            centers_um = np.full((num_barcodes, 3), np.nan, dtype=np.float32)
+            centers_um[valid_wavelength] = (
+                weighted_sum[valid_wavelength]
+                / weight_sum[valid_wavelength, np.newaxis]
+                * spacing
+            ).astype(np.float32)
+            centers_by_wavelength_um[wavelength] = centers_um
+            weights_by_wavelength[wavelength] = weight_sum.astype(np.float32)
+            valid_by_wavelength[wavelength] = valid_wavelength
+
+        valid_wavelength_count = np.zeros(num_barcodes, dtype=np.int16)
+        for valid in valid_by_wavelength.values():
+            valid_wavelength_count += valid.astype(np.int16)
+        contributing_transcripts = int(np.sum(valid_wavelength_count >= 2))
+
+        for source_wavelength in unique_wavelengths:
+            for target_wavelength in unique_wavelengths:
+                if np.isclose(source_wavelength, target_wavelength):
+                    continue
+                valid_pair = (
+                    valid_by_wavelength[source_wavelength]
+                    & valid_by_wavelength[target_wavelength]
+                )
+                pair_weights = np.sqrt(
+                    weights_by_wavelength[source_wavelength][valid_pair]
+                    * weights_by_wavelength[target_wavelength][valid_pair]
+                ).astype(np.float32)
+                finite_pair = np.isfinite(pair_weights) & (pair_weights > 0)
+                source_points = centers_by_wavelength_um[source_wavelength][valid_pair][
+                    finite_pair
+                ]
+                target_points = centers_by_wavelength_um[target_wavelength][valid_pair][
+                    finite_pair
+                ]
+                pair_weights = pair_weights[finite_pair]
+                required_weights = (
+                    int(config.weight_filter_min_pairs_multiplier) * min_pairs
+                )
+                if pair_weights.size >= required_weights:
+                    min_weight = np.percentile(
+                        pair_weights,
+                        float(config.weight_filter_percentile),
+                    )
+                    strong = pair_weights >= min_weight
+                    if int(np.sum(strong)) >= int(min_pairs):
+                        source_points = source_points[strong]
+                        target_points = target_points[strong]
+                        pair_weights = pair_weights[strong]
+                pair_points[(source_wavelength, target_wavelength)] = (
+                    source_points,
+                    target_points,
+                    pair_weights,
+                )
+
+        edge_affines = {}
+        edge_diagnostics = {}
+        for wavelength_pair, points in pair_points.items():
+            source_points, target_points, pair_weights = points
+            if source_points.shape[0] < int(min_pairs):
+                continue
+            affine, diagnostics = self._fit_affine_zyx_um(
+                source_points,
+                target_points,
+                weights=pair_weights,
+                min_pairs=min_pairs,
+                config=config,
+                residual_threshold_um=max(
+                    float(config.residual_threshold_um),
+                    float(config.residual_threshold_z_spacing_fraction)
+                    * float(spacing[0]),
+                ),
+            )
+            diagnostics["candidate_pairs"] = int(source_points.shape[0])
+            edge_diagnostics[wavelength_pair] = diagnostics
+            if affine is not None:
+                edge_affines[wavelength_pair] = affine
+
+        adjacency = {wavelength: [] for wavelength in unique_wavelengths}
+        for source_wavelength, target_wavelength in edge_affines:
+            adjacency[source_wavelength].append(target_wavelength)
+
+        affines_by_wavelength = {
+            reference_wavelength: np.eye(4, dtype=np.float32),
+        }
+        status_by_wavelength = {reference_wavelength: "identity_reference"}
+        diagnostics_by_wavelength = {
+            wavelength: {
+                "paired_transcripts": contributing_transcripts,
+                "pair_constraints": 0,
+                "path_wavelengths_um": [],
+            }
+            for wavelength in unique_wavelengths
+        }
+
+        for wavelength in unique_wavelengths:
+            if np.isclose(wavelength, reference_wavelength):
+                continue
+
+            queue = [(wavelength, [wavelength], np.eye(4, dtype=np.float32))]
+            visited = {wavelength}
+            while queue:
+                current_wavelength, path, composed_affine = queue.pop(0)
+                if np.isclose(current_wavelength, reference_wavelength):
+                    affines_by_wavelength[wavelength] = composed_affine
+                    status_by_wavelength[wavelength] = "affine_estimated"
+                    pair_count = 0
+                    path_diagnostics = []
+                    for source_wavelength, target_wavelength in itertools.pairwise(
+                        path
+                    ):
+                        pair_count += pair_points[
+                            (source_wavelength, target_wavelength)
+                        ][0].shape[0]
+                        path_diagnostics.append(
+                            {
+                                "source_wavelength_um": float(source_wavelength),
+                                "target_wavelength_um": float(target_wavelength),
+                                "fit": edge_diagnostics[
+                                    (source_wavelength, target_wavelength)
+                                ],
+                            }
+                        )
+                    diagnostics_by_wavelength[wavelength] = {
+                        "paired_transcripts": contributing_transcripts,
+                        "pair_constraints": int(pair_count),
+                        "path_wavelengths_um": [float(v) for v in path],
+                        "path_fits": path_diagnostics,
+                    }
+                    break
+                for neighbor in adjacency[current_wavelength]:
+                    if neighbor in visited:
+                        continue
+                    visited.add(neighbor)
+                    edge_affine = edge_affines[(current_wavelength, neighbor)]
+                    queue.append(
+                        (
+                            neighbor,
+                            [*path, neighbor],
+                            edge_affine @ composed_affine,
+                        )
+                    )
+
+            if wavelength not in affines_by_wavelength:
+                affines_by_wavelength[wavelength] = np.eye(4, dtype=np.float32)
+                candidate_pairs = sum(
+                    pair_points[(wavelength, other_wavelength)][0].shape[0]
+                    for other_wavelength in unique_wavelengths
+                    if not np.isclose(wavelength, other_wavelength)
+                )
+                status_by_wavelength[wavelength] = (
+                    "identity_fallback_unconnected"
+                    if candidate_pairs >= int(min_pairs)
+                    else "identity_fallback_too_few_pairs"
+                )
+                diagnostics_by_wavelength[wavelength] = {
+                    "paired_transcripts": contributing_transcripts,
+                    "pair_constraints": int(candidate_pairs),
+                    "path_wavelengths_um": [],
+                }
+
+        channels = {}
+        for wavelength in unique_wavelengths:
+            residual_affine = affines_by_wavelength[wavelength].astype(
+                np.float32,
+                copy=False,
+            )
+            previous_affine = previous_chromatic_affines.get(
+                wavelength,
+                np.eye(4, dtype=np.float32),
+            )
+            cumulative_affine = residual_affine @ previous_affine
+            if np.isclose(wavelength, reference_wavelength):
+                cumulative_affine = np.eye(4, dtype=np.float32)
+            elif not np.allclose(previous_affine, np.eye(4, dtype=np.float32)):
+                z_limit_um = float(config.z_limit_spacing_multiplier) * float(
+                    spacing[0]
+                )
+                lateral_scale = np.diag(cumulative_affine[1:3, 1:3])
+                lateral_shear = cumulative_affine[1:3, 1:3] - np.diag(lateral_scale)
+                plausible_cumulative = (
+                    abs(float(cumulative_affine[0, 3])) <= z_limit_um
+                    and np.all(lateral_scale >= float(config.lateral_scale_min))
+                    and np.all(lateral_scale <= float(config.lateral_scale_max))
+                    and float(np.max(np.abs(lateral_shear)))
+                    <= float(config.lateral_shear_max)
+                )
+                if not plausible_cumulative:
+                    cumulative_affine = previous_affine.astype(
+                        np.float32,
+                        copy=True,
+                    )
+                    diagnostics_by_wavelength[wavelength][
+                        "rejected_residual_status"
+                    ] = "implausible_cumulative_affine"
+            key = f"wavelength_{wavelength:.6f}"
+            channels[key] = {
+                "channel_index": wavelength_to_index[wavelength],
+                "channel_name": key,
+                "wavelength_um": float(wavelength),
+                "reference_channel": bool(np.isclose(wavelength, reference_wavelength)),
+                "affine_zyx_um": cumulative_affine.tolist(),
+                "diagnostics": diagnostics_by_wavelength[wavelength],
+                "status": status_by_wavelength.get(
+                    wavelength, "identity_fallback_unconnected"
+                ),
+            }
+
+        self._datastore.save_chromatic_affine_transforms_zyx_um(
+            {
+                "reference_wavelength_um": float(reference_wavelength),
+                "voxel_size_zyx_um": [float(v) for v in spacing],
+                "estimator": (
+                    "decoded_rna_on_bit_weighted_centroid_z_translation_yx_affine_graph"
+                ),
+                "pair_constraints": int(
+                    sum(points[0].shape[0] for points in pair_points.values())
+                ),
+                "contributing_transcripts": contributing_transcripts,
+                "channels": channels,
+            }
+        )
+
+    def _save_identity_chromatic_affines(self) -> None:
+        """
+        Save identity chromatic affine transforms for the current bit wavelengths.
+
+        Returns
+        -------
+        None
+            Identity channel transforms are written to datastore metadata.
+        """
+
+        bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
+        reference_tile = self._datastore.tile_ids[0]
+        wavelengths = []
+        for bit_id in bit_ids:
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=reference_tile,
+                bit=bit_id,
+            )
+            wavelengths.append(float(em_wvl))
+        unique_wavelengths = sorted(set(wavelengths))
+        reference_wavelength = unique_wavelengths[0]
+        channels = {}
+        for index, wavelength in enumerate(unique_wavelengths):
+            key = f"wavelength_{wavelength:.6f}"
+            channels[key] = {
+                "channel_index": index,
+                "channel_name": key,
+                "wavelength_um": float(wavelength),
+                "reference_channel": bool(np.isclose(wavelength, reference_wavelength)),
+                "affine_zyx_um": np.eye(4, dtype=np.float32).tolist(),
+                "diagnostics": {
+                    "paired_transcripts": 0,
+                    "pair_constraints": 0,
+                    "path_wavelengths_um": [],
+                },
+                "status": "identity_reference"
+                if np.isclose(wavelength, reference_wavelength)
+                else "identity_initialization",
+            }
+        self._datastore.save_chromatic_affine_transforms_zyx_um(
+            {
+                "reference_wavelength_um": float(reference_wavelength),
+                "voxel_size_zyx_um": [
+                    float(v) for v in self._datastore.voxel_size_zyx_um
+                ],
+                "estimator": "identity_initialization_for_iterative_decoding",
+                "pair_constraints": 0,
+                "contributing_transcripts": 0,
+                "channels": channels,
+            }
+        )
+
+    def _load_bit_data(
+        self,
+        feature_predictor_threshold: float | None = 0.1,
+        gpu_id: int = 0,
+    ) -> None:
         """Load prediction-weighted readout data for all bits in the tile.
 
         Parameters
@@ -920,6 +1485,8 @@ class PixelDecoder:
         feature_predictor_threshold : float, default 0.1
             Legacy argument kept for API compatibility. The loaded image is
             weighted by the feature-predictor image rather than thresholded.
+        gpu_id : int, default=0
+            CUDA device ID used for decode-time warping.
         """
 
         if self._verbose > 1:
@@ -954,32 +1521,46 @@ class PixelDecoder:
 
             feature_predictor_array = feature_predictor_image.result()
             decon_array = decon_image.result()
-            prediction = np.asarray(
-                feature_predictor_array[self._z_slice, :, :],
-                dtype=np.float32,
+            _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
+                tile=self._tile_idx,
+                bit=bit_id,
             )
-            registered_data = np.asarray(
-                decon_array[self._z_slice, :, :],
-                dtype=np.float32,
+            prediction_weighted = np.asarray(
+                decon_array, dtype=np.float32
+            ) * np.asarray(feature_predictor_array, dtype=np.float32)
+            registered_data = warp_bit_image_to_reference(
+                prediction_weighted,
+                datastore=self._datastore,
+                tile=self._tile_idx,
+                bit_id=bit_id,
+                emission_wavelength_um=em_wvl,
+                gpu_id=gpu_id,
             )
-            images.append(registered_data * prediction)
+            images.append(registered_data[self._z_slice, :, :])
             del feature_predictor_array, decon_array
-            self._em_wvl.append(
-                self._datastore.load_local_wavelengths_um(
-                    tile=self._tile_idx,
-                    bit=bit_id,
-                )[1]
-            )
+            self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)
         if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
             raise ValueError(
                 "decode_mode='3d' requires at least two z planes after applying "
-                "z_range and zstride_level."
+                "z_range."
             )
         voxel_size_zyx_um = self._datastore.voxel_size_zyx_um
         self._pixel_size = voxel_size_zyx_um[1]
         self._axial_step = voxel_size_zyx_um[0]
+
+        stage_metadata = self._datastore.load_local_stage_position_zyx_um(
+            tile=self._tile_idx, round=0
+        )
+        stage_origin = None
+        camera_to_stage_affine = np.eye(4, dtype=np.float32)
+        if stage_metadata is not None:
+            stage_origin, camera_to_stage_affine = stage_metadata
+            stage_origin = np.asarray(stage_origin, dtype=np.float32)
+            camera_to_stage_affine = np.asarray(
+                camera_to_stage_affine, dtype=np.float32
+            )
 
         affine, origin, spacing = self._datastore.load_global_coord_xforms_um(
             tile=self._tile_idx
@@ -987,21 +1568,28 @@ class PixelDecoder:
         if affine is None or origin is None or spacing is None:
             if self._is_3D:
                 affine = np.eye(4)
-                origin = self._datastore.load_local_stage_position_zyx_um(
-                    tile=self._tile_idx, round=0
+                origin = (
+                    stage_origin
+                    if stage_origin is not None
+                    else np.zeros(3, dtype=np.float32)
                 )
                 spacing = self._datastore.voxel_size_zyx_um
             else:
                 affine = np.eye(4)
-                origin = self._datastore.load_local_stage_position_zyx_um(
-                    tile=self._tile_idx, round=0
-                )
-                origin = [0, origin[0], origin[1]]
+                if stage_origin is None:
+                    origin = np.zeros(3, dtype=np.float32)
+                elif stage_origin.size == 2:
+                    origin = np.asarray(
+                        [0, stage_origin[0], stage_origin[1]], dtype=np.float32
+                    )
+                else:
+                    origin = stage_origin
                 spacing = self._datastore.voxel_size_zyx_um
 
-        self._affine = affine
-        self._origin = origin
-        self._spacing = spacing
+        self._affine = np.asarray(affine, dtype=np.float32)
+        self._origin = np.asarray(origin, dtype=np.float32)
+        self._spacing = np.asarray(spacing, dtype=np.float32)
+        self._camera_to_stage_affine = camera_to_stage_affine
 
         del images
         gc.collect()
@@ -1089,21 +1677,13 @@ class PixelDecoder:
     def _effective_lowpass_sigma(
         self, sigma: Sequence[float] | None
     ) -> tuple[float, float, float] | None:
-        """
-        Resolve lowpass sigma in the sampled decoding volume.
-
-        Public decode arguments are expressed in source-image voxel units. For
-        strided 3D decoding, the sampled z axis has fewer planes, so the z sigma
-        must be divided by the stride to preserve the same physical smoothing.
-        """
+        """Return a validated sigma tuple for lowpass filtering."""
 
         if sigma is None:
             return None
         sigma_zyx = tuple(float(v) for v in sigma)
         if len(sigma_zyx) != 3:
             raise ValueError("lowpass_sigma must contain three values: z, y, x.")
-        if self._is_3D and self._zstride > 1:
-            sigma_zyx = (sigma_zyx[0] / float(self._zstride), *sigma_zyx[1:])
         return sigma_zyx
 
     def _default_minimum_pixels(self) -> float:
@@ -1111,9 +1691,287 @@ class PixelDecoder:
 
         if not self._is_3D:
             return DEFAULT_2D_MINIMUM_PIXELS
-        if self._zstride > 1:
-            return DEFAULT_ZSTRIDE_3D_MINIMUM_PIXELS
         return DEFAULT_3D_MINIMUM_PIXELS
+
+    @staticmethod
+    def _fit_affine_zyx_um(
+        source_zyx_um: np.ndarray,
+        target_zyx_um: np.ndarray,
+        *,
+        weights: np.ndarray | None = None,
+        min_pairs: int,
+        config: ChromaticAffineEstimationConfig,
+        residual_threshold_um: float = 0.35,
+    ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
+        """
+        Fit a robust chromatic affine from decoded transcript centroids.
+
+        The iterative chromatic estimator uses decoded RNA centroids, not bead
+        calibration volumes. These centroids span the lateral field of view
+        well, but usually span only a thin axial range. A full 3D affine is
+        therefore poorly conditioned and can turn centroid noise into axial
+        scale or shear. This fit estimates the chromatic model supported by
+        decoded RNA features: one shared radial Y/X scale, Y/X translations,
+        and a Z translation, returned as a 4x4 Z, Y, X physical transform.
+
+        Parameters
+        ----------
+        source_zyx_um : numpy.ndarray
+            Source points in physical Z, Y, X microns.
+        target_zyx_um : numpy.ndarray
+            Target points in physical Z, Y, X microns.
+        weights : numpy.ndarray or None, optional
+            Nonnegative per-pair confidence weights. Larger values increase the
+            influence of bright, well-supported transcript centroids.
+        min_pairs : int
+            Minimum number of retained point correspondences.
+        config : ChromaticAffineEstimationConfig
+            Explicit fitting parameters.
+        residual_threshold_um : float, default=0.35
+            Residual threshold used for iterative outlier rejection.
+
+        Returns
+        -------
+        tuple[numpy.ndarray or None, dict]
+            Constrained affine mapping source coordinates to target coordinates
+            and fit diagnostics. The affine is None when the point set is not
+            sufficient for the lateral affine model.
+        """
+
+        source = np.asarray(source_zyx_um, dtype=np.float64)
+        target = np.asarray(target_zyx_um, dtype=np.float64)
+        diagnostics: dict[str, float | int | str | list[float]] = {
+            "input_pairs": int(source.shape[0]),
+            "used_pairs": 0,
+            "median_residual_um": np.nan,
+            "p95_residual_um": np.nan,
+            "source_extent_zyx_um": [0.0, 0.0, 0.0],
+            "model": "z_translation_yx_radial_scale",
+            "status": "insufficient_pairs",
+        }
+        if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
+            diagnostics["status"] = "invalid_point_shape"
+            return None, diagnostics
+        if source.shape[0] < max(3, int(min_pairs)):
+            return None, diagnostics
+        if weights is None:
+            weights_arr = np.ones(source.shape[0], dtype=np.float64)
+        else:
+            weights_arr = np.asarray(weights, dtype=np.float64)
+            if weights_arr.shape != (source.shape[0],):
+                diagnostics["status"] = "invalid_weight_shape"
+                return None, diagnostics
+            weights_arr = np.nan_to_num(weights_arr, nan=0.0, posinf=0.0, neginf=0.0)
+            weights_arr = np.maximum(weights_arr, 0.0)
+            if not np.any(weights_arr > 0):
+                diagnostics["status"] = "invalid_weights"
+                return None, diagnostics
+            weights_arr = weights_arr / np.median(weights_arr[weights_arr > 0])
+
+        source_extent = np.ptp(source, axis=0)
+        diagnostics["source_extent_zyx_um"] = [float(v) for v in source_extent]
+        if np.linalg.matrix_rank(source[:, 1:3] - np.mean(source[:, 1:3], axis=0)) < 2:
+            diagnostics["status"] = "insufficient_lateral_spatial_rank"
+            return None, diagnostics
+
+        def solve_yx_radial_scale(
+            source_yx: np.ndarray,
+            target_yx: np.ndarray,
+            fit_weights: np.ndarray,
+        ) -> tuple[float, float, float]:
+            design_y = np.column_stack(
+                [
+                    source_yx[:, 0],
+                    np.ones(source_yx.shape[0], dtype=np.float64),
+                    np.zeros(source_yx.shape[0], dtype=np.float64),
+                ]
+            )
+            design_x = np.column_stack(
+                [
+                    source_yx[:, 1],
+                    np.zeros(source_yx.shape[0], dtype=np.float64),
+                    np.ones(source_yx.shape[0], dtype=np.float64),
+                ]
+            )
+            design = np.vstack([design_y, design_x])
+            target_values = np.concatenate([target_yx[:, 0], target_yx[:, 1]])
+            sqrt_weights = np.sqrt(np.maximum(fit_weights, 1e-12))
+            stacked_weights = np.concatenate([sqrt_weights, sqrt_weights])
+            weighted_design = design * stacked_weights[:, np.newaxis]
+            weighted_target = target_values * stacked_weights
+
+            if config.scale_regularization > 0:
+                penalty = np.sqrt(float(config.scale_regularization))
+                weighted_design = np.vstack(
+                    [weighted_design, np.asarray([[penalty, 0.0, 0.0]])]
+                )
+                weighted_target = np.concatenate(
+                    [weighted_target, np.asarray([penalty])]
+                )
+
+            solution, *_ = np.linalg.lstsq(
+                weighted_design,
+                weighted_target,
+                rcond=None,
+            )
+            return float(solution[0]), float(solution[1]), float(solution[2])
+
+        def robust_weighted_z_translation(
+            z_offsets: np.ndarray,
+            fit_weights: np.ndarray,
+        ) -> float:
+            finite = np.isfinite(z_offsets) & np.isfinite(fit_weights)
+            finite &= fit_weights > 0
+            if not np.any(finite):
+                return 0.0
+            offsets = z_offsets[finite]
+            local_weights = fit_weights[finite]
+            center = float(np.median(offsets))
+            spread = float(np.median(np.abs(offsets - center)))
+            if spread > 0:
+                keep_offsets = (
+                    np.abs(offsets - center)
+                    <= float(config.robust_z_mad_multiplier)
+                    * float(config.robust_z_mad_scale)
+                    * spread
+                )
+                if np.any(keep_offsets):
+                    offsets = offsets[keep_offsets]
+                    local_weights = local_weights[keep_offsets]
+            return float(np.average(offsets, weights=local_weights))
+
+        rng = np.random.default_rng(int(config.ransac_seed))
+        keep = np.ones(source.shape[0], dtype=bool)
+        best_keep = None
+        best_score = -1
+        best_weighted_score = -1.0
+        best_median_residual = np.inf
+        max_ransac_iterations = min(
+            int(config.ransac_max_iterations),
+            max(int(config.ransac_min_iterations), source.shape[0]),
+        )
+        sample_probability = weights_arr / np.sum(weights_arr)
+        for _iteration in range(max_ransac_iterations):
+            sample_indices = rng.choice(
+                source.shape[0],
+                size=int(config.ransac_sample_size),
+                replace=False,
+                p=sample_probability,
+            )
+            sample_source = source[sample_indices]
+            if (
+                np.linalg.matrix_rank(
+                    sample_source[:, 1:3] - np.mean(sample_source[:, 1:3], axis=0)
+                )
+                < 2
+            ):
+                continue
+
+            sample_scale, sample_y_translation, sample_x_translation = (
+                solve_yx_radial_scale(
+                    sample_source[:, 1:3],
+                    target[sample_indices, 1:3],
+                    weights_arr[sample_indices],
+                )
+            )
+            sample_affine = np.eye(4, dtype=np.float64)
+            sample_affine[0, 3] = robust_weighted_z_translation(
+                target[sample_indices, 0] - sample_source[:, 0],
+                weights_arr[sample_indices],
+            )
+            sample_affine[1, 1] = sample_scale
+            sample_affine[1, 3] = sample_y_translation
+            sample_affine[2, 2] = sample_scale
+            sample_affine[2, 3] = sample_x_translation
+
+            predicted = (
+                np.concatenate(
+                    [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                    axis=1,
+                )
+                @ sample_affine.T
+            )[:, :3]
+            residuals = np.linalg.norm(predicted - target, axis=1)
+            sample_keep = residuals <= float(residual_threshold_um)
+            sample_score = int(np.sum(sample_keep))
+            if sample_score < max(3, int(min_pairs)):
+                continue
+            sample_weighted_score = float(np.sum(weights_arr[sample_keep]))
+            sample_median_residual = float(np.median(residuals[sample_keep]))
+            if (
+                sample_score > best_score
+                or (
+                    sample_score == best_score
+                    and sample_weighted_score > best_weighted_score
+                )
+                or (
+                    sample_score == best_score
+                    and np.isclose(sample_weighted_score, best_weighted_score)
+                    and sample_median_residual < best_median_residual
+                )
+            ):
+                best_keep = sample_keep
+                best_score = sample_score
+                best_weighted_score = sample_weighted_score
+                best_median_residual = sample_median_residual
+
+        if best_keep is not None:
+            keep = best_keep
+        affine = np.eye(4, dtype=np.float64)
+        for _iteration in range(max(1, int(config.max_iterations))):
+            scale, y_translation, x_translation = solve_yx_radial_scale(
+                source[keep, 1:3],
+                target[keep, 1:3],
+                weights_arr[keep],
+            )
+            z_offsets = target[keep, 0] - source[keep, 0]
+            z_translation = robust_weighted_z_translation(z_offsets, weights_arr[keep])
+            affine = np.eye(4, dtype=np.float64)
+            affine[0, 3] = z_translation
+            affine[1, 1] = scale
+            affine[1, 3] = y_translation
+            affine[2, 2] = scale
+            affine[2, 3] = x_translation
+
+            predicted = (
+                np.concatenate(
+                    [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                    axis=1,
+                )
+                @ affine.T
+            )[:, :3]
+            residuals = np.linalg.norm(predicted - target, axis=1)
+            next_keep = residuals <= float(residual_threshold_um)
+            if np.sum(next_keep) < max(3, int(min_pairs)):
+                break
+            if np.array_equal(next_keep, keep):
+                keep = next_keep
+                break
+            keep = next_keep
+
+        predicted = (
+            np.concatenate(
+                [source, np.ones((source.shape[0], 1), dtype=np.float64)],
+                axis=1,
+            )
+            @ affine.T
+        )[:, :3]
+        residuals = np.linalg.norm(predicted - target, axis=1)
+        kept_residuals = residuals[keep]
+        if kept_residuals.size < max(3, int(min_pairs)):
+            diagnostics["status"] = "too_few_inliers"
+            diagnostics["used_pairs"] = int(kept_residuals.size)
+            return None, diagnostics
+
+        diagnostics.update(
+            {
+                "used_pairs": int(kept_residuals.size),
+                "median_residual_um": float(np.median(kept_residuals)),
+                "p95_residual_um": float(np.percentile(kept_residuals, 95)),
+                "status": "ok",
+            }
+        )
+        return affine.astype(np.float32), diagnostics
 
     @staticmethod
     def _scale_pixel_traces(
@@ -1411,6 +2269,7 @@ class PixelDecoder:
         spacing: np.ndarray,
         origin: np.ndarray,
         affine: np.ndarray,
+        camera_to_stage_affine: np.ndarray | None = None,
     ) -> np.ndarray:
         """Warp pixel space point to physical space point.
 
@@ -1424,6 +2283,8 @@ class PixelDecoder:
             Origin.
         affine : np.ndarray
             Affine transformation matrix.
+        camera_to_stage_affine : np.ndarray | None, optional
+            Camera-to-stage affine transform from datastore stage metadata.
 
         Returns
         -------
@@ -1432,6 +2293,11 @@ class PixelDecoder:
         """
 
         physical_space_point = pixel_space_point * spacing + origin
+        if camera_to_stage_affine is not None:
+            physical_space_point = (
+                np.asarray(camera_to_stage_affine)
+                @ np.array([*list(physical_space_point), 1])
+            )[:-1]
         registered_space_point = (
             np.array(affine) @ np.array([*list(physical_space_point), 1])
         )[:-1]
@@ -1440,7 +2306,7 @@ class PixelDecoder:
 
     def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
         """
-        Map z coordinates from the strided decoding volume back to source planes.
+        Map z coordinates from a cropped decoding volume back to source planes.
 
         Parameters
         ----------
@@ -1453,7 +2319,159 @@ class PixelDecoder:
             Z coordinate in the source image.
         """
 
-        return float(self._z_range[0]) + decoded_z * float(self._zstride)
+        return float(self._z_range[0]) + decoded_z
+
+    def _add_on_bit_weighted_centroids(
+        self,
+        df_barcode: pd.DataFrame,
+        codewords_label_image: cp.ndarray,
+        intensity_image: cp.ndarray,
+        on_bits_1based: np.ndarray,
+    ) -> pd.DataFrame:
+        """
+        Add per-on-bit intensity-weighted centroids for chromatic estimation.
+
+        Parameters
+        ----------
+        df_barcode : pandas.DataFrame
+            Decoded barcode table with ``label`` and centroid columns.
+        codewords_label_image : cupy.ndarray
+            Connected-component label image in decoded Z, Y, X coordinates.
+        intensity_image : cupy.ndarray
+            Intensity image in Z, Y, X, bit order.
+        on_bits_1based : numpy.ndarray
+            On-bit indices for each barcode row, 1-based.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Barcode table with sparse per-bit center and intensity-support
+            columns.
+        """
+
+        if df_barcode.empty:
+            return df_barcode
+
+        extra_columns = {
+            f"bit{bit_idx:02d}_{suffix}": np.full(len(df_barcode), np.nan)
+            for bit_idx in range(1, self._n_merfish_bits + 1)
+            for suffix in (
+                "center_z",
+                "center_y",
+                "center_x",
+                "intensity_sum",
+                "intensity_peak",
+                "voxel_count",
+            )
+        }
+        extra_df = pd.DataFrame(extra_columns, index=df_barcode.index)
+        region_labels = df_barcode["label"].to_numpy(dtype=np.int64)
+        fallback_centers = df_barcode[["z", "y", "x"]].to_numpy(dtype=np.float64)
+        labels_cp = codewords_label_image.astype(cp.int32, copy=False)
+        config = self._chromatic_affine_config
+        z_support = min(
+            int(config.centroid_z_support),
+            labels_cp.shape[0] if labels_cp.ndim == 3 else 1,
+        )
+        if z_support % 2 == 0:
+            z_support -= 1
+        centroid_labels_cp = grey_dilation(labels_cp, size=(z_support, 1, 1))
+        labels_flat = labels_cp.ravel()
+        centroid_labels_flat = centroid_labels_cp.ravel()
+        max_label = int(cp.max(labels_cp).get()) if labels_cp.size else 0
+        if max_label < 1:
+            return pd.concat([df_barcode, extra_df], axis=1)
+        label_lookup = cp.asarray(region_labels, dtype=cp.int32)
+        label_lookup = cp.clip(label_lookup, 0, max_label)
+        minlength = max_label + 1
+        area_by_label = cp.bincount(labels_flat, minlength=minlength).astype(
+            cp.float32,
+            copy=False,
+        )
+        z_coords = cp.arange(labels_cp.shape[0], dtype=cp.float32)[:, None, None]
+        y_coords = cp.arange(labels_cp.shape[1], dtype=cp.float32)[None, :, None]
+        x_coords = cp.arange(labels_cp.shape[2], dtype=cp.float32)[None, None, :]
+
+        for bit_idx in range(1, self._n_merfish_bits + 1):
+            active_rows = np.flatnonzero(np.any(on_bits_1based == bit_idx, axis=1))
+            if active_rows.size == 0:
+                continue
+
+            bit_image = cp.maximum(
+                intensity_image[..., bit_idx - 1],
+                cp.float32(0),
+            )
+            weights_flat = bit_image.ravel()
+            weight_by_label = cp.bincount(
+                centroid_labels_flat,
+                weights=weights_flat,
+                minlength=minlength,
+            )
+            z_sum_by_label = cp.bincount(
+                centroid_labels_flat,
+                weights=(bit_image * z_coords).ravel(),
+                minlength=minlength,
+            )
+            y_sum_by_label = cp.bincount(
+                centroid_labels_flat,
+                weights=(bit_image * y_coords).ravel(),
+                minlength=minlength,
+            )
+            x_sum_by_label = cp.bincount(
+                centroid_labels_flat,
+                weights=(bit_image * x_coords).ravel(),
+                minlength=minlength,
+            )
+            peak_by_label = cp.zeros(minlength, dtype=cp.float32)
+            cp.maximum.at(peak_by_label, labels_flat, weights_flat)
+
+            active_labels = label_lookup[active_rows]
+            weight_sum_cp = weight_by_label[active_labels]
+            centroid_epsilon = cp.float32(config.centroid_weight_epsilon)
+            centers_cp = cp.column_stack(
+                (
+                    z_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
+                    y_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
+                    x_sum_by_label[active_labels]
+                    / cp.maximum(weight_sum_cp, centroid_epsilon),
+                )
+            )
+            centers = cp.asnumpy(centers_cp).astype(np.float64, copy=False)
+            fallback = fallback_centers[active_rows]
+            weight_sum = cp.asnumpy(weight_sum_cp).astype(np.float64, copy=False)
+            invalid_centers = (~np.all(np.isfinite(centers), axis=1)) | (
+                weight_sum <= 0
+            )
+            centers[invalid_centers] = fallback[invalid_centers]
+
+            if self._z_crop:
+                centers[:, 0] = self._decoded_z_to_source_z(centers[:, 0])
+
+            area = cp.asnumpy(area_by_label[active_labels]).astype(
+                np.float64,
+                copy=False,
+            )
+            intensity_peak = cp.asnumpy(peak_by_label[active_labels]).astype(
+                np.float64,
+                copy=False,
+            )
+            missing = (~np.isfinite(weight_sum)) | (weight_sum <= 0)
+            area[missing] = 0.0
+            intensity_peak[~np.isfinite(intensity_peak)] = 0.0
+            weight_sum[missing] = 0.0
+
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_z"] = centers[:, 0]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_y"] = centers[:, 1]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_center_x"] = centers[:, 2]
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_intensity_sum"] = weight_sum
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_intensity_peak"] = (
+                intensity_peak
+            )
+            extra_df.loc[active_rows, f"bit{bit_idx:02d}_voxel_count"] = area
+
+        return pd.concat([df_barcode, extra_df], axis=1)
 
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
@@ -1536,7 +2554,7 @@ class PixelDecoder:
             if self._verbose > 1:
                 print("remove small")
             codewords_label_image_cp = remove_small_objects(
-                codewords_label_image_cp, min_size=minimum_pixels
+                codewords_label_image_cp, max_size=max(int(minimum_pixels) - 1, 0)
             )
 
             props_distance = gpu_regionprops_table(
@@ -1561,10 +2579,11 @@ class PixelDecoder:
                     columns={"intensity_min": "distance_min"}
                 )
 
-            # move arrays to CPU for the existing regionprops path
+            # Move labels to CPU for the existing regionprops path. Keep the
+            # GPU labels alive for the optional iterative chromatic estimates.
             codewords_label_image = cp.asnumpy(codewords_label_image_cp)
 
-            del codewords_label_image_cp, decoded_image_cp
+            del decoded_image_cp
             gc.collect()
             cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
@@ -1662,8 +2681,18 @@ class PixelDecoder:
             df_barcode = df_barcode.rename(
                 columns={"centroid-0": "z", "centroid-1": "y", "centroid-2": "x"}
             )
+            if (
+                self._optimize_normalization_weights
+                and self._collect_chromatic_centroids
+            ):
+                df_barcode = self._add_on_bit_weighted_centroids(
+                    df_barcode,
+                    codewords_label_image_cp,
+                    cp.asarray(intensity_image, dtype=cp.float32),
+                    on_sel,
+                )
 
-            if self._z_crop or self._zstride != 1:
+            if self._z_crop:
                 df_barcode["z"] = self._decoded_z_to_source_z(df_barcode["z"])
 
             df_barcode["tile_z"] = np.round(df_barcode["z"], 0).astype(int)
@@ -1677,6 +2706,7 @@ class PixelDecoder:
                     self._spacing,
                     self._origin,
                     self._affine,
+                    self._camera_to_stage_affine,
                 )
 
             df_barcode["global_z"] = np.round(pts[:, 0], 2)
@@ -1726,6 +2756,7 @@ class PixelDecoder:
             # Cleanup
             del (
                 codewords_label_image,
+                codewords_label_image_cp,
                 props,
                 props_distance,
                 props_magnitude,
@@ -1876,7 +2907,7 @@ class PixelDecoder:
             decoded_dir_path = self._temp_dir
 
             tile_files = decoded_dir_path.glob("*.parquet")
-            tile_files = sorted(tile_files, key=lambda x: x.name)
+            tile_files = sorted(tile_files, key=operator.attrgetter("name"))
 
             if self._verbose >= 1:
                 iterable_files = tqdm(tile_files, desc="tile", leave=False)
@@ -2383,510 +3414,6 @@ class PixelDecoder:
                     )
         self._blank_fraction_filter_results = diagnostics
         self._df_filtered_barcodes = annotated[annotated["blank_fraction_keep"]].copy()
-        self._df_filtered_barcodes["cell_id"] = -1
-        self._barcodes_filtered = True
-
-    def _filter_all_barcodes_blank_bit_enrichment(
-        self,
-        target_gross_misid_rate: float = 0.05,
-        intensity_bins: Sequence[float] | None = None,
-        voxel_number_bins: Sequence[float] | None = None,
-        vector_distance_bins: Sequence[float] | None = None,
-        bit_penalty_bins: Sequence[float] | None = None,
-    ) -> None:
-        """
-        Filter transcripts using blank-fraction histograms plus bit enrichment.
-
-        Parameters
-        ----------
-        target_gross_misid_rate : float
-            Function argument.
-        intensity_bins : Sequence[float] | None
-            Function argument.
-        voxel_number_bins : Sequence[float] | None
-            Function argument.
-        vector_distance_bins : Sequence[float] | None
-            Function argument.
-        bit_penalty_bins : Sequence[float] | None
-            Function argument.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
-
-        if self._verbose > 1:
-            print("blank bit enrichment: compute bit penalties")
-
-        on_bit_columns = ("on_bit_1", "on_bit_2", "on_bit_3", "on_bit_4")
-        required_columns = {
-            "gene_id",
-            "magnitude_mean",
-            "area",
-            "distance_min",
-            *on_bit_columns,
-        }
-        missing = sorted(required_columns.difference(self._df_barcodes_loaded.columns))
-        if missing:
-            raise ValueError(
-                "Blank-bit-enrichment filtering requires columns: "
-                + ", ".join(missing)
-                + ". Re-decode transcripts with the exact caller."
-            )
-
-        def _normalize_edges(
-            values: np.ndarray,
-            num_bins: int,
-            *,
-            discrete: bool = False,
-        ) -> np.ndarray:
-            """
-            Normalize edges.
-
-            Parameters
-            ----------
-            values : np.ndarray
-                Function argument.
-            num_bins : int
-                Function argument.
-            discrete : bool
-                Function argument.
-
-            Returns
-            -------
-            np.ndarray
-                Function result.
-            """
-            values = values[np.isfinite(values)]
-            if values.size == 0:
-                return np.array([-0.5, 0.5], dtype=float)
-
-            if discrete:
-                min_value = int(np.floor(values.min()))
-                max_value = int(np.ceil(values.max()))
-                if max_value - min_value + 1 <= num_bins:
-                    edges = np.arange(
-                        min_value - 0.5, max_value + 1.5, 1.0, dtype=float
-                    )
-                else:
-                    quantiles = np.quantile(values, np.linspace(0.0, 1.0, num_bins + 1))
-                    quantile_edges = np.unique(np.floor(quantiles).astype(float))
-                    if quantile_edges.size == 0:
-                        quantile_edges = np.array(
-                            [float(min_value), float(max_value + 1)]
-                        )
-                    if quantile_edges[0] > min_value:
-                        quantile_edges = np.insert(quantile_edges, 0, float(min_value))
-                    if quantile_edges[-1] <= max_value:
-                        quantile_edges = np.append(quantile_edges, float(max_value + 1))
-                    edges = quantile_edges - 0.5
-            else:
-                edges = np.unique(
-                    np.quantile(values, np.linspace(0.0, 1.0, num_bins + 1))
-                )
-
-            edges = edges[np.isfinite(edges)]
-            if edges.size < 2 or np.allclose(edges[0], edges[-1]):
-                center = float(values.mean())
-                edges = np.array([center - 0.5, center + 0.5], dtype=float)
-
-            edges[0] = min(edges[0], float(values.min()))
-            edges[-1] = max(edges[-1], float(values.max()))
-            edges[-1] = np.nextafter(edges[-1], np.inf)
-            return edges
-
-        annotated = self._df_barcodes_loaded.copy()
-        annotated["voxel_intensity"] = annotated["magnitude_mean"].to_numpy(
-            dtype=float, copy=False
-        )
-        annotated["voxel_number"] = annotated["area"].to_numpy(dtype=float, copy=False)
-        annotated["vector_distance"] = annotated["distance_min"].to_numpy(
-            dtype=float, copy=False
-        )
-        annotated["is_blank"] = (
-            annotated["gene_id"]
-            .astype("string")
-            .str.lower()
-            .str.startswith("blank", na=False)
-            .to_numpy(dtype=bool, copy=False)
-        )
-        annotated["blank_bit_enrichment_bin"] = -1
-        annotated["blank_bit_enrichment_fraction"] = np.nan
-        annotated["blank_bit_enrichment_keep"] = False
-
-        diagnostics: dict[str, object] = {
-            "target_gross_misid_rate": float(target_gross_misid_rate),
-            "chosen_threshold": np.nan,
-            "achieved_gross_misid_rate": np.inf,
-            "target_reached": False,
-            "all_histogram": np.zeros((0, 0, 0, 0), dtype=np.int64),
-            "blank_histogram": np.zeros((0, 0, 0, 0), dtype=np.int64),
-            "blank_fraction_histogram": np.zeros((0, 0, 0, 0), dtype=float),
-            "intensity_bins": np.array([], dtype=float),
-            "voxel_number_bins": np.array([], dtype=float),
-            "vector_distance_bins": np.array([], dtype=float),
-            "bit_penalty_bins": np.array([], dtype=float),
-            "threshold_sweep": pd.DataFrame(
-                columns=[
-                    "threshold",
-                    "gross_misid_rate",
-                    "kept_transcripts",
-                    "kept_blank_transcripts",
-                ]
-            ),
-            "bit_penalty_table": pd.DataFrame(),
-            "bit_penalty_mean": np.nan,
-            "bit_penalty_max": np.nan,
-        }
-
-        if annotated.empty:
-            diagnostics["reason"] = "no_transcripts"
-            self._blank_bit_enrichment_filter_results = diagnostics
-            self._df_filtered_barcodes = annotated.iloc[0:0].copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-            return
-
-        blank_gene_mask = (
-            self._df_codebook["gene_id"]
-            .astype("string")
-            .str.lower()
-            .str.startswith("blank", na=False)
-        )
-        blank_gene_count = int(blank_gene_mask.sum())
-        coding_gene_count = int((~blank_gene_mask).sum())
-
-        if self._blank_count <= 0 or blank_gene_count <= 0 or coding_gene_count <= 0:
-            annotated["blank_bit_enrichment_keep"] = True
-            diagnostics["reason"] = "no_blank_barcodes"
-            self._blank_bit_enrichment_filter_results = diagnostics
-            self._df_filtered_barcodes = annotated[
-                annotated["blank_bit_enrichment_keep"]
-            ].copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-            return
-
-        bit_columns = self._df_codebook.columns[1 : self._n_merfish_bits + 1]
-        blank_codebook_matrix = self._df_codebook.loc[
-            blank_gene_mask, bit_columns
-        ].to_numpy(dtype=float, copy=False)
-        coding_codebook_matrix = self._df_codebook.loc[
-            ~blank_gene_mask, bit_columns
-        ].to_numpy(dtype=float, copy=False)
-        blank_codebook_bit_freq = blank_codebook_matrix.sum(axis=0) / max(
-            float(blank_codebook_matrix.sum()), 1.0
-        )
-        coding_codebook_bit_freq = coding_codebook_matrix.sum(axis=0) / max(
-            float(coding_codebook_matrix.sum()), 1.0
-        )
-
-        on_bits = annotated[list(on_bit_columns)].to_numpy(dtype=np.int16, copy=False)
-        valid_on_bits = (on_bits >= 1) & (on_bits <= self._n_merfish_bits)
-        repeated_blank = np.repeat(
-            annotated["is_blank"].to_numpy(dtype=bool, copy=False), on_bits.shape[1]
-        )[valid_on_bits.ravel()]
-        flat_bits = (on_bits[valid_on_bits] - 1).astype(np.int16, copy=False)
-        blank_support = np.zeros(self._n_merfish_bits, dtype=np.int64)
-        coding_support = np.zeros(self._n_merfish_bits, dtype=np.int64)
-        if flat_bits.size:
-            blank_bits = flat_bits[repeated_blank]
-            coding_bits = flat_bits[~repeated_blank]
-            if blank_bits.size:
-                blank_support += np.bincount(blank_bits, minlength=self._n_merfish_bits)
-            if coding_bits.size:
-                coding_support += np.bincount(
-                    coding_bits, minlength=self._n_merfish_bits
-                )
-
-        blank_transcript_bit_freq = blank_support / max(blank_support.sum(), 1)
-        coding_transcript_bit_freq = coding_support / max(coding_support.sum(), 1)
-        eps = 1e-6
-        relative_blank = (blank_transcript_bit_freq + eps) / (
-            blank_codebook_bit_freq + eps
-        )
-        relative_coding = (coding_transcript_bit_freq + eps) / (
-            coding_codebook_bit_freq + eps
-        )
-        bit_enrichment_log2 = np.log2(relative_blank / relative_coding)
-        bit_penalty = np.clip(bit_enrichment_log2, a_min=0.0, a_max=None).astype(
-            np.float32, copy=False
-        )
-        bit_penalty[blank_codebook_bit_freq <= 0] = 0.0
-
-        safe_bits = np.where(valid_on_bits, on_bits - 1, 0)
-        penalty_values = np.zeros_like(on_bits, dtype=np.float32)
-        penalty_values[valid_on_bits] = bit_penalty[safe_bits[valid_on_bits]]
-        annotated["blank_bit_penalty"] = penalty_values.mean(axis=1, dtype=np.float32)
-
-        diagnostics["bit_penalty_table"] = pd.DataFrame(
-            {
-                "bit": np.arange(1, self._n_merfish_bits + 1, dtype=int),
-                "blank_support": blank_support,
-                "coding_support": coding_support,
-                "blank_transcript_bit_freq": blank_transcript_bit_freq,
-                "coding_transcript_bit_freq": coding_transcript_bit_freq,
-                "blank_codebook_bit_freq": blank_codebook_bit_freq,
-                "coding_codebook_bit_freq": coding_codebook_bit_freq,
-                "bit_enrichment_log2": bit_enrichment_log2,
-                "bit_penalty": bit_penalty,
-            }
-        )
-        diagnostics["bit_penalty_mean"] = float(np.mean(bit_penalty))
-        diagnostics["bit_penalty_max"] = float(np.max(bit_penalty))
-
-        if self._verbose > 1:
-            print("blank bit enrichment: build 4D histogram")
-
-        valid_rows = (
-            np.isfinite(annotated["voxel_intensity"].to_numpy(dtype=float, copy=False))
-            & np.isfinite(annotated["voxel_number"].to_numpy(dtype=float, copy=False))
-            & np.isfinite(
-                annotated["vector_distance"].to_numpy(dtype=float, copy=False)
-            )
-            & np.isfinite(
-                annotated["blank_bit_penalty"].to_numpy(dtype=float, copy=False)
-            )
-        )
-        if not np.any(valid_rows):
-            diagnostics["reason"] = "no_valid_features"
-            self._blank_bit_enrichment_filter_results = diagnostics
-            self._df_filtered_barcodes = annotated.iloc[0:0].copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-            return
-
-        valid = annotated.loc[valid_rows]
-        intensity_values = valid["voxel_intensity"].to_numpy(dtype=float, copy=False)
-        voxel_count_values = valid["voxel_number"].to_numpy(dtype=float, copy=False)
-        distance_values = valid["vector_distance"].to_numpy(dtype=float, copy=False)
-        bit_penalty_values = valid["blank_bit_penalty"].to_numpy(
-            dtype=float, copy=False
-        )
-
-        if intensity_bins is not None:
-            intensity_edges = np.unique(np.asarray(intensity_bins, dtype=float))
-            intensity_edges = intensity_edges[np.isfinite(intensity_edges)]
-            if intensity_edges.size < 2:
-                raise ValueError(
-                    "Explicit histogram edges must contain at least two finite values."
-                )
-            intensity_edges[-1] = np.nextafter(intensity_edges[-1], np.inf)
-        else:
-            intensity_edges = _normalize_edges(intensity_values, 10)
-
-        if voxel_number_bins is not None:
-            voxel_number_edges = np.unique(np.asarray(voxel_number_bins, dtype=float))
-            voxel_number_edges = voxel_number_edges[np.isfinite(voxel_number_edges)]
-            if voxel_number_edges.size < 2:
-                raise ValueError(
-                    "Explicit histogram edges must contain at least two finite values."
-                )
-            voxel_number_edges[-1] = np.nextafter(voxel_number_edges[-1], np.inf)
-        else:
-            voxel_number_edges = _normalize_edges(voxel_count_values, 11, discrete=True)
-
-        if vector_distance_bins is not None:
-            vector_distance_edges = np.unique(
-                np.asarray(vector_distance_bins, dtype=float)
-            )
-            vector_distance_edges = vector_distance_edges[
-                np.isfinite(vector_distance_edges)
-            ]
-            if vector_distance_edges.size < 2:
-                raise ValueError(
-                    "Explicit histogram edges must contain at least two finite values."
-                )
-            vector_distance_edges[-1] = np.nextafter(vector_distance_edges[-1], np.inf)
-        else:
-            vector_distance_edges = _normalize_edges(distance_values, 10)
-
-        if bit_penalty_bins is not None:
-            penalty_edges = np.unique(np.asarray(bit_penalty_bins, dtype=float))
-            penalty_edges = penalty_edges[np.isfinite(penalty_edges)]
-            if penalty_edges.size < 2:
-                raise ValueError(
-                    "Explicit histogram edges must contain at least two finite values."
-                )
-            penalty_edges[-1] = np.nextafter(penalty_edges[-1], np.inf)
-        else:
-            penalty_edges = _normalize_edges(bit_penalty_values, 6)
-
-        diagnostics["intensity_bins"] = intensity_edges
-        diagnostics["voxel_number_bins"] = voxel_number_edges
-        diagnostics["vector_distance_bins"] = vector_distance_edges
-        diagnostics["bit_penalty_bins"] = penalty_edges
-
-        intensity_idx = (
-            np.searchsorted(
-                intensity_edges,
-                annotated["voxel_intensity"].to_numpy(dtype=float, copy=False),
-                side="right",
-            )
-            - 1
-        )
-        voxel_idx = (
-            np.searchsorted(
-                voxel_number_edges,
-                annotated["voxel_number"].to_numpy(dtype=float, copy=False),
-                side="right",
-            )
-            - 1
-        )
-        distance_idx = (
-            np.searchsorted(
-                vector_distance_edges,
-                annotated["vector_distance"].to_numpy(dtype=float, copy=False),
-                side="right",
-            )
-            - 1
-        )
-        penalty_idx = (
-            np.searchsorted(
-                penalty_edges,
-                annotated["blank_bit_penalty"].to_numpy(dtype=float, copy=False),
-                side="right",
-            )
-            - 1
-        )
-
-        histogram_shape = (
-            len(intensity_edges) - 1,
-            len(voxel_number_edges) - 1,
-            len(vector_distance_edges) - 1,
-            len(penalty_edges) - 1,
-        )
-        in_range = (
-            valid_rows
-            & (intensity_idx >= 0)
-            & (intensity_idx < histogram_shape[0])
-            & (voxel_idx >= 0)
-            & (voxel_idx < histogram_shape[1])
-            & (distance_idx >= 0)
-            & (distance_idx < histogram_shape[2])
-            & (penalty_idx >= 0)
-            & (penalty_idx < histogram_shape[3])
-        )
-        if not np.any(in_range):
-            diagnostics["reason"] = "no_transcripts_in_histogram_range"
-            self._blank_bit_enrichment_filter_results = diagnostics
-            self._df_filtered_barcodes = annotated.iloc[0:0].copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-            return
-
-        flat_bins = np.full(len(annotated), -1, dtype=np.int64)
-        flat_bins[in_range] = np.ravel_multi_index(
-            (
-                intensity_idx[in_range],
-                voxel_idx[in_range],
-                distance_idx[in_range],
-                penalty_idx[in_range],
-            ),
-            dims=histogram_shape,
-        )
-        all_histogram = np.bincount(
-            flat_bins[in_range], minlength=int(np.prod(histogram_shape))
-        ).reshape(histogram_shape)
-        blank_in_range = in_range & annotated["is_blank"].to_numpy(
-            dtype=bool, copy=False
-        )
-        blank_histogram = np.bincount(
-            flat_bins[blank_in_range], minlength=int(np.prod(histogram_shape))
-        ).reshape(histogram_shape)
-        blank_fraction_histogram = np.full(histogram_shape, np.nan, dtype=np.float32)
-        nonempty = all_histogram > 0
-        blank_fraction_histogram[nonempty] = (
-            blank_histogram[nonempty] / all_histogram[nonempty]
-        ).astype(np.float32, copy=False)
-
-        annotated["blank_bit_enrichment_bin"] = flat_bins
-        annotated.loc[in_range, "blank_bit_enrichment_fraction"] = (
-            blank_fraction_histogram.ravel()[flat_bins[in_range]]
-        )
-
-        thresholds = np.unique(blank_fraction_histogram[nonempty])
-        sweep_rows: list[dict[str, float | int]] = []
-        chosen_threshold = np.nan
-        achieved_rate = np.inf
-        keep_mask = np.zeros(len(annotated), dtype=bool)
-        target_reached = False
-        fraction_values = annotated["blank_bit_enrichment_fraction"].to_numpy(
-            dtype=float, copy=False
-        )
-        blank_flags = annotated["is_blank"].to_numpy(dtype=bool, copy=False)
-        for threshold in thresholds:
-            current_keep = in_range & (fraction_values <= float(threshold))
-            if (
-                self._blank_count <= 0
-                or self._barcode_count <= 0
-                or not np.any(current_keep)
-            ):
-                gross_misid = np.inf
-            else:
-                blank_kept = np.count_nonzero(current_keep & blank_flags)
-                total_kept = np.count_nonzero(current_keep)
-                gross_misid = (blank_kept / float(self._blank_count)) / (
-                    total_kept / float(self._barcode_count)
-                )
-            sweep_rows.append(
-                {
-                    "threshold": float(threshold),
-                    "gross_misid_rate": float(gross_misid),
-                    "kept_transcripts": int(np.count_nonzero(current_keep)),
-                    "kept_blank_transcripts": int(
-                        np.count_nonzero(current_keep & blank_flags)
-                    ),
-                }
-            )
-            if gross_misid <= target_gross_misid_rate:
-                chosen_threshold = float(threshold)
-                achieved_rate = float(gross_misid)
-                keep_mask = current_keep.copy()
-                target_reached = True
-
-        if not sweep_rows:
-            diagnostics["reason"] = "no_nonempty_histogram_bins"
-            self._blank_bit_enrichment_filter_results = diagnostics
-            self._df_filtered_barcodes = annotated.iloc[0:0].copy()
-            self._df_filtered_barcodes["cell_id"] = -1
-            self._barcodes_filtered = True
-            return
-
-        sweep_df = pd.DataFrame(sweep_rows)
-        if not target_reached:
-            best_idx = int(sweep_df["gross_misid_rate"].argmin())
-            chosen_threshold = float(sweep_df.loc[best_idx, "threshold"])
-            achieved_rate = float(sweep_df.loc[best_idx, "gross_misid_rate"])
-            keep_mask = in_range & (fraction_values <= chosen_threshold)
-
-        annotated["blank_bit_enrichment_keep"] = keep_mask
-        diagnostics.update(
-            {
-                "chosen_threshold": chosen_threshold,
-                "achieved_gross_misid_rate": achieved_rate,
-                "target_reached": target_reached,
-                "all_histogram": all_histogram,
-                "blank_histogram": blank_histogram,
-                "blank_fraction_histogram": blank_fraction_histogram,
-                "threshold_sweep": sweep_df,
-            }
-        )
-
-        if self._verbose > 1:
-            print("blank bit enrichment filter diagnostics:")
-            for key, value in diagnostics.items():
-                if isinstance(value, (float, int, str, bool)):
-                    print(f"{key}: {value}")
-                else:
-                    print(
-                        f"{key}: {type(value)} with shape {getattr(value, 'shape', 'N/A')}"
-                    )
-        self._blank_bit_enrichment_filter_results = diagnostics
-        self._df_filtered_barcodes = annotated[
-            annotated["blank_bit_enrichment_keep"]
-        ].copy()
         self._df_filtered_barcodes["cell_id"] = -1
         self._barcodes_filtered = True
 
@@ -3586,7 +4113,10 @@ class PixelDecoder:
             )
 
             self._tile_idx = tile_idx
-            self._load_bit_data(feature_predictor_threshold=feature_predictor_threshold)
+            self._load_bit_data(
+                feature_predictor_threshold=feature_predictor_threshold,
+                gpu_id=gpu_id,
+            )
             self._filter_type = "raw"
             effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
             if effective_lowpass_sigma is not None and not np.any(
@@ -3635,6 +4165,7 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
         magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
+        estimate_chromatic_affines: bool | None = None,
     ) -> None:
         """Iteratively refine normalization vectors using exact-called transcripts.
 
@@ -3655,6 +4186,10 @@ class PixelDecoder:
         tile_indices : Sequence[int], optional
             Explicit tile indices to use for normalization. If omitted, a random
             subset of ``n_random_tiles`` is used.
+        estimate_chromatic_affines : bool or None, optional
+            If True, estimate chromatic affine transforms after each iterative
+            decoding round. If None, use the instance setting supplied at
+            construction.
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
@@ -3669,6 +4204,13 @@ class PixelDecoder:
         self._iterative_normalization_vector = None
         self._global_background_vector = None
         self._optimize_normalization_weights = True
+        run_chromatic_estimation = (
+            self._estimate_chromatic_affines
+            if estimate_chromatic_affines is None
+            else bool(estimate_chromatic_affines)
+        )
+        if run_chromatic_estimation:
+            self._save_identity_chromatic_affines()
         self._load_global_normalization_vectors(
             gpu_id=0,
             recalculate=True,
@@ -3715,14 +4257,13 @@ class PixelDecoder:
                 subset = random_tiles[start:end]
                 if not subset:
                     continue
-                p = mp.Process(
+                p = _start_gpu_worker_process(
                     target=_optimize_norm_worker,
                     args=(
                         self._datastore_path,
                         subset,
-                        gpu,
+                        0,
                         self._n_merfish_bits,
-                        self._zstride_level,
                         self._decode_mode,
                         iteration_temp_dir,
                         iteration,
@@ -3730,13 +4271,13 @@ class PixelDecoder:
                         magnitude_threshold,
                         minimum_pixels,
                         feature_predictor_threshold,
+                        run_chromatic_estimation,
                     ),
+                    physical_gpu_id=gpu,
                 )
-                p.start()
                 processes.append(p)
 
-            for p in processes:
-                p.join()
+            _join_gpu_workers(processes, "Iterative normalization")
 
             with cp.cuda.Device(0):
                 # gather results and update
@@ -3747,6 +4288,8 @@ class PixelDecoder:
                     self._remove_duplicates_within_tile(
                         radius_xy=radius_xy, radius_z=radius_z
                     )
+                if run_chromatic_estimation:
+                    self._estimate_chromatic_affines_from_barcodes()
                 self._load_global_normalization_vectors(
                     gpu_id=0,
                     lowpass_sigma=lowpass_sigma,
@@ -3774,9 +4317,7 @@ class PixelDecoder:
         normalization_method: Literal["iterative", "global", "none"] = "iterative",
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
-        filter_method: Literal[
-            "blank_fraction", "blank_bit_enrichment", "lr"
-        ] = "blank_fraction",
+        filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
         target_gross_misid_rate: float = 0.05,
         lr_fdr_target: float = 0.05,
     ) -> None:
@@ -3800,7 +4341,7 @@ class PixelDecoder:
             Override XY radius, in microns, for within-tile duplicate collapse.
         duplicate_radius_z : float, optional
             Override Z radius, in microns, for within-tile duplicate collapse.
-        filter_method : {"blank_fraction", "blank_bit_enrichment", "lr"}, default "blank_fraction"
+        filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
             Downstream filter to apply after exact transcript calling.
         target_gross_misid_rate : float, default 0.05
             Gross misidentification-rate target for blank-fraction filtering.
@@ -3829,15 +4370,14 @@ class PixelDecoder:
             subset = all_tiles[start:end]
             if not subset:
                 continue
-            p = mp.Process(
+            p = _start_gpu_worker_process(
                 target=decode_tiles_worker,
                 args=(
                     self._datastore_path,
                     subset,
-                    gpu,
+                    0,
                     self._n_merfish_bits,
                     self._verbose,
-                    self._zstride_level,
                     self._decode_mode,
                     lowpass_sigma,
                     magnitude_threshold,
@@ -3845,12 +4385,11 @@ class PixelDecoder:
                     feature_predictor_threshold,
                     normalization_method,
                 ),
+                physical_gpu_id=gpu,
             )
-            p.start()
             processes.append(p)
 
-        for p in processes:
-            p.join()
+        _join_gpu_workers(processes, "Tile decoding")
 
         # load all barcodes and filter
         self._load_tile_decoding = True
@@ -3884,7 +4423,7 @@ class PixelDecoder:
 
     @staticmethod
     def _validate_filter_configuration(
-        filter_method: Literal["blank_fraction", "blank_bit_enrichment", "lr"],
+        filter_method: Literal["blank_fraction", "lr"],
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
@@ -3893,7 +4432,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        filter_method : Literal['blank_fraction', 'blank_bit_enrichment', 'lr']
+        filter_method : Literal['blank_fraction', 'lr']
             Function argument.
         target_gross_misid_rate : float
             Function argument.
@@ -3906,12 +4445,11 @@ class PixelDecoder:
             Function result.
         """
 
-        if filter_method in ("blank_fraction", "blank_bit_enrichment"):
+        if filter_method == "blank_fraction":
             if lr_fdr_target != 0.05:
                 raise ValueError(
                     "lr_fdr_target only applies when filter_method='lr'. "
-                    "Use target_gross_misid_rate with filter_method='blank_fraction' "
-                    "or 'blank_bit_enrichment'."
+                    "Use target_gross_misid_rate with filter_method='blank_fraction'."
                 )
             return
 
@@ -3924,14 +4462,11 @@ class PixelDecoder:
                 )
             return
 
-        raise ValueError(
-            "filter_method must be one of 'blank_fraction', "
-            "'blank_bit_enrichment', or 'lr'."
-        )
+        raise ValueError("filter_method must be one of 'blank_fraction' or 'lr'.")
 
     def _apply_filter_method(
         self,
-        filter_method: Literal["blank_fraction", "blank_bit_enrichment", "lr"],
+        filter_method: Literal["blank_fraction", "lr"],
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
@@ -3940,7 +4475,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        filter_method : Literal['blank_fraction', 'blank_bit_enrichment', 'lr']
+        filter_method : Literal['blank_fraction', 'lr']
             Function argument.
         target_gross_misid_rate : float
             Function argument.
@@ -3962,29 +4497,18 @@ class PixelDecoder:
             )
             return
 
-        if filter_method == "blank_bit_enrichment":
-            self._filter_all_barcodes_blank_bit_enrichment(
-                target_gross_misid_rate=float(target_gross_misid_rate)
-            )
-            return
-
         if filter_method == "lr":
             self._filter_all_barcodes_LR(lr_fdr_target=float(lr_fdr_target))
             return
 
-        raise ValueError(
-            "filter_method must be one of 'blank_fraction', "
-            "'blank_bit_enrichment', or 'lr'."
-        )
+        raise ValueError("filter_method must be one of 'blank_fraction' or 'lr'.")
 
     def optimize_filtering(
         self,
         assign_to_cells: bool = True,
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
-        filter_method: Literal[
-            "blank_fraction", "blank_bit_enrichment", "lr"
-        ] = "blank_fraction",
+        filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
         target_gross_misid_rate: float = 0.05,
         lr_fdr_target: float = 0.05,
     ) -> None:
@@ -3998,7 +4522,7 @@ class PixelDecoder:
             Override XY radius, in microns, for within-tile duplicate collapse.
         duplicate_radius_z : float, optional
             Override Z radius, in microns, for within-tile duplicate collapse.
-        filter_method : {"blank_fraction", "blank_bit_enrichment", "lr"}, default "blank_fraction"
+        filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
             Downstream filter to apply to decoded transcripts.
         target_gross_misid_rate : float, default 0.05
             Gross misidentification-rate target for blank-fraction filtering.

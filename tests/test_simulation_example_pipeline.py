@@ -1,3 +1,12 @@
+"""Simulation pipeline regression tests.
+
+The matrix converts cached StatPhysBio simulation outputs into qi2lab
+datastores, runs preprocessing, decodes transcripts, and scores decoded
+features against simulation ground truth. The optional exhaustive mode expands
+the matrix across feature-prediction probability thresholds and cached U-FISH
+models so README result tables can be regenerated from the same report.
+"""
+
 import json
 import os
 import shutil
@@ -37,7 +46,6 @@ SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     5.0: 0.2,
 }
 F1_ABS_TOLERANCE = 0.02
-COLLECT_FULL_BASELINES = False
 F1_RADIUS_BY_AXIAL_SPACING_UM = {
     "0.315": 1.0,
     "1.0": 1.0,
@@ -58,6 +66,28 @@ RESULT_KEYS = {
     "False Positives",
     "False Negatives",
 }
+
+
+def _nearest_nyquist_multiple(
+    thresholds_by_multiple: dict[float, float],
+    nyquist_multiple: float,
+) -> float:
+    """Return the configured Nyquist multiple nearest to a measured multiple."""
+
+    best_multiple = next(iter(thresholds_by_multiple))
+    best_distance = abs(best_multiple - nyquist_multiple)
+    for multiple in thresholds_by_multiple:
+        distance = abs(multiple - nyquist_multiple)
+        if distance < best_distance:
+            best_multiple = multiple
+            best_distance = distance
+    return best_multiple
+
+
+def _total_seconds(record: dict[str, Any]) -> float:
+    """Return elapsed seconds from a performance record."""
+
+    return float(record["total_seconds"])
 
 
 def _ufish_label_from_weights_path(weights_path: Path) -> str:
@@ -121,6 +151,10 @@ def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
 
 
 UFISH_MODELS = _available_ufish_models()
+DEFAULT_UFISH_MODELS = tuple(
+    model for model in UFISH_MODELS if model[0] == DEFAULT_UFISH_MODEL
+)
+REGISTRATION_MODES = (("affine", False),)
 STANDARD_SIMULATION_MATRIX = tuple(
     {
         "dataset_variant": dataset_variant,
@@ -130,15 +164,21 @@ STANDARD_SIMULATION_MATRIX = tuple(
         "ufish_model": ufish_model,
         "preprocess_mode": DEFAULT_PREPROCESS_MODE,
         "decon_readout": PREPROCESS_MODES[DEFAULT_PREPROCESS_MODE],
+        "registration_mode": registration_mode,
+        "perform_deformable_registration": perform_deformable_registration,
         "feature_predictor_threshold": DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
     }
     for (dataset_variant, dataset_dir), axial_spacing_um, (
         ufish_model_name,
         ufish_model,
+    ), (
+        registration_mode,
+        perform_deformable_registration,
     ) in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
+        REGISTRATION_MODES,
     )
 )
 FULL_SIMULATION_MATRIX = tuple(
@@ -150,6 +190,8 @@ FULL_SIMULATION_MATRIX = tuple(
         "ufish_model": ufish_model,
         "preprocess_mode": preprocess_mode,
         "decon_readout": decon_readout,
+        "registration_mode": registration_mode,
+        "perform_deformable_registration": perform_deformable_registration,
         "feature_predictor_threshold": feature_predictor_threshold,
     }
     for (dataset_variant, dataset_dir), axial_spacing_um, (
@@ -158,11 +200,15 @@ FULL_SIMULATION_MATRIX = tuple(
     ), (
         preprocess_mode,
         decon_readout,
+    ), (
+        registration_mode,
+        perform_deformable_registration,
     ), feature_predictor_threshold in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
         PREPROCESS_MODES.items(),
+        REGISTRATION_MODES,
         FEATURE_PREDICTOR_THRESHOLDS,
     )
 )
@@ -175,6 +221,8 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
         "ufish_model": ufish_model,
         "preprocess_mode": preprocess_mode,
         "decon_readout": decon_readout,
+        "registration_mode": registration_mode,
+        "perform_deformable_registration": perform_deformable_registration,
     }
     for (dataset_variant, dataset_dir), axial_spacing_um, (
         ufish_model_name,
@@ -182,82 +230,86 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
     ), (
         preprocess_mode,
         decon_readout,
+    ), (
+        registration_mode,
+        perform_deformable_registration,
     ) in product(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
-        UFISH_MODELS,
+        DEFAULT_UFISH_MODELS,
         PREPROCESS_MODES.items(),
+        REGISTRATION_MODES,
     )
 )
 STANDARD_EXPECTED_F1_SCORES = {
-    ("cells", "0.315"): 0.9933222036727879,
-    ("cells", "1.0"): 0.9710391822827938,
-    ("cells", "1.5"): 0.42944785276073616,
-    ("uniform", "0.315"): 0.9954070981210855,
-    ("uniform", "1.0"): 0.9811951525282072,
-    ("uniform", "1.5"): 0.6323404255319149,
+    ("cells", "0.315"): 0.984822934232715,
+    ("cells", "1.0"): 0.9532710280373832,
+    ("cells", "1.5"): 0.3768224299065421,
+    ("uniform", "0.315"): 0.9899074852817493,
+    ("uniform", "1.0"): 0.9672977624784854,
+    ("uniform", "1.5"): 0.6160687815001483,
 }
 FULL_EXPECTED_F1_SCORES = {
-    ("cells", "0.315", "decon", 0.1): 0.9924686192468619,
-    ("cells", "0.315", "decon", 0.2): 0.994142259414226,
-    ("cells", "0.315", "decon", 0.3): 0.9933110367892977,
-    ("cells", "0.315", "decon", 0.4): 0.9949832775919734,
-    ("cells", "0.315", "decon", 0.5): 0.9933222036727879,
-    ("cells", "0.315", "no-decon", 0.1): 0.9941225860621327,
-    ("cells", "0.315", "no-decon", 0.2): 0.9916107382550335,
-    ("cells", "0.315", "no-decon", 0.3): 0.9949748743718593,
-    ("cells", "0.315", "no-decon", 0.4): 0.9949748743718593,
-    ("cells", "0.315", "no-decon", 0.5): 0.9958158995815899,
-    ("cells", "1.0", "decon", 0.1): 0.9635157545605307,
-    ("cells", "1.0", "decon", 0.2): 0.9716666666666667,
-    ("cells", "1.0", "decon", 0.3): 0.9791840133222314,
-    ("cells", "1.0", "decon", 0.4): 0.9824561403508771,
-    ("cells", "1.0", "decon", 0.5): 0.9710391822827938,
-    ("cells", "1.0", "no-decon", 0.1): 0.7801302931596091,
-    ("cells", "1.0", "no-decon", 0.2): 0.8346972176759412,
-    ("cells", "1.0", "no-decon", 0.3): 0.8857615894039735,
-    ("cells", "1.0", "no-decon", 0.4): 0.9202657807308969,
-    ("cells", "1.0", "no-decon", 0.5): 0.9507923269391159,
-    ("cells", "1.5", "decon", 0.1): 0.5936981757877281,
-    ("cells", "1.5", "decon", 0.2): 0.5777777777777778,
-    ("cells", "1.5", "decon", 0.3): 0.5376344086021505,
-    ("cells", "1.5", "decon", 0.4): 0.49479768786127165,
-    ("cells", "1.5", "decon", 0.5): 0.42944785276073616,
-    ("cells", "1.5", "no-decon", 0.1): 0.9210740439381611,
-    ("cells", "1.5", "no-decon", 0.2): 0.9377049180327869,
-    ("cells", "1.5", "no-decon", 0.3): 0.9627174813587407,
-    ("cells", "1.5", "no-decon", 0.4): 0.970906068162926,
-    ("cells", "1.5", "no-decon", 0.5): 0.9741019214703426,
-    ("uniform", "0.315", "decon", 0.1): 0.9937264742785445,
-    ("uniform", "0.315", "decon", 0.2): 0.9941471571906355,
-    ("uniform", "0.315", "decon", 0.3): 0.9941471571906355,
-    ("uniform", "0.315", "decon", 0.4): 0.9954032595068951,
-    ("uniform", "0.315", "decon", 0.5): 0.9954070981210855,
-    ("uniform", "0.315", "no-decon", 0.1): 0.9953955629970699,
-    ("uniform", "0.315", "no-decon", 0.2): 0.9966555183946487,
-    ("uniform", "0.315", "no-decon", 0.3): 0.995819397993311,
-    ("uniform", "0.315", "no-decon", 0.4): 0.9962390305056414,
-    ("uniform", "0.315", "no-decon", 0.5): 0.9974937343358397,
-    ("uniform", "1.0", "decon", 0.1): 0.9575353871773523,
-    ("uniform", "1.0", "decon", 0.2): 0.9737390579408086,
-    ("uniform", "1.0", "decon", 0.3): 0.9770546516478932,
-    ("uniform", "1.0", "decon", 0.4): 0.9795577805590322,
-    ("uniform", "1.0", "decon", 0.5): 0.9811951525282072,
-    ("uniform", "1.0", "no-decon", 0.1): 0.8148148148148148,
-    ("uniform", "1.0", "no-decon", 0.2): 0.8653128885205139,
-    ("uniform", "1.0", "no-decon", 0.3): 0.9052544476623914,
-    ("uniform", "1.0", "no-decon", 0.4): 0.9451371571072318,
-    ("uniform", "1.0", "no-decon", 0.5): 0.9575707154742097,
-    ("uniform", "1.5", "decon", 0.1): 0.6759455370650529,
-    ("uniform", "1.5", "decon", 0.2): 0.6945954589062999,
-    ("uniform", "1.5", "decon", 0.3): 0.7006993006993008,
-    ("uniform", "1.5", "decon", 0.4): 0.6717674062739096,
-    ("uniform", "1.5", "decon", 0.5): 0.6323404255319149,
-    ("uniform", "1.5", "no-decon", 0.1): 0.8992688870836718,
-    ("uniform", "1.5", "no-decon", 0.2): 0.9317995069843878,
-    ("uniform", "1.5", "no-decon", 0.3): 0.9591752577319588,
-    ("uniform", "1.5", "no-decon", 0.4): 0.9763583575279967,
-    ("uniform", "1.5", "no-decon", 0.5): 0.9791492910758965,
+    ("cells", "0.315", "decon", 0.1): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.2): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.3): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.4): 0.984822934232715,
+    ("cells", "0.315", "decon", 0.5): 0.984822934232715,
+    ("cells", "0.315", "no-decon", 0.1): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.2): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.3): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.4): 0.9881956155143339,
+    ("cells", "0.315", "no-decon", 0.5): 0.9881956155143339,
+    ("cells", "1.0", "decon", 0.1): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.2): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.3): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.4): 0.9532710280373832,
+    ("cells", "1.0", "decon", 0.5): 0.9532710280373832,
+    ("cells", "1.0", "no-decon", 0.1): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.2): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.3): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.4): 0.9540816326530613,
+    ("cells", "1.0", "no-decon", 0.5): 0.9540816326530613,
+    ("cells", "1.5", "decon", 0.1): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.2): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.3): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.4): 0.3768224299065421,
+    ("cells", "1.5", "decon", 0.5): 0.3768224299065421,
+    ("cells", "1.5", "no-decon", 0.1): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.2): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.3): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.4): 0.9051580698835274,
+    ("cells", "1.5", "no-decon", 0.5): 0.9051580698835274,
+    ("uniform", "0.315", "decon", 0.1): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.2): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.3): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.4): 0.9899074852817493,
+    ("uniform", "0.315", "decon", 0.5): 0.9899074852817493,
+    ("uniform", "0.315", "no-decon", 0.1): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.2): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.3): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.4): 0.9882253994953742,
+    ("uniform", "0.315", "no-decon", 0.5): 0.9882253994953742,
+    ("uniform", "1.0", "decon", 0.1): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.2): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.3): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.4): 0.9672977624784854,
+    ("uniform", "1.0", "decon", 0.5): 0.9672977624784854,
+    ("uniform", "1.0", "no-decon", 0.1): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.2): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.3): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.4): 0.9598633646456021,
+    ("uniform", "1.0", "no-decon", 0.5): 0.9598633646456021,
+    ("uniform", "1.5", "decon", 0.1): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.2): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.3): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.4): 0.6160687815001483,
+    ("uniform", "1.5", "decon", 0.5): 0.6160687815001483,
+    ("uniform", "1.5", "no-decon", 0.1): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.2): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.3): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.4): 0.7897990726429677,
+    ("uniform", "1.5", "no-decon", 0.5): 0.7897990726429677,
 }
 
 
@@ -378,9 +430,9 @@ def _default_standard_magnitude_threshold(
         return DEFAULT_MAGNITUDE_THRESHOLD
 
     nyquist_multiple = float(axial_spacing_um) / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = min(
+    nearest_multiple = _nearest_nyquist_multiple(
         SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        key=lambda value: abs(value - nyquist_multiple),
+        nyquist_multiple,
     )
     lower_threshold = SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
     return (lower_threshold, DEFAULT_MAGNITUDE_THRESHOLD[1])
@@ -399,7 +451,7 @@ def simulation_api() -> dict[str, Any]:
 
     try:
         from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
-            calculate_F1_with_radius,
+            calculate_F1,
         )
         from merfish3danalysis.cli.statphysbio_simulation.convert_simulation_to_experiment import (
             convert_simulation,
@@ -410,9 +462,6 @@ def simulation_api() -> dict[str, Any]:
         from merfish3danalysis.cli.statphysbio_simulation.pixeldecode import (
             decode_pixels,
         )
-        from merfish3danalysis.cli.statphysbio_simulation.register_and_deconvolve import (
-            global_register_data,
-        )
         from merfish3danalysis.DataRegistration import DataRegistration
         from merfish3danalysis.qi2labDataStore import qi2labDataStore
     except Exception as exc:
@@ -420,11 +469,10 @@ def simulation_api() -> dict[str, Any]:
 
     return {
         "DataRegistration": DataRegistration,
-        "calculate_F1_with_radius": calculate_F1_with_radius,
+        "calculate_F1": calculate_F1,
         "convert_simulation": convert_simulation,
         "convert_data": convert_data,
         "decode_pixels": decode_pixels,
-        "global_register_data": global_register_data,
         "qi2labDataStore": qi2labDataStore,
     }
 
@@ -451,7 +499,7 @@ def performance_records() -> list[dict[str, Any]]:
     ).expanduser()
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ordered_records = sorted(records, key=lambda record: float(record["total_seconds"]))
+    ordered_records = sorted(records, key=_total_seconds)
     report = {
         "generated_at_utc": datetime.now(UTC).isoformat(),
         "records": ordered_records,
@@ -564,56 +612,10 @@ def _calculate_f1_from_datastore(
     dict[str, float]
         Function result.
     """
-    import numpy as np
-    import pandas as pd
-
-    datastore = simulation_api["qi2labDataStore"](
-        case_root / "sim_acquisition" / "qi2labdatastore"
+    return simulation_api["calculate_F1"](
+        case_root,
+        search_radius=search_radius,
     )
-    gene_ids, _ = datastore.load_codebook_parsed()
-    decoded_spots = datastore.load_global_filtered_decoded_spots()
-    gt_spots = pd.read_csv(case_root / "GT_spots.csv")
-    corrected_image = datastore.load_local_corrected_image(
-        tile=0, round=0, return_future=False
-    )
-
-    if decoded_spots is None:
-        raise RuntimeError("Decoded spots table is missing from datastore.")
-    if corrected_image is None:
-        raise RuntimeError("Could not load local corrected image for F1 calculation.")
-
-    corrected_image = np.asarray(corrected_image)
-    y_size = corrected_image.shape[-2]
-    x_size = corrected_image.shape[-1]
-
-    gt_coords_offset = np.asarray(
-        [
-            0.0,
-            (y_size / 2) * datastore.voxel_size_zyx_um[1]
-            - datastore.voxel_size_zyx_um[1] / 2,
-            (x_size / 2) * datastore.voxel_size_zyx_um[2]
-            - datastore.voxel_size_zyx_um[2] / 2,
-        ],
-        dtype=np.float64,
-    )
-
-    qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy(
-        dtype=np.float64
-    )
-    qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
-
-    gt_coords = gt_spots[["Z", "X", "Y"]].to_numpy(dtype=np.float64) + gt_coords_offset
-    gene_ids = np.asarray(gene_ids)
-    gt_gene_ids = gene_ids[(gt_spots["Gene_label"].to_numpy(dtype=int) - 1)]
-
-    f1_results, _, _, _ = simulation_api["calculate_F1_with_radius"](
-        qi2lab_coords=qi2lab_coords,
-        qi2lab_gene_ids=qi2lab_gene_ids,
-        gt_coords=gt_coords,
-        gt_gene_ids=gt_gene_ids,
-        radius=search_radius,
-    )
-    return f1_results
 
 
 def _run_simulation_preprocess(
@@ -621,6 +623,7 @@ def _run_simulation_preprocess(
     simulation_api: dict[str, Any],
     decon_readout: bool,
     ufish_model: str | None,
+    perform_deformable_registration: bool,
 ) -> None:
     """
     Run simulation preprocess.
@@ -635,6 +638,8 @@ def _run_simulation_preprocess(
         Function argument.
     ufish_model : str | None
         Function argument.
+    perform_deformable_registration : bool
+        Function argument.
 
     Returns
     -------
@@ -642,19 +647,21 @@ def _run_simulation_preprocess(
         Function result.
     """
     datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    save_all_fiducial_registered = os.environ.get(
+        "MERFISH3D_SIM_SAVE_ALL_FIDUCIAL_REGISTERED", ""
+    ).lower() in {"1", "true", "yes"}
     registration_factory = simulation_api["DataRegistration"](
         datastore=datastore,
-        perform_optical_flow=False,
+        perform_deformable_registration=perform_deformable_registration,
         overwrite_registered=True,
-        save_all_fiducial_registered=False,
+        save_all_fiducial_registered=save_all_fiducial_registered,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
         num_gpus=1,
         verbose=1,
     )
     registration_factory.register_all_tiles()
-
-    simulation_api["global_register_data"](acquisition_root, create_max_proj_tiff=False)
+    registration_factory.global_register(create_max_proj_tiff=False)
 
     # Mark local registration complete only after global registration succeeds so
     # follow-on datastore opens do not validate a half-updated local state.
@@ -669,6 +676,7 @@ def _run_simulation_case_setup(
     simulation_api: dict[str, Any],
     decon_readout: bool,
     ufish_model: str | None,
+    perform_deformable_registration: bool,
     case_label: str,
 ) -> dict[str, float]:
     """
@@ -683,6 +691,8 @@ def _run_simulation_case_setup(
     decon_readout : bool
         Function argument.
     ufish_model : str | None
+        Function argument.
+    perform_deformable_registration : bool
         Function argument.
     case_label : str
         Function argument.
@@ -723,6 +733,7 @@ def _run_simulation_case_setup(
         simulation_api,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
+        perform_deformable_registration=perform_deformable_registration,
     )
     timings_seconds["preprocess_registration"] = time.perf_counter() - start
     print(
@@ -771,6 +782,9 @@ def _prepare_preprocessed_magnitude_case(
     ufish_model_name = case_spec["ufish_model_name"]
     ufish_model = case_spec["ufish_model"]
     decon_readout = case_spec["decon_readout"]
+    perform_deformable_registration = case_spec.get(
+        "perform_deformable_registration", False
+    )
     preprocess_mode = case_spec.get(
         "preprocess_mode",
         "decon" if decon_readout else "no-decon",
@@ -795,6 +809,7 @@ def _prepare_preprocessed_magnitude_case(
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
         f"{dataset_variant}-{axial_spacing_um}-{ufish_model_name}-{preprocess_mode}-"
+        f"{case_spec.get('registration_mode', 'affine')}-"
         f"fp{DEFAULT_FEATURE_PREDICTOR_THRESHOLD}"
     )
     setup_timings = _run_simulation_case_setup(
@@ -802,6 +817,7 @@ def _prepare_preprocessed_magnitude_case(
         simulation_api,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
+        perform_deformable_registration=perform_deformable_registration,
         case_label=case_label,
     )
     if run_calibration_decode:
@@ -846,6 +862,7 @@ def _run_simulation_decode_and_f1(
     skip_optimization: bool = False,
     duplicate_radius_xy: float | None = None,
     duplicate_radius_z: float | None = None,
+    normalization_iterations: int = 3,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """
     Run simulation decode and f1.
@@ -874,6 +891,8 @@ def _run_simulation_decode_and_f1(
         Function argument.
     duplicate_radius_z : float | None
         Function argument.
+    normalization_iterations : int
+        Function argument.
 
     Returns
     -------
@@ -894,6 +913,7 @@ def _run_simulation_decode_and_f1(
         skip_optimization=skip_optimization,
         duplicate_radius_xy=duplicate_radius_xy,
         duplicate_radius_z=duplicate_radius_z,
+        normalization_iterations=normalization_iterations,
     )
     timings_seconds["decode_pixels"] = time.perf_counter() - start
     print(
@@ -937,6 +957,7 @@ def _run_simulation_pipeline(
     decon_readout: bool,
     ufish_model: str | None,
     feature_predictor_threshold: float,
+    perform_deformable_registration: bool = False,
     lowpass_sigma: tuple[float, float, float] = DEFAULT_LOWPASS_SIGMA,
     magnitude_threshold: tuple[float, float] = (0.9, 10.0),
     minimum_pixels_per_rna: int | None = None,
@@ -959,6 +980,8 @@ def _run_simulation_pipeline(
         Function argument.
     feature_predictor_threshold : float
         Function argument.
+    perform_deformable_registration : bool
+        Function argument.
     lowpass_sigma : tuple[float, float, float]
         Function argument.
     magnitude_threshold : tuple[float, float]
@@ -980,6 +1003,7 @@ def _run_simulation_pipeline(
         simulation_api,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
+        perform_deformable_registration=perform_deformable_registration,
         case_label=case_label,
     )
     decode_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
@@ -1008,6 +1032,7 @@ def _run_simulation_pipeline(
             f"{case['axial_spacing_um']}-"
             f"{case['ufish_model_name']}-"
             f"{case['preprocess_mode']}-"
+            f"{case['registration_mode']}-"
             f"fp{case['feature_predictor_threshold']}"
         )
         for case in STANDARD_SIMULATION_MATRIX
@@ -1067,6 +1092,10 @@ def simulation_standard_case_result(
     ufish_model = simulation_standard_case_spec["ufish_model"]
     preprocess_mode = simulation_standard_case_spec["preprocess_mode"]
     decon_readout = simulation_standard_case_spec["decon_readout"]
+    registration_mode = simulation_standard_case_spec["registration_mode"]
+    perform_deformable_registration = simulation_standard_case_spec[
+        "perform_deformable_registration"
+    ]
     feature_predictor_threshold = simulation_standard_case_spec[
         "feature_predictor_threshold"
     ]
@@ -1090,6 +1119,7 @@ def simulation_standard_case_result(
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
         f"{dataset_variant}-{axial_spacing_um}-{ufish_model_name}-{preprocess_mode}-"
+        f"{registration_mode}-"
         f"fp{feature_predictor_threshold}"
     )
     f1_results, timings_seconds, performance_metrics = _run_simulation_pipeline(
@@ -1099,6 +1129,7 @@ def simulation_standard_case_result(
         decon_readout=decon_readout,
         ufish_model=ufish_model,
         feature_predictor_threshold=feature_predictor_threshold,
+        perform_deformable_registration=perform_deformable_registration,
         magnitude_threshold=default_magnitude_threshold,
         minimum_pixels_per_rna=default_minimum_pixels,
         case_label=case_label,
@@ -1110,6 +1141,8 @@ def simulation_standard_case_result(
         "ufish_model": ufish_model_name,
         "preprocess_mode": preprocess_mode,
         "decon_readout": decon_readout,
+        "registration_mode": registration_mode,
+        "perform_deformable_registration": perform_deformable_registration,
         "feature_predictor_threshold": feature_predictor_threshold,
         "magnitude_threshold_lower": default_magnitude_threshold[0],
         "minimum_pixels_per_rna": default_minimum_pixels,
@@ -1148,7 +1181,8 @@ def simulation_standard_case_result(
             f"{case['dataset_variant']}-"
             f"{case['axial_spacing_um']}-"
             f"{case['ufish_model_name']}-"
-            f"{case['preprocess_mode']}"
+            f"{case['preprocess_mode']}-"
+            f"{case['registration_mode']}"
         )
         for case in FULL_SWEEP_BASE_SIMULATION_MATRIX
     ],
@@ -1241,6 +1275,8 @@ def simulation_full_case_result(
     ufish_model_name = case_spec["ufish_model_name"]
     preprocess_mode = case_spec["preprocess_mode"]
     decon_readout = case_spec["decon_readout"]
+    registration_mode = case_spec["registration_mode"]
+    perform_deformable_registration = case_spec["perform_deformable_registration"]
     default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
     default_magnitude_threshold = _default_standard_magnitude_threshold(
         axial_spacing_um
@@ -1271,6 +1307,8 @@ def simulation_full_case_result(
             "ufish_model": ufish_model_name,
             "preprocess_mode": preprocess_mode,
             "decon_readout": decon_readout,
+            "registration_mode": registration_mode,
+            "perform_deformable_registration": perform_deformable_registration,
             "feature_predictor_threshold": feature_predictor_threshold,
             "magnitude_threshold_lower": default_magnitude_threshold[0],
             "lowpass_sigma": list(DEFAULT_LOWPASS_SIGMA),
@@ -1331,22 +1369,16 @@ def test_simulation_standard_matrix(
         / "qi2labdatastore"
     )
     case_spec = simulation_standard_case_result["case_spec"]
-    ufish_model_name = case_spec["ufish_model_name"]
-    expected_f1 = (
-        STANDARD_EXPECTED_F1_SCORES[
-            (case_spec["dataset_variant"], case_spec["axial_spacing_um"])
-        ]
-        if ufish_model_name == DEFAULT_UFISH_MODEL
-        else None
-    )
+    expected_f1 = STANDARD_EXPECTED_F1_SCORES[
+        (case_spec["dataset_variant"], case_spec["axial_spacing_um"])
+    ]
 
     assert datastore_path.exists()
     assert isinstance(simulation_standard_case_result["f1_results"], dict)
     assert RESULT_KEYS.issubset(simulation_standard_case_result["f1_results"])
-    if expected_f1 is not None:
-        assert simulation_standard_case_result["performance_metrics"][
-            "f1_score"
-        ] == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
+    assert simulation_standard_case_result["performance_metrics"][
+        "f1_score"
+    ] == pytest.approx(expected_f1, abs=F1_ABS_TOLERANCE)
     assert simulation_standard_case_result["performance_metrics"]["true_positives"] >= 0
     assert (
         simulation_standard_case_result["performance_metrics"]["false_positives"] >= 0
@@ -1378,28 +1410,25 @@ def test_simulation_exhaustive_matrix(
         simulation_full_case_result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     )
     case_spec = simulation_full_case_result["case_spec"]
-    ufish_model_name = case_spec["ufish_model_name"]
 
     assert datastore_path.exists()
     assert len(simulation_full_case_result["results"]) == len(
         FEATURE_PREDICTOR_THRESHOLDS
     )
-    collect_only = COLLECT_FULL_BASELINES or ufish_model_name != DEFAULT_UFISH_MODEL
     for result in simulation_full_case_result["results"]:
         assert isinstance(result["f1_results"], dict)
         assert RESULT_KEYS.issubset(result["f1_results"])
-        if not collect_only:
-            expected_f1 = FULL_EXPECTED_F1_SCORES[
-                (
-                    case_spec["dataset_variant"],
-                    case_spec["axial_spacing_um"],
-                    case_spec["preprocess_mode"],
-                    result["feature_predictor_threshold"],
-                )
-            ]
-            assert result["performance_metrics"]["f1_score"] == pytest.approx(
-                expected_f1, abs=F1_ABS_TOLERANCE
+        expected_f1 = FULL_EXPECTED_F1_SCORES[
+            (
+                case_spec["dataset_variant"],
+                case_spec["axial_spacing_um"],
+                case_spec["preprocess_mode"],
+                result["feature_predictor_threshold"],
             )
+        ]
+        assert result["performance_metrics"]["f1_score"] == pytest.approx(
+            expected_f1, abs=F1_ABS_TOLERANCE
+        )
         assert result["performance_metrics"]["true_positives"] >= 0
         assert result["performance_metrics"]["false_positives"] >= 0
         assert result["performance_metrics"]["false_negatives"] >= 0

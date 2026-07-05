@@ -1,8 +1,6 @@
 """CLI entry point for the qi2lab datastore viewer."""
 
-from __future__ import annotations
-
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import typer
 

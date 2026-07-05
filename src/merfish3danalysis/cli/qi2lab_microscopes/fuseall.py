@@ -20,11 +20,6 @@ from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils, regist
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
-from merfish3danalysis.cli.qi2lab_microscopes.global_register import (
-    _get_batch_processing_options,
-    _get_fusion_backend_kwargs,
-    _get_scale0_sim_from_fusion_result,
-)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 mp.set_start_method("spawn", force=True)
@@ -156,7 +151,7 @@ def fuse_all_channels(
     for ch_idx in tqdm(range(len(channel_ids)), desc="channel"):
         msims_full = []
         for tile_idx, msim in enumerate(tqdm(msims, desc="tile")):
-            # parse the registered fidicual channel to get the registration metadata
+            # parse the registered fiducial channel to get the registration metadata
             affine = msi_utils.get_transform_from_msim(
                 msim, transform_key="affine_registered"
             ).data.squeeze()
@@ -194,10 +189,8 @@ def fuse_all_channels(
                     / Path(tile_id)
                     / Path("bit" + str(ch_idx).zfill(3))
                 )
-                decon_path = input_path / Path("registered_decon_data.ome.zarr")
-                predictor_path = input_path / Path(
-                    "registered_feature_predictor_data.ome.zarr"
-                )
+                decon_path = input_path / Path("decon_data.ome.zarr")
+                predictor_path = input_path / Path("feature_predictor_data.ome.zarr")
                 im_data[0, :] = (
                     da.from_zarr(str(decon_path)).astype(np.float32)
                     * da.from_zarr(str(predictor_path)).astype(np.float32).clip(0.25, 1)
@@ -237,17 +230,22 @@ def fuse_all_channels(
                 "ngff_version": ngff_version,
                 "overwrite": True,
             },
-            batch_options=_get_batch_processing_options(
-                misc_utils=misc_utils,
-                n_jobs=n_jobs,
-                use_gpu_fusion=use_gpu_fusion,
-            ),
-            **_get_fusion_backend_kwargs(
-                fusion.fuse,
-                use_gpu_fusion=use_gpu_fusion,
+            batch_options={
+                "batch_func": misc_utils.process_batch_using_joblib,
+                "n_batch": int(n_jobs),
+                "batch_func_kwargs": {
+                    "n_jobs": int(n_jobs),
+                    "backend": "threading",
+                },
+            },
+            **(
+                {"backend": "cupy", "output_on_backend": False}
+                if use_gpu_fusion
+                else {}
             ),
         )
-        fused = _get_scale0_sim_from_fusion_result(fused, msi_utils=msi_utils)
+        if not hasattr(fused, "data"):
+            fused = msi_utils.get_sim_from_msim(fused, scale="scale0")
         del fused
 
 

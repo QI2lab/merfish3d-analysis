@@ -53,7 +53,7 @@ def local_register_data(root_path: Path) -> None:
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        perform_optical_flow=False,
+        perform_deformable_registration=False,
         overwrite_registered=True,
         save_all_fiducial_registered=False,
         decon_readout=True,
@@ -102,7 +102,7 @@ def global_register_data(
         tile=0,
     )
 
-    datastore.save_global_fidicual_image(
+    datastore.save_global_fiducial_image(
         fused_image=datastore.load_local_registered_image(
             tile=0, round=0, return_future=False
         ),
@@ -114,7 +114,7 @@ def global_register_data(
     # write max projection OME-TIFF for cellpose GUI
     if create_max_proj_tiff:
         # load downsampled, fused fiducial image and coordinates
-        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fidicual_image(
+        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fiducial_image(
             return_future=False
         )
 
