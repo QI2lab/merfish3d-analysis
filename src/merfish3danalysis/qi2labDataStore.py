@@ -1570,7 +1570,7 @@ class qi2labDataStore:
     @staticmethod
     def _default_chunks(
         array: np.ndarray,
-        spatial_chunk_zyx: tuple[int, int, int] = (1, 256, 256),
+        spatial_chunk_zyx: tuple[int, int, int] = (16, 512, 512),
     ) -> list[int]:
         """
         Create sane default chunk sizes based on dimensionality.
@@ -1579,7 +1579,7 @@ class qi2labDataStore:
         ----------
         array : np.ndarray
             Array that will be written.
-        spatial_chunk_zyx : tuple[int, int, int], default=(1, 256, 256)
+        spatial_chunk_zyx : tuple[int, int, int], default=(16, 512, 512)
             Desired Z, Y, X storage chunks for local fiducial and readout images.
 
         Returns
@@ -1633,7 +1633,27 @@ class qi2labDataStore:
             Chunk shape for fused image storage.
         """
 
-        return qi2labDataStore._default_chunks(array)
+        shape = [int(dim) for dim in array.shape]
+        if array.ndim == 2:
+            return [min(shape[0], 2048), min(shape[1], 2048)]
+        if array.ndim == 3:
+            return [min(shape[0], 16), min(shape[1], 512), min(shape[2], 512)]
+        if array.ndim == 4:
+            return [
+                min(shape[0], 1),
+                min(shape[1], 16),
+                min(shape[2], 512),
+                min(shape[3], 512),
+            ]
+        if array.ndim == 5:
+            return [
+                min(shape[0], 1),
+                min(shape[1], 1),
+                min(shape[2], 16),
+                min(shape[3], 512),
+                min(shape[4], 512),
+            ]
+        return list(array.shape)
 
     @staticmethod
     def _build_axes(v05: Any, ndim: int) -> list[Any]:
