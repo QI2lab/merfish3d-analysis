@@ -240,7 +240,8 @@ def test_proseg_transcripts_rasterize_global_and_local_canvas(tmp_path: Path) ->
 
     assert global_overlay[1, 4, 2] == 1.0
     assert local_overlay[1, 4, 2] == 1.0
-    assert np.isnan(global_overlay[0, 0, 0])
+    assert global_overlay.dtype == np.uint16
+    assert global_overlay[0, 0, 0] == 0
     assert np.isnan(local_overlay[0, 0, 0])
 
 

@@ -29,11 +29,11 @@ from merfish3danalysis.viewer.overlays import (
     codeword_color_hex,
     discover_proseg_runs,
     global_cell_outline_overlay,
+    lazy_global_decoded_spots,
+    lazy_global_proseg_transcripts,
     load_global_image_channels,
     rasterize_cell_outlines,
     rasterize_global_cell_outlines,
-    rasterize_global_decoded_spots,
-    rasterize_global_proseg_transcripts,
     rasterize_local_decoded_spots,
     rasterize_local_proseg_transcripts,
 )
@@ -164,6 +164,7 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self._display_refresh_enabled = False
             self._display_refresh_pending = False
             self._transcript_refresh_pending = False
+            self._closing = False
             self._transcript_refresh_context: dict[str, Any] | None = None
             self._global_decoded_spots_loaded = False
             self._global_decoded_spots: Any | None = None
@@ -615,12 +616,49 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 Computed viewer result.
             """
 
+            z_size = (
+                int(data.sizes["z_um"])
+                if hasattr(data, "sizes")
+                else int(data.shape[1])
+            )
+            display_model = None
+            if hasattr(data, "channel_value_range"):
+                from ndv.models import ArrayDisplayModel, LUTModel
+
+                dtype = np.dtype(data.dtype)
+                if np.issubdtype(dtype, np.integer):
+                    dtype_info = np.iinfo(dtype)
+                    image_clims = (float(dtype_info.min), float(dtype_info.max))
+                else:
+                    image_clims = (0.0, 1.0)
+                luts = {0: LUTModel(cmap="gray", clims=image_clims)}
+                for channel_index in range(1, int(data.shape[0])):
+                    value_range = data.channel_value_range(channel_index)
+                    if value_range is not None:
+                        luts[channel_index] = LUTModel(
+                            cmap="turbo",
+                            clims=value_range,
+                        )
+                display_model = ArrayDisplayModel(
+                    channel_axis="c",
+                    channel_mode="composite",
+                    visible_axes=("y_um", "x_um"),
+                    current_index={"z_um": z_size // 2},
+                    luts=luts,
+                )
             self.array_viewer = ndv.ArrayViewer(
                 data,
-                channel_axis="c",
-                channel_mode="composite",
-                visible_axes=("y_um", "x_um"),
-                current_index={"z_um": int(data.sizes["z_um"]) // 2},
+                display_model=display_model,
+                **(
+                    {}
+                    if display_model is not None
+                    else {
+                        "channel_axis": "c",
+                        "channel_mode": "composite",
+                        "visible_axes": ("y_um", "x_um"),
+                        "current_index": {"z_um": z_size // 2},
+                    }
+                ),
             )
             widget = self.array_viewer.widget()
             widget.setWindowTitle("qi2lab NDV view")
@@ -727,20 +765,17 @@ def run_viewer(initial_path: Path | None = None) -> None:
             )
             line.order = 200
             text.order = 201
-            spacing = np.asarray(spacing_zyx_um, dtype=float)
-            x_spacing_um = float(spacing[2])
 
             def update_scale_bar(*_args: Any) -> None:
                 camera = getattr(view, "camera", None)
                 rect = getattr(camera, "rect", None)
                 if rect is None or rect.width <= 0 or rect.height <= 0:
                     return
-                target_um = rect.width * x_spacing_um / 5.0
+                target_um = rect.width / 5.0
                 length_um = self._nice_scale_bar_length_um(target_um)
-                length_px = length_um / x_spacing_um
                 margin_x = rect.width / 20.0
                 margin_y = rect.height / 20.0
-                x1 = rect.right - margin_x - length_px
+                x1 = rect.right - margin_x - length_um
                 x2 = rect.right - margin_x
                 y = rect.top - margin_y
                 line.set_data(pos=np.asarray([[x1, y], [x2, y]], dtype=np.float32))
@@ -804,6 +839,21 @@ def run_viewer(initial_path: Path | None = None) -> None:
             self.viewer_windows.clear()
             self._disconnect_scale_bar()
             self.array_viewer = None
+            self._closing = True
+            self._display_refresh_enabled = False
+            self._display_refresh_pending = False
+            self._transcript_refresh_pending = False
+            if self._display_worker is not None:
+                with suppress(Exception):
+                    self._display_worker.signals.finished.disconnect(
+                        self._finish_display_worker
+                    )
+                with suppress(Exception):
+                    self._display_worker.signals.failed.disconnect(
+                        self._fail_display_worker
+                    )
+                self._display_worker = None
+            QtCore.QThreadPool.globalInstance().clear()
             super().closeEvent(event)
             qt_app = QtWidgets.QApplication.instance()
             if qt_app is not None:
@@ -980,7 +1030,7 @@ def run_viewer(initial_path: Path | None = None) -> None:
                     overlay = (
                         None
                         if decoded_spots is None
-                        else rasterize_global_decoded_spots(
+                        else lazy_global_decoded_spots(
                             decoded_spots,
                             shape_zyx=shape_zyx,
                             origin_zyx_um=context["origin_zyx_um"],
@@ -1018,7 +1068,7 @@ def run_viewer(initial_path: Path | None = None) -> None:
                     return stack
                 transcripts = self._cached_proseg_transcripts(proseg_run.name)
                 if mode == "global":
-                    overlay = rasterize_global_proseg_transcripts(
+                    overlay = lazy_global_proseg_transcripts(
                         transcripts,
                         shape_zyx=shape_zyx,
                         origin_zyx_um=context["origin_zyx_um"],
@@ -1847,6 +1897,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 Computed viewer result.
             """
 
+            if self._closing:
+                return
             if self._display_worker is not None:
                 self.status_label.setText("A display update is already running.")
                 return
@@ -1874,6 +1926,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
             """
 
             self._display_worker = None
+            if self._closing or not self.isVisible():
+                return
             self._transcript_refresh_context = result.context
             if result.decoded_spots is not None:
                 self._global_decoded_spots = result.decoded_spots
@@ -1892,6 +1946,15 @@ def run_viewer(initial_path: Path | None = None) -> None:
             )
             self._display_refresh_enabled = True
             self._finish_progress(result.status)
+            if result.context.get("pending_global_overlays") and not self._closing:
+                QtCore.QTimer.singleShot(
+                    0,
+                    partial(
+                        self._start_display_worker,
+                        partial(self._build_global_overlay_result, result.context),
+                        "Loading selected global overlays...",
+                    ),
+                )
 
         def _fail_display_worker(self, message: str) -> None:
             """
@@ -1909,6 +1972,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
             """
 
             self._display_worker = None
+            if self._closing or not self.isVisible():
+                return
             self._finish_progress(message)
 
         def _build_global_display_result(
@@ -1955,26 +2020,76 @@ def run_viewer(initial_path: Path | None = None) -> None:
                 include_segmentation=include_segmentation,
             )
             stack = global_stack.stack
+            context = {
+                "mode": "global",
+                "base_stack": stack,
+                "origin_zyx_um": global_stack.origin_zyx_um,
+                "spacing_zyx_um": global_stack.spacing_zyx_um,
+                "pending_global_overlays": (
+                    include_cells
+                    or include_decoded
+                    or include_proseg_transcripts
+                    or (include_proseg_polygons and proseg_run_name is not None)
+                ),
+                "include_cells": include_cells,
+                "include_decoded": include_decoded,
+                "include_proseg_transcripts": include_proseg_transcripts,
+                "include_proseg_polygons": include_proseg_polygons,
+                "selected_genes": selected_genes,
+                "marker_radius": marker_radius,
+                "proseg_run_name": proseg_run_name,
+            }
 
-            if include_cells:
+            return ViewerBuildResult(
+                stack,
+                spacing_zyx_um=global_stack.spacing_zyx_um,
+                origin_zyx_um=global_stack.origin_zyx_um,
+                context=context,
+                status="Displayed: " + ", ".join(stack.labels),
+            )
+
+        def _build_global_overlay_result(
+            self,
+            context: dict[str, Any],
+        ) -> ViewerBuildResult:
+            """
+            Build selected global overlays after the fused image is visible.
+
+            Parameters
+            ----------
+            context : dict[str, Any]
+                Current global display context.
+
+            Returns
+            -------
+            ViewerBuildResult
+                Updated global display with selected overlays.
+            """
+
+            stack = context["base_stack"]
+            origin_zyx_um = context["origin_zyx_um"]
+            spacing_zyx_um = context["spacing_zyx_um"]
+            proseg_run_name = context.get("proseg_run_name")
+
+            if context.get("include_cells"):
                 cell_overlay = global_cell_outline_overlay(
                     self.datastore,
                     shape_zyx=stack.data.shape[1:],
-                    origin_zyx_um=global_stack.origin_zyx_um,
-                    spacing_zyx_um=global_stack.spacing_zyx_um,
+                    origin_zyx_um=origin_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
                 )
                 stack = append_overlay_channel(
                     stack, cell_overlay, "global Cellpose outlines"
                 )
 
-            if include_proseg_polygons and proseg_run_name is not None:
+            if context.get("include_proseg_polygons") and proseg_run_name is not None:
                 proseg_overlay = rasterize_global_cell_outlines(
                     self.datastore.load_proseg_cell_polygons_3d(
                         run_name=proseg_run_name
                     ),
                     shape_zyx=stack.data.shape[1:],
-                    origin_zyx_um=global_stack.origin_zyx_um,
-                    spacing_zyx_um=global_stack.spacing_zyx_um,
+                    origin_zyx_um=origin_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
                 )
                 stack = append_overlay_channel(
                     stack,
@@ -1982,42 +2097,38 @@ def run_viewer(initial_path: Path | None = None) -> None:
                     f"global Proseg polygons {proseg_run_name}",
                 )
 
-            context = {
-                "mode": "global",
-                "base_stack": stack,
-                "origin_zyx_um": global_stack.origin_zyx_um,
-                "spacing_zyx_um": global_stack.spacing_zyx_um,
-            }
             decoded_spots = None
             proseg_transcripts = None
-            if include_decoded:
+            base_stack = stack
+            selected_genes = context.get("selected_genes", [])
+            marker_radius = context.get("marker_radius", 1)
+            if context.get("include_decoded"):
                 decoded_spots = self.datastore.load_global_filtered_decoded_spots()
-                overlay = (
-                    None
-                    if decoded_spots is None
-                    else rasterize_global_decoded_spots(
-                        decoded_spots,
-                        shape_zyx=stack.data.shape[1:],
-                        origin_zyx_um=global_stack.origin_zyx_um,
-                        spacing_zyx_um=global_stack.spacing_zyx_um,
-                        genes=selected_genes,
-                        radius=marker_radius,
-                    )
+                overlay = lazy_global_decoded_spots(
+                    decoded_spots,
+                    shape_zyx=stack.data.shape[1:],
+                    origin_zyx_um=origin_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
+                    genes=selected_genes,
+                    radius=marker_radius,
                 )
                 stack = append_overlay_channel(
                     stack,
                     overlay,
                     "global datastore codewords",
                 )
-            elif include_proseg_transcripts and proseg_run_name is not None:
+            elif (
+                context.get("include_proseg_transcripts")
+                and proseg_run_name is not None
+            ):
                 proseg_transcripts = self.datastore.load_proseg_transcripts_3d(
                     run_name=proseg_run_name
                 )
-                overlay = rasterize_global_proseg_transcripts(
+                overlay = lazy_global_proseg_transcripts(
                     proseg_transcripts,
                     shape_zyx=stack.data.shape[1:],
-                    origin_zyx_um=global_stack.origin_zyx_um,
-                    spacing_zyx_um=global_stack.spacing_zyx_um,
+                    origin_zyx_um=origin_zyx_um,
+                    spacing_zyx_um=spacing_zyx_um,
                     genes=selected_genes,
                     radius=marker_radius,
                 )
@@ -2027,11 +2138,14 @@ def run_viewer(initial_path: Path | None = None) -> None:
                     f"global Proseg transcripts: {proseg_run_name}",
                 )
 
+            updated_context = dict(context)
+            updated_context["base_stack"] = base_stack
+            updated_context["pending_global_overlays"] = False
             return ViewerBuildResult(
                 stack,
-                spacing_zyx_um=global_stack.spacing_zyx_um,
-                origin_zyx_um=global_stack.origin_zyx_um,
-                context=context,
+                spacing_zyx_um=spacing_zyx_um,
+                origin_zyx_um=origin_zyx_um,
+                context=updated_context,
                 status="Displayed: " + ", ".join(stack.labels),
                 decoded_spots=decoded_spots,
                 proseg_run_name=proseg_run_name,
@@ -2291,7 +2405,7 @@ def run_viewer(initial_path: Path | None = None) -> None:
     qt_app = QtWidgets.QApplication.instance()
     if qt_app is None:
         qt_app = QtWidgets.QApplication([])
-    qt_app.setQuitOnLastWindowClosed(False)
+    qt_app.setQuitOnLastWindowClosed(True)
     window = DatastoreViewerWindow(initial_path)
     window.adjustSize()
     window.show()

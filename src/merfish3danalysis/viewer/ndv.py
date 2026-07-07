@@ -41,13 +41,24 @@ def apply_lut_channel_labels(array_viewer: Any, labels: list[str]) -> int:
             if lut_model is not None:
                 lut_model.cmap = "turbo"
                 with suppress(Exception):
-                    channel_data = np.asarray(array_viewer.data[key])
-                    finite_values = channel_data[np.isfinite(channel_data)]
-                    if finite_values.size > 0:
-                        max_value = float(np.nanmax(finite_values))
-                        lut_model.clims = (
-                            (1.0, max_value) if max_value > 1.0 else (0.0, 1.0)
-                        )
+                    value_range = None
+                    channel_value_range = getattr(
+                        array_viewer.data,
+                        "channel_value_range",
+                        None,
+                    )
+                    if channel_value_range is not None:
+                        value_range = channel_value_range(key)
+                    if value_range is None:
+                        channel_data = np.asarray(array_viewer.data[key])
+                        finite_values = channel_data[np.isfinite(channel_data)]
+                        if finite_values.size > 0:
+                            max_value = float(np.nanmax(finite_values))
+                            value_range = (
+                                (1.0, max_value) if max_value > 1.0 else (0.0, 1.0)
+                            )
+                    if value_range is not None:
+                        lut_model.clims = value_range
         for lut_view in getattr(controller, "lut_views", []):
             set_channel_name = getattr(lut_view, "set_channel_name", None)
             if set_channel_name is None:

@@ -6,11 +6,166 @@ from typing import Any
 import numpy as np
 
 
+@dataclass(frozen=True)
 class ChannelStack:
     """Channel-stacked image data and labels for display."""
 
-    data: np.ndarray
+    data: Any
     labels: list[str]
+
+
+@dataclass(frozen=True)
+class LazyGlobalChannelData:
+    """Tensorstore-backed fused image plus in-memory overlay channels."""
+
+    fused_zyx: Any
+    overlays: tuple[Any, ...]
+    coords: dict[str, Any]
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the fused image dtype."""
+
+        dtype = self.fused_zyx.dtype
+        numpy_dtype = getattr(dtype, "numpy_dtype", None)
+        if numpy_dtype is not None:
+            return np.dtype(numpy_dtype)
+        return np.dtype(dtype)
+
+    @property
+    def shape(self) -> tuple[int, int, int, int]:
+        """Return channel, Z, Y, X shape."""
+
+        zyx_shape = tuple(int(value) for value in self.fused_zyx.shape)
+        return (1 + len(self.overlays), *zyx_shape)
+
+    @property
+    def ndim(self) -> int:
+        """Return the number of array dimensions."""
+
+        return len(self.shape)
+
+    @property
+    def dims(self) -> tuple[str, str, str, str]:
+        """Return NDV dimension names."""
+
+        return ("c", "z_um", "y_um", "x_um")
+
+    def with_overlay(self, overlay_zyx: Any) -> "LazyGlobalChannelData":
+        """
+        Return a new lazy stack with one additional in-memory overlay.
+
+        Parameters
+        ----------
+        overlay_zyx : Any
+            Overlay image or lazy overlay in Z, Y, X order.
+
+        Returns
+        -------
+        LazyGlobalChannelData
+            Updated channel data.
+        """
+
+        coords = dict(self.coords)
+        coords["c"] = range(self.shape[0] + 1)
+        return LazyGlobalChannelData(
+            fused_zyx=self.fused_zyx,
+            overlays=(*self.overlays, overlay_zyx),
+            coords=coords,
+        )
+
+    def channel_value_range(self, channel_index: int) -> tuple[float, float] | None:
+        """
+        Return a cheap display range for an overlay channel when available.
+
+        Parameters
+        ----------
+        channel_index : int
+            Channel index.
+
+        Returns
+        -------
+        tuple[float, float] or None
+            Inclusive display range, or ``None`` when it would require reading data.
+        """
+
+        if channel_index == 0:
+            return None
+        overlay = self.overlays[channel_index - 1]
+        max_value = getattr(overlay, "max_value", None)
+        if max_value is None:
+            return None
+        max_value = float(max_value)
+        return (1.0, max_value) if max_value > 1.0 else (0.0, 1.0)
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        """
+        Read selected channels from tensorstore or in-memory overlays.
+
+        Parameters
+        ----------
+        key : Any
+            NumPy-style channel, Z, Y, X index.
+
+        Returns
+        -------
+        numpy.ndarray
+            Requested image data.
+        """
+
+        if not isinstance(key, tuple):
+            key = (key,)
+        key = key + (slice(None),) * (self.ndim - len(key))
+        channel_key, zyx_key = key[0], key[1:]
+        if isinstance(channel_key, np.integer):
+            channel_key = int(channel_key)
+        if isinstance(channel_key, int):
+            return self._read_channel(channel_key, zyx_key)
+        channel_indices = list(range(self.shape[0])[channel_key])
+        return np.stack(
+            [
+                self._read_channel(channel_index, zyx_key)
+                for channel_index in channel_indices
+            ],
+            axis=0,
+        )
+
+    def __array_function__(self, *_args: Any, **_kwargs: Any) -> Any:
+        """
+        Mark the object as NumPy-like without full-array conversion.
+
+        Returns
+        -------
+        Any
+            ``NotImplemented`` so NumPy does not read the full fused zarr.
+        """
+
+        return NotImplemented
+
+    def _read_channel(self, channel_index: int, zyx_key: tuple[Any, ...]) -> np.ndarray:
+        """
+        Read one channel.
+
+        Parameters
+        ----------
+        channel_index : int
+            Channel index.
+        zyx_key : tuple[Any, ...]
+            Z, Y, X index.
+
+        Returns
+        -------
+        numpy.ndarray
+            Requested channel data.
+        """
+
+        if channel_index == 0:
+            return self.fused_zyx[zyx_key].read().result()
+        overlay = self.overlays[channel_index - 1]
+        selected = overlay[zyx_key]
+        if hasattr(selected, "read"):
+            selected = selected.read().result()
+        return np.asarray(selected)
 
 
 @dataclass(frozen=True)
@@ -157,6 +312,9 @@ def stack_with_micron_coords(
     """
 
     import xarray as xr
+
+    if isinstance(stack.data, LazyGlobalChannelData):
+        return stack.data
 
     data = stack.data.astype(np.float32, copy=False)
     voxel = np.asarray(voxel_size_zyx_um, dtype=np.float32)

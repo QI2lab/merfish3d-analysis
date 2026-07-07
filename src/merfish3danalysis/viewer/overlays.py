@@ -1,12 +1,268 @@
 """Overlay rasterization helpers for the datastore viewer."""
 
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from matplotlib import colormaps
 
-from merfish3danalysis.viewer.models import ChannelStack, GlobalChannelStack, ProsegRun
+from merfish3danalysis.viewer.models import (
+    ChannelStack,
+    GlobalChannelStack,
+    LazyGlobalChannelData,
+    ProsegRun,
+)
 from merfish3danalysis.viewer.warping import _as_zyx
+
+
+def _axis_indices(axis_key: Any, axis_size: int) -> tuple[np.ndarray, bool]:
+    """
+    Return selected axis indices and whether the key was scalar.
+
+    Parameters
+    ----------
+    axis_key : Any
+        NumPy-style axis key.
+    axis_size : int
+        Axis length.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, bool]
+        Selected indices and scalar-key flag.
+    """
+
+    if isinstance(axis_key, np.integer):
+        axis_key = int(axis_key)
+    if isinstance(axis_key, int):
+        return np.asarray([range(axis_size)[axis_key]], dtype=int), True
+    return np.asarray(range(axis_size)[axis_key], dtype=int), False
+
+
+@dataclass(frozen=True)
+class LazyRepeatedPlaneOverlay:
+    """A 2D overlay virtually repeated across all Z planes."""
+
+    plane_yx: np.ndarray
+    z_size: int
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        """Return Z, Y, X shape."""
+
+        plane_shape = tuple(int(value) for value in self.plane_yx.shape)
+        return (self.z_size, *plane_shape)
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the overlay dtype."""
+
+        dtype = self.plane_yx.dtype
+        numpy_dtype = getattr(dtype, "numpy_dtype", None)
+        if numpy_dtype is not None:
+            return np.dtype(numpy_dtype)
+        return np.dtype(dtype)
+
+    @property
+    def max_value(self) -> int | None:
+        """Return the maximum display value without expanding across Z."""
+
+        if hasattr(self.plane_yx, "read"):
+            return None
+        if self.plane_yx.size == 0:
+            return 0
+        return int(np.max(self.plane_yx))
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        """
+        Return a requested repeated-plane slice.
+
+        Parameters
+        ----------
+        key : Any
+            Z, Y, X key.
+
+        Returns
+        -------
+        numpy.ndarray
+            Requested overlay slice.
+        """
+
+        if not isinstance(key, tuple):
+            key = (key,)
+        key = key + (slice(None),) * (3 - len(key))
+        z_indices, z_scalar = _axis_indices(key[0], self.z_size)
+        plane = self.plane_yx[key[1], key[2]]
+        if hasattr(plane, "read"):
+            plane = plane.read().result()
+        plane = np.asarray(plane)
+        if z_scalar:
+            return plane
+        return np.broadcast_to(plane, (len(z_indices), *plane.shape)).copy()
+
+
+@dataclass(frozen=True)
+class LazyPointOverlay:
+    """A sparse point overlay rendered only for requested slices."""
+
+    coords_zyx: np.ndarray
+    values: np.ndarray
+    shape: tuple[int, int, int]
+    radius: int
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the overlay dtype."""
+
+        return self.values.dtype
+
+    @property
+    def max_value(self) -> int:
+        """Return the maximum display value without rasterizing the overlay."""
+
+        if self.values.size == 0:
+            return 0
+        return int(np.max(self.values))
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        """
+        Render requested Z, Y, X slice from sparse point coordinates.
+
+        Parameters
+        ----------
+        key : Any
+            Z, Y, X key.
+
+        Returns
+        -------
+        numpy.ndarray
+            Requested overlay slice.
+        """
+
+        if not isinstance(key, tuple):
+            key = (key,)
+        key = key + (slice(None),) * (3 - len(key))
+        axis_indices = [_axis_indices(key[axis], self.shape[axis]) for axis in range(3)]
+        selected = [indices for indices, _is_scalar in axis_indices]
+        scalar_flags = [is_scalar for _indices, is_scalar in axis_indices]
+        output_shape = tuple(
+            len(indices) for indices, is_scalar in axis_indices if not is_scalar
+        )
+        output = np.zeros(output_shape, dtype=self.values.dtype)
+        if self.coords_zyx.size == 0:
+            return output
+
+        bounds = [(indices[0], indices[-1]) for indices in selected]
+        keep = np.ones(self.coords_zyx.shape[0], dtype=bool)
+        for axis, (lower, upper) in enumerate(bounds):
+            keep &= self.coords_zyx[:, axis] >= lower - self.radius
+            keep &= self.coords_zyx[:, axis] <= upper + self.radius
+        if not keep.any():
+            return output
+
+        offsets = np.asarray([indices[0] for indices in selected], dtype=float)
+        coords = self.coords_zyx[keep] - offsets
+        values = self.values[keep]
+        squeezed_coords = coords[:, [not flag for flag in scalar_flags]]
+        if output.ndim == 2:
+            coords_zyx = np.column_stack(
+                [
+                    np.zeros(squeezed_coords.shape[0], dtype=float),
+                    squeezed_coords[:, 0],
+                    squeezed_coords[:, 1],
+                ]
+            )
+            _paint_points(output[np.newaxis, :, :], coords_zyx, values, self.radius)
+            return output
+        _paint_points(output, squeezed_coords, values, self.radius)
+        return output
+
+
+@dataclass(frozen=True)
+class LazyPolylineOverlay:
+    """A sparse 2D polyline overlay virtually repeated across Z planes."""
+
+    polylines_yx: tuple[np.ndarray, ...]
+    shape: tuple[int, int, int]
+    line_thickness: int
+    value: int = 1
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Return the overlay dtype."""
+
+        return np.dtype(np.uint16)
+
+    @property
+    def max_value(self) -> int:
+        """Return the maximum display value."""
+
+        return self.value
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        """
+        Render requested Z, Y, X slice from sparse polylines.
+
+        Parameters
+        ----------
+        key : Any
+            Z, Y, X key.
+
+        Returns
+        -------
+        numpy.ndarray
+            Requested overlay slice.
+        """
+
+        if not isinstance(key, tuple):
+            key = (key,)
+        key = key + (slice(None),) * (3 - len(key))
+        z_indices, z_scalar = _axis_indices(key[0], self.shape[0])
+        y_indices, y_scalar = _axis_indices(key[1], self.shape[1])
+        x_indices, x_scalar = _axis_indices(key[2], self.shape[2])
+        output_shape = tuple(
+            len(indices)
+            for indices, is_scalar in (
+                (z_indices, z_scalar),
+                (y_indices, y_scalar),
+                (x_indices, x_scalar),
+            )
+            if not is_scalar
+        )
+        output = np.zeros(output_shape, dtype=np.uint16)
+        if y_scalar or x_scalar:
+            return output
+
+        plane = np.zeros((len(y_indices), len(x_indices)), dtype=np.uint16)
+        y_offset = float(y_indices[0])
+        x_offset = float(x_indices[0])
+        y_lower = y_offset - self.line_thickness
+        y_upper = float(y_indices[-1]) + self.line_thickness
+        x_lower = x_offset - self.line_thickness
+        x_upper = float(x_indices[-1]) + self.line_thickness
+        for polyline in self.polylines_yx:
+            if polyline.size == 0:
+                continue
+            if (
+                polyline[:, 0].max() < y_lower
+                or polyline[:, 0].min() > y_upper
+                or polyline[:, 1].max() < x_lower
+                or polyline[:, 1].min() > x_upper
+            ):
+                continue
+            shifted = polyline - np.asarray([y_offset, x_offset], dtype=float)
+            for idx in range(shifted.shape[0]):
+                _draw_line_2d(
+                    plane,
+                    shifted[idx - 1],
+                    shifted[idx],
+                    thickness=self.line_thickness,
+                    value=self.value,
+                )
+
+        if z_scalar:
+            return plane
+        return np.broadcast_to(plane, (len(z_indices), *plane.shape)).copy()
 
 
 def _paint_point(
@@ -118,7 +374,7 @@ def _paint_points(
         return
 
     coords = np.round(coords_zyx[finite]).astype(np.intp, copy=False)
-    point_values = values[finite].astype(np.float32, copy=False)
+    point_values = values[finite].astype(volume.dtype, copy=False)
     z_offsets = np.arange(-radius, radius + 1, dtype=np.intp)
     y_offsets, x_offsets = np.nonzero(_circular_footprint(radius))
     y_offsets = y_offsets.astype(np.intp, copy=False) - radius
@@ -311,7 +567,7 @@ def rasterize_global_decoded_spots(
         Computed viewer result.
     """
 
-    overlay = empty_transcript_overlay(shape_zyx)
+    overlay = np.zeros(shape_zyx, dtype=np.uint16)
     if decoded_spots is None or len(decoded_spots) == 0:
         return overlay
 
@@ -327,17 +583,80 @@ def rasterize_global_decoded_spots(
 
     origin = np.asarray(origin_zyx_um, dtype=float)
     spacing = np.asarray(spacing_zyx_um, dtype=float)
-    coords_um = spots[["global_y", "global_x"]].to_numpy(dtype=float, copy=False)
-    coords_yx = (coords_um - origin[1:]) / spacing[1:]
-    coords_zyx = np.column_stack(
-        [np.zeros(coords_yx.shape[0], dtype=float), coords_yx[:, 0], coords_yx[:, 1]]
-    )
+    coords_yx_um = spots[["global_y", "global_x"]].to_numpy(dtype=float, copy=False)
+    coords_yx = (coords_yx_um - origin[1:]) / spacing[1:]
+    if "global_z" in spots.columns:
+        coords_z_um = spots["global_z"].to_numpy(dtype=float, copy=False)
+        coords_z = (coords_z_um - origin[0]) / spacing[0]
+    else:
+        coords_z = np.zeros(coords_yx.shape[0], dtype=float)
+    coords_zyx = np.column_stack([coords_z, coords_yx[:, 0], coords_yx[:, 1]])
     gene_values = (
-        spots["gene_id"].astype(str).map(value_by_gene).to_numpy(dtype=np.float32)
+        spots["gene_id"].astype(str).map(value_by_gene).to_numpy(dtype=np.uint16)
     )
     _paint_points(overlay, coords_zyx, gene_values, radius)
 
     return overlay
+
+
+def lazy_global_decoded_spots(
+    decoded_spots: Any,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+    genes: list[str] | None = None,
+    radius: int = 1,
+) -> LazyPointOverlay:
+    """
+    Create a lazy global decoded transcript overlay.
+
+    Parameters
+    ----------
+    decoded_spots : Any
+        Final decoded transcript table.
+    shape_zyx : tuple[int, int, int]
+        Fused image shape.
+    origin_zyx_um : Any
+        Fused image origin in Z, Y, X microns.
+    spacing_zyx_um : Any
+        Fused image spacing in Z, Y, X microns.
+    genes : list[str] | None
+        Optional gene filter.
+    radius : int
+        Paint radius in pixels.
+
+    Returns
+    -------
+    LazyPointOverlay
+        Sparse overlay rendered per requested slice.
+    """
+
+    empty_coords = np.empty((0, 3), dtype=float)
+    empty_values = np.empty(0, dtype=np.uint16)
+    if decoded_spots is None or len(decoded_spots) == 0:
+        return LazyPointOverlay(empty_coords, empty_values, shape_zyx, radius)
+    required_columns = {"global_y", "global_x", "gene_id"}
+    if not required_columns.issubset(decoded_spots.columns):
+        return LazyPointOverlay(empty_coords, empty_values, shape_zyx, radius)
+
+    spots = decoded_spots
+    value_by_gene = _codeword_values(spots, "gene_id", genes)
+    if genes is not None:
+        genes_set = {gene.strip() for gene in genes if gene.strip()}
+        spots = spots.loc[spots["gene_id"].astype(str).isin(genes_set)]
+
+    origin = np.asarray(origin_zyx_um, dtype=float)
+    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    coords_yx_um = spots[["global_y", "global_x"]].to_numpy(dtype=float, copy=False)
+    coords_yx = (coords_yx_um - origin[1:]) / spacing[1:]
+    if "global_z" in spots.columns:
+        coords_z_um = spots["global_z"].to_numpy(dtype=float, copy=False)
+        coords_z = (coords_z_um - origin[0]) / spacing[0]
+    else:
+        coords_z = np.zeros(coords_yx.shape[0], dtype=float)
+    coords_zyx = np.column_stack([coords_z, coords_yx[:, 0], coords_yx[:, 1]])
+    values = spots["gene_id"].astype(str).map(value_by_gene).to_numpy(dtype=np.uint16)
+    return LazyPointOverlay(coords_zyx, values, shape_zyx, radius)
 
 
 def rasterize_local_decoded_spots(
@@ -473,7 +792,7 @@ def rasterize_global_proseg_transcripts(
         Overlay volume.
     """
 
-    overlay = empty_transcript_overlay(shape_zyx)
+    overlay = np.zeros(shape_zyx, dtype=np.uint16)
     if transcripts is None or len(transcripts) == 0:
         return overlay
     required_columns = {"x", "y", "z", "gene"}
@@ -491,11 +810,64 @@ def rasterize_global_proseg_transcripts(
     coords_xyz = spots[["x", "y", "z"]].to_numpy(dtype=float, copy=False)
     coords_zyx = coords_xyz[:, [2, 1, 0]]
     coords_px = (coords_zyx - origin) / spacing
-    gene_values = (
-        spots["gene"].astype(str).map(value_by_gene).to_numpy(dtype=np.float32)
-    )
+    gene_values = spots["gene"].astype(str).map(value_by_gene).to_numpy(dtype=np.uint16)
     _paint_points(overlay, coords_px, gene_values, radius)
     return overlay
+
+
+def lazy_global_proseg_transcripts(
+    transcripts: Any,
+    shape_zyx: tuple[int, int, int],
+    origin_zyx_um: Any,
+    spacing_zyx_um: Any,
+    genes: list[str] | None = None,
+    radius: int = 1,
+) -> LazyPointOverlay:
+    """
+    Create a lazy global Proseg transcript overlay.
+
+    Parameters
+    ----------
+    transcripts : Any
+        Proseg transcript table.
+    shape_zyx : tuple[int, int, int]
+        Fused image shape.
+    origin_zyx_um : Any
+        Fused image origin in Z, Y, X microns.
+    spacing_zyx_um : Any
+        Fused image spacing in Z, Y, X microns.
+    genes : list[str] | None
+        Optional gene filter.
+    radius : int
+        Paint radius in pixels.
+
+    Returns
+    -------
+    LazyPointOverlay
+        Sparse overlay rendered per requested slice.
+    """
+
+    empty_coords = np.empty((0, 3), dtype=float)
+    empty_values = np.empty(0, dtype=np.uint16)
+    if transcripts is None or len(transcripts) == 0:
+        return LazyPointOverlay(empty_coords, empty_values, shape_zyx, radius)
+    required_columns = {"x", "y", "z", "gene"}
+    if not required_columns.issubset(transcripts.columns):
+        return LazyPointOverlay(empty_coords, empty_values, shape_zyx, radius)
+
+    spots = transcripts
+    value_by_gene = _codeword_values(spots, "gene", genes)
+    if genes is not None:
+        genes_set = {gene.strip() for gene in genes if gene.strip()}
+        spots = spots.loc[spots["gene"].astype(str).isin(genes_set)]
+
+    origin = np.asarray(origin_zyx_um, dtype=float)
+    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    coords_xyz = spots[["x", "y", "z"]].to_numpy(dtype=float, copy=False)
+    coords_zyx = coords_xyz[:, [2, 1, 0]]
+    coords_px = (coords_zyx - origin) / spacing
+    values = spots["gene"].astype(str).map(value_by_gene).to_numpy(dtype=np.uint16)
+    return LazyPointOverlay(coords_px, values, shape_zyx, radius)
 
 
 def _global_zyx_um_to_tile_zyx_px(
@@ -674,6 +1046,7 @@ def _draw_line_2d(
     start_yx: np.ndarray,
     end_yx: np.ndarray,
     thickness: int = 1,
+    value: int = 1,
 ) -> None:
     """
     Draw a line into a 2D image using integer interpolation.
@@ -688,6 +1061,8 @@ def _draw_line_2d(
         end_yx for this viewer operation.
     thickness : int, default=1
         Line thickness in pixels.
+    value : int, default=1
+        Display value painted into the line.
 
     Returns
     -------
@@ -712,10 +1087,10 @@ def _draw_line_2d(
     valid = (ys >= 0) & (ys < image.shape[0]) & (xs >= 0) & (xs < image.shape[1])
     radius = max(int(thickness) // 2, 0)
     if radius == 0:
-        image[ys[valid], xs[valid]] = 1.0
+        image[ys[valid], xs[valid]] = value
         return
     for y, x in zip(ys[valid], xs[valid], strict=True):
-        _paint_disk_2d(image, np.asarray([y, x], dtype=float), radius, 1.0)
+        _paint_disk_2d(image, np.asarray([y, x], dtype=float), radius, value)
 
 
 def _global_xy_to_tile_yx(
@@ -824,7 +1199,7 @@ def rasterize_global_cell_outlines(
     origin_zyx_um: Any,
     spacing_zyx_um: Any,
     line_thickness: int = 1,
-) -> np.ndarray:
+) -> LazyPolylineOverlay:
     """
     Rasterize global Cellpose outlines directly onto the fused global canvas.
 
@@ -843,16 +1218,16 @@ def rasterize_global_cell_outlines(
 
     Returns
     -------
-    np.ndarray
-        Computed viewer result.
+    LazyPolylineOverlay
+        Sparse outline overlay rendered per requested slice.
     """
 
-    overlay_2d = np.zeros(shape_zyx[1:], dtype=np.float32)
     if not outlines:
-        return np.zeros(shape_zyx, dtype=np.float32)
+        return LazyPolylineOverlay((), shape_zyx, line_thickness)
 
     origin = np.asarray(origin_zyx_um, dtype=float)
     spacing = np.asarray(spacing_zyx_um, dtype=float)
+    polylines: list[np.ndarray] = []
     for outline in outlines.values():
         global_xy = np.asarray(outline, dtype=float)
         if global_xy.ndim != 2 or global_xy.shape[0] < 2 or global_xy.shape[1] != 2:
@@ -861,20 +1236,14 @@ def rasterize_global_cell_outlines(
         local_yx = (global_yx - origin[1:]) / spacing[1:]
         if (
             local_yx[:, 0].max() < 0
-            or local_yx[:, 0].min() >= overlay_2d.shape[0]
+            or local_yx[:, 0].min() >= shape_zyx[1]
             or local_yx[:, 1].max() < 0
-            or local_yx[:, 1].min() >= overlay_2d.shape[1]
+            or local_yx[:, 1].min() >= shape_zyx[2]
         ):
             continue
-        for idx in range(local_yx.shape[0]):
-            _draw_line_2d(
-                overlay_2d,
-                local_yx[idx - 1],
-                local_yx[idx],
-                thickness=line_thickness,
-            )
+        polylines.append(local_yx)
 
-    return np.repeat(overlay_2d[np.newaxis, :, :], shape_zyx[0], axis=0)
+    return LazyPolylineOverlay(tuple(polylines), shape_zyx, line_thickness)
 
 
 def cell_outline_overlay_for_tile(
@@ -964,7 +1333,7 @@ def global_cell_outline_overlay(
 def _match_global_overlay_shape(
     overlay: np.ndarray,
     shape_zyx: tuple[int, int, int],
-) -> np.ndarray:
+) -> Any:
     """
     Convert a 2D or single-plane global overlay to the fused image shape.
 
@@ -983,11 +1352,195 @@ def _match_global_overlay_shape(
 
     overlay_zyx = _as_zyx(overlay)
     if overlay_zyx.shape == shape_zyx:
-        return overlay_zyx.astype(np.float32, copy=False)
+        return overlay_zyx.astype(np.uint16, copy=False)
     if overlay_zyx.shape[0] == 1 and overlay_zyx.shape[1:] == shape_zyx[1:]:
-        return np.repeat(overlay_zyx, shape_zyx[0], axis=0).astype(
-            np.float32, copy=False
+        return LazyRepeatedPlaneOverlay(
+            overlay_zyx[0].astype(np.uint16, copy=False),
+            shape_zyx[0],
         )
+    raise ValueError("Global overlay shape does not match fused global image.")
+
+
+def _squeeze_to_zyx(array: Any) -> Any:
+    """
+    Squeeze leading singleton axes from a lazy or eager image array.
+
+    Parameters
+    ----------
+    array : Any
+        Image array with optional leading singleton axes.
+
+    Returns
+    -------
+    Any
+        Z, Y, X image array.
+    """
+
+    squeezed = array
+    while len(squeezed.shape) > 3 and squeezed.shape[0] == 1:
+        squeezed = squeezed[0]
+    if len(squeezed.shape) != 3:
+        raise ValueError("Expected fused image data with Z, Y, X dimensions.")
+    return squeezed
+
+
+def _open_coarsest_pyramid_zyx(group: Any) -> tuple[Any, tuple[int, int, int]]:
+    """
+    Open the smallest available Z, Y, X image in a zarr pyramid.
+
+    Parameters
+    ----------
+    group : Any
+        Open yaozarrs image group.
+
+    Returns
+    -------
+    tuple[Any, tuple[int, int, int]]
+        Coarsest lazy image and the full-resolution Z, Y, X shape.
+    """
+
+    arrays: list[Any] = []
+    level = 0
+    while True:
+        try:
+            arrays.append(_squeeze_to_zyx(group[str(level)].to_tensorstore()))
+        except (KeyError, IndexError, ValueError):
+            break
+        level += 1
+    if not arrays:
+        raise ValueError("Expected at least one zarr pyramid level.")
+    full_shape = tuple(int(value) for value in arrays[0].shape)
+    return arrays[-1], full_shape
+
+
+def _load_lazy_global_fiducial_image(
+    datastore: Any,
+) -> tuple[Any, np.ndarray, np.ndarray]:
+    """
+    Open the fused global fiducial zarr lazily through datastore path helpers.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore object.
+
+    Returns
+    -------
+    tuple[Any, np.ndarray, np.ndarray]
+        Lazy Z, Y, X fused image, global origin, and spacing.
+    """
+
+    fused_root = (
+        datastore._fused_root_path / f"fused_{datastore.fiducial_folder_name}_zyx"
+    )
+    image_path = datastore._image_store_path(fused_root)
+    if not image_path.exists():
+        raise ValueError("No fused global polyDT image was available to display.")
+
+    open_group, _, _ = datastore._import_yaozarrs()
+    fused_zyx, full_shape_zyx = _open_coarsest_pyramid_zyx(open_group(str(image_path)))
+    attributes = datastore._read_extra_attributes(image_path)
+    origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
+    spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+    display_shape_zyx = np.asarray(fused_zyx.shape, dtype=np.float32)
+    scale_zyx = np.asarray(full_shape_zyx, dtype=np.float32) / display_shape_zyx
+    spacing_zyx_um = spacing_zyx_um * scale_zyx
+    return fused_zyx, origin_zyx_um, spacing_zyx_um
+
+
+def _load_lazy_global_cellpose_mask(datastore: Any) -> Any | None:
+    """
+    Open the global Cellpose mask zarr lazily through datastore path helpers.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore object.
+
+    Returns
+    -------
+    Any | None
+        Lazy mask image, or None when no mask zarr exists.
+    """
+
+    mask_root = (
+        datastore._segmentation_root_path
+        / "cellpose"
+        / f"masks_{datastore.fiducial_folder_name}_iso_zyx"
+    )
+    image_path = datastore._image_store_path(mask_root)
+    if not image_path.exists():
+        return None
+
+    open_group, _, _ = datastore._import_yaozarrs()
+    arrays: list[Any] = []
+    group = open_group(str(image_path))
+    level = 0
+    while True:
+        try:
+            arrays.append(_squeeze_to_yx_or_zyx(group[str(level)].to_tensorstore()))
+        except (KeyError, IndexError, ValueError):
+            break
+        level += 1
+    if not arrays:
+        return None
+    return arrays[-1]
+
+
+def _squeeze_to_yx_or_zyx(array: Any) -> Any:
+    """
+    Squeeze leading singleton axes from a lazy or eager 2D/3D image array.
+
+    Parameters
+    ----------
+    array : Any
+        Image array with optional leading singleton axes.
+
+    Returns
+    -------
+    Any
+        Y, X or Z, Y, X image array.
+    """
+
+    squeezed = array
+    while len(squeezed.shape) > 3 and squeezed.shape[0] == 1:
+        squeezed = squeezed[0]
+    if len(squeezed.shape) not in {2, 3}:
+        raise ValueError("Expected image data with Y, X or Z, Y, X dimensions.")
+    return squeezed
+
+
+def _match_lazy_global_overlay_shape(
+    overlay: Any,
+    shape_zyx: tuple[int, int, int],
+) -> Any:
+    """
+    Match a lazy or eager global overlay to fused Z, Y, X shape.
+
+    Parameters
+    ----------
+    overlay : Any
+        Overlay image in Y, X or Z, Y, X order.
+    shape_zyx : tuple[int, int, int]
+        Fused image shape.
+
+    Returns
+    -------
+    Any
+        Overlay compatible with the lazy global channel stack.
+    """
+
+    overlay_shape = tuple(int(value) for value in overlay.shape)
+    if overlay_shape == shape_zyx:
+        return overlay
+    if overlay_shape == shape_zyx[1:]:
+        return LazyRepeatedPlaneOverlay(overlay, shape_zyx[0])
+    if (
+        len(overlay_shape) == 3
+        and overlay_shape[0] == 1
+        and overlay_shape[1:] == shape_zyx[1:]
+    ):
+        return LazyRepeatedPlaneOverlay(overlay[0], shape_zyx[0])
     raise ValueError("Global overlay shape does not match fused global image.")
 
 
@@ -1011,31 +1564,38 @@ def load_global_image_channels(
         Computed viewer result.
     """
 
-    loaded = datastore.load_global_fiducial_image(return_future=False)
-    if loaded is None:
-        raise ValueError("No fused global polyDT image was available to display.")
-
-    fused_image, _affine, origin_zyx_um, spacing_zyx_um = loaded
-    fused_zyx = _as_zyx(fused_image)
-    fused_projection = np.max(fused_zyx, axis=0, keepdims=True).astype(
-        np.float32, copy=False
+    fused_zyx, origin_zyx_um, spacing_zyx_um = _load_lazy_global_fiducial_image(
+        datastore
     )
-    channels = [fused_projection]
-    labels = ["global polyDT max projection"]
+    shape_zyx = tuple(int(value) for value in fused_zyx.shape)
+    coords = {
+        "c": range(1),
+        "z_um": origin_zyx_um[0]
+        + np.arange(shape_zyx[0], dtype=np.float32) * spacing_zyx_um[0],
+        "y_um": origin_zyx_um[1]
+        + np.arange(shape_zyx[1], dtype=np.float32) * spacing_zyx_um[1],
+        "x_um": origin_zyx_um[2]
+        + np.arange(shape_zyx[2], dtype=np.float32) * spacing_zyx_um[2],
+    }
+    data = LazyGlobalChannelData(fused_zyx=fused_zyx, overlays=(), coords=coords)
+    labels = ["global polyDT fused zarr overview"]
 
     if include_segmentation:
-        segmentation = datastore.load_global_cellpose_segmentation_image(
-            return_future=False
-        )
+        segmentation = _load_lazy_global_cellpose_mask(datastore)
         if segmentation is not None:
-            segmentation_zyx = _match_global_overlay_shape(
-                segmentation, fused_projection.shape
-            )
-            channels.append(segmentation_zyx)
-            labels.append("global Cellpose mask")
+            try:
+                segmentation_zyx = _match_lazy_global_overlay_shape(
+                    segmentation,
+                    shape_zyx,
+                )
+            except ValueError:
+                segmentation_zyx = None
+            if segmentation_zyx is not None:
+                data = data.with_overlay(segmentation_zyx)
+                labels.append("global Cellpose mask")
 
     return GlobalChannelStack(
-        stack=ChannelStack(data=np.stack(channels, axis=0), labels=labels),
+        stack=ChannelStack(data=data, labels=labels),
         origin_zyx_um=np.asarray(origin_zyx_um, dtype=np.float32),
         spacing_zyx_um=np.asarray(spacing_zyx_um, dtype=np.float32),
     )
@@ -1066,8 +1626,18 @@ def append_overlay_channel(
 
     if overlay is None:
         return stack
+    if isinstance(stack.data, LazyGlobalChannelData) and hasattr(overlay, "shape"):
+        overlay_shape = tuple(int(value) for value in overlay.shape)
+        stack_shape_zyx = tuple(int(value) for value in stack.data.shape[1:])
+        if overlay_shape != stack_shape_zyx:
+            raise ValueError("Overlay shape does not match selected image channels.")
+        return ChannelStack(
+            data=stack.data.with_overlay(overlay),
+            labels=[*stack.labels, label],
+        )
     overlay_zyx = _as_zyx(overlay)
-    if overlay_zyx.shape != stack.data.shape[1:]:
+    stack_shape_zyx = tuple(int(value) for value in stack.data.shape[1:])
+    if overlay_zyx.shape != stack_shape_zyx:
         raise ValueError("Overlay shape does not match selected image channels.")
     return ChannelStack(
         data=np.concatenate([stack.data, overlay_zyx[np.newaxis, :, :, :]], axis=0),
