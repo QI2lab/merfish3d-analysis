@@ -1568,7 +1568,10 @@ class qi2labDataStore:
         return [fill] * ndim
 
     @staticmethod
-    def _default_chunks(array: np.ndarray) -> list[int]:
+    def _default_chunks(
+        array: np.ndarray,
+        spatial_chunk_zyx: tuple[int, int, int] = (1, 256, 256),
+    ) -> list[int]:
         """
         Create sane default chunk sizes based on dimensionality.
 
@@ -1576,6 +1579,8 @@ class qi2labDataStore:
         ----------
         array : np.ndarray
             Array that will be written.
+        spatial_chunk_zyx : tuple[int, int, int], default=(1, 256, 256)
+            Desired Z, Y, X storage chunks for local fiducial and readout images.
 
         Returns
         -------
@@ -1583,18 +1588,39 @@ class qi2labDataStore:
             Chunk shape matched to the array dimensionality.
         """
 
+        z_chunk, y_chunk, x_chunk = (int(value) for value in spatial_chunk_zyx)
         if array.ndim == 2:
-            return [int(array.shape[0]), int(array.shape[1])]
+            return [
+                min(int(array.shape[0]), y_chunk),
+                min(int(array.shape[1]), x_chunk),
+            ]
         if array.ndim == 3:
-            return [1, int(array.shape[1]), int(array.shape[2])]
+            return [
+                min(int(array.shape[0]), z_chunk),
+                min(int(array.shape[1]), y_chunk),
+                min(int(array.shape[2]), x_chunk),
+            ]
         if array.ndim == 4:
-            return [1, 1, int(array.shape[2]), int(array.shape[3])]
+            return [
+                1,
+                min(int(array.shape[1]), z_chunk),
+                min(int(array.shape[2]), y_chunk),
+                min(int(array.shape[3]), x_chunk),
+            ]
+        if array.ndim == 5:
+            return [
+                1,
+                1,
+                min(int(array.shape[2]), z_chunk),
+                min(int(array.shape[3]), y_chunk),
+                min(int(array.shape[4]), x_chunk),
+            ]
         return list(array.shape)
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
         """
-        Create chunk sizes tailored for large fused images only.
+        Create chunk sizes tailored for fused image storage.
 
         Parameters
         ----------
@@ -1607,26 +1633,6 @@ class qi2labDataStore:
             Chunk shape for fused image storage.
         """
 
-        shape = [int(dim) for dim in array.shape]
-        if array.ndim == 2:
-            return [min(shape[0], 2048), min(shape[1], 2048)]
-        if array.ndim == 3:
-            return [min(shape[0], 16), min(shape[1], 512), min(shape[2], 512)]
-        if array.ndim == 4:
-            return [
-                min(shape[0], 1),
-                min(shape[1], 16),
-                min(shape[2], 512),
-                min(shape[3], 512),
-            ]
-        if array.ndim == 5:
-            return [
-                min(shape[0], 1),
-                min(shape[1], 1),
-                min(shape[2], 16),
-                min(shape[3], 512),
-                min(shape[4], 512),
-            ]
         return qi2labDataStore._default_chunks(array)
 
     @staticmethod

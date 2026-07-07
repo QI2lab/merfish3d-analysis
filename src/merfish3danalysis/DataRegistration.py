@@ -100,8 +100,6 @@ class GlobalFusionConfig:
 
     n_batch: int = 20
     n_jobs: int | None = None
-    joblib_backend: str = "threading"
-    output_chunksize: int = 512
     overlap_in_pixels: int = 64
     backend: str = "cupy"
     output_on_backend: bool = False
@@ -1616,10 +1614,7 @@ class DataRegistration:
                 output_stack_mode="union",
                 transform_key=self._global_registration_config.new_transform_key,
             )
-            output_chunksize = fusion.process_output_chunksize(
-                scale0_sims,
-                int(self._global_fusion_config.output_chunksize),
-            )
+            output_chunksize = fusion.process_output_chunksize(scale0_sims, None)
             spatial_shape = output_stack_properties["shape"]
             nblocks = {
                 dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
@@ -1709,7 +1704,6 @@ class DataRegistration:
             "n_batch": int(fusion_config.n_batch),
             "batch_func_kwargs": {
                 "n_jobs": n_jobs,
-                "backend": fusion_config.joblib_backend,
             },
         }
         self._print_global_fusion_diagnostics(
@@ -1727,7 +1721,6 @@ class DataRegistration:
             images=[msi_utils.get_sim_from_msim(msim) for msim in msims],
             transform_key=self._global_registration_config.new_transform_key,
             output_spacing=scale,
-            output_chunksize=int(fusion_config.output_chunksize),
             overlap_in_pixels=int(fusion_config.overlap_in_pixels),
             output_zarr_url=str(output_zarr_path),
             zarr_options={

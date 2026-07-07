@@ -45,7 +45,6 @@ def local_register_data(
     global_registration_affine_round_decimals: int | None = 2,
     global_fusion_n_batch: int = 20,
     global_fusion_n_jobs: int | None = None,
-    global_fusion_output_chunksize: int = 512,
     global_fusion_overlap_in_pixels: int = 64,
     sofima_residual_iterations: int = 2,
     sofima_patch_size_zyx: tuple[int, int, int] = (10, 32, 32),
@@ -125,8 +124,6 @@ def local_register_data(
         Number of fusion batches passed to multiview-stitcher.
     global_fusion_n_jobs : int | None, default=None
         Joblib worker count for fusion batches. None derives from the GPU count.
-    global_fusion_output_chunksize : int, default=512
-        Output chunk size passed to direct OME-Zarr fusion.
     global_fusion_overlap_in_pixels : int, default=64
         Fusion overlap in pixels.
     sofima_residual_iterations : int, default=2
@@ -242,7 +239,6 @@ def local_register_data(
         global_fusion_config=GlobalFusionConfig(
             n_batch=global_fusion_n_batch,
             n_jobs=global_fusion_n_jobs,
-            output_chunksize=global_fusion_output_chunksize,
             overlap_in_pixels=global_fusion_overlap_in_pixels,
         ),
         verbose=verbose,
