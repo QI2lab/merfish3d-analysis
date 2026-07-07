@@ -42,7 +42,6 @@ warnings.filterwarnings(
     "ignore", category=UserWarning, message=r".*block stride.*last level.*"
 )
 
-import builtins
 import gc
 import queue
 import timeit
@@ -1127,7 +1126,6 @@ class DataRegistration:
             global_registration_config or GlobalRegistrationConfig()
         )
         self._global_fusion_config = global_fusion_config or GlobalFusionConfig()
-        self._original_print = builtins.print
         self._verbose = verbose
 
     # -----------------------------------
@@ -2332,20 +2330,6 @@ class DataRegistration:
                 )
         if errors:
             raise RuntimeError("Readout preprocessing failed:\n" + "\n".join(errors))
-
-
-def no_op(*args: Any, **kwargs: Any) -> None:
-    """Function to monkey patch print to suppress output.
-
-    Parameters
-    ----------
-    args: Any
-        positional arguments
-    kwargs: Any
-        keyword arguments
-    """
-
-    pass
 
 
 def time_stamp() -> str:

@@ -11,9 +11,9 @@ History:
                and chunked GPU deconvolution.
 """
 
-import builtins
 import gc
-from typing import Any
+import io
+from contextlib import redirect_stdout
 
 import numpy as np
 from numba import njit, prange
@@ -99,12 +99,10 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    original_print = builtins.print
-    builtins.print = no_op
     basic = BaSiC(get_darkfield=False)
-    basic.autotune(maxz_images[:])
-    basic.fit(maxz_images[:])
-    builtins.print = original_print
+    with redirect_stdout(io.StringIO()):
+        basic.autotune(maxz_images[:])
+        basic.fit(maxz_images[:])
     shading_correction = basic.flatfield.astype(np.float32) / np.max(
         basic.flatfield.astype(np.float32), axis=(0, 1)
     )
@@ -221,17 +219,3 @@ def downsample_axis(image: ArrayLike, level: int = 2, axis: int = 0) -> ArrayLik
                         downsampled_image[z, y, x] = sum_value / count
 
     return downsampled_image
-
-
-def no_op(*args: Any, **kwargs: Any) -> None:
-    """Function to monkey patch print to suppress output.
-
-    Parameters
-    ----------
-    args: Any
-        positional arguments
-    kwargs: Any
-        keyword arguments
-    """
-
-    pass

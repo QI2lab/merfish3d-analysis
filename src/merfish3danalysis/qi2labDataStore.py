@@ -12,6 +12,7 @@ History:
 - **2024/07**: Initial commit.
 """
 
+import gzip
 import json
 import re
 from collections.abc import Collection, Mapping, Sequence
@@ -50,9 +51,9 @@ class qi2labDataStore:
         Parameters
         ----------
         datastore_path : str | Path
-            Function argument.
+            Datastore root path.
         validate : bool
-            Function argument.
+            Whether to validate existing image arrays while parsing the store.
         """
         compressor = {
             "id": "blosc",
@@ -111,7 +112,7 @@ class qi2labDataStore:
         Returns
         -------
         Path
-            Function result.
+            Path to ``calibrations/attributes.json``.
         """
 
         return self._calibrations_zarr_path / Path("attributes.json")
@@ -123,7 +124,7 @@ class qi2labDataStore:
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Calibration metadata loaded from disk.
         """
 
         attributes = self._load_from_json(self._calibrations_attributes_path())
@@ -138,12 +139,12 @@ class qi2labDataStore:
         Parameters
         ----------
         attributes : Mapping[str, Any]
-            Function argument.
+            Calibration metadata to write.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
 
         self._save_to_json(
@@ -158,14 +159,14 @@ class qi2labDataStore:
         Parameters
         ----------
         key : str
-            Function argument.
+            Calibration metadata key.
         value : Any
-            Function argument.
+            Value to store after JSON conversion.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
 
         attributes = self._load_calibrations_attributes()
@@ -282,16 +283,16 @@ class qi2labDataStore:
         Parameters
         ----------
         name : str
-            Function argument.
+            Identifier to validate.
         prefix : str
-            Function argument.
+            Required identifier prefix.
         width : int
-            Function argument.
+            Required number of zero-padded digits.
 
         Returns
         -------
         int
-            Function result.
+            Parsed numeric identifier.
         """
 
         match = re.fullmatch(rf"{re.escape(prefix)}(\d{{{width}}})", name)
@@ -309,16 +310,16 @@ class qi2labDataStore:
         Parameters
         ----------
         parent : Path
-            Function argument.
+            Folder containing identifier-named child directories.
         prefix : str
-            Function argument.
+            Required identifier prefix.
         width : int
-            Function argument.
+            Required number of zero-padded digits.
 
         Returns
         -------
         list[str]
-            Function result.
+            Strict identifiers sorted by numeric value.
         """
 
         def sort_id(value: str) -> tuple[int, int, str]:
@@ -794,12 +795,12 @@ class qi2labDataStore:
         Parameters
         ----------
         value : ArrayLike | pd.DataFrame
-            Function argument.
+            Experiment order table or array to normalize.
 
         Returns
         -------
         pd.DataFrame
-            Function result.
+            Experiment order as a DataFrame with channel columns.
         """
 
         if isinstance(value, pd.DataFrame):
@@ -1388,7 +1389,7 @@ class qi2labDataStore:
         Returns
         -------
         tuple[Any, Any, Any]
-            Function result.
+            ``open_group``, ``v05``, and ``write_image`` objects from yaozarrs.
         """
 
         try:
@@ -1409,12 +1410,12 @@ class qi2labDataStore:
         Parameters
         ----------
         kvstore : dict | Path | str
-            Function argument.
+            Local file kvstore, path, or path-like string.
 
         Returns
         -------
         Path
-            Function result.
+            Local filesystem path represented by the kvstore.
         """
 
         if isinstance(kvstore, (str, Path)):
@@ -1445,26 +1446,26 @@ class qi2labDataStore:
         Parameters
         ----------
         path : Path
-            Function argument.
+            Destination zarr array path.
         shape : tuple[int, ...]
-            Function argument.
+            Array shape.
         dtype : Any
-            Function argument.
+            Array dtype.
         chunks : tuple[int, ...]
-            Function argument.
+            Chunk shape.
         shards : tuple[int, ...] | None
-            Function argument.
+            Optional shard shape.
         dimension_names : list[str] | None
-            Function argument.
+            Optional dimension names for metadata.
         overwrite : bool
-            Function argument.
+            Whether to replace an existing array.
         compression : str
-            Function argument.
+            Compression preset name.
 
         Returns
         -------
         Any
-            Function result.
+            Open tensorstore array handle.
         """
 
         import tensorstore as ts
@@ -1545,16 +1546,16 @@ class qi2labDataStore:
         Parameters
         ----------
         values : Sequence[float] | None
-            Function argument.
+            Optional transform vector.
         ndim : int
-            Function argument.
+            Target array dimensionality.
         fill : float
-            Function argument.
+            Fill value for missing leading dimensions.
 
         Returns
         -------
         list[float]
-            Function result.
+            Transform vector with one value per array dimension.
         """
 
         if values is None:
@@ -1574,12 +1575,12 @@ class qi2labDataStore:
         Parameters
         ----------
         array : np.ndarray
-            Function argument.
+            Array that will be written.
 
         Returns
         -------
         list[int]
-            Function result.
+            Chunk shape matched to the array dimensionality.
         """
 
         if array.ndim == 2:
@@ -1598,12 +1599,12 @@ class qi2labDataStore:
         Parameters
         ----------
         array : np.ndarray
-            Function argument.
+            Fused image array that will be written.
 
         Returns
         -------
         list[int]
-            Function result.
+            Chunk shape for fused image storage.
         """
 
         shape = [int(dim) for dim in array.shape]
@@ -1636,14 +1637,14 @@ class qi2labDataStore:
         Parameters
         ----------
         v05 : Any
-            Function argument.
+            yaozarrs NGFF model namespace.
         ndim : int
-            Function argument.
+            Number of array dimensions.
 
         Returns
         -------
         list[Any]
-            Function result.
+            NGFF axis models ordered to match array dimensions.
         """
 
         axis_names = ["t", "c", "z", "y", "x"][-ndim:]
@@ -1665,12 +1666,12 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
 
         Returns
         -------
         Path
-            Function result.
+            Entity metadata sidecar path.
         """
 
         return Path(entity_root_path) / Path("attributes.json")
@@ -1683,12 +1684,12 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Logical image path or OME-Zarr path.
 
         Returns
         -------
         Path
-            Function result.
+            Normalized path ending in ``.ome.zarr``.
         """
 
         path = Path(image_path)
@@ -1712,12 +1713,12 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Image store path.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Extra attributes stored on the image root.
         """
 
         image_root = qi2labDataStore._image_store_path(image_path)
@@ -1795,12 +1796,12 @@ class qi2labDataStore:
         Parameters
         ----------
         value : Any
-            Function argument.
+            Value to convert before JSON serialization.
 
         Returns
         -------
         Any
-            Function result.
+            JSON-compatible representation.
         """
 
         if isinstance(value, np.ndarray):
@@ -1825,12 +1826,12 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Image store path.
 
         Returns
         -------
         tuple[int, ...] | None
-            Function result.
+            Image array shape, or ``None`` when the image is unavailable.
         """
 
         path = qi2labDataStore._image_store_path(image_path)
@@ -1859,14 +1860,14 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         image_names : Sequence[str] | None
-            Function argument.
+            Optional image names whose extra attributes should be merged.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Merged entity metadata.
         """
 
         entity_root = Path(entity_root_path)
@@ -1907,18 +1908,18 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         updates : Mapping[str, Any]
-            Function argument.
+            Metadata updates to persist.
         target_image_name : str | None
-            Function argument.
+            Deprecated image target argument kept for API compatibility.
         image_names : Sequence[str] | None
-            Function argument.
+            Deprecated image-name argument kept for API compatibility.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
 
         if not updates:
@@ -1949,16 +1950,16 @@ class qi2labDataStore:
         Parameters
         ----------
         dtype : str | None
-            Function argument.
+            Optional array dtype override.
         stage_zyx_um : Sequence[float] | None
-            Function argument.
+            Optional stage translation in Z, Y, X microns.
         extra_attributes : Mapping[str, Any] | None
-            Function argument.
+            Optional extra metadata to attach to the image.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Tensorstore write spec with OME metadata.
         """
 
         spec = self._zarrv2_spec.copy()
@@ -2033,16 +2034,16 @@ class qi2labDataStore:
         Parameters
         ----------
         tile_id : str
-            Function argument.
+            Tile identifier.
         round_id : str | None
-            Function argument.
+            Optional fiducial round identifier.
         bit_id : str | None
-            Function argument.
+            Optional readout bit identifier.
 
         Returns
         -------
         list[float] | None
-            Function result.
+            Original stage position in Z, Y, X microns, if available.
         """
 
         if round_id is not None:
@@ -2109,16 +2110,16 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         image_name : str
-            Function argument.
+            Logical image name being validated.
         image : ArrayLike
-            Function argument.
+            Image data to validate.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
 
         entity_root = Path(entity_root_path)
@@ -2427,12 +2428,12 @@ class qi2labDataStore:
         Parameters
         ----------
         validate : bool
-            Function argument.
+            Whether to validate existing zarr arrays while parsing.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
 
         # directory structure as defined by qi2lab spec
@@ -2484,8 +2485,21 @@ class qi2labDataStore:
             for key in keys_to_check:
                 if key not in attributes.keys():
                     raise KeyError("Calibration attributes incomplete")
-                else:
-                    setattr(self, "_" + key, attributes[key])
+
+            self._num_rounds = attributes["num_rounds"]
+            self._num_tiles = attributes["num_tiles"]
+            self._channels_in_data = attributes["channels_in_data"]
+            self._tile_overlap = attributes["tile_overlap"]
+            self._binning = attributes["binning"]
+            self._e_per_ADU = attributes["e_per_ADU"]
+            self._na = attributes["na"]
+            self._ri = attributes["ri"]
+            self._exp_order = attributes["exp_order"]
+            self._codebook = attributes["codebook"]
+            self._num_bits = attributes["num_bits"]
+            self._microscope_type = attributes["microscope_type"]
+            self._camera_model = attributes["camera_model"]
+            self._voxel_size_zyx_um = attributes["voxel_size_zyx_um"]
 
             if getattr(self, "_exp_order", None) is not None:
                 self._experiment_order = self._coerce_experiment_order_dataframe(
@@ -5393,6 +5407,184 @@ class qi2labDataStore:
                 current_cellpose_outlines_path
             )
             return cellpose_outlines
+
+    def load_global_cellpose_roi_zip(
+        self,
+    ) -> dict[int, ArrayLike] | None:
+        """Load global Cellpose outlines from an ImageJ ROI zip.
+
+        Returns
+        -------
+        cellpose_outlines : Optional[dict[int, ArrayLike]]
+            Cellpose ROI outlines with global X, Y coordinates.
+        """
+
+        roi_path = (
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("imagej_rois")
+            / Path("global_coords_rois.zip")
+        )
+        if not roi_path.exists():
+            print("Cellpose global ROI zip not found.")
+            return None
+
+        try:
+            from roifile import roiread
+        except ImportError:
+            print("roifile is required to load Cellpose ROI zip.")
+            return None
+
+        outlines: dict[int, ArrayLike] = {}
+        try:
+            for idx, roi in enumerate(roiread(roi_path)):
+                coordinates = getattr(roi, "subpixel_coordinates", None)
+                if coordinates is None:
+                    coordinates = roi.coordinates()
+                if coordinates is not None:
+                    outlines[idx + 1] = np.asarray(coordinates, dtype=float)
+            return outlines
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Cellpose ROI zip.")
+            return None
+
+    def _proseg_3d_root(self) -> Path:
+        """
+        Return the root path for Proseg 3D outputs.
+
+        Returns
+        -------
+        Path
+            Proseg 3D output root.
+        """
+
+        return self._datastore_path / Path("proseg") / Path("3D")
+
+    def _proseg_3d_run_root(self, run_name: str | None = None) -> Path:
+        """
+        Return one Proseg 3D run root path.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        Path
+            Proseg run root path.
+        """
+
+        proseg_root = self._proseg_3d_root()
+        if run_name is None or run_name == "default":
+            return proseg_root
+        return proseg_root / Path(run_name)
+
+    def list_proseg_3d_runs(self) -> list[str]:
+        """List available Proseg 3D output runs.
+
+        Returns
+        -------
+        proseg_runs : list[str]
+            Available Proseg 3D run names. The direct ``proseg/3D`` output is
+            named ``"default"``.
+        """
+
+        proseg_root = self._proseg_3d_root()
+        if not proseg_root.exists():
+            return []
+
+        run_names: list[str] = []
+        candidate_roots = [proseg_root]
+        candidate_roots.extend(
+            path for path in sorted(proseg_root.iterdir()) if path.is_dir()
+        )
+        for root in candidate_roots:
+            transcript_path = root / Path("transcript_metadata_3D.csv.gz")
+            polygon_path = root / Path("cell_polygons_3D.geojson.gz")
+            if transcript_path.exists() and polygon_path.exists():
+                run_names.append("default" if root == proseg_root else root.name)
+        return sorted(run_names)
+
+    def load_proseg_transcripts_3d(
+        self,
+        run_name: str | None = None,
+    ) -> pd.DataFrame | None:
+        """Load Proseg 3D transcript metadata.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        transcripts : Optional[pd.DataFrame]
+            Proseg transcript metadata.
+        """
+
+        transcript_path = self._proseg_3d_run_root(run_name) / Path(
+            "transcript_metadata_3D.csv.gz"
+        )
+        if not transcript_path.exists():
+            print("Proseg transcript metadata not found.")
+            return None
+        try:
+            return pd.read_csv(transcript_path, compression="gzip")
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Proseg transcript metadata.")
+            return None
+
+    def load_proseg_cell_polygons_3d(
+        self,
+        run_name: str | None = None,
+    ) -> dict[Any, ArrayLike] | None:
+        """Load Proseg 3D refined cell polygons.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        polygons : Optional[dict[Any, ArrayLike]]
+            Cell identifiers mapped to polygon vertices in X, Y order.
+        """
+
+        polygon_path = self._proseg_3d_run_root(run_name) / Path(
+            "cell_polygons_3D.geojson.gz"
+        )
+        if not polygon_path.exists():
+            print("Proseg cell polygons not found.")
+            return None
+
+        try:
+            with gzip.open(polygon_path, "rt", encoding="utf-8") as file:
+                geojson = json.load(file)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(exc)
+            print("Error loading Proseg cell polygons.")
+            return None
+
+        polygons: dict[Any, ArrayLike] = {}
+        for idx, feature in enumerate(geojson.get("features", [])):
+            properties = feature.get("properties", {})
+            cell_id = properties.get("cell", idx)
+            geometry = feature.get("geometry", {})
+            coordinates = geometry.get("coordinates", [])
+            rings: list[np.ndarray] = []
+            if geometry.get("type") == "Polygon":
+                rings.extend(np.asarray(ring, dtype=float) for ring in coordinates)
+            elif geometry.get("type") == "MultiPolygon":
+                for polygon in coordinates:
+                    rings.extend(np.asarray(ring, dtype=float) for ring in polygon)
+            if rings:
+                polygons[cell_id] = max(rings, key=len)
+
+        return polygons
 
     def load_global_cellpose_segmentation_image(
         self,

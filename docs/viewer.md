@@ -1,6 +1,6 @@
 # NDV datastore viewer
 
-`qi2lab-viewer` opens a read-only NDV/PyQt viewer for an existing
+`viewer` opens a read-only NDV/PyQt viewer for an existing
 `qi2labdatastore`. It is intended for quick inspection of corrected data,
 registered/deconvolved data, feature predictor images, decoded RNA overlays,
 cell outlines, and fused global outputs.
@@ -13,13 +13,13 @@ viewer.
 Open an experiment root:
 
 ```bash
-qi2lab-viewer /path/to/experiment
+viewer /path/to/experiment
 ```
 
 or open a datastore directly:
 
 ```bash
-qi2lab-viewer /path/to/experiment/qi2labdatastore
+viewer /path/to/experiment/qi2labdatastore
 ```
 
 The viewer never writes to the datastore.
