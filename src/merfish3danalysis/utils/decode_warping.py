@@ -83,6 +83,19 @@ def compose_decode_warp_transform_zyx_um(
     )
 
 
+def _load_chromatic_transform_or_identity(
+    datastore: Any,
+    *,
+    emission_wavelength_um: float,
+) -> np.ndarray:
+    chromatic_transform_zyx_um = datastore.load_chromatic_affine_transform_zyx_um(
+        wavelength_um=emission_wavelength_um,
+    )
+    if chromatic_transform_zyx_um is None:
+        return np.eye(4, dtype=np.float32)
+    return np.asarray(chromatic_transform_zyx_um, dtype=np.float32)
+
+
 def warp_bit_image_to_reference(
     image: np.ndarray,
     *,
@@ -122,8 +135,9 @@ def warp_bit_image_to_reference(
         tile=tile,
         bit_id=bit_id,
     )
-    chromatic_transform_zyx_um = datastore.load_chromatic_affine_transform_zyx_um(
-        wavelength_um=emission_wavelength_um,
+    chromatic_transform_zyx_um = _load_chromatic_transform_or_identity(
+        datastore,
+        emission_wavelength_um=emission_wavelength_um,
     )
     transform_zyx_um = compose_decode_warp_transform_zyx_um(
         round_transform_zyx_um=round_transform_zyx_um,
