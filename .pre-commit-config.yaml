@@ -17,13 +17,13 @@ repos:
         args: ["-ignore", 'label ".+" is unknown']
 
   - repo: https://github.com/adhtruong/mirrors-typos
-    rev: v1.47.0
+    rev: v1.48.0
     hooks:
       - id: typos
         args: ["--force-exclude", "--write-changes"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.15
+    rev: v0.15.20
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
