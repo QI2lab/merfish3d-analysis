@@ -26,7 +26,6 @@ def _diag(message: str, *, enabled: bool) -> None:
     None
         The message is printed only when diagnostics are enabled.
     """
-
     if enabled:
         print(f"[multiview-registration] {message}", flush=True)
 
@@ -45,7 +44,6 @@ def _clear_cupy_memory(cp: Any) -> None:
     None
         CuPy memory pools and FFT plan cache are cleared in-place.
     """
-
     cp.cuda.Stream.null.synchronize()
     try:
         cp.fft.config.get_plan_cache().clear()
@@ -72,7 +70,6 @@ def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
     cupy.ndarray
         Maximum projection over Z as a GPU array.
     """
-
     image_gpu = cp.asarray(image, dtype=cp.float32)
     projection = cp.max(image_gpu, axis=0)
     del image_gpu
@@ -100,7 +97,6 @@ def _overlap_slices_after_translation(
     tuple[slice, ...] or None
         Valid overlap slices, or None if the translation leaves no overlap.
     """
-
     slices = []
     for axis_size, axis_translation_px in zip(shape, translation_px, strict=True):
         start = int(np.ceil(max(0.0, -float(axis_translation_px))))
@@ -127,7 +123,6 @@ def _zyx_dict(values: Sequence[float]) -> dict[str, float]:
     dict[str, float]
         Mapping with ``"z"``, ``"y"``, and ``"x"`` keys.
     """
-
     values = np.asarray(values, dtype=np.float32).tolist()
     return {"z": float(values[0]), "y": float(values[1]), "x": float(values[2])}
 
@@ -149,7 +144,6 @@ def registration_binning_from_spacing(
         Binning dictionary for multiview-stitcher. Z is not binned; Y and X are
         binned by the rounded ratio of axial spacing to lateral spacing.
     """
-
     spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
     if spacing.shape[0] != 3:
         raise ValueError("spacing_zyx_um must have three ZYX elements.")
@@ -181,7 +175,6 @@ def sim_from_array(
     Any
         SpatialImage object created by ``multiview_stitcher``.
     """
-
     from multiview_stitcher import spatial_image_utils as si_utils
 
     return si_utils.get_sim_from_array(
@@ -222,7 +215,6 @@ def msim_from_array(
     Any
         MultiscaleSpatialImage object with the requested transform metadata.
     """
-
     from multiview_stitcher import msi_utils
 
     sim = sim_from_array(
@@ -284,7 +276,6 @@ def register_pair_to_fixed(
         sampled from the moving image, matching the convention expected by
         :func:`warp_array_to_reference_gpu`.
     """
-
     import cupy as cp
     from cucim.skimage.registration import phase_cross_correlation
 
@@ -388,7 +379,6 @@ def _score_axial_shift_gpu(
         Pearson score after applying the candidate z shift. Only out-of-bounds
         z samples are excluded; all valid Y/X pixels are used.
     """
-
     import cupy as cp
 
     if fixed.shape != moving.shape or fixed.ndim != 3:
@@ -443,7 +433,6 @@ def _best_axial_score(
     tuple[float, float]
         Best z shift in pixels and its Pearson score.
     """
-
     scores = [
         _score_axial_shift_gpu(fixed, moving, float(candidate))
         for candidate in candidates
@@ -488,7 +477,6 @@ def _refine_axial_translation(
         Transform with the same lateral components and rescored axial
         translation.
     """
-
     if fixed.shape != moving.shape or fixed.ndim != 3:
         return np.asarray(transform_zyx_um, dtype=np.float32)
 
@@ -565,7 +553,6 @@ def _cupy_rankdata_average(values: Any) -> Any:
     cupy.ndarray
         Average ranks with the same shape as ``values``.
     """
-
     import cupy as cp
 
     values = cp.ravel(values)
@@ -603,7 +590,6 @@ def _cupy_spearman_correlation(values0: Any, values1: Any) -> float:
     float
         Spearman rank correlation, or NaN for empty or constant inputs.
     """
-
     import cupy as cp
 
     values0 = cp.ravel(values0)
@@ -657,7 +643,6 @@ def cucim_phase_correlation_registration(
         Dictionary with ``"affine_matrix"`` and ``"quality"`` entries, matching
         multiview-stitcher's pairwise registration API.
     """
-
     import cupy as cp
     from cucim.skimage.exposure import rescale_intensity
     from cucim.skimage.metrics import structural_similarity
@@ -753,6 +738,19 @@ def cucim_phase_correlation_registration(
         return {"affine_matrix": np.eye(ndim + 1, dtype=np.float32), "quality": 1.0}
 
     def get_bb_from_nanmask(mask: Any) -> list[list[int]]:
+        """
+        Return per-axis valid bounds from a boolean mask.
+
+        Parameters
+        ----------
+        mask : Any
+            Boolean CuPy mask.
+
+        Returns
+        -------
+        list[list[int]]
+            Inclusive lower and upper bounds for each axis.
+        """
         bbs = []
         for idim in range(mask.ndim):
             axes = list(range(mask.ndim))
@@ -891,7 +889,6 @@ def warp_array_to_reference_gpu(
     numpy.ndarray
         Warped image sampled on the reference grid.
     """
-
     import cupy as cp
     from cupyx.scipy import ndimage
 
@@ -1016,7 +1013,6 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     numpy.ndarray
         Warped image on the reference grid.
     """
-
     import cupy as cp
     from cupyx.scipy import ndimage
 
@@ -1200,7 +1196,6 @@ def transform_points_to_reference(
         Point coordinates in the reference pixel grid, with columns in Z, Y, X
         order.
     """
-
     points = np.asarray(points_zyx, dtype=np.float32)
     if points.size == 0:
         return points.reshape((-1, 3))

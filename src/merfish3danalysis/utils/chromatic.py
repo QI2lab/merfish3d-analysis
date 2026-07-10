@@ -36,7 +36,6 @@ def parse_csv_floats(value: str | Sequence[float] | None) -> tuple[float, ...] |
     tuple[float, ...] or None
         Parsed floats, or None when ``value`` is None.
     """
-
     if value is None:
         return None
     if isinstance(value, str):
@@ -58,7 +57,6 @@ def _xml_float(value: str | None) -> float | None:
     float or None
         Parsed float, or None if parsing fails.
     """
-
     if value is None:
         return None
     try:
@@ -81,7 +79,6 @@ def _wavelength_to_um(value: float | None) -> float | None:
     float or None
         Wavelength in microns.
     """
-
     if value is None:
         return None
     if value > 10:
@@ -106,7 +103,6 @@ def _parse_ome_metadata(
         ``(spacing_zyx_um, wavelengths_um, channel_names)``. Missing values are
         returned as None.
     """
-
     if not ome_metadata:
         return None, None, None
 
@@ -178,7 +174,6 @@ def load_bead_channel_stack(
     tuple[numpy.ndarray, dict[str, Any]]
         Channel stack in C, Z, Y, X order and metadata.
     """
-
     image_path = Path(image_path)
     with TiffFile(image_path) as tif:
         axes = channel_axis or tif.series[0].axes
@@ -261,7 +256,6 @@ def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str:
     pathlib.Path or str
         Local path or U-FISH weights filename.
     """
-
     if model is None:
         model = DEFAULT_UFISH_MODEL
     model_str = str(model).strip() or DEFAULT_UFISH_MODEL
@@ -291,7 +285,6 @@ def _load_ufish_model(ufish: Any, model: str | Path | None) -> None:
     None
         Model weights are loaded in place.
     """
-
     weights = _resolve_ufish_weights_path(model)
     if isinstance(weights, Path):
         ufish.load_weights_from_path(weights)
@@ -319,7 +312,6 @@ def _roi_sum(
     float
         Sum of ROI pixel values.
     """
-
     center = np.round(np.asarray(point_zyx, dtype=float)).astype(int)
     radius = np.asarray(radius_zyx, dtype=int)
     start = np.maximum(center - radius, 0)
@@ -358,7 +350,6 @@ def detect_bead_centroids(
         Bead centroid table with columns ``z``, ``y``, ``x`` and
         ``sum_decon_pixels``.
     """
-
     from ufish.api import UFish
 
     ufish = UFish(device=f"cuda:{int(gpu_id)}")
@@ -412,7 +403,6 @@ def deconvolve_channels(
     numpy.ndarray
         Deconvolved channel stack in C, Z, Y, X order.
     """
-
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     if len(psfs) not in (1, stack_czyx.shape[0]):
@@ -464,7 +454,6 @@ def generate_channel_psfs(
     list[numpy.ndarray]
         Normalized PSFs in Z, Y, X order.
     """
-
     from psfmodels import make_psf
 
     spacing = tuple(float(v) for v in voxel_size_zyx_um)
@@ -512,7 +501,6 @@ def _mutual_nearest_matches(
     tuple[numpy.ndarray, numpy.ndarray]
         Matched reference and moving points.
     """
-
     if reference_points_um.size == 0 or moving_points_um.size == 0:
         empty = np.empty((0, 3), dtype=np.float32)
         return empty, empty
@@ -575,7 +563,6 @@ def fit_affine_source_to_reference(
     tuple[numpy.ndarray, dict[str, Any]]
         4x4 affine transform and fit diagnostics.
     """
-
     source = np.asarray(source_points_zyx_um, dtype=np.float64)
     reference = np.asarray(reference_points_zyx_um, dtype=np.float64)
     if source.shape[0] < 4:
@@ -650,7 +637,6 @@ def estimate_chromatic_affines(
     dict[str, Any]
         Calibration metadata with one affine per channel.
     """
-
     spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
     wavelengths = np.asarray(wavelengths_um, dtype=np.float32)
     reference_index = int(np.argmin(wavelengths))
@@ -742,7 +728,6 @@ def save_calibration_json(calibration: dict[str, Any], output_path: Path | str) 
     None
         JSON is written to disk.
     """
-
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as handle:
@@ -815,7 +800,6 @@ def run_chromatic_calibration(
     dict[str, Any]
         Calibration metadata.
     """
-
     stack, metadata = load_bead_channel_stack(
         image_path,
         channel_axis=channel_axis,

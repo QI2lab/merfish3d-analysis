@@ -237,7 +237,6 @@ def convert_data(
     max_flatfield_images : int, default=100
         Maximum number of tiles used to estimate flatfield illuminations.
     """
-
     # load illuminations if requested
     # -----------------------------------
     illuminations = None

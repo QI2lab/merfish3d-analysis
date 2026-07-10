@@ -26,7 +26,8 @@ def calculate_F1_with_radius(
     radius: float,
 ) -> dict:
     """
-    Compute F1 using greedy closest-first matching within a max radius, with same-gene and
+    Compute F1 using greedy closest-first matching within a max radius, with same-gene and.
+
     one-to-one constraints.
 
     Algorithm
@@ -202,7 +203,6 @@ def calculate_F1(root_path: Path, gt_path: Path, search_radius: float) -> dict:
     results: dict
         dictionary of results for F1 score calculation
     """
-
     # initialize datastore
     datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -259,7 +259,6 @@ def decode_pixels(
     minimum_pixels: float
         The minimum pixel threshold.
     """
-
     datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
     merfish_bits = datastore.num_bits
@@ -321,7 +320,6 @@ def sweep_decode_params(
     minimum_pixels_step: float, default = 2.0
         The step size for the minimum pixel threshold.
     """
-
     mag_values = np.arange(
         mag_threshold_range[0],
         mag_threshold_range[1],
@@ -383,7 +381,7 @@ def sweep_decode_params(
 
 def main() -> None:
     """
-    Main.
+    Run the F1 sweep CLI.
 
     Returns
     -------

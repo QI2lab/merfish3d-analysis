@@ -45,7 +45,6 @@ def local_register_data(root_path: Path) -> None:
     root_path: Path
         path to experiment
     """
-
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -78,11 +77,10 @@ def global_register_data(
     root_path: Path
         path to experiment
 
-    create_max_proj_tiff: Optional[bool]
+    create_max_proj_tiff: bool or None
         create max projection tiff in the segmentation/cellpose directory.
         Default = True
     """
-
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -165,7 +163,7 @@ def global_register_data(
 
 def main() -> None:
     """
-    Main.
+    Run the registration and deconvolution CLI.
 
     Returns
     -------

@@ -1,11 +1,34 @@
 """Datastore access helpers for the viewer."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+
+@dataclass(frozen=True)
+class ViewerDatastoreOptions:
+    """Datastore-derived options needed by the viewer controller."""
+
+    components: dict[str, bool]
+    tile_ids: tuple[str, ...]
+    round_ids: tuple[str, ...]
+    bit_ids: tuple[str, ...]
+    proseg_runs: tuple[str, ...]
+    baysor_available: bool
+    transcript_gene_to_bits: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class ViewerDatastoreLoadResult:
+    """Opened datastore and controller options for one path."""
+
+    datastore_path: Path
+    datastore: Any
+    options: ViewerDatastoreOptions
 
 
 def normalize_datastore_path(path: Path) -> Path:
@@ -15,14 +38,13 @@ def normalize_datastore_path(path: Path) -> Path:
     Parameters
     ----------
     path : Path
-        path for this viewer operation.
+        Experiment root or qi2lab datastore directory.
 
     Returns
     -------
     Path
-        Computed viewer result.
+        Resolved qi2lab datastore directory.
     """
-
     expanded = path.expanduser().resolve()
     direct_state_path = expanded / "datastore_state.json"
     if direct_state_path.exists():
@@ -46,14 +68,13 @@ def open_datastore(datastore_path: Path) -> Any:
     Parameters
     ----------
     datastore_path : Path
-        datastore_path for this viewer operation.
+        qi2lab datastore directory.
 
     Returns
     -------
     Any
-        Computed viewer result.
+        Opened qi2lab datastore.
     """
-
     return qi2labDataStore(datastore_path, validate=False)
 
 
@@ -64,14 +85,13 @@ def component_summary(datastore: Any) -> dict[str, bool]:
     Parameters
     ----------
     datastore : Any
-        datastore for this viewer operation.
+        qi2lab datastore-like object.
 
     Returns
     -------
     dict[str, bool]
-        Computed viewer result.
+        Component names mapped to availability flags.
     """
-
     state = datastore.datastore_state or {}
     return {
         "Calibrations": bool(state.get("Calibrations", False)),
@@ -80,82 +100,9 @@ def component_summary(datastore: Any) -> dict[str, bool]:
         "GlobalRegistered": bool(state.get("GlobalRegistered", False)),
         "Fused": bool(state.get("Fused", False)),
         "SegmentedCells": bool(state.get("SegmentedCells", False)),
-        "DecodedSpots": bool(state.get("DecodedSpots", False)),
-        "FilteredSpots": bool(state.get("FilteredSpots", False)),
+        "Transcripts": bool(state.get("DecodedSpots", False))
+        or bool(state.get("FilteredSpots", False)),
     }
-
-
-def decoded_available(datastore: Any) -> bool:
-    """
-    Return whether decoded spots are available without requiring fresh state flags.
-
-    Parameters
-    ----------
-    datastore : Any
-        datastore for this viewer operation.
-
-    Returns
-    -------
-    bool
-        Computed viewer result.
-    """
-
-    state = component_summary(datastore)
-    return state["DecodedSpots"] or state["FilteredSpots"]
-
-
-def cell_outlines_available(datastore: Any) -> bool:
-    """
-    Return whether cell outlines are available without requiring fresh state flags.
-
-    Parameters
-    ----------
-    datastore : Any
-        datastore for this viewer operation.
-
-    Returns
-    -------
-    bool
-        Computed viewer result.
-    """
-
-    return component_summary(datastore)["SegmentedCells"]
-
-
-def global_fused_available(datastore: Any) -> bool:
-    """
-    Return whether a fused global polyDT image appears to be available.
-
-    Parameters
-    ----------
-    datastore : Any
-        datastore for this viewer operation.
-
-    Returns
-    -------
-    bool
-        Computed viewer result.
-    """
-
-    return component_summary(datastore)["Fused"]
-
-
-def global_cellpose_segmentation_available(datastore: Any) -> bool:
-    """
-    Return whether a global polyDT Cellpose segmentation image is available.
-
-    Parameters
-    ----------
-    datastore : Any
-        datastore for this viewer operation.
-
-    Returns
-    -------
-    bool
-        Computed viewer result.
-    """
-
-    return component_summary(datastore)["SegmentedCells"]
 
 
 def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
@@ -165,14 +112,13 @@ def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
     Parameters
     ----------
     datastore : Any
-        datastore for this viewer operation.
+        qi2lab datastore-like object.
 
     Returns
     -------
     dict[str, list[str]]
-        Computed viewer result.
+        Gene names mapped to active bit identifiers.
     """
-
     parsed = datastore.load_codebook_parsed()
     if parsed is None:
         return {}
@@ -180,31 +126,61 @@ def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
     gene_ids, codebook_matrix = parsed
     bit_ids = list(datastore.bit_ids or [])
     codebook_array = np.asarray(codebook_matrix)
-    gene_to_bits: dict[str, list[str]] = {}
+    transcript_gene_to_bits: dict[str, list[str]] = {}
     for gene_id, row in zip(gene_ids, codebook_array, strict=False):
         selected_bits = [
             bit_ids[bit_idx]
             for bit_idx, value in enumerate(np.asarray(row).astype(bool))
             if value and bit_idx < len(bit_ids)
         ]
-        gene_to_bits[str(gene_id)] = selected_bits
+        transcript_gene_to_bits[str(gene_id)] = selected_bits
 
-    return gene_to_bits
+    return transcript_gene_to_bits
 
 
-def unavailable_data_message(error: ValueError) -> str:
+def viewer_datastore_options(datastore: Any) -> ViewerDatastoreOptions:
     """
-    Return a user-facing message for unavailable viewer data.
+    Return datastore-derived selector options for the viewer controller.
 
     Parameters
     ----------
-    error : ValueError
-        error for this viewer operation.
+    datastore : Any
+        qi2lab datastore-like object.
 
     Returns
     -------
-    str
-        Computed viewer result.
+    ViewerDatastoreOptions
+        Immutable selector metadata for the controller.
     """
+    return ViewerDatastoreOptions(
+        components=component_summary(datastore),
+        tile_ids=tuple(str(tile) for tile in datastore.tile_ids or ()),
+        round_ids=tuple(str(round_id) for round_id in datastore.round_ids or ()),
+        bit_ids=tuple(str(bit_id) for bit_id in datastore.bit_ids or ()),
+        proseg_runs=tuple(datastore.list_proseg_3d_runs()),
+        baysor_available=bool(datastore.baysor_3d_available()),
+        transcript_gene_to_bits=codebook_gene_bits(datastore),
+    )
 
-    return f"Data not available: {error}"
+
+def load_datastore_for_viewer(path: Path) -> ViewerDatastoreLoadResult:
+    """
+    Open a datastore and collect viewer selector metadata.
+
+    Parameters
+    ----------
+    path : Path
+        Experiment root or qi2lab datastore directory.
+
+    Returns
+    -------
+    ViewerDatastoreLoadResult
+        Open datastore and controller selector metadata.
+    """
+    datastore_path = normalize_datastore_path(path)
+    datastore = open_datastore(datastore_path)
+    return ViewerDatastoreLoadResult(
+        datastore_path=datastore_path,
+        datastore=datastore,
+        options=viewer_datastore_options(datastore),
+    )

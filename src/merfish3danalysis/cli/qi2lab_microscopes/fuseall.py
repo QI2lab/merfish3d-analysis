@@ -49,7 +49,6 @@ def fuse_all_channels(
     ngff_version : str, default="0.5"
         OME-NGFF version requested for direct multiview-stitcher Zarr output.
     """
-
     # initialize datastore
     print("\nInitializing datastore...")
     datastore_path = root_path / Path(r"qi2labdatastore")

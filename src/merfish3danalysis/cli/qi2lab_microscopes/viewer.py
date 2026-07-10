@@ -29,7 +29,6 @@ def view(path: Path | None = VIEW_PATH_ARGUMENT) -> None:
     None
         Computed viewer result.
     """
-
     Qi2labViewer(path).run()
 
 

@@ -15,6 +15,7 @@
 # - file2: .txt (contains gene + FPKM)
 # - Optional: filter file1a/file1b rows to keep only those with cell_id > 0
 #
+"""Compare MERFISH transcript counts with bulk RNA-seq expression."""
 
 from pathlib import Path
 
@@ -355,7 +356,7 @@ def main(
 ) -> None:
     # Validate second dataset arguments
     """
-    Main.
+    Run the bulk RNA-seq correlation CLI.
 
     Parameters
     ----------

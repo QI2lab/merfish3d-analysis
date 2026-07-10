@@ -86,7 +86,6 @@ class GlobalRegistrationConfig:
     @property
     def registration_binning(self) -> dict[str, int]:
         """Return binning keyed by multiview-stitcher spatial dimension name."""
-
         return {
             "z": int(self.registration_binning_zyx[0]),
             "y": int(self.registration_binning_zyx[1]),
@@ -121,7 +120,6 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
     None
         The message is printed only when diagnostics are enabled.
     """
-
     if enabled:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
@@ -141,7 +139,6 @@ def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
         Local CUDA device index visible inside the restricted worker. This is
         always 0 after setting ``CUDA_VISIBLE_DEVICES``.
     """
-
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_id))
     return 0
 
@@ -162,7 +159,6 @@ def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
         Existing local path when one is found; otherwise a U-FISH weights file
         name accepted by ``UFish.load_weights``.
     """
-
     if model is None:
         model = DEFAULT_UFISH_MODEL
 
@@ -202,7 +198,6 @@ def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
     None
         The weights are loaded into ``ufish`` in place.
     """
-
     weights = _resolve_ufish_weights_path(model)
     if weights is None:
         raise ValueError("Resolved U-FISH weights cannot be None.")
@@ -230,7 +225,6 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
     numpy.ndarray
         Selected PSF as a float32 array.
     """
-
     if isinstance(psfs, list):
         if psf_idx < 0 or psf_idx >= len(psfs):
             raise IndexError(f"PSF index {psf_idx} out of range for {len(psfs)} PSFs.")
@@ -261,7 +255,6 @@ def _release_worker_gpu_memory(cp: Any) -> None:
         The current CUDA stream is synchronized and CuPy memory pools are
         released.
     """
-
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
@@ -300,7 +293,6 @@ def _run_chunked_rlgc_remembering_crop(
     numpy.ndarray
         Deconvolved image returned by ``chunked_rlgc``.
     """
-
     image_arr = np.asarray(image)
     if image_arr.ndim == 2:
         image_max_yx = max(image_arr.shape)
@@ -370,7 +362,6 @@ def _load_deconvolve_fiducial_round(
     numpy.ndarray
         Deconvolved or copied fiducial image as ``uint16``.
     """
-
     raw = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=round_id, return_future=False
     )
@@ -438,7 +429,6 @@ def _process_fiducial_rounds_on_gpu(
         Results are saved to the datastore and status is returned through
         ``result_queue``.
     """
-
     assigned_gpu_id = int(gpu_id)
     local_gpu_id = _restrict_worker_to_assigned_gpu(assigned_gpu_id)
 
@@ -564,7 +554,6 @@ def _process_sofima_rounds_on_gpu(
     None
         SOFIMA flow fields are saved to the datastore.
     """
-
     local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
 
     import cupy as cp
@@ -689,7 +678,6 @@ def _local_registered_fiducial_path(
     pathlib.Path
         Path to ``registered_decon_data.ome.zarr``.
     """
-
     return datastore._image_store_path(
         datastore._fiducial_root_path
         / Path(tile_id)
@@ -733,7 +721,6 @@ def _read_registered_fiducial_sim(
         SpatialImage with datastore stage metadata attached under
         ``stage_metadata``.
     """
-
     sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
         input_path,
         resolution_level=0,
@@ -766,7 +753,6 @@ def _sim_fusion_summary(sim: Any) -> str:
     str
         Shape, dtype, chunk, and backend details for diagnostics.
     """
-
     data = getattr(sim, "data", None)
     encoding = getattr(sim, "encoding", {}) or {}
     attrs = getattr(sim, "attrs", {}) or {}
@@ -802,7 +788,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     bool
         True after all assigned bits are processed.
     """
-
     local_gpu_id = _restrict_worker_to_assigned_gpu(gpu_id)
 
     import cupy as cp
@@ -1138,7 +1123,6 @@ class DataRegistration:
         qi2labDataStore
             qi2labDataStore object
         """
-
         if self._dataset_path is not None:
             return self._datastore
         else:
@@ -1154,7 +1138,6 @@ class DataRegistration:
         value : qi2labDataStore
             qi2labDataStore object
         """
-
         del self._datastore
         self._datastore = value
 
@@ -1164,10 +1147,9 @@ class DataRegistration:
 
         Returns
         -------
-        tile_id: Union[int,str]
+        tile_id: int or str
             Tile id
         """
-
         if self._tile_id is not None:
             tile_id = self._tile_id
             return tile_id
@@ -1181,10 +1163,9 @@ class DataRegistration:
 
         Parameters
         ----------
-        value : Union[int,str]
+        value : int or str
             Tile id
         """
-
         if isinstance(value, int):
             if value < 0 or value > self._datastore.num_tiles:
                 print("Set value index >=0 and <=" + str(self._datastore.num_tiles))
@@ -1207,7 +1188,6 @@ class DataRegistration:
         bool
             True when SOFIMA deformable flow-field registration is enabled.
         """
-
         return self._perform_deformable_registration
 
     @perform_deformable_registration.setter
@@ -1219,7 +1199,6 @@ class DataRegistration:
         value : bool
             True to enable SOFIMA deformable flow-field registration.
         """
-
         self._perform_deformable_registration = value
 
     @property
@@ -1231,7 +1210,6 @@ class DataRegistration:
         overwrite_registered: bool
             Overwrite existing registered data and registrations
         """
-
         return self._overwrite_registered
 
     @overwrite_registered.setter
@@ -1243,7 +1221,6 @@ class DataRegistration:
         value : bool
             Overwrite existing registered data and registrations
         """
-
         self._overwrite_registered = value
 
     def _entity_root(
@@ -1394,7 +1371,7 @@ class DataRegistration:
 
     def register_all_tiles(self) -> None:
         """
-        Helper function to register all tiles.
+        Register all tiles.
 
         Returns
         -------
@@ -1437,25 +1414,29 @@ class DataRegistration:
             self.global_register()
 
     def register_one_tile(self, tile_id: int | str) -> None:
-        """Helper function to register one tile.
+        """Register one tile.
 
         Parameters
         ----------
-        tile_id : Union[int,str]
+        tile_id : int or str
             Tile id
         """
-
         self.tile_id = tile_id
         self._generate_registrations()
         self._apply_registration_to_bits()
 
     def apply_registration_to_one_tile(self, tile_id: int | str) -> None:
-        """Apply existing local registrations to readout bits for one tile.
+        """
+        Apply existing local registrations to readout bits for one tile.
 
         This uses the local transforms already stored in the datastore. It does
         not estimate or overwrite fiducial registrations.
-        """
 
+        Parameters
+        ----------
+        tile_id : int or str
+            Tile identifier.
+        """
         self.tile_id = tile_id
         self._apply_registration_to_bits()
 
@@ -1487,7 +1468,6 @@ class DataRegistration:
         list[Any]
             MultiscaleSpatialImages for global registration or fusion.
         """
-
         voxel_zyx_um = self._datastore.voxel_size_zyx_um
         scale = {
             "z": float(voxel_zyx_um[0]),
@@ -1586,7 +1566,6 @@ class DataRegistration:
         None
             Diagnostics are printed when ``verbose >= 1``.
         """
-
         if self._verbose < 1:
             return
 
@@ -1677,7 +1656,6 @@ class DataRegistration:
             Fused OME-Zarr, metadata, datastore state, and optional TIFF are
             written to disk.
         """
-
         import shutil
 
         voxel_zyx_um = self._datastore.voxel_size_zyx_um
@@ -1852,7 +1830,6 @@ class DataRegistration:
             Global transforms, fused fiducial OME-Zarr, datastore state, and
             optional max projection are written to the datastore.
         """
-
         from dask import config as dask_config
         from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
@@ -2020,7 +1997,6 @@ class DataRegistration:
             Fused fiducial OME-Zarr, datastore state, and optional max
             projection are written to the datastore.
         """
-
         from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
         from multiview_stitcher import spatial_image_utils as si_utils
         from tifffile import TiffWriter
@@ -2062,7 +2038,6 @@ class DataRegistration:
         None
             Function result.
         """
-
         self._data_raw = []
         stage_positions = []
 

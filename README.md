@@ -66,13 +66,13 @@ The standard `uv sync` install includes the ndv/PyQt dependencies for the view-o
 Open an experiment root:
 
 ```bash
-uv run viewer /path/to/experiment
+uv run qi2lab-viewer /path/to/experiment
 ```
 
 or open a datastore directly:
 
 ```bash
-uv run viewer /path/to/experiment/qi2labdatastore
+uv run qi2lab-viewer /path/to/experiment/qi2labdatastore
 ```
 
 The viewer only reads existing datastore contents. It can display selected tiles, round-1 fiducials, selected bits, feature predictor probability images, decoded codebook-word overlays, and cell-outline overlays when those components are already present. When the datastore contains fused global polyDT data, globally decoded features, cell outlines, and the global polyDT segmentation image, enable the global fused view to inspect the downsampled polyDT max projection with selected RNA identities on the global coordinate canvas.

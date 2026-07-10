@@ -39,7 +39,6 @@ def replace_hot_pixels(
     data: ArrayLike
         hotpixel corrected data
     """
-
     # GPU
     import cupy as cp  # type: ignore
     from cupyx.scipy import ndimage  # type: ignore
@@ -83,7 +82,6 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     shading_image: ArrayLike
         estimated shading image
     """
-
     # GPU
 
     import cupy as cp  # type: ignore
@@ -120,7 +118,7 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
 def downsample_image_anisotropic(
     image: ArrayLike, level: tuple[int, int, int] = (2, 6, 6)
 ) -> ArrayLike:
-    """Numba accelerated anisotropic downsampling
+    """Numba accelerated anisotropic downsampling.
 
     Parameters
     ----------
@@ -134,7 +132,6 @@ def downsample_image_anisotropic(
     downsampled_image: ArrayLike
         downsampled 3D image
     """
-
     downsampled_image = downsample_axis(
         downsample_axis(downsample_axis(image, level[0], 0), level[1], 1), level[2], 2
     )

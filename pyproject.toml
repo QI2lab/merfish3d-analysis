@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 name = "merfish3d-analysis"
 description = "GPU-accelerated MERFISH processing"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [
     { email = "douglas.shepherd@asu.edu", name = "Douglas Shepherd" },
