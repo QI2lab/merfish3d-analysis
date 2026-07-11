@@ -604,7 +604,7 @@ def _run_simulation_preprocess(
     registration_factory = simulation_api["DataRegistration"](
         datastore=datastore,
         perform_deformable_registration=perform_deformable_registration,
-        overwrite_registered=True,
+        overwrite_outputs=True,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
         num_gpus=1,

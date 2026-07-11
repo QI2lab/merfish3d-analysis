@@ -58,7 +58,7 @@ def local_register_data(
         decon_fiducial=True,
         decon_readout=True,
         perform_deformable_registration=True,
-        overwrite_registered=overwrite,
+        overwrite_outputs=overwrite,
         num_gpus=num_gpus,
         global_registration=True,
         verbose=verbose,

@@ -2040,7 +2040,7 @@ class qi2labDataStore:
         self, tile_id: str
     ) -> list[float] | None:
         """
-        Resolve the first-round reference stage position for registered outputs.
+        Resolve the first-round reference stage position for derived outputs.
 
         Parameters
         ----------
@@ -2065,7 +2065,7 @@ class qi2labDataStore:
         image: ArrayLike,
     ) -> None:
         """
-        Enforce corrected/registered/feature-predictor image shape consistency.
+        Enforce corrected/deconvolved/feature image shape consistency.
 
         Parameters
         ----------

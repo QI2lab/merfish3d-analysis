@@ -736,14 +736,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         if (
             (decon_on_disk or not dr._decon_readout)
             and feature_predictor_on_disk
-            and not dr._overwrite_registered
+            and not dr._overwrite_outputs
         ):
             continue
 
         if (
             (dr._decon_readout and not decon_on_disk)
             or (not feature_predictor_on_disk)
-            or dr._overwrite_registered
+            or dr._overwrite_outputs
         ):
             # load data
             corrected_image = dr._datastore.load_local_corrected_image(
@@ -912,7 +912,7 @@ class DataRegistration:
     decon_readout: bool, default False
         Deconvolve readout images before saving unwarped readout data for
         decode-time registration.
-    overwrite_registered: bool, default False
+    overwrite_outputs: bool, default False
         Overwrite existing local transforms and preprocessing outputs.
     perform_deformable_registration: bool, default True
         Estimate and save a residual SOFIMA deformable flow field after affine
@@ -936,7 +936,7 @@ class DataRegistration:
         datastore: qi2labDataStore,
         decon_fiducial: bool = True,
         decon_readout: bool = False,
-        overwrite_registered: bool = False,
+        overwrite_outputs: bool = False,
         perform_deformable_registration: bool = True,
         num_gpus: int = 1,
         crop_yx_decon: int = 2048,
@@ -961,7 +961,7 @@ class DataRegistration:
         decon_readout : bool
             If True, deconvolve readout images before U-FISH prediction and
             warping.
-        overwrite_registered : bool
+        overwrite_outputs : bool
             If True, regenerate local transforms, optional decon images, and
             feature predictor outputs even when they already exist.
         perform_deformable_registration : bool
@@ -1001,8 +1001,7 @@ class DataRegistration:
         self._crop_yx_decon = crop_yx_decon
         self._perform_deformable_registration = perform_deformable_registration
         self._data_raw = None
-        self._has_registered_data = None
-        self._overwrite_registered = overwrite_registered
+        self._overwrite_outputs = overwrite_outputs
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
         self._global_registration = global_registration
@@ -1105,26 +1104,26 @@ class DataRegistration:
         self._perform_deformable_registration = value
 
     @property
-    def overwrite_registered(self) -> bool:
-        """Get the overwrite_registered flag.
+    def overwrite_outputs(self) -> bool:
+        """Get the overwrite_outputs flag.
 
         Returns
         -------
-        overwrite_registered: bool
+        bool
             Overwrite existing local transforms and preprocessing outputs.
         """
-        return self._overwrite_registered
+        return self._overwrite_outputs
 
-    @overwrite_registered.setter
-    def overwrite_registered(self, value: bool) -> None:
-        """Set the overwrite_registered flag.
+    @overwrite_outputs.setter
+    def overwrite_outputs(self, value: bool) -> None:
+        """Set the overwrite_outputs flag.
 
         Parameters
         ----------
         value : bool
-            Overwrite existing registered data and registrations
+            Overwrite existing local transforms and preprocessing outputs.
         """
-        self._overwrite_registered = value
+        self._overwrite_outputs = value
 
     def _entity_root(
         self,
@@ -1313,7 +1312,7 @@ class DataRegistration:
         """
         tile_ids = list(self._datastore.tile_ids)
         start_idx = 0
-        if not self._overwrite_registered:
+        if not self._overwrite_outputs:
             for idx, tile_id in enumerate(tile_ids):
                 if self._is_tile_complete(tile_id):
                     start_idx = idx + 1
@@ -1327,7 +1326,7 @@ class DataRegistration:
                 if self._verbose >= 1:
                     print(
                         time_stamp(),
-                        "All tiles already have complete registered outputs.",
+                        "All tiles already have complete preprocessing outputs.",
                     )
                 return
 
@@ -1745,11 +1744,11 @@ class DataRegistration:
         """
         Globally register first-round fiducial tiles and write fused OME-Zarr.
 
-        The method reads the locally registered first fiducial round for every
-        tile, combines stage metadata with multiview-stitcher global
-        registration, saves per-tile global transforms back to the datastore,
-        and fuses the registered views directly into the datastore as OME-Zarr
-        v0.5 using CuPy-backed fusion.
+        The method reads each tile's first fiducial round, combines stage
+        metadata with multiview-stitcher global registration, saves per-tile
+        global transforms back to the datastore, and fuses the transformed
+        views directly into the datastore as OME-Zarr v0.5 using CuPy-backed
+        fusion.
 
         Parameters
         ----------
@@ -1914,9 +1913,9 @@ class DataRegistration:
         Fuse fiducials using stored global transforms without registering tiles.
 
         This method is intended for existing datastores that already have
-        saved per-tile global transforms. It loads locally registered reference
-        fiducials, attaches the stored ``global_registered`` transforms, and
-        runs only the fused OME-Zarr creation path.
+        saved per-tile global transforms. It loads reference fiducials, attaches
+        the stored ``global_registered`` transforms, and runs only the fused
+        OME-Zarr creation path.
 
         Parameters
         ----------

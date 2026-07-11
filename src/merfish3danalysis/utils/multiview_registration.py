@@ -77,6 +77,76 @@ def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
     return projection
 
 
+def _registration_binning_tuple(
+    registration_binning: dict[str, int] | None,
+    spacing_zyx_um: Sequence[float],
+) -> tuple[int, int, int]:
+    """
+    Resolve registration binning in Z, Y, X order.
+
+    Parameters
+    ----------
+    registration_binning : dict or None
+        Binning keyed by ``"z"``, ``"y"``, and ``"x"``. If None, derive
+        physical-resolution binning from voxel spacing.
+    spacing_zyx_um : Sequence[float]
+        Voxel spacing in Z, Y, X order.
+
+    Returns
+    -------
+    tuple of int
+        Positive integer binning in Z, Y, X order.
+    """
+    if registration_binning is None:
+        registration_binning = registration_binning_from_spacing(spacing_zyx_um)
+    return (
+        max(1, int(registration_binning["z"])),
+        max(1, int(registration_binning["y"])),
+        max(1, int(registration_binning["x"])),
+    )
+
+
+def _block_mean_gpu(image: Any, cp: Any, binning: Sequence[int]) -> Any:
+    """
+    Downsample an image by block averaging on the GPU.
+
+    Parameters
+    ----------
+    image : Any
+        NumPy or CuPy array.
+    cp : Any
+        Imported ``cupy`` module.
+    binning : Sequence[int]
+        Positive integer binning for each image axis.
+
+    Returns
+    -------
+    cupy.ndarray
+        Downsampled float32 image.
+    """
+    image_gpu = cp.asarray(image, dtype=cp.float32)
+    binning = tuple(
+        max(1, min(int(axis_binning), int(axis_size)))
+        for axis_binning, axis_size in zip(binning, image_gpu.shape, strict=True)
+    )
+    if all(axis_binning == 1 for axis_binning in binning):
+        return image_gpu
+
+    crop_slices = tuple(
+        slice(0, (int(axis_size) // axis_binning) * axis_binning)
+        for axis_size, axis_binning in zip(image_gpu.shape, binning, strict=True)
+    )
+    cropped = image_gpu[crop_slices]
+    reshape_shape = []
+    for axis_size, axis_binning in zip(cropped.shape, binning, strict=True):
+        reshape_shape.extend([int(axis_size) // axis_binning, axis_binning])
+    mean_axes = tuple(range(1, 2 * cropped.ndim, 2))
+    reduced = cropped.reshape(tuple(reshape_shape)).mean(axis=mean_axes)
+    del image_gpu, cropped
+    _clear_cupy_memory(cp)
+    return reduced
+
+
 def _overlap_slices_after_translation(
     shape: Sequence[int],
     translation_px: Sequence[float],
@@ -246,9 +316,9 @@ def register_pair_to_fixed(
     The input arrays are interpreted as Z, Y, X images with physical spacing in
     microns. The registration first estimates lateral translation from maximum
     Z projections, warps the moving volume by that lateral estimate, then runs
-    phase correlation on the full volume to estimate the residual translation.
-    The returned affine maps fixed/reference physical coordinates to
-    moving-image physical coordinates, matching the convention expected by
+    binned 3D phase correlation to estimate the residual translation. The
+    returned affine maps fixed/reference physical coordinates to moving-image
+    physical coordinates, matching the convention expected by
     :func:`warp_array_to_reference_gpu`.
 
     Parameters
@@ -260,11 +330,12 @@ def register_pair_to_fixed(
     spacing_zyx_um : Sequence[float]
         Physical voxel spacing in microns in Z, Y, X order.
     registration_binning : dict[str, int] or None, default=None
-        Unused compatibility argument retained for current callers.
+        Binning for residual 3D phase correlation. If None, derive binning from
+        voxel spacing.
     axial_refinement_radius_px : int, default=12
-        Unused compatibility argument retained for current callers.
+        Reserved for axial refinement callers.
     axial_refinement_step_px : float, default=0.25
-        Unused compatibility argument retained for current callers.
+        Reserved for axial refinement callers.
     diagnostics : bool, default=False
         If True, print detailed timing diagnostics.
 
@@ -279,7 +350,7 @@ def register_pair_to_fixed(
     import cupy as cp
     from cucim.skimage.registration import phase_cross_correlation
 
-    del registration_binning, axial_refinement_radius_px, axial_refinement_step_px
+    del axial_refinement_radius_px, axial_refinement_step_px
 
     _diag(
         "register_pair_to_fixed_start "
@@ -296,16 +367,28 @@ def register_pair_to_fixed(
 
     start_time = timeit.default_timer()
     spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    binning_zyx = _registration_binning_tuple(registration_binning, spacing)
+    binning_yx = binning_zyx[1:]
     fixed_projection = _max_z_projection_gpu(fixed, cp)
     moving_projection = _max_z_projection_gpu(moving, cp)
+    fixed_projection_binned = _block_mean_gpu(fixed_projection, cp, binning_yx)
+    moving_projection_binned = _block_mean_gpu(moving_projection, cp, binning_yx)
     xy_push_shift_px = phase_cross_correlation(
-        fixed_projection,
-        moving_projection,
+        fixed_projection_binned,
+        moving_projection_binned,
         upsample_factor=10,
         disambiguate=True,
     )[0]
-    xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
-    del fixed_projection, moving_projection, xy_push_shift_px
+    xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32) * np.asarray(
+        binning_yx, dtype=np.float32
+    )
+    del (
+        fixed_projection,
+        moving_projection,
+        fixed_projection_binned,
+        moving_projection_binned,
+        xy_push_shift_px,
+    )
     _clear_cupy_memory(cp)
 
     xy_transform = np.eye(4, dtype=np.float32)
@@ -320,24 +403,30 @@ def register_pair_to_fixed(
         diagnostics=diagnostics,
     )
 
-    fixed_gpu = cp.asarray(fixed, dtype=cp.float32)
-    moving_xy_registered_gpu = cp.asarray(moving_xy_registered, dtype=cp.float32)
+    fixed_binned = _block_mean_gpu(fixed, cp, binning_zyx)
+    moving_xy_registered_binned = _block_mean_gpu(moving_xy_registered, cp, binning_zyx)
     overlap_slices = _overlap_slices_after_translation(
-        fixed.shape,
-        (0.0, float(xy_pull_shift_px[0]), float(xy_pull_shift_px[1])),
+        fixed_binned.shape,
+        (
+            0.0,
+            float(xy_pull_shift_px[0]) / float(binning_zyx[1]),
+            float(xy_pull_shift_px[1]) / float(binning_zyx[2]),
+        ),
     )
     if overlap_slices is None:
         residual_push_shift_px = np.zeros(3, dtype=np.float32)
     else:
         residual_push_shift_px = phase_cross_correlation(
-            fixed_gpu[overlap_slices],
-            moving_xy_registered_gpu[overlap_slices],
+            fixed_binned[overlap_slices],
+            moving_xy_registered_binned[overlap_slices],
             upsample_factor=10,
             disambiguate=True,
         )[0]
-        residual_push_shift_px = cp.asnumpy(residual_push_shift_px).astype(np.float32)
+        residual_push_shift_px = cp.asnumpy(residual_push_shift_px).astype(
+            np.float32
+        ) * np.asarray(binning_zyx, dtype=np.float32)
     residual_pull_shift_px = -residual_push_shift_px.astype(np.float32, copy=False)
-    del fixed_gpu, moving_xy_registered_gpu, moving_xy_registered
+    del fixed_binned, moving_xy_registered_binned, moving_xy_registered
     total_shift_px = residual_pull_shift_px.copy()
     total_shift_px[1] += xy_pull_shift_px[0]
     total_shift_px[2] += xy_pull_shift_px[1]
@@ -349,6 +438,7 @@ def register_pair_to_fixed(
         f"xy_pull_shift_px=(0.000, {float(xy_pull_shift_px[0]):.3f}, {float(xy_pull_shift_px[1]):.3f}) "
         f"residual_pull_shift_px={tuple(float(v) for v in residual_pull_shift_px)} "
         f"total_pull_shift_px={tuple(float(v) for v in total_shift_px)} "
+        f"registration_binning_zyx={tuple(int(v) for v in binning_zyx)} "
         f"elapsed_s={timeit.default_timer() - start_time:.2f}",
         enabled=diagnostics,
     )
@@ -915,18 +1005,31 @@ def warp_array_to_reference_gpu(
         enabled=diagnostics,
     )
     start_time = timeit.default_timer()
+    reference_shape = tuple(int(v) for v in reference_shape)
     image_gpu = cp.asarray(image)
-    warped_gpu = ndimage.affine_transform(
-        image_gpu,
-        matrix=cp.asarray(matrix_px),
-        offset=cp.asarray(offset_px),
-        output_shape=tuple(int(v) for v in reference_shape),
-        order=order,
-        mode=mode,
-        cval=float(cval),
-    )
-    warped = cp.asnumpy(warped_gpu)
-    del image_gpu, warped_gpu
+    matrix_gpu = cp.asarray(matrix_px)
+    offset_gpu = cp.asarray(offset_px)
+    warped = np.empty(reference_shape, dtype=np.asarray(image).dtype)
+    z_batch_size = max(1, int(z_batch_size))
+    for z_start in range(0, reference_shape[0], z_batch_size):
+        z_stop = min(z_start + z_batch_size, reference_shape[0])
+        slab_shape = (z_stop - z_start, reference_shape[1], reference_shape[2])
+        slab_origin = cp.asarray((z_start, 0, 0), dtype=cp.float32)
+        slab_offset_gpu = offset_gpu + matrix_gpu @ slab_origin
+        warped_gpu = ndimage.affine_transform(
+            image_gpu,
+            matrix=matrix_gpu,
+            offset=slab_offset_gpu,
+            output_shape=slab_shape,
+            order=order,
+            mode=mode,
+            cval=float(cval),
+        )
+        warped[z_start:z_stop, :, :] = cp.asnumpy(warped_gpu)
+        del warped_gpu, slab_offset_gpu, slab_origin
+        cp.cuda.Stream.null.synchronize()
+        cp.get_default_memory_pool().free_all_blocks()
+    del image_gpu, matrix_gpu, offset_gpu
     cp.cuda.Stream.null.synchronize()
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()

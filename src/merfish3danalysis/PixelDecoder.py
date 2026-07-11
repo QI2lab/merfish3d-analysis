@@ -457,19 +457,20 @@ class PixelDecoder:
         Parameters
         ----------
         datastore : qi2labDataStore
-            Function argument.
+            Datastore containing preprocessed images, transforms, codebook, and
+            decoded output groups.
         merfish_bits : int
-            Function argument.
+            Number of MERFISH readout bits.
         num_gpus : int
-            Function argument.
+            Number of GPUs to use for decoding.
         verbose : int
-            Function argument.
+            Progress verbosity.
         use_mask : bool | None
-            Function argument.
+            If True, use the stored fiducial mask during decoding.
         z_range : Sequence[int] | None
-            Function argument.
+            Z-index range to decode. If None, decode all planes.
         decode_mode : Literal['auto', '2d', '3d']
-            Function argument.
+            Connected-component and filtering mode.
         estimate_chromatic_affines : bool
             If True, iterative normalization estimates chromatic affine
             transforms from decoded on-bit centroids. If False, decoding uses
@@ -1520,7 +1521,7 @@ class PixelDecoder:
             prediction_weighted = np.asarray(
                 readout_array, dtype=np.float32
             ) * np.asarray(feature_predictor_array, dtype=np.float32)
-            registered_data = warp_bit_image_to_reference(
+            warped_data = warp_bit_image_to_reference(
                 prediction_weighted,
                 datastore=self._datastore,
                 tile=self._tile_idx,
@@ -1528,7 +1529,7 @@ class PixelDecoder:
                 emission_wavelength_um=em_wvl,
                 gpu_id=gpu_id,
             )
-            images.append(registered_data[self._z_slice, :, :])
+            images.append(warped_data[self._z_slice, :, :])
             del feature_predictor_array, readout_array
             self._em_wvl.append(em_wvl)
 
@@ -2303,8 +2304,8 @@ class PixelDecoder:
 
         Returns
         -------
-        registered_space_point : np.ndarray
-            Registered space point.
+        transformed_space_point : np.ndarray
+            Transformed physical-space point.
         """
         physical_space_point = pixel_space_point * spacing + origin
         if camera_to_stage_affine is not None:
@@ -2312,11 +2313,11 @@ class PixelDecoder:
                 np.asarray(camera_to_stage_affine)
                 @ np.array([*list(physical_space_point), 1])
             )[:-1]
-        registered_space_point = (
+        transformed_space_point = (
             np.array(affine) @ np.array([*list(physical_space_point), 1])
         )[:-1]
 
-        return registered_space_point
+        return transformed_space_point
 
     def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
         """
