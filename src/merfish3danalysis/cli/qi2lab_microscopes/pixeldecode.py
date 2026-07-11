@@ -56,7 +56,6 @@ def _nearest_nyquist_multiple(
     float
         Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
     """
-
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -86,7 +85,6 @@ def _effective_decode_mode(
     {'2d', '3d'}
         Effective decode mode.
     """
-
     if decode_mode == "auto":
         return "2d" if datastore.microscope_type == "2D" else "3d"
     if decode_mode in {"2d", "3d"}:
@@ -113,7 +111,6 @@ def _default_qi2lab_minimum_pixels(
     int
         Default minimum-pixel threshold.
     """
-
     if _effective_decode_mode(datastore, decode_mode) == "2d":
         return QI2LAB_2D_DEFAULT_MINIMUM_PIXELS
     return QI2LAB_3D_DEFAULT_MINIMUM_PIXELS
@@ -138,7 +135,6 @@ def _default_qi2lab_magnitude_threshold(
     tuple[float, float]
         Default magnitude threshold range.
     """
-
     if _effective_decode_mode(datastore, decode_mode) != "2d":
         return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
 
@@ -166,7 +162,6 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     bool
         True if the first registered readout records deconvolution metadata.
     """
-
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
     if tile_ids is None or bit_ids is None:
@@ -203,7 +198,6 @@ def _default_qi2lab_feature_predictor_threshold(
     float
         Default feature-predictor threshold.
     """
-
     if _effective_decode_mode(
         datastore, decode_mode
     ) != "2d" or not _readouts_are_deconvolved(datastore):
@@ -240,7 +234,6 @@ def _validate_filter_arguments(
     None
         This function raises when arguments are inconsistent.
     """
-
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
@@ -384,7 +377,6 @@ def decode_pixels(
         Decode mode. ``auto`` follows the datastore microscope type; explicit
         values control connected-component extraction and default thresholds.
     """
-
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)

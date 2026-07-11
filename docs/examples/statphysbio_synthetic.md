@@ -90,15 +90,22 @@ uv run sim-f1score /path/to/simulation/example_16bit_cells/0.315
 
 ## Ensuring a successful run
 
-If the runs are successful with the default `simfish` model, deconvolution
-enabled, and the default feature-prediction threshold, the standard simulation
-matrix should produce F1 scores close to the following values:
+The repository test suite exercises the same cached simulation datasets. The
+standard matrix runs the default decoder settings across both simulation types,
+all axial spacings, and both chromatic-aberration conditions:
 
-| Simulation Type | Axial Spacing (µm) | Precision | Recall | F1 score |
-| --------------- | ------------------ | --------- | ------ | -------- |
-| Cells MERFISH   | 0.315              | 0.986     | 0.983  | 0.985    |
-| Cells MERFISH   | 1.0                | 0.918     | 1.000  | 0.957    |
-| Cells MERFISH   | 1.5                | 0.237     | 0.934  | 0.378    |
-| Uniform MERFISH | 0.315              | 0.987     | 0.993  | 0.990    |
-| Uniform MERFISH | 1.0                | 0.937     | 1.000  | 0.967    |
-| Uniform MERFISH | 1.5                | 0.449     | 0.961  | 0.612    |
+```bash
+uv run pytest tests/test_simulation_example_pipeline.py::test_simulation_standard_matrix -vv
+```
+
+Each standard case runs a paired affine registration case and a SOFIMA-enabled
+case. Testing stops immediately if the rounded SOFIMA F1 score is lower than the
+paired affine F1 score.
+
+The exhaustive simulation mode expands the feature-prediction threshold sweep
+and writes measured performance records to
+`tests/data/simulation_performance.json`:
+
+```bash
+uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
+```

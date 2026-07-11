@@ -46,7 +46,7 @@ nav:
   - DataStore overview: datastore.md
   - Workflow overview: workflow.md
   - Current API notes: api.md
-  - NDV viewer: viewer.md
+  - Datastore viewer: viewer.md
   - Examples:
     - Synthetic data: examples/statphysbio_synthetic.md
     - Zhuang laboratory mouse brain: examples/zhuang_lab_mouse_brain.md

@@ -61,21 +61,28 @@ acceleration is used in the direct fusion step.
 
 ## View a qi2lab datastore
 
-The standard `uv sync` install includes the ndv/PyQt dependencies for the view-only datastore GUI.
+The standard `uv sync` install includes the NDV, VisPy, and PyQt dependencies
+for the view-only datastore GUI.
 
 Open an experiment root:
 
 ```bash
-uv run qi2lab-viewer /path/to/experiment
+uv run viewer /path/to/experiment
 ```
 
 or open a datastore directly:
 
 ```bash
-uv run qi2lab-viewer /path/to/experiment/qi2labdatastore
+uv run viewer /path/to/experiment/qi2labdatastore
 ```
 
-The viewer only reads existing datastore contents. It can display selected tiles, round-1 fiducials, selected bits, feature predictor probability images, decoded codebook-word overlays, and cell-outline overlays when those components are already present. When the datastore contains fused global polyDT data, globally decoded features, cell outlines, and the global polyDT segmentation image, enable the global fused view to inspect the downsampled polyDT max projection with selected RNA identities on the global coordinate canvas.
+The viewer only reads existing datastore contents. It uses NDV for Zarr-backed
+image channels and VisPy for sparse transcript and cell-boundary overlays. It
+can inspect local native tiles, local tiles warped with selected chromatic,
+stage/round affine, and SOFIMA components, and global fused views. Transcript
+sources are mutually exclusive: datastore transcripts, Proseg transcripts, or
+Baysor transcripts. Cell boundaries can be shown from Cellpose, Proseg, or
+Baysor when those outputs are present.
 
 The documentation includes a [viewer guide with screenshots](https://qi2lab.github.io/merfish3d-analysis/viewer/) and a [current API notes](https://qi2lab.github.io/merfish3d-analysis/api/) page covering the current RLGC, PSF, and U-FISH defaults.
 
@@ -119,206 +126,9 @@ Full feature-prediction probability threshold sweep:
 uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
 ```
 
-The simulation suite currently runs the default `simfish` U-FISH model. The
-exhaustive mode expands the feature-prediction probability threshold and
-preprocessing matrix for that default model.
-
-### Simulation Results
-
-F1 scores for the default `simfish` model are summarized below using the consensus feature-prediction probability threshold selected from the full sweep.
-
-| Dataset | Axial spacing (um) | No deconvolution | Deconvolution |
-| --- | --- | --- | --- |
-| cells | 0.315 | 0.988 | 0.985 |
-| cells | 1.0 | 0.954 | 0.953 |
-| cells | 1.5 | 0.905 | 0.377 |
-| uniform | 0.315 | 0.988 | 0.990 |
-| uniform | 1.0 | 0.960 | 0.967 |
-| uniform | 1.5 | 0.790 | 0.616 |
-
-<details>
-<summary>exhaustive feature prediction testing</summary>
-
-Columns are feature-prediction probability thresholds. Values are F1 scores.
-
-#### cells, axial spacing 0.315 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| dnafish | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| deepblink | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| suntag | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| rca | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| simfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| merfish | 0.074 | 0.074 | 0.074 | 0.074 | 0.074 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| dnafish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| deepblink | 0.745 | 0.745 | 0.745 | 0.745 | 0.745 |
-| suntag | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| rca | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| simfish | 0.985 | 0.985 | 0.985 | 0.985 | 0.985 |
-| merfish | 0.986 | 0.986 | 0.986 | 0.986 | 0.986 |
-
-#### cells, axial spacing 1.0 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.938 | 0.938 | 0.938 | 0.938 | 0.938 |
-| dnafish | 0.940 | 0.940 | 0.940 | 0.940 | 0.940 |
-| deepspot | 0.954 | 0.954 | 0.954 | 0.954 | 0.954 |
-| deepblink | 0.927 | 0.927 | 0.927 | 0.927 | 0.927 |
-| suntag | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
-| rca | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 |
-| seqfish | 0.952 | 0.952 | 0.952 | 0.952 | 0.952 |
-| simfish | 0.954 | 0.954 | 0.954 | 0.954 | 0.954 |
-| merfish | 0.695 | 0.695 | 0.695 | 0.695 | 0.695 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.941 | 0.941 | 0.941 | 0.941 | 0.941 |
-| dnafish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
-| deepspot | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
-| deepblink | 0.880 | 0.880 | 0.880 | 0.880 | 0.880 |
-| suntag | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
-| rca | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
-| seqfish | 0.956 | 0.956 | 0.956 | 0.956 | 0.956 |
-| simfish | 0.953 | 0.953 | 0.953 | 0.953 | 0.953 |
-| merfish | 0.884 | 0.884 | 0.884 | 0.884 | 0.884 |
-
-#### cells, axial spacing 1.5 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.922 | 0.922 | 0.922 | 0.922 | 0.922 |
-| dnafish | 0.886 | 0.886 | 0.886 | 0.886 | 0.886 |
-| deepspot | 0.936 | 0.936 | 0.936 | 0.936 | 0.936 |
-| deepblink | 0.917 | 0.917 | 0.917 | 0.917 | 0.917 |
-| suntag | 0.888 | 0.888 | 0.888 | 0.888 | 0.888 |
-| rca | 0.939 | 0.939 | 0.939 | 0.939 | 0.939 |
-| seqfish | 0.920 | 0.920 | 0.920 | 0.920 | 0.920 |
-| simfish | 0.905 | 0.905 | 0.905 | 0.905 | 0.905 |
-| merfish | 0.464 | 0.464 | 0.464 | 0.464 | 0.464 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.539 | 0.539 | 0.539 | 0.539 | 0.539 |
-| dnafish | 0.596 | 0.596 | 0.596 | 0.596 | 0.596 |
-| deepspot | 0.593 | 0.593 | 0.593 | 0.593 | 0.593 |
-| deepblink | 0.530 | 0.530 | 0.530 | 0.530 | 0.530 |
-| suntag | 0.358 | 0.358 | 0.358 | 0.358 | 0.358 |
-| rca | 0.457 | 0.457 | 0.457 | 0.457 | 0.457 |
-| seqfish | 0.588 | 0.588 | 0.588 | 0.588 | 0.588 |
-| simfish | 0.377 | 0.377 | 0.377 | 0.377 | 0.377 |
-| merfish | 0.417 | 0.417 | 0.417 | 0.417 | 0.417 |
-
-#### uniform, axial spacing 0.315 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| dnafish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| deepspot | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| deepblink | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| suntag | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| rca | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| seqfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| simfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-| merfish | 0.988 | 0.988 | 0.988 | 0.988 | 0.988 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| dnafish | 0.989 | 0.989 | 0.989 | 0.989 | 0.989 |
-| deepspot | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| deepblink | 0.984 | 0.984 | 0.984 | 0.984 | 0.984 |
-| suntag | 0.991 | 0.991 | 0.991 | 0.991 | 0.991 |
-| rca | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| seqfish | 0.987 | 0.987 | 0.987 | 0.987 | 0.987 |
-| simfish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-| merfish | 0.990 | 0.990 | 0.990 | 0.990 | 0.990 |
-
-#### uniform, axial spacing 1.0 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.959 | 0.959 | 0.959 | 0.959 | 0.959 |
-| dnafish | 0.962 | 0.962 | 0.962 | 0.962 | 0.962 |
-| deepspot | 0.961 | 0.961 | 0.961 | 0.961 | 0.961 |
-| deepblink | 0.946 | 0.946 | 0.946 | 0.946 | 0.946 |
-| suntag | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
-| rca | 0.964 | 0.964 | 0.964 | 0.964 | 0.964 |
-| seqfish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
-| simfish | 0.960 | 0.960 | 0.960 | 0.960 | 0.960 |
-| merfish | 0.951 | 0.951 | 0.951 | 0.951 | 0.951 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.966 | 0.966 | 0.966 | 0.966 | 0.966 |
-| dnafish | 0.965 | 0.965 | 0.965 | 0.965 | 0.965 |
-| deepspot | 0.872 | 0.872 | 0.872 | 0.872 | 0.872 |
-| deepblink | 0.952 | 0.952 | 0.952 | 0.952 | 0.952 |
-| suntag | 0.958 | 0.958 | 0.958 | 0.958 | 0.958 |
-| rca | 0.967 | 0.967 | 0.967 | 0.967 | 0.967 |
-| seqfish | 0.963 | 0.963 | 0.963 | 0.963 | 0.963 |
-| simfish | 0.967 | 0.967 | 0.967 | 0.967 | 0.967 |
-| merfish | 0.966 | 0.966 | 0.966 | 0.966 | 0.966 |
-
-#### uniform, axial spacing 1.5 um
-
-##### No deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.924 | 0.924 | 0.924 | 0.924 | 0.924 |
-| dnafish | 0.935 | 0.935 | 0.935 | 0.935 | 0.935 |
-| deepspot | 0.938 | 0.938 | 0.938 | 0.938 | 0.938 |
-| deepblink | 0.920 | 0.920 | 0.920 | 0.920 | 0.920 |
-| suntag | 0.914 | 0.914 | 0.914 | 0.914 | 0.914 |
-| rca | 0.939 | 0.939 | 0.939 | 0.939 | 0.939 |
-| seqfish | 0.927 | 0.927 | 0.927 | 0.927 | 0.927 |
-| simfish | 0.790 | 0.790 | 0.790 | 0.790 | 0.790 |
-| merfish | 0.903 | 0.903 | 0.903 | 0.903 | 0.903 |
-
-##### Deconvolution
-
-| U-FISH model | 0.1 | 0.2 | 0.3 | 0.4 | 0.5 |
-| --- | --- | --- | --- | --- | --- |
-| exseq | 0.584 | 0.584 | 0.584 | 0.584 | 0.584 |
-| dnafish | 0.665 | 0.665 | 0.665 | 0.665 | 0.665 |
-| deepspot | 0.659 | 0.659 | 0.659 | 0.659 | 0.659 |
-| deepblink | 0.581 | 0.581 | 0.581 | 0.581 | 0.581 |
-| suntag | 0.624 | 0.624 | 0.624 | 0.624 | 0.624 |
-| rca | 0.644 | 0.644 | 0.644 | 0.644 | 0.644 |
-| seqfish | 0.627 | 0.627 | 0.627 | 0.627 | 0.627 |
-| simfish | 0.616 | 0.616 | 0.616 | 0.616 | 0.616 |
-| merfish | 0.594 | 0.594 | 0.594 | 0.594 | 0.594 |
-
-</details>
+The standard simulation matrix runs paired affine and SOFIMA preprocessing for
+every default dataset, axial spacing, and chromatic-aberration setting. The
+test exits immediately if SOFIMA lowers the rounded F1 score relative to the
+paired affine run. The exhaustive mode keeps the longer feature-prediction
+threshold sweep and writes measured performance records to
+`tests/data/simulation_performance.json`.

@@ -82,7 +82,6 @@ def synthetic_chromatic_affines_zyx_um(
         Mapping from emission wavelength to channel-to-reference affine in
         Z/Y/X microns.
     """
-
     spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
     shape = np.asarray(image_shape_zyx, dtype=np.float32)
     center_um = (shape - 1.0) * spacing / 2.0
@@ -152,7 +151,6 @@ def _apply_synthetic_chromatic_aberration(
     numpy.ndarray
         Chromatically shifted image with the same shape and dtype as input.
     """
-
     from merfish3danalysis.utils.multiview_registration import (
         warp_array_to_reference_gpu,
     )
@@ -214,15 +212,15 @@ def convert_data(
         path to dataset
     channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Optional[Path], default None
+    hot_pixel_image_path: Path or None, default None
         path to hot pixel map. Default of `None` will set it to all zeros.
-    output_path: Optional[Path], default None
+    output_path: Path or None, default None
         path to output directory. Default of `None` and will be created
         within the root_path
-    codebook_path: Optional[Path], default None
+    codebook_path: Path or None, default None
         path to codebook. Default of `None` assumes the file is in
         the root_path.
-    bit_order_path: Optional[Path], default None
+    bit_order_path: Path or None, default None
         path to bit order file. This file defines what bits are present in each
         imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.
@@ -577,7 +575,7 @@ def convert_data(
 
 def main() -> None:
     """
-    Main.
+    Run the datastore conversion CLI.
 
     Returns
     -------

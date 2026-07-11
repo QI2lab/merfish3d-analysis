@@ -1,3 +1,5 @@
+"""Darkfield image filtering utilities."""
+
 from typing import Any
 
 import cupy as cp
@@ -411,7 +413,6 @@ def dark_sectioning(
     cp.ndarray
         Dehazed 3D image in (z, y, x) order on GPU.
     """
-
     if input_image.ndim == 2:
         input_image = input_image[None, ...]
 

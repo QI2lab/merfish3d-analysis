@@ -1,5 +1,5 @@
 """
-Calculate F1-score using known ground truth
+Calculate F1-score using known ground truth.
 
 Shepherd 2025/08 - update for new BiFISH simulations.
 Shepherd 2024/12 - create script to run on simulation.
@@ -25,7 +25,27 @@ def calculate_F1_with_radius(
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
     """
     Greedy closest-first matching within `radius`, with strict same-gene and one-to-one constraints.
+
     Returns F1 metrics and (TP coords, FP coords, FN coords).
+
+    Parameters
+    ----------
+    qi2lab_coords : ArrayLike
+        Decoded transcript coordinates.
+    qi2lab_gene_ids : ArrayLike
+        Decoded transcript gene identifiers.
+    gt_coords : ArrayLike
+        Ground-truth transcript coordinates.
+    gt_gene_ids : ArrayLike
+        Ground-truth gene identifiers.
+    radius : float
+        Maximum match distance.
+
+    Returns
+    -------
+    tuple[dict, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Metrics, true-positive coordinates, false-positive coordinates, and
+        false-negative coordinates.
     """
     # Canonicalize inputs
     qi2lab_coords = np.asarray(qi2lab_coords, float)
@@ -203,7 +223,6 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
     results: dict
         dictionary of results for F1 score calculation
     """
-
     # initialize datastore
     datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path)
@@ -259,7 +278,7 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
 
 def main() -> None:
     """
-    Main.
+    Run the F1 calculation CLI.
 
     Returns
     -------

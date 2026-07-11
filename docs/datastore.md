@@ -240,7 +240,7 @@ warped image as applying the in-memory field returned by the estimator.
     │       │   ├── corrected_data.ome.zarr/   # OME-NGFF v0.5 image
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   ├── registered_decon_data.ome.zarr/
+    │       │   ├── decon_data.ome.zarr/       # optional, native local frame
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
     │       │   └── local_sofima_flow_field.ome.zarr/  # rounds > 1 when enabled
@@ -274,12 +274,22 @@ warped image as applying the in-memory field returned by the estimator.
     │       │   └── 0/
     │       └── fused_all_channels_zyx.ome.zarr/   # optional
     ├── segmentation/
-    │   └── cellpose/
-    │       ├── cellpose.zarr/
-    │       │   └── masks_fiducial_iso_zyx.ome.zarr/
-    │       │       ├── zarr.json
-    │       │       └── 0/
-    │       └── imagej_rois/global_coords_rois.zip
+    │   ├── cellpose/
+    │   │   ├── cellpose.zarr/
+    │   │   │   └── masks_fiducial_iso_zyx.ome.zarr/
+    │   │   │       ├── zarr.json
+    │   │   │       └── 0/
+    │   │   └── imagej_rois/global_coords_rois.zip
+    │   └── baysor/3D/
+    │       ├── molecules.parquet
+    │       └── cell_boundaries_3d.parquet
+    ├── proseg/
+    │   └── 3D/
+    │       ├── cell_polygons_3D.geojson.gz
+    │       ├── transcript_metadata_3D.csv.gz
+    │       └── <optional run name>/
+    │           ├── cell_polygons_3D.geojson.gz
+    │           └── transcript_metadata_3D.csv.gz
     ├── decoded/
     │   ├── tile0000_decoded_features.parquet
     │   └── temporary/iteration_000/tile000_temp_decoded.parquet
@@ -291,7 +301,9 @@ warped image as applying the in-memory field returned by the estimator.
 
 ## Metadata conventions
 
-- Each image directory (for example `corrected_data.ome.zarr/`, `registered_decon_data.ome.zarr/`, `decon_data.ome.zarr/`, or `feature_predictor_data.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Each image directory (for example `corrected_data.ome.zarr/`, `decon_data.ome.zarr/`, `feature_predictor_data.ome.zarr/`, or `local_sofima_flow_field.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Local fiducial and readout images are stored in native tile coordinates. Registered fiducial/readout images are not saved as separate arrays; downstream decoding and viewer paths apply affine, chromatic, and SOFIMA transforms when aligned data are needed.
+- Readout `corrected_data.ome.zarr/` is always expected after datastore creation. Readout and fiducial `decon_data.ome.zarr/` are present only when deconvolution was run. Readout `feature_predictor_data.ome.zarr/` is expected after preprocessing and is produced from the deconvolved image when available, otherwise from the corrected image.
 - Folder-level metadata for non-image entities (for example `calibrations/`, `fiducial/*/round*/`, `readouts/*/bit*/`) is stored in `attributes.json`.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
 - All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).

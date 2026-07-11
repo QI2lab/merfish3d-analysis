@@ -12,6 +12,7 @@ History:
 - **2024/07**: Initial commit.
 """
 
+import gzip
 import json
 import re
 from collections.abc import Collection, Mapping, Sequence
@@ -35,7 +36,7 @@ class qi2labDataStore:
 
     Parameters
     ----------
-    datastore_path : Union[str, Path]
+    datastore_path : str or Path
         Path to qi2lab MERFISH store
     validate : bool, default True
         Validate datastore contents on open. Set False to skip expensive
@@ -45,14 +46,14 @@ class qi2labDataStore:
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
         """
-        Initialize the object.
+        Initialize a qi2lab datastore handle.
 
         Parameters
         ----------
         datastore_path : str | Path
-            Function argument.
+            Datastore root path.
         validate : bool
-            Function argument.
+            Whether to validate existing image arrays while parsing the store.
         """
         compressor = {
             "id": "blosc",
@@ -82,10 +83,9 @@ class qi2labDataStore:
 
         Returns
         -------
-        datastore_state : Optional[dict]
+        datastore_state : dict or None
             Datastore state.
         """
-
         return getattr(self, "_datastore_state", None)
 
     @datastore_state.setter
@@ -97,7 +97,6 @@ class qi2labDataStore:
         value : dict
             New datastore state.
         """
-
         if not hasattr(self, "_datastore_state") or self._datastore_state is None:
             self._datastore_state = value
         else:
@@ -111,9 +110,8 @@ class qi2labDataStore:
         Returns
         -------
         Path
-            Function result.
+            Path to ``calibrations/attributes.json``.
         """
-
         return self._calibrations_zarr_path / Path("attributes.json")
 
     def _load_calibrations_attributes(self) -> dict[str, Any]:
@@ -123,9 +121,8 @@ class qi2labDataStore:
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Calibration metadata loaded from disk.
         """
-
         attributes = self._load_from_json(self._calibrations_attributes_path())
         if not isinstance(attributes, dict):
             raise ValueError("calibrations/attributes.json is invalid.")
@@ -138,14 +135,13 @@ class qi2labDataStore:
         Parameters
         ----------
         attributes : Mapping[str, Any]
-            Function argument.
+            Calibration metadata to write.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
-
         self._save_to_json(
             {str(k): self._to_json_compatible(v) for k, v in dict(attributes).items()},
             self._calibrations_attributes_path(),
@@ -158,16 +154,15 @@ class qi2labDataStore:
         Parameters
         ----------
         key : str
-            Function argument.
+            Calibration metadata key.
         value : Any
-            Function argument.
+            Value to store after JSON conversion.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
-
         attributes = self._load_calibrations_attributes()
         attributes[str(key)] = self._to_json_compatible(value)
         self._save_calibrations_attributes(attributes)
@@ -191,7 +186,6 @@ class qi2labDataStore:
         None
             Metadata are written to ``calibrations/attributes.json``.
         """
-
         self._set_calibration_attribute(
             "chromatic_affine_transforms_zyx_um",
             calibration,
@@ -207,7 +201,6 @@ class qi2labDataStore:
             Stored calibration metadata. Returns an empty dictionary when no
             chromatic calibration is present.
         """
-
         try:
             attributes = self._load_calibrations_attributes()
         except (FileNotFoundError, json.JSONDecodeError, ValueError):
@@ -242,7 +235,6 @@ class qi2labDataStore:
             4x4 affine matrix in physical Z, Y, X microns. Identity is returned
             if the calibration or requested channel is absent.
         """
-
         calibration = self.load_chromatic_affine_transforms_zyx_um()
         channels = calibration.get("channels", {})
         if not isinstance(channels, Mapping):
@@ -282,18 +274,17 @@ class qi2labDataStore:
         Parameters
         ----------
         name : str
-            Function argument.
+            Identifier to validate.
         prefix : str
-            Function argument.
+            Required identifier prefix.
         width : int
-            Function argument.
+            Required number of zero-padded digits.
 
         Returns
         -------
         int
-            Function result.
+            Parsed numeric identifier.
         """
-
         match = re.fullmatch(rf"{re.escape(prefix)}(\d{{{width}}})", name)
         if match is None:
             raise ValueError(
@@ -309,19 +300,32 @@ class qi2labDataStore:
         Parameters
         ----------
         parent : Path
-            Function argument.
+            Folder containing identifier-named child directories.
         prefix : str
-            Function argument.
+            Required identifier prefix.
         width : int
-            Function argument.
+            Required number of zero-padded digits.
 
         Returns
         -------
         list[str]
-            Function result.
+            Strict identifiers sorted by numeric value.
         """
 
         def sort_id(value: str) -> tuple[int, int, str]:
+            """
+            Return the strict identifier sort key.
+
+            Parameters
+            ----------
+            value : str
+                Identifier string.
+
+            Returns
+            -------
+            tuple[int, int, str]
+                Numeric and lexical sort key.
+            """
             return cls._strict_id_sort_key(value, prefix, width)
 
         ids = [entry.name for entry in parent.iterdir() if entry.is_dir()]
@@ -334,10 +338,9 @@ class qi2labDataStore:
 
         Returns
         -------
-        microscope_type : Optional[str]
+        microscope_type : str or None
             Microscope type.
         """
-
         return getattr(self, "_microscope_type", None)
 
     @microscope_type.setter
@@ -349,7 +352,6 @@ class qi2labDataStore:
         value : str
             New microscope type.
         """
-
         self._microscope_type = value
         self._set_calibration_attribute("microscope_type", value)
 
@@ -359,10 +361,9 @@ class qi2labDataStore:
 
         Returns
         -------
-        camera_model : Optional[str]
+        camera_model : str or None
             Camera model.
         """
-
         return getattr(self, "_camera_model", None)
 
     @camera_model.setter
@@ -386,7 +387,6 @@ class qi2labDataStore:
         num_rounds : int
             Number of rounds.
         """
-
         return getattr(self, "_num_rounds", None)
 
     @num_rounds.setter
@@ -398,7 +398,6 @@ class qi2labDataStore:
         value : int
             New number of rounds.
         """
-
         self._num_rounds = value
         self._set_calibration_attribute("num_rounds", value)
 
@@ -418,7 +417,7 @@ class qi2labDataStore:
         """Set the number of bits.
 
         Parameters
-        -------
+        ----------
         value : int
             Number of bits.
         """
@@ -434,7 +433,6 @@ class qi2labDataStore:
         num_tiles : int
             Number of tiles.
         """
-
         return getattr(self, "_num_tiles", None)
 
     @num_tiles.setter
@@ -446,7 +444,6 @@ class qi2labDataStore:
         value : int
             New number of tiles.
         """
-
         self._num_tiles = value
         self._set_calibration_attribute("num_tiles", value)
 
@@ -463,7 +460,6 @@ class qi2labDataStore:
         channels_in_data : Collection[int]
             Channel indices.
         """
-
         return getattr(self, "_channels_in_data", None)
 
     @channels_in_data.setter
@@ -475,7 +471,6 @@ class qi2labDataStore:
         value : Collection[int]
             New channels in data (int values starting from zero).
         """
-
         self._channels_in_data = value
         self._set_calibration_attribute("channels_in_data", value)
 
@@ -488,7 +483,6 @@ class qi2labDataStore:
         tile_overlap : float
             XY tile overlap.
         """
-
         return getattr(self, "_tile_overlap", None)
 
     @tile_overlap.setter
@@ -500,7 +494,6 @@ class qi2labDataStore:
         value : float
             New tile overlap.
         """
-
         self._tile_overlap = value
         self._set_calibration_attribute("tile_overlap", value)
 
@@ -513,7 +506,6 @@ class qi2labDataStore:
         binning : int
             Camera binning.
         """
-
         return getattr(self, "_binning", None)
 
     @binning.setter
@@ -525,7 +517,6 @@ class qi2labDataStore:
         value : int
             New camera binning.
         """
-
         self._binning = value
         self._set_calibration_attribute("binning", value)
 
@@ -536,8 +527,8 @@ class qi2labDataStore:
         Returns
         -------
         e_per_ADU : float
-            Electrons per camera ADU."""
-
+            Electrons per camera ADU.
+        """
         return getattr(self, "_e_per_ADU", None)
 
     @e_per_ADU.setter
@@ -549,7 +540,6 @@ class qi2labDataStore:
         value : float
             New camera conversion (e- per ADU).
         """
-
         self._e_per_ADU = value
         self._set_calibration_attribute("e_per_ADU", value)
 
@@ -562,7 +552,6 @@ class qi2labDataStore:
         na : float
             Detection objective numerical aperture (NA).
         """
-
         return getattr(self, "_na", None)
 
     @na.setter
@@ -574,7 +563,6 @@ class qi2labDataStore:
         value: float
             New detection objective numerical aperture (NA)
         """
-
         self._na = value
         self._set_calibration_attribute("na", value)
 
@@ -587,7 +575,6 @@ class qi2labDataStore:
         ri : float
             Detection objective refractive index (RI).
         """
-
         return getattr(self, "_ri", None)
 
     @ri.setter
@@ -599,7 +586,6 @@ class qi2labDataStore:
         value: float
             New detection objective refractive index (RI)
         """
-
         self._ri = value
         self._set_calibration_attribute("ri", value)
 
@@ -612,7 +598,6 @@ class qi2labDataStore:
         noise_map : ArrayLike
             Camera noise image.
         """
-
         return getattr(self, "_noise_map", None)
 
     @noise_map.setter
@@ -624,7 +609,6 @@ class qi2labDataStore:
         value : ArrayLike
             New camera noise image.
         """
-
         self._noise_map = value
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("noise_map"))
 
@@ -647,7 +631,6 @@ class qi2labDataStore:
         channel_shading_maps : ArrayLike
             Channel shading images.
         """
-
         return getattr(self, "_shading_maps", None)
 
     @channel_shading_maps.setter
@@ -659,7 +642,6 @@ class qi2labDataStore:
         value : ArrayLike
             New channel shading images.
         """
-
         shading_maps = np.asarray(value, dtype=np.float32)
         if shading_maps.ndim == 2:
             shading_maps = np.expand_dims(shading_maps, axis=0)
@@ -695,12 +677,11 @@ class qi2labDataStore:
     def channel_psfs(self) -> ArrayLike | None:
         """Channel point spread functions (PSF).
 
-        Return
-        ------
+        Returns
+        -------
         channel_psfs : ArrayLike
             Channel point spread functions (PSF).
         """
-
         psfs = getattr(self, "_psfs", None)
         if psfs is None:
             return None
@@ -722,7 +703,6 @@ class qi2labDataStore:
         value : ArrayLike
             New channel point spread functions (PSF).
         """
-
         if isinstance(value, np.ndarray):
             if value.dtype == object:
                 psf_list = [np.asarray(psf, dtype=np.float32) for psf in list(value)]
@@ -794,14 +774,13 @@ class qi2labDataStore:
         Parameters
         ----------
         value : ArrayLike | pd.DataFrame
-            Function argument.
+            Experiment order table or array to normalize.
 
         Returns
         -------
         pd.DataFrame
-            Function result.
+            Experiment order as a DataFrame with channel columns.
         """
-
         if isinstance(value, pd.DataFrame):
             return value
 
@@ -814,10 +793,9 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        value : Union[ArrayLike, pd.DataFrame]
+        value : ArrayLike or pandas.DataFrame
             New round and bit order.
         """
-
         self._experiment_order = self._coerce_experiment_order_dataframe(value)
 
         self._set_calibration_attribute("exp_order", self._experiment_order.values)
@@ -853,7 +831,6 @@ class qi2labDataStore:
         codebook : pd.DataFrame
             Codebook.
         """
-
         data = getattr(self, "_codebook", None)
 
         if data is None:
@@ -872,7 +849,6 @@ class qi2labDataStore:
         value : pd.DataFrame
             New codebook.
         """
-
         self._codebook = value
         self._set_calibration_attribute("codebook", self._codebook.values)
 
@@ -885,7 +861,6 @@ class qi2labDataStore:
         voxel_size_zyx_um : ArrayLike
             Voxel size, zyx order (microns).
         """
-
         return getattr(self, "_voxel_size_zyx_um", None)
 
     @voxel_size_zyx_um.setter
@@ -897,7 +872,6 @@ class qi2labDataStore:
         value : ArrayLike
             New voxel size, zyx order (microns).
         """
-
         self._voxel_size_zyx_um = value
         self._set_calibration_attribute("voxel_size_zyx_um", value)
 
@@ -910,7 +884,6 @@ class qi2labDataStore:
         global_normalization_vector : ArrayLike
             Global normalization vector.
         """
-
         value = getattr(self, "_global_normalization_vector", None)
         if value is None:
             calib_attrs = self._load_calibrations_attributes()
@@ -935,7 +908,6 @@ class qi2labDataStore:
         value : ArrayLike
             New global normalization vector.
         """
-
         self._global_normalization_vector = np.asarray(value, dtype=np.float32)
         self._set_calibration_attribute(
             "global_normalization_vector",
@@ -951,7 +923,6 @@ class qi2labDataStore:
         global_background_vector : ArrayLike
             Global background vector.
         """
-
         value = getattr(self, "_global_background_vector", None)
         if value is None:
             calib_attrs = self._load_calibrations_attributes()
@@ -975,7 +946,6 @@ class qi2labDataStore:
         value : ArrayLike
             New global background vector.
         """
-
         self._global_background_vector = np.asarray(value, dtype=np.float32)
         self._set_calibration_attribute(
             "global_background_vector",
@@ -991,7 +961,6 @@ class qi2labDataStore:
         iterative_normalization_vector : ArrayLike
             Iterative normalization vector.
         """
-
         value = getattr(self, "_iterative_normalization_vector", None)
         if value is None:
             calib_attrs = self._load_calibrations_attributes()
@@ -1019,7 +988,6 @@ class qi2labDataStore:
         value : ArrayLike
             New iterative normalization vector.
         """
-
         self._iterative_normalization_vector = value
         self._set_calibration_attribute(
             "iterative_normalization_vector",
@@ -1035,7 +1003,6 @@ class qi2labDataStore:
         iterative_background_vector : ArrayLike
             Iterative background vector.
         """
-
         value = getattr(self, "_iterative_background_vector", None)
         if value is None:
             calib_attrs = self._load_calibrations_attributes()
@@ -1062,7 +1029,6 @@ class qi2labDataStore:
         value : ArrayLike
             New iterative background vector.
         """
-
         self._iterative_background_vector = value
         self._set_calibration_attribute(
             "iterative_background_vector",
@@ -1084,7 +1050,6 @@ class qi2labDataStore:
         str or None
             Validated run key.
         """
-
         if decode_run_key is None:
             return None
         decode_run_key = str(decode_run_key)
@@ -1108,7 +1073,6 @@ class qi2labDataStore:
         pathlib.Path
             Decoded output root.
         """
-
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
             return self._decoded_root_path
@@ -1134,7 +1098,6 @@ class qi2labDataStore:
         pathlib.Path
             Temporary decoded-output directory.
         """
-
         root = self._decoded_run_root(decode_run_key) / Path("temporary")
         if iteration is not None:
             root = root / Path(f"iteration_{int(iteration):03d}")
@@ -1157,7 +1120,6 @@ class qi2labDataStore:
         pathlib.Path
             Global filtered decoded-output root.
         """
-
         root = self._datastore_path / Path("all_tiles_filtered_decoded_features")
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
@@ -1184,7 +1146,6 @@ class qi2labDataStore:
         tuple[numpy.ndarray or None, numpy.ndarray or None]
             Normalization and background vectors.
         """
-
         if kind == "global":
             if decode_run_key is None:
                 return self.global_normalization_vector, self.global_background_vector
@@ -1239,7 +1200,6 @@ class qi2labDataStore:
         decode_mode : str or None, default None
             Decode mode metadata.
         """
-
         if kind == "global":
             if decode_run_key is None:
                 self.global_normalization_vector = normalization_vector
@@ -1278,7 +1238,6 @@ class qi2labDataStore:
         tile_ids : Collection[str]
             Tile IDs.
         """
-
         return getattr(self, "_tile_ids", None)
 
     @property
@@ -1290,7 +1249,6 @@ class qi2labDataStore:
         round_ids : Collection[str]
             Round IDs.
         """
-
         return getattr(self, "_round_ids", None)
 
     @property
@@ -1302,7 +1260,6 @@ class qi2labDataStore:
         bit_ids : Collection[str]
             Bit IDs.
         """
-
         return getattr(self, "_bit_ids", None)
 
     def _init_datastore(self) -> None:
@@ -1310,7 +1267,6 @@ class qi2labDataStore:
 
         Create directory structure and initialize datastore state.
         """
-
         self._datastore_path.mkdir(parents=True)
         self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations")
         self._calibrations_zarr_path.mkdir()
@@ -1359,7 +1315,7 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        path : Union[Path, str]
+        path : Path or str
             Datastore location.
 
         Returns
@@ -1367,7 +1323,6 @@ class qi2labDataStore:
         kvstore_key : dict
             Tensorstore kvstore key.
         """
-
         path_str = str(path)
         if path_str.startswith("s3://") or "s3.amazonaws.com" in path_str:
             return {"driver": "s3", "path": path_str}
@@ -1388,9 +1343,8 @@ class qi2labDataStore:
         Returns
         -------
         tuple[Any, Any, Any]
-            Function result.
+            ``open_group``, ``v05``, and ``write_image`` objects from yaozarrs.
         """
-
         try:
             from yaozarrs import open_group, v05
             from yaozarrs.write.v05 import write_image
@@ -1409,14 +1363,13 @@ class qi2labDataStore:
         Parameters
         ----------
         kvstore : dict | Path | str
-            Function argument.
+            Local file kvstore, path, or path-like string.
 
         Returns
         -------
         Path
-            Function result.
+            Local filesystem path represented by the kvstore.
         """
-
         if isinstance(kvstore, (str, Path)):
             return Path(kvstore)
         if isinstance(kvstore, dict):
@@ -1445,28 +1398,27 @@ class qi2labDataStore:
         Parameters
         ----------
         path : Path
-            Function argument.
+            Destination zarr array path.
         shape : tuple[int, ...]
-            Function argument.
+            Array shape.
         dtype : Any
-            Function argument.
+            Array dtype.
         chunks : tuple[int, ...]
-            Function argument.
+            Chunk shape.
         shards : tuple[int, ...] | None
-            Function argument.
+            Optional shard shape.
         dimension_names : list[str] | None
-            Function argument.
+            Optional dimension names for metadata.
         overwrite : bool
-            Function argument.
+            Whether to replace an existing array.
         compression : str
-            Function argument.
+            Compression preset name.
 
         Returns
         -------
         Any
-            Function result.
+            Open tensorstore array handle.
         """
-
         import tensorstore as ts
 
         if compression == "blosc-zstd":
@@ -1545,18 +1497,17 @@ class qi2labDataStore:
         Parameters
         ----------
         values : Sequence[float] | None
-            Function argument.
+            Optional transform vector.
         ndim : int
-            Function argument.
+            Target array dimensionality.
         fill : float
-            Function argument.
+            Fill value for missing leading dimensions.
 
         Returns
         -------
         list[float]
-            Function result.
+            Transform vector with one value per array dimension.
         """
-
         if values is None:
             return [fill] * ndim
         cast = [float(v) for v in values]
@@ -1567,45 +1518,69 @@ class qi2labDataStore:
         return [fill] * ndim
 
     @staticmethod
-    def _default_chunks(array: np.ndarray) -> list[int]:
+    def _default_chunks(
+        array: np.ndarray,
+        spatial_chunk_zyx: tuple[int, int, int] = (16, 512, 512),
+    ) -> list[int]:
         """
         Create sane default chunk sizes based on dimensionality.
 
         Parameters
         ----------
         array : np.ndarray
-            Function argument.
+            Array that will be written.
+        spatial_chunk_zyx : tuple[int, int, int], default=(16, 512, 512)
+            Desired Z, Y, X storage chunks for local fiducial and readout images.
 
         Returns
         -------
         list[int]
-            Function result.
+            Chunk shape matched to the array dimensionality.
         """
-
+        z_chunk, y_chunk, x_chunk = (int(value) for value in spatial_chunk_zyx)
         if array.ndim == 2:
-            return [int(array.shape[0]), int(array.shape[1])]
+            return [
+                min(int(array.shape[0]), y_chunk),
+                min(int(array.shape[1]), x_chunk),
+            ]
         if array.ndim == 3:
-            return [1, int(array.shape[1]), int(array.shape[2])]
+            return [
+                min(int(array.shape[0]), z_chunk),
+                min(int(array.shape[1]), y_chunk),
+                min(int(array.shape[2]), x_chunk),
+            ]
         if array.ndim == 4:
-            return [1, 1, int(array.shape[2]), int(array.shape[3])]
+            return [
+                1,
+                min(int(array.shape[1]), z_chunk),
+                min(int(array.shape[2]), y_chunk),
+                min(int(array.shape[3]), x_chunk),
+            ]
+        if array.ndim == 5:
+            return [
+                1,
+                1,
+                min(int(array.shape[2]), z_chunk),
+                min(int(array.shape[3]), y_chunk),
+                min(int(array.shape[4]), x_chunk),
+            ]
         return list(array.shape)
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
         """
-        Create chunk sizes tailored for large fused images only.
+        Create chunk sizes tailored for fused image storage.
 
         Parameters
         ----------
         array : np.ndarray
-            Function argument.
+            Fused image array that will be written.
 
         Returns
         -------
         list[int]
-            Function result.
+            Chunk shape for fused image storage.
         """
-
         shape = [int(dim) for dim in array.shape]
         if array.ndim == 2:
             return [min(shape[0], 2048), min(shape[1], 2048)]
@@ -1626,7 +1601,7 @@ class qi2labDataStore:
                 min(shape[3], 512),
                 min(shape[4], 512),
             ]
-        return qi2labDataStore._default_chunks(array)
+        return list(array.shape)
 
     @staticmethod
     def _build_axes(v05: Any, ndim: int) -> list[Any]:
@@ -1636,16 +1611,15 @@ class qi2labDataStore:
         Parameters
         ----------
         v05 : Any
-            Function argument.
+            yaozarrs NGFF model namespace.
         ndim : int
-            Function argument.
+            Number of array dimensions.
 
         Returns
         -------
         list[Any]
-            Function result.
+            NGFF axis models ordered to match array dimensions.
         """
-
         axis_names = ["t", "c", "z", "y", "x"][-ndim:]
         axes: list[Any] = []
         for axis_name in axis_names:
@@ -1665,14 +1639,13 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
 
         Returns
         -------
         Path
-            Function result.
+            Entity metadata sidecar path.
         """
-
         return Path(entity_root_path) / Path("attributes.json")
 
     @staticmethod
@@ -1683,14 +1656,13 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Logical image path or OME-Zarr path.
 
         Returns
         -------
         Path
-            Function result.
+            Normalized path ending in ``.ome.zarr``.
         """
-
         path = Path(image_path)
         if path.name.endswith(".ome.zarr"):
             return path
@@ -1712,14 +1684,13 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Image store path.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Extra attributes stored on the image root.
         """
-
         image_root = qi2labDataStore._image_store_path(image_path)
         open_group, _, _ = qi2labDataStore._import_yaozarrs()
         attrs = dict(open_group(str(image_root)).attrs)
@@ -1752,7 +1723,6 @@ class qi2labDataStore:
             Attributes are written to ``zarr.json`` for Zarr v3 stores or to
             ``.zattrs`` for Zarr v2 stores.
         """
-
         image_root = qi2labDataStore._image_store_path(image_path)
         payload = {
             str(k): qi2labDataStore._to_json_compatible(v)
@@ -1795,14 +1765,13 @@ class qi2labDataStore:
         Parameters
         ----------
         value : Any
-            Function argument.
+            Value to convert before JSON serialization.
 
         Returns
         -------
         Any
-            Function result.
+            JSON-compatible representation.
         """
-
         if isinstance(value, np.ndarray):
             return value.tolist()
         if isinstance(value, np.generic):
@@ -1825,14 +1794,13 @@ class qi2labDataStore:
         Parameters
         ----------
         image_path : Path | str
-            Function argument.
+            Image store path.
 
         Returns
         -------
         tuple[int, ...] | None
-            Function result.
+            Image array shape, or ``None`` when the image is unavailable.
         """
-
         path = qi2labDataStore._image_store_path(image_path)
         if not path.exists():
             return None
@@ -1859,22 +1827,20 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         image_names : Sequence[str] | None
-            Function argument.
+            Optional image names whose extra attributes should be merged.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Merged entity metadata.
         """
-
         entity_root = Path(entity_root_path)
         merged: dict[str, Any] = {}
 
         default_images = (
             "corrected_data",
-            "registered_decon_data",
             "decon_data",
             f"{self.feature_predictor_folder_name}_data",
             "opticalflow_xform_px",
@@ -1907,20 +1873,19 @@ class qi2labDataStore:
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         updates : Mapping[str, Any]
-            Function argument.
+            Metadata updates to persist.
         target_image_name : str | None
-            Function argument.
+            Deprecated image target argument kept for API compatibility.
         image_names : Sequence[str] | None
-            Function argument.
+            Deprecated image-name argument kept for API compatibility.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
-
         if not updates:
             return
 
@@ -1949,18 +1914,17 @@ class qi2labDataStore:
         Parameters
         ----------
         dtype : str | None
-            Function argument.
+            Optional array dtype override.
         stage_zyx_um : Sequence[float] | None
-            Function argument.
+            Optional stage translation in Z, Y, X microns.
         extra_attributes : Mapping[str, Any] | None
-            Function argument.
+            Optional extra metadata to attach to the image.
 
         Returns
         -------
         dict[str, Any]
-            Function result.
+            Tensorstore write spec with OME metadata.
         """
-
         spec = self._zarrv2_spec.copy()
         spec["metadata"] = dict(self._zarrv2_spec.get("metadata", {}))
         if dtype is not None:
@@ -1998,7 +1962,6 @@ class qi2labDataStore:
         None
             The image metadata is updated in place when it already exists.
         """
-
         image_path = self._image_store_path(image_root)
         metadata_path = image_path / Path("zarr.json")
         if not metadata_path.exists():
@@ -2033,18 +1996,17 @@ class qi2labDataStore:
         Parameters
         ----------
         tile_id : str
-            Function argument.
+            Tile identifier.
         round_id : str | None
-            Function argument.
+            Optional fiducial round identifier.
         bit_id : str | None
-            Function argument.
+            Optional readout bit identifier.
 
         Returns
         -------
         list[float] | None
-            Function result.
+            Original stage position in Z, Y, X microns, if available.
         """
-
         if round_id is not None:
             fiducial_entity = self._fiducial_root_path / Path(tile_id) / Path(round_id)
             attrs = self._load_entity_attributes(fiducial_entity)
@@ -2078,7 +2040,7 @@ class qi2labDataStore:
         self, tile_id: str
     ) -> list[float] | None:
         """
-        Resolve the first-round reference stage position for registered outputs.
+        Resolve the first-round reference stage position for derived outputs.
 
         Parameters
         ----------
@@ -2090,7 +2052,6 @@ class qi2labDataStore:
         list[float] or None
             First fiducial round stage position in Z, Y, X microns.
         """
-
         if not getattr(self, "_round_ids", None):
             return None
         return self._resolve_original_tile_position_zyx_um(
@@ -2104,28 +2065,26 @@ class qi2labDataStore:
         image: ArrayLike,
     ) -> None:
         """
-        Enforce corrected/registered/feature-predictor image shape consistency.
+        Enforce corrected/deconvolved/feature image shape consistency.
 
         Parameters
         ----------
         entity_root_path : Path | str
-            Function argument.
+            Entity folder path.
         image_name : str
-            Function argument.
+            Logical image name being validated.
         image : ArrayLike
-            Function argument.
+            Image data to validate.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
-
         entity_root = Path(entity_root_path)
         shape = tuple(int(v) for v in np.asarray(image).shape)
         required_names = {
             "corrected_data",
-            "registered_decon_data",
             "decon_data",
             f"{self.feature_predictor_folder_name}_data",
         }
@@ -2139,7 +2098,7 @@ class qi2labDataStore:
                 raise ValueError(
                     f"Image shape mismatch in {entity_root.name}: "
                     f"{image_name}={shape} but {candidate_name}={candidate_shape}. "
-                    "corrected_data, decon/registered data, and "
+                    "corrected_data, optional decon_data, and "
                     "feature_predictor_data must match."
                 )
 
@@ -2149,7 +2108,7 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        dictionary_path : Union[Path, str]
+        dictionary_path : Path or str
             Path to json file.
 
         Returns
@@ -2157,7 +2116,6 @@ class qi2labDataStore:
         dictionary : dict
             Dictionary from json file.
         """
-
         try:
             with open(dictionary_path) as f:
                 dictionary = json.load(f)
@@ -2173,10 +2131,9 @@ class qi2labDataStore:
         ----------
         dictionary : dict
             The data to be saved.
-        dictionary_path : Union[Path,str]
+        dictionary_path : Path or str
             The path to the JSON file where the data will be saved.
         """
-
         with open(dictionary_path, "w") as file:
             json.dump(dictionary, file, indent=4)
 
@@ -2186,7 +2143,7 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        dictionary_path : Union[Path, str]
+        dictionary_path : Path or str
             Path to microjson file.
 
         Returns
@@ -2194,7 +2151,6 @@ class qi2labDataStore:
         outlines : dict
             Cell outlines dictionary.
         """
-
         try:
             with open(dictionary_path) as f:
                 data = json.load(f)
@@ -2219,12 +2175,11 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        kvstore : Union[Path, str]
+        kvstore : Path or str
             Datastore location.
         spec : dict
             Zarr specification.
         """
-
         del spec
         open_group, _, _ = qi2labDataStore._import_yaozarrs()
         image_path = qi2labDataStore._extract_local_path_from_kvstore(kvstore)
@@ -2237,7 +2192,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _load_from_zarr_array(
-        kvstore: dict, spec: dict, return_future: bool = True
+        kvstore: dict, spec: dict, return_future: bool | None = True
     ) -> ArrayLike:
         """Read image data via yaozarrs.
 
@@ -2249,15 +2204,15 @@ class qi2labDataStore:
             Tensorstore kvstore specification.
         spec : dict
             Tensorstore zarr specification.
-        return_future : bool
-            Return future (True) or immediately read (False).
+        return_future : bool or None
+            Return read future (True), immediately read (False), or return the
+            TensorStore array without issuing a read (None).
 
         Returns
         -------
         array : ArrayLike
-            Delayed (future) or immediate array.
+            Read future, immediate array, or TensorStore array.
         """
-
         del spec
         open_group, _, _ = qi2labDataStore._import_yaozarrs()
         image_path = qi2labDataStore._extract_local_path_from_kvstore(kvstore)
@@ -2265,6 +2220,8 @@ class qi2labDataStore:
         group = open_group(str(image_path))
         current_array = group["0"].to_tensorstore()
 
+        if return_future is None:
+            return current_array
         read_future = current_array.read()
         return read_future if return_future else read_future.result()
 
@@ -2287,15 +2244,14 @@ class qi2labDataStore:
             Tensorstore kvstore specification.
         spec : dict
             Tensorstore zarr specification.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future (True) or immediately write (False).
 
         Returns
         -------
-        write_future : Optional[ArrayLike]
+        write_future : ArrayLike or None
             Delayed (future) if return_future is True.
         """
-
         open_group, v05, write_image = qi2labDataStore._import_yaozarrs()
         image_path = qi2labDataStore._extract_local_path_from_kvstore(kvstore)
         image_path = qi2labDataStore._image_store_path(image_path)
@@ -2381,7 +2337,7 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        parquet_path : Union[Path, str]
+        parquet_path : Path or str
             Path to parquet file.
 
         Returns
@@ -2389,7 +2345,6 @@ class qi2labDataStore:
         df : pd.DataFrame
             Dataframe from parquet file.
         """
-
         return pd.read_parquet(parquet_path)
 
     @staticmethod
@@ -2400,10 +2355,9 @@ class qi2labDataStore:
         ----------
         df : pd.DataFrame
             Dataframe to save.
-        parquet_path : Union[Path, str]
+        parquet_path : Path or str
             Path to parquet file.
         """
-
         df.to_parquet(parquet_path, engine="fastparquet", index=False)
 
     @staticmethod
@@ -2414,10 +2368,9 @@ class qi2labDataStore:
         ----------
         df : pd.DataFrame
             Dataframe to save.
-        csv_gz_path : Union[Path, str]
+        csv_gz_path : Path or str
             Path to gzipped CSV file.
         """
-
         df.to_csv(csv_gz_path, index=False, compression="gzip")
 
     def _parse_datastore(self, validate: bool = True) -> None:
@@ -2427,14 +2380,13 @@ class qi2labDataStore:
         Parameters
         ----------
         validate : bool
-            Function argument.
+            Whether to validate existing zarr arrays while parsing.
 
         Returns
         -------
         None
-            Function result.
+            No return value.
         """
-
         # directory structure as defined by qi2lab spec
         self._datastore_state_json_path = self._datastore_path / Path(
             r"datastore_state.json"
@@ -2484,8 +2436,21 @@ class qi2labDataStore:
             for key in keys_to_check:
                 if key not in attributes.keys():
                     raise KeyError("Calibration attributes incomplete")
-                else:
-                    setattr(self, "_" + key, attributes[key])
+
+            self._num_rounds = attributes["num_rounds"]
+            self._num_tiles = attributes["num_tiles"]
+            self._channels_in_data = attributes["channels_in_data"]
+            self._tile_overlap = attributes["tile_overlap"]
+            self._binning = attributes["binning"]
+            self._e_per_ADU = attributes["e_per_ADU"]
+            self._na = attributes["na"]
+            self._ri = attributes["ri"]
+            self._exp_order = attributes["exp_order"]
+            self._codebook = attributes["codebook"]
+            self._num_bits = attributes["num_bits"]
+            self._microscope_type = attributes["microscope_type"]
+            self._camera_model = attributes["camera_model"]
+            self._voxel_size_zyx_um = attributes["voxel_size_zyx_um"]
 
             if getattr(self, "_exp_order", None) is not None:
                 self._experiment_order = self._coerce_experiment_order_dataframe(
@@ -2514,6 +2479,19 @@ class qi2labDataStore:
                     if psf_root_path.exists():
 
                         def psf_sort_key(path: Path) -> int:
+                            """
+                            Return the numeric PSF directory index.
+
+                            Parameters
+                            ----------
+                            path : Path
+                                PSF directory path.
+
+                            Returns
+                            -------
+                            int
+                                PSF directory index.
+                            """
                             return int(path.name[len("psf_") : len("psf_") + 3])
 
                         psf_dirs = sorted(
@@ -2649,7 +2627,7 @@ class qi2labDataStore:
                     print(tile_id, bit_id)
                     print("Corrected readout data missing.")
 
-        # check and validate local registered data
+        # check and validate local transform and preprocessing data
         if self._datastore_state["LocalRegistered"] and validate:
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
                 entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
@@ -2678,47 +2656,22 @@ class qi2labDataStore:
                         # print("Optical flow registration data missing.")
                         pass
 
-                current_local_zarr_path = str(
-                    entity_root / Path("registered_decon_data")
-                )
-                if round_id == self._round_ids[0]:
-                    try:
-                        self._check_for_zarr_array(
-                            self._get_kvstore_key(current_local_zarr_path),
-                            self._zarrv2_spec.copy(),
-                        )
-                    except (OSError, ZarrError):
-                        print(tile_id, round_id)
-                        print("Registered fiducial data missing.")
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(
-                    entity_root / Path("registered_decon_data")
-                )
+                decon_shape = self._image_shape(entity_root / Path("decon_data"))
                 if (
                     corrected_shape is not None
-                    and registered_shape is not None
-                    and corrected_shape != registered_shape
+                    and decon_shape is not None
+                    and corrected_shape != decon_shape
                 ):
                     raise ValueError(
-                        f"{tile_id} {round_id} corrected and registered shapes differ: "
-                        f"{corrected_shape} != {registered_shape}"
+                        f"{tile_id} {round_id} corrected and decon shapes differ: "
+                        f"{corrected_shape} != {decon_shape}"
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
                 entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
-                current_local_zarr_path = str(entity_root / Path("decon_data"))
-
-                try:
-                    self._check_for_zarr_array(
-                        self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec.copy(),
-                    )
-                except (OSError, ZarrError):
-                    print(tile_id, bit_id)
-                    print("Readout decon data missing.")
-
                 current_local_zarr_path = str(
                     entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
@@ -2734,19 +2687,19 @@ class qi2labDataStore:
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(entity_root / Path("decon_data"))
+                decon_shape = self._image_shape(entity_root / Path("decon_data"))
                 feature_shape = self._image_shape(
                     entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
                 shapes = [
                     shape
-                    for shape in (corrected_shape, registered_shape, feature_shape)
+                    for shape in (corrected_shape, decon_shape, feature_shape)
                     if shape is not None
                 ]
                 if len(shapes) > 1 and any(shape != shapes[0] for shape in shapes[1:]):
                     raise ValueError(
                         f"{tile_id} {bit_id} corrected/decon/feature image shapes differ: "
-                        f"{corrected_shape}, {registered_shape}, {feature_shape}"
+                        f"{corrected_shape}, {decon_shape}, {feature_shape}"
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
@@ -2856,7 +2809,6 @@ class qi2labDataStore:
         codebook_matrix : ArrayLike
             Codebook matrix.
         """
-
         try:
             data = getattr(self, "_codebook", None)
 
@@ -2882,10 +2834,9 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         """
-
         if getattr(self, "_experiment_order", None) is None:
             print("Assign experimental order before creating tiles.")
             return None
@@ -2970,17 +2921,16 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
 
         Returns
         -------
-        bit_linker : Optional[Sequence[int]]
+        bit_linker : Sequence[int] or None
             Readout bits linked to fiducial round for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
@@ -3039,12 +2989,11 @@ class qi2labDataStore:
         ----------
         bit_linker : Sequence[int]
             Readout bits linked to fiducial round for one tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
@@ -3099,17 +3048,16 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
 
         Returns
         -------
-        round_linker : Optional[Sequence[int]]
+        round_linker : Sequence[int] or None
             Fiducial round linked to readout bit for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -3168,12 +3116,11 @@ class qi2labDataStore:
         ----------
         round_linker : int
             Fiducial round linked to readout bit for one tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -3227,19 +3174,18 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
 
         Returns
         -------
-        stage_zyx_um : Optional[ArrayLike]
+        stage_zyx_um : ArrayLike or None
             Tile stage position for one tile.
-        affine_zyx_um: Optional[ArrayLike]
+        affine_zyx_um: ArrayLike or None
             Affine transformation between stage and camera
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
@@ -3304,12 +3250,11 @@ class qi2labDataStore:
             Tile stage position for one tile.
         affine_zyx_px: ArrayLike
             4x4 homogeneous affine matrix for stage transformation
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <" + str(self._num_tiles))
@@ -3373,19 +3318,18 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Optional[Union[int, str]]
+        round : int or str or None
             Round index or round id.
-        bit : Optional[Union[int, str]]
+        bit : int or str or None
             Bit index or bit id.
 
         Returns
         -------
-        wavelengths_um : Optional[tuple[float, float]]
+        wavelengths_um : tuple[float, float] or None
             Wavelengths for fiducial OR readout bit for one tile.
         """
-
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -3463,19 +3407,18 @@ class qi2labDataStore:
         ----------
         wavelengths_um : tuple[float, float]
             Wavelengths for fiducial OR readout bit for one tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Optional[Union[int, str]]
+        round : int or str or None
             Round index or round id.
-        bit : Optional[Union[int, str]]
+        bit : int or str or None
             Bit index or bit id.
 
         Returns
         -------
-        wavelengths_um : Optional[tuple[float, float]]
+        wavelengths_um : tuple[float, float] or None
             Wavelengths for fiducial OR readout bit for one tile.
         """
-
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -3555,21 +3498,20 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Optional[Union[int, str]]
+        round : int or str or None
             Round index or round id.
-        bit : Optional[Union[int, str]]
+        bit : int or str or None
             Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
 
         Returns
         -------
-        corrected_image : Optional[ArrayLike]
+        corrected_image : ArrayLike or None
             Gain and offset corrected image for fiducial OR readout bit for one tile.
         """
-
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -3671,7 +3613,7 @@ class qi2labDataStore:
         ----------
         image : ArrayLike
             Local corrected image.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         gain_correction : bool
             Gain correction applied (True) or not (False).
@@ -3681,14 +3623,13 @@ class qi2labDataStore:
             Shading correction applied (True) or not (False).
         psf_idx : int
             PSF index.
-        round : Optional[Union[int, str]]
+        round : int or str or None
             Round index or round id.
-        bit : Optional[Union[int, str]]
+        bit : int or str or None
             Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
         """
-
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
             return None
@@ -3795,17 +3736,16 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
 
         Returns
         -------
-        rigid_xform_xyz_px : Optional[ArrayLike]
+        rigid_xform_xyz_px : ArrayLike or None
             Local rigid registration transform for one round and tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -3861,17 +3801,16 @@ class qi2labDataStore:
         ----------
         rigid_xform_xyz_px : ArrayLike
             Local rigid registration transform for one round and tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
 
         Returns
         -------
-        rigid_xform_xyz_px : Optional[ArrayLike]
+        rigid_xform_xyz_px : ArrayLike or None
             Local rigid registration transform for one round and tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -3912,7 +3851,7 @@ class qi2labDataStore:
                         rigid_xform_xyz_px, dtype=np.float32
                     ).tolist()
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
             print("Error writing rigid transform attribute.")
@@ -3941,7 +3880,6 @@ class qi2labDataStore:
             the requested moving round. Returns None when the transform is not
             present.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4006,7 +3944,6 @@ class qi2labDataStore:
             The transform is stored in the entity attributes for the requested
             fiducial tile and round.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4043,7 +3980,7 @@ class qi2labDataStore:
                         transform_zyx_um, dtype=np.float32
                     ).tolist()
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
             print("Error writing local round transform attribute.")
@@ -4059,21 +3996,20 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Optional[Union[int, str]]
+        tile : int or str or None
             Tile index or tile id.
-        round : Optional[Union[int, str]]
+        round : int or str or None
             Round index or round id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
 
         Returns
         -------
-        of_xform_px : Optional[ArrayLike]
+        of_xform_px : ArrayLike or None
             Local fiducial optical flow matrix for one round and tile.
-        downsampling : Optional[ArrayLike]
+        downsampling : ArrayLike or None
             Downsampling factor.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4148,18 +4084,17 @@ class qi2labDataStore:
         ----------
         of_xform_px : ArrayLike
             Local fiducial optical flow matrix for one round and tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         block_size : Sequence[float]
             Block size for pixel warp
         block_stride: Sequence[float]
             Block stride for pixel warp
-        round : Union[int, str]
+        round : int or str
             Round index or round id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4250,7 +4185,6 @@ class qi2labDataStore:
             sample. For fields produced by SOFIMA this is the patch center
             coordinate, not the image corner.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4367,7 +4301,6 @@ class qi2labDataStore:
         None
             The flow field and attributes are written to the datastore.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4460,241 +4393,405 @@ class qi2labDataStore:
             print("Error saving SOFIMA flow field.")
             return None
 
-    def load_local_registered_image(
+    def load_local_deconvolved_fiducial_image(
         self,
         tile: int | str,
-        round: int | str | None = None,
-        bit: int | str | None = None,
+        round: int | str,
         return_future: bool | None = True,
     ) -> ArrayLike | None:
-        """Load a fiducial registered image or an unwarped readout image.
+        """Load a native-frame deconvolved fiducial image.
 
-        Fiducial rounds are loaded from ``registered_decon_data`` after local
-        registration. Readout bits are loaded from ``decon_data`` in their
-        native, unwarped tile frame; pixel decoding applies fiducial, SOFIMA,
-        and chromatic transforms at load time.
+        Deconvolved fiducials are loaded from ``decon_data`` in their native,
+        unwarped tile frame. This image exists only when fiducial deconvolution
+        was run during preprocessing.
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        round : Optional[Union[int, str]]
+        round : int or str
             Round index or round id.
-        bit : Optional[Union[int, str]]
-            Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
 
         Returns
         -------
         ArrayLike or None
-            Fiducial registered image or unwarped readout image.
+            Native-frame deconvolved fiducial image.
         """
-
-        if (round is None and bit is None) or (round is not None and bit is not None):
-            print("Provide either 'round' or 'bit', but not both")
-            return None
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
-            else:
-                tile_id = self._tile_ids[tile]
+            tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
-            else:
-                tile_id = tile
+            tile_id = tile
         else:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if bit is not None:
-            if isinstance(bit, int):
-                if bit < 0 or bit > len(self._bit_ids):
-                    print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
-                    return None
-                else:
-                    local_id = self._bit_ids[bit]
-            elif isinstance(bit, str):
-                if bit not in self._bit_ids:
-                    print("Set valid bit id")
-                    return None
-                else:
-                    local_id = bit
-            else:
-                print("'bit' must be integer index or string identifier")
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
-            current_local_zarr_path = str(
-                self._readouts_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("decon_data")
-            )
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
         else:
-            if isinstance(round, int):
-                if round < 0:
-                    print("Set round index >=0 and <" + str(self._num_rounds))
-                    return None
-                else:
-                    local_id = self._round_ids[round]
-            elif isinstance(round, str):
-                if round not in self._round_ids:
-                    print("Set valid round id")
-                    return None
-                else:
-                    local_id = round
-            else:
-                print("'round' must be integer index or string identifier")
-                return None
-            current_local_zarr_path = str(
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("registered_decon_data")
-            )
+            print("'round' must be integer index or string identifier")
+            return None
 
-        image_path = self._image_store_path(current_local_zarr_path)
+        decon_path = self._fiducial_root_path / tile_id / round_id / Path("decon_data")
+        image_path = self._image_store_path(decon_path)
         if not image_path.exists():
-            # print("Registered deconvolved image not found.")
             return None
 
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<u2"
-            image = self._load_from_zarr_array(
+            return self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return image
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error loading local deconvolved image.")
+            print("Error loading local deconvolved fiducial image.")
             return None
 
-    def save_local_registered_image(
+    def load_local_fiducial_image(
         self,
-        registered_image: ArrayLike,
         tile: int | str,
-        deconvolution: bool = True,
-        round: int | str | None = None,
-        bit: int | str | None = None,
-        return_future: bool | None = False,
-    ) -> None:
-        """Save a fiducial registered image or an unwarped readout image.
+        round: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load the best available native-frame fiducial image.
 
-        Fiducial rounds are saved under ``registered_decon_data`` after local
-        registration. Readout bits are saved under ``decon_data`` in their
-        native, unwarped tile frame.
+        Deconvolved fiducial data are returned when ``decon_data`` exists;
+        otherwise corrected fiducial data are returned.
 
         Parameters
         ----------
-        registered_image : ArrayLike
-            Image to save.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        deconvolution : bool
-            Deconvolution applied (True) or not (False).
-        round : Optional[Union[int, str]]
+        round : int or str
             Round index or round id.
-        bit : Optional[Union[int, str]]
-            Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Deconvolved fiducial image if available, otherwise corrected image.
         """
+        image = self.load_local_deconvolved_fiducial_image(
+            tile=tile,
+            round=round,
+            return_future=return_future,
+        )
+        if image is not None:
+            return image
+        return self.load_local_corrected_image(
+            tile=tile,
+            round=round,
+            return_future=return_future,
+        )
 
-        if (round is None and bit is None) or (round is not None and bit is not None):
-            print("Provide either 'round' or 'bit', but not both")
-            return None
+    def save_local_deconvolved_fiducial_image(
+        self,
+        image: ArrayLike,
+        tile: int | str,
+        round: int | str,
+        return_future: bool | None = False,
+    ) -> None:
+        """Save a native-frame deconvolved fiducial image.
 
+        Deconvolved fiducials are saved under ``decon_data`` in their native,
+        unwarped tile frame.
+
+        Parameters
+        ----------
+        image : ArrayLike
+            Image to save.
+        tile : int or str
+            Tile index or tile id.
+        round : int or str
+            Round index or round id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
-            else:
-                tile_id = self._tile_ids[tile]
+            tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
-            else:
-                tile_id = tile
+            tile_id = tile
         else:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if bit is not None:
-            if isinstance(bit, int):
-                if bit < 0 or bit > len(self._bit_ids):
-                    print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
-                    return None
-                else:
-                    local_id = self._bit_ids[bit]
-            elif isinstance(bit, str):
-                if bit not in self._bit_ids:
-                    print("Set valid bit id")
-                    return None
-                else:
-                    local_id = bit
-            else:
-                print("'bit' must be integer index or string identifier")
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("decon_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
         else:
-            if isinstance(round, int):
-                if round < 0:
-                    print("Set round index >=0 and <" + str(self._num_rounds))
-                    return None
-                else:
-                    local_id = self._round_ids[round]
-            elif isinstance(round, str):
-                if round not in self._round_ids:
-                    print("Set valid round id")
-                    return None
-                else:
-                    local_id = round
-            else:
-                print("'round' must be integer index or string identifier")
-                return None
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+            print("'round' must be integer index or string identifier")
+            return None
+
+        entity_root = self._fiducial_root_path / tile_id / round_id
+        decon_path = entity_root / Path("decon_data")
+        stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
 
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name="decon_data" if bit is not None else "registered_decon_data",
-                image=registered_image,
+                image_name="decon_data",
+                image=image,
             )
             attributes = self._load_entity_attributes(entity_root)
-            attributes["deconvolution"] = bool(deconvolution)
+            attributes["deconvolution"] = True
             spec = self._build_image_write_spec(
                 dtype="<u2",
                 stage_zyx_um=stage_position,
                 extra_attributes=attributes,
             )
             self._save_to_zarr_array(
-                registered_image,
-                self._get_kvstore_key(current_local_zarr_path),
+                image,
+                self._get_kvstore_key(decon_path),
                 spec,
                 return_future,
             )
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name=(
-                    "decon_data" if bit is not None else "registered_decon_data"
-                ),
+                target_image_name="decon_data",
             )
         except (OSError, TimeoutError, ValueError):
-            print("Error saving corrected image.")
+            print("Error saving local deconvolved fiducial image.")
+            return None
+
+    def load_local_deconvolved_readout_image(
+        self,
+        tile: int | str,
+        bit: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load a native-frame deconvolved readout bit image.
+
+        Deconvolved readout bits are loaded from ``decon_data`` in their
+        native, unwarped tile frame. This image exists only when readout
+        deconvolution was run during preprocessing.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile id.
+        bit : int or str
+            Bit index or bit id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Native-frame deconvolved readout image.
+        """
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(bit, int):
+            if bit < 0 or bit > len(self._bit_ids):
+                print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
+                return None
+            bit_id = self._bit_ids[bit]
+        elif isinstance(bit, str):
+            if bit not in self._bit_ids:
+                print("Set valid bit id")
+                return None
+            bit_id = bit
+        else:
+            print("'bit' must be integer index or string identifier")
+            return None
+
+        readout_path = (
+            self._readouts_root_path / Path(tile_id) / Path(bit_id) / Path("decon_data")
+        )
+        image_path = self._image_store_path(readout_path)
+        if not image_path.exists():
+            return None
+
+        try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<u2"
+            return self._load_from_zarr_array(
+                self._get_kvstore_key(image_path),
+                spec,
+                return_future,
+            )
+        except (OSError, ZarrError) as e:
+            print(e)
+            print("Error loading local deconvolved readout image.")
+            return None
+
+    def load_local_readout_image(
+        self,
+        tile: int | str,
+        bit: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load the best available native-frame readout bit image.
+
+        Deconvolved readout data are returned when ``decon_data`` exists;
+        otherwise corrected readout data are returned.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile id.
+        bit : int or str
+            Bit index or bit id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Deconvolved readout image if available, otherwise corrected image.
+        """
+        image = self.load_local_deconvolved_readout_image(
+            tile=tile,
+            bit=bit,
+            return_future=return_future,
+        )
+        if image is not None:
+            return image
+        return self.load_local_corrected_image(
+            tile=tile,
+            bit=bit,
+            return_future=return_future,
+        )
+
+    def save_local_deconvolved_readout_image(
+        self,
+        image: ArrayLike,
+        tile: int | str,
+        bit: int | str,
+        return_future: bool | None = False,
+    ) -> None:
+        """Save a native-frame deconvolved readout bit image.
+
+        Deconvolved readout bits are saved under ``decon_data`` in their
+        native, unwarped tile frame.
+
+        Parameters
+        ----------
+        image : ArrayLike
+            Image to save.
+        tile : int or str
+            Tile index or tile id.
+        bit : int or str
+            Bit index or bit id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(bit, int):
+            if bit < 0 or bit > len(self._bit_ids):
+                print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
+                return None
+            bit_id = self._bit_ids[bit]
+        elif isinstance(bit, str):
+            if bit not in self._bit_ids:
+                print("Set valid bit id")
+                return None
+            bit_id = bit
+        else:
+            print("'bit' must be integer index or string identifier")
+            return None
+
+        entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
+        readout_path = entity_root / Path("decon_data")
+        stage_position = self._resolve_original_tile_position_zyx_um(
+            tile_id=tile_id,
+            bit_id=bit_id,
+        )
+
+        try:
+            self._validate_core_image_shape(
+                entity_root_path=entity_root,
+                image_name="decon_data",
+                image=image,
+            )
+            attributes = self._load_entity_attributes(entity_root)
+            attributes["deconvolution"] = True
+            spec = self._build_image_write_spec(
+                dtype="<u2",
+                stage_zyx_um=stage_position,
+                extra_attributes=attributes,
+            )
+            self._save_to_zarr_array(
+                image,
+                self._get_kvstore_key(readout_path),
+                spec,
+                return_future,
+            )
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates=attributes,
+                target_image_name="decon_data",
+            )
+        except (OSError, TimeoutError, ValueError):
+            print("Error saving local deconvolved readout image.")
             return None
 
     def load_local_feature_predictor_image(
@@ -4707,19 +4804,18 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             return a future (true) or array (false)
 
         Returns
         -------
-        feature_predictor_image : Optional[ArrayLike]
+        feature_predictor_image : ArrayLike or None
             feature_predictor prediction image for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4791,14 +4887,13 @@ class qi2labDataStore:
         ----------
         feature_predictor_image : ArrayLike
             feature_predictor prediction image.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4876,17 +4971,16 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
 
         Returns
         -------
-        feature_predictor_localizations : Optional[pd.DataFrame]
+        feature_predictor_localizations : pandas.DataFrame or None
             feature_predictor localizations and features for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -4946,12 +5040,11 @@ class qi2labDataStore:
         ----------
         spot_df : pd.DataFrame
             feature_predictor localizations and features.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
-        bit : Union[int, str]
+        bit : int or str
             Bit index or bit id.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -5010,19 +5103,18 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
 
         Returns
         -------
-        affine_zyx_um : Optional[ArrayLike]
+        affine_zyx_um : ArrayLike or None
             Global affine registration transform for one tile.
-        origin_zyx_um : Optional[ArrayLike]
+        origin_zyx_um : ArrayLike or None
             Global origin registration transform for one tile.
-        spacing_zyx_um : Optional[ArrayLike]
+        spacing_zyx_um : ArrayLike or None
             Global spacing registration transform for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -5070,7 +5162,7 @@ class qi2labDataStore:
             Global origin registration transform for one tile.
         spacing_zyx_um : ArrayLike
             Global spacing registration transform for one tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         """
         if isinstance(tile, int):
@@ -5106,7 +5198,7 @@ class qi2labDataStore:
                         spacing_zyx_um, dtype=np.float32
                     ).tolist(),
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError) as e:
             print(e)
@@ -5120,21 +5212,21 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        return_future : Optional[bool]
-            Return future array.
+        return_future : bool or None
+            Return read future (True), immediately read the array (False), or
+            return sliceable TensorStore array without reading (None).
 
         Returns
         -------
-        fused_image : Optional[ArrayLike]
+        fused_image : ArrayLike or None
             Downsampled, fused fiducial image.
-        affine_zyx_um : Optional[ArrayLike]
+        affine_zyx_um : ArrayLike or None
             Global affine registration transform for fused image.
-        origin_zyx_um : Optional[ArrayLike]
+        origin_zyx_um : ArrayLike or None
             Global origin registration transform for fused image.
-        spacing_zyx_um : Optional[ArrayLike]
+        spacing_zyx_um : ArrayLike or None
             Global spacing registration transform for fused image.
         """
-
         current_local_zarr_path = self._fused_root_path / Path(
             f"fused_{self.fiducial_folder_name}_zyx"
         )
@@ -5182,10 +5274,9 @@ class qi2labDataStore:
             Global spacing registration transform for fused image.
         fusion_type : str
             Type of fusion (fiducial or all_channels).
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
         """
-
         if fusion_type == "fiducial":
             filename = f"fused_{self.fiducial_folder_name}_zyx"
         else:
@@ -5223,17 +5314,16 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         decode_run_key : str or None, default None
             Optional decoded-output run key.
 
         Returns
         -------
-        tile_features : Optional[pd.DataFrame]
+        tile_features : pandas.DataFrame or None
             Decoded spots and features for one tile.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -5273,12 +5363,11 @@ class qi2labDataStore:
         ----------
         features_df : pd.DataFrame
             Decoded spots and features for one tile.
-        tile : Union[int, str]
+        tile : int or str
             Tile index or tile id.
         decode_run_key : str or None, default None
             Optional decoded-output run key.
         """
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
@@ -5306,6 +5395,8 @@ class qi2labDataStore:
     def load_global_filtered_decoded_spots(
         self,
         decode_run_key: str | None = None,
+        gene_ids: Collection[str] | None = None,
+        columns: Collection[str] | None = None,
     ) -> pd.DataFrame | None:
         """Load all decoded and filtered spots.
 
@@ -5313,13 +5404,16 @@ class qi2labDataStore:
         ----------
         decode_run_key : str or None, default None
             Optional decoded-output run key.
+        gene_ids : Collection[str] or None, default None
+            Optional gene ids to load.
+        columns : Collection[str] or None, default None
+            Optional columns to load.
 
         Returns
         -------
-        all_tiles_filtered : Optional[pd.DataFrame]
+        all_tiles_filtered : pandas.DataFrame or None
             All decoded and filtered spots.
         """
-
         current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
             decode_run_key
         )
@@ -5330,6 +5424,23 @@ class qi2labDataStore:
         if not current_global_filtered_decoded_path.exists():
             print("Global, filtered, decoded spots not found.")
             return None
+        elif gene_ids is not None or columns is not None:
+            selected_gene_ids = (
+                [str(gene_id) for gene_id in gene_ids] if gene_ids is not None else []
+            )
+            filters = (
+                [("gene_id", "in", selected_gene_ids)] if gene_ids is not None else None
+            )
+            all_tiles_filtered = pd.read_parquet(
+                current_global_filtered_decoded_path,
+                columns=None if columns is None else list(columns),
+                filters=filters,
+            )
+            if gene_ids is not None and "gene_id" in all_tiles_filtered.columns:
+                all_tiles_filtered = all_tiles_filtered[
+                    all_tiles_filtered["gene_id"].astype(str).isin(selected_gene_ids)
+                ]
+            return all_tiles_filtered
         else:
             all_tiles_filtered = self._load_from_parquet(
                 current_global_filtered_decoded_path
@@ -5350,7 +5461,6 @@ class qi2labDataStore:
         decode_run_key : str or None, default None
             Optional decoded-output run key.
         """
-
         current_global_filtered_decoded_dir_path = self._global_filtered_decoded_root(
             decode_run_key
         )
@@ -5377,10 +5487,9 @@ class qi2labDataStore:
 
         Returns
         -------
-        cellpose_outlines : Optional[dict]
+        cellpose_outlines : dict or None
             Cellpose cell mask outlines.
         """
-
         current_cellpose_outlines_path = (
             self._segmentation_root_path / Path("cellpose") / Path("cell_outlines.json")
         )
@@ -5394,6 +5503,235 @@ class qi2labDataStore:
             )
             return cellpose_outlines
 
+    def load_global_cellpose_roi_zip(
+        self,
+    ) -> dict[int, ArrayLike] | None:
+        """Load global Cellpose outlines from an ImageJ ROI zip.
+
+        Returns
+        -------
+        cellpose_outlines : dict[int, ArrayLike] or None
+            Cellpose ROI outlines with global X, Y coordinates.
+        """
+        roi_path = (
+            self._segmentation_root_path
+            / Path("cellpose")
+            / Path("imagej_rois")
+            / Path("global_coords_rois.zip")
+        )
+        if not roi_path.exists():
+            print("Cellpose global ROI zip not found.")
+            return None
+
+        try:
+            from roifile import roiread
+        except ImportError:
+            print("roifile is required to load Cellpose ROI zip.")
+            return None
+
+        outlines: dict[int, ArrayLike] = {}
+        try:
+            for idx, roi in enumerate(roiread(roi_path)):
+                coordinates = getattr(roi, "subpixel_coordinates", None)
+                if coordinates is None:
+                    coordinates = roi.coordinates()
+                if coordinates is not None:
+                    outlines[idx + 1] = np.asarray(coordinates, dtype=float)
+            return outlines
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Cellpose ROI zip.")
+            return None
+
+    def _proseg_3d_root(self) -> Path:
+        """
+        Return the root path for Proseg 3D outputs.
+
+        Returns
+        -------
+        Path
+            Proseg 3D output root.
+        """
+        return self._datastore_path / Path("proseg") / Path("3D")
+
+    def _proseg_3d_run_root(self, run_name: str | None = None) -> Path:
+        """
+        Return one Proseg 3D run root path.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        Path
+            Proseg run root path.
+        """
+        proseg_root = self._proseg_3d_root()
+        if run_name is None or run_name == "default":
+            return proseg_root
+        return proseg_root / Path(run_name)
+
+    def list_proseg_3d_runs(self) -> list[str]:
+        """List available Proseg 3D output runs.
+
+        Returns
+        -------
+        proseg_runs : list[str]
+            Available Proseg 3D run names. The direct ``proseg/3D`` output is
+            named ``"default"``.
+        """
+        proseg_root = self._proseg_3d_root()
+        if not proseg_root.exists():
+            return []
+
+        run_names: list[str] = []
+        candidate_roots = [proseg_root]
+        candidate_roots.extend(
+            path for path in sorted(proseg_root.iterdir()) if path.is_dir()
+        )
+        for root in candidate_roots:
+            transcript_path = root / Path("transcript_metadata_3D.csv.gz")
+            polygon_path = root / Path("cell_polygons_3D.geojson.gz")
+            if transcript_path.exists() and polygon_path.exists():
+                run_names.append("default" if root == proseg_root else root.name)
+        return sorted(run_names)
+
+    def load_proseg_transcripts_3d(
+        self,
+        run_name: str | None = None,
+    ) -> pd.DataFrame | None:
+        """Load Proseg 3D transcript metadata.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        transcripts : pandas.DataFrame or None
+            Proseg transcript metadata.
+        """
+        transcript_path = self._proseg_3d_run_root(run_name) / Path(
+            "transcript_metadata_3D.csv.gz"
+        )
+        if not transcript_path.exists():
+            print("Proseg transcript metadata not found.")
+            return None
+        try:
+            return pd.read_csv(transcript_path, compression="gzip")
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Proseg transcript metadata.")
+            return None
+
+    def load_proseg_cell_polygons_3d(
+        self,
+        run_name: str | None = None,
+    ) -> dict[Any, ArrayLike] | None:
+        """Load Proseg 3D refined cell polygons.
+
+        Parameters
+        ----------
+        run_name : str or None, default None
+            Proseg run name. ``None`` or ``"default"`` selects ``proseg/3D``.
+
+        Returns
+        -------
+        polygons : dict[Any, ArrayLike] or None
+            Cell identifiers mapped to polygon vertices in X, Y order.
+        """
+        polygon_path = self._proseg_3d_run_root(run_name) / Path(
+            "cell_polygons_3D.geojson.gz"
+        )
+        if not polygon_path.exists():
+            print("Proseg cell polygons not found.")
+            return None
+
+        try:
+            with gzip.open(polygon_path, "rt", encoding="utf-8") as file:
+                geojson = json.load(file)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(exc)
+            print("Error loading Proseg cell polygons.")
+            return None
+
+        polygons: dict[Any, ArrayLike] = {}
+        for idx, feature in enumerate(geojson.get("features", [])):
+            properties = feature.get("properties", {})
+            cell_id = properties.get("cell", idx)
+            geometry = feature.get("geometry", {})
+            coordinates = geometry.get("coordinates", [])
+            rings: list[np.ndarray] = []
+            if geometry.get("type") == "Polygon":
+                rings.extend(np.asarray(ring, dtype=float) for ring in coordinates)
+            elif geometry.get("type") == "MultiPolygon":
+                for polygon in coordinates:
+                    rings.extend(np.asarray(ring, dtype=float) for ring in polygon)
+            if rings:
+                polygons[cell_id] = max(rings, key=len)
+
+        return polygons
+
+    def baysor_3d_available(self) -> bool:
+        """Return whether Baysor 3D molecules and cell boundaries are present."""
+        baysor_root = self._segmentation_root_path / Path("baysor") / Path("3D")
+        return (baysor_root / Path("molecules.parquet")).exists() and (
+            baysor_root / Path("cell_boundaries_3d.parquet")
+        ).exists()
+
+    def load_baysor_molecules_3d(self) -> pd.DataFrame | None:
+        """
+        Load Baysor 3D molecule assignments.
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            Baysor molecule table, if present.
+        """
+        molecules_path = (
+            self._segmentation_root_path
+            / Path("baysor")
+            / Path("3D")
+            / Path("molecules.parquet")
+        )
+        if not molecules_path.exists():
+            print("Baysor molecules not found.")
+            return None
+        try:
+            return self._load_from_parquet(molecules_path)
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Baysor molecules.")
+            return None
+
+    def load_baysor_cell_boundaries_3d(self) -> pd.DataFrame | None:
+        """
+        Load Baysor 3D cell boundary polygons.
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            Baysor cell boundary table, if present.
+        """
+        boundaries_path = (
+            self._segmentation_root_path
+            / Path("baysor")
+            / Path("3D")
+            / Path("cell_boundaries_3d.parquet")
+        )
+        if not boundaries_path.exists():
+            print("Baysor cell boundaries not found.")
+            return None
+        try:
+            return self._load_from_parquet(boundaries_path)
+        except (OSError, ValueError) as exc:
+            print(exc)
+            print("Error loading Baysor cell boundaries.")
+            return None
+
     def load_global_cellpose_segmentation_image(
         self,
         return_future: bool | None = True,
@@ -5402,15 +5740,15 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        return_future : Optional[bool]
-            Return future array.
+        return_future : bool or None
+            Return read future (True), immediately read the array (False), or
+            return sliceable TensorStore array without reading (None).
 
         Returns
         -------
-        fused_image : Optional[ArrayLike]
+        fused_image : ArrayLike or None
             Cellpose max projection, downsampled segmentation image.
         """
-
         current_local_zarr_path = (
             self._segmentation_root_path
             / Path("cellpose")
@@ -5447,10 +5785,9 @@ class qi2labDataStore:
             Cellpose max projection, downsampled segmentation image.
         downsampling : Sequence[float]
             Downsample factors.
-        return_future : Optional[bool]
+        return_future : bool or None
             Return future array.
         """
-
         current_local_zarr_path = (
             self._segmentation_root_path
             / Path("cellpose")

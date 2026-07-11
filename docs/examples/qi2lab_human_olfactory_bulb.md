@@ -60,6 +60,10 @@ uv run qi2lab-datastore /path/to/data --hot-pixel-image-path hot_pixel_flir.tiff
 uv run qi2lab-preprocess /path/to/data --num-gpus 2
 ```
 
+This command keeps registration-specific tuning at the API level and uses the
+package defaults for local affine registration, SOFIMA residual estimation,
+readout feature prediction, and direct-to-Zarr global fiducial fusion.
+
 To rerun only global registration and fused fiducial OME-Zarr creation on an
 existing datastore:
 
@@ -91,3 +95,15 @@ normalization, enable it explicitly:
 ```bash
 uv run qi2lab-decode /path/to/data --num-gpus 2 --merfish-bits 16 --estimate-chromatic-affines
 ```
+
+### Datastore viewing
+
+Open the read-only viewer with:
+
+```bash
+uv run viewer /path/to/data
+```
+
+Use local native mode to inspect stored tile images, local warped mode to test
+chromatic, affine, and SOFIMA transform overlays, and global fused mode to view
+the fused Zarr with datastore, Proseg, Baysor, or Cellpose overlays when present.

@@ -22,25 +22,24 @@ def view(path: Path | None = VIEW_PATH_ARGUMENT) -> None:
     Parameters
     ----------
     path : Path | None
-        Function argument.
+        path for this viewer operation.
 
     Returns
     -------
     None
-        Function result.
+        Computed viewer result.
     """
-
     Qi2labViewer(path).run()
 
 
 def main() -> None:
     """
-    Main.
+    Run the viewer CLI.
 
     Returns
     -------
     None
-        Function result.
+        Computed viewer result.
     """
     app()
 

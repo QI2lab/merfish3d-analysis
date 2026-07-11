@@ -63,7 +63,6 @@ def run_cellpose(
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
     """
-
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
@@ -308,7 +307,25 @@ def warp_points(
     origin: np.ndarray,
     affine: np.ndarray,
 ) -> np.ndarray:
-    """Warp points from pixel space to global space using known transforms."""
+    """
+    Warp points from pixel space to global space using known transforms.
+
+    Parameters
+    ----------
+    pixel_space_points : numpy.ndarray
+        Points in pixel Z, Y, X coordinates.
+    spacing : numpy.ndarray
+        Pixel spacing in microns.
+    origin : numpy.ndarray
+        Physical origin in microns.
+    affine : numpy.ndarray
+        Homogeneous affine transform.
+
+    Returns
+    -------
+    numpy.ndarray
+        Warped physical Z, Y, X coordinates.
+    """
     physical_space_points = pixel_space_points * spacing + origin
     homogeneous_points = np.column_stack(
         (

@@ -14,8 +14,9 @@ Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
-import builtins
 import gc
+import io
+from contextlib import redirect_stdout
 from itertools import compress
 from pathlib import Path
 from typing import Any
@@ -32,7 +33,6 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import (
     estimate_shading,
-    no_op,
     replace_hot_pixels,
 )
 
@@ -78,12 +78,8 @@ def _load_dataset_silently(dataset_path: Path) -> Any:
     """Load an NDTiff dataset while suppressing ndstorage console output."""
     from ndstorage import Dataset
 
-    original_print = builtins.print
-    builtins.print = no_op
-    try:
+    with redirect_stdout(io.StringIO()):
         return Dataset(str(dataset_path))
-    finally:
-        builtins.print = original_print
 
 
 def _first_stack_path(
@@ -241,7 +237,6 @@ def convert_data(
     max_flatfield_images : int, default=100
         Maximum number of tiles used to estimate flatfield illuminations.
     """
-
     # load illuminations if requested
     # -----------------------------------
     illuminations = None

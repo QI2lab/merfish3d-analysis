@@ -11,9 +11,9 @@ History:
                and chunked GPU deconvolution.
 """
 
-import builtins
 import gc
-from typing import Any
+import io
+from contextlib import redirect_stdout
 
 import numpy as np
 from numba import njit, prange
@@ -39,7 +39,6 @@ def replace_hot_pixels(
     data: ArrayLike
         hotpixel corrected data
     """
-
     # GPU
     import cupy as cp  # type: ignore
     from cupyx.scipy import ndimage  # type: ignore
@@ -83,7 +82,6 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     shading_image: ArrayLike
         estimated shading image
     """
-
     # GPU
 
     import cupy as cp  # type: ignore
@@ -99,12 +97,10 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    original_print = builtins.print
-    builtins.print = no_op
     basic = BaSiC(get_darkfield=False)
-    basic.autotune(maxz_images[:])
-    basic.fit(maxz_images[:])
-    builtins.print = original_print
+    with redirect_stdout(io.StringIO()):
+        basic.autotune(maxz_images[:])
+        basic.fit(maxz_images[:])
     shading_correction = basic.flatfield.astype(np.float32) / np.max(
         basic.flatfield.astype(np.float32), axis=(0, 1)
     )
@@ -122,7 +118,7 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
 def downsample_image_anisotropic(
     image: ArrayLike, level: tuple[int, int, int] = (2, 6, 6)
 ) -> ArrayLike:
-    """Numba accelerated anisotropic downsampling
+    """Numba accelerated anisotropic downsampling.
 
     Parameters
     ----------
@@ -136,7 +132,6 @@ def downsample_image_anisotropic(
     downsampled_image: ArrayLike
         downsampled 3D image
     """
-
     downsampled_image = downsample_axis(
         downsample_axis(downsample_axis(image, level[0], 0), level[1], 1), level[2], 2
     )
@@ -221,17 +216,3 @@ def downsample_axis(image: ArrayLike, level: int = 2, axis: int = 0) -> ArrayLik
                         downsampled_image[z, y, x] = sum_value / count
 
     return downsampled_image
-
-
-def no_op(*args: Any, **kwargs: Any) -> None:
-    """Function to monkey patch print to suppress output.
-
-    Parameters
-    ----------
-    args: Any
-        positional arguments
-    kwargs: Any
-        keyword arguments
-    """
-
-    pass

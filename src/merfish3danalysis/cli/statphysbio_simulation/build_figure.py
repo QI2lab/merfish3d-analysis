@@ -1,3 +1,5 @@
+"""Build simulation benchmark figures."""
+
 from pathlib import Path
 
 import napari
@@ -21,7 +23,27 @@ def calculate_F1_with_radius(
 ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray]:
     """
     Greedy closest-first matching within `radius`, with strict same-gene and one-to-one constraints.
+
     Returns F1 metrics and (TP coords, FP coords, FN coords).
+
+    Parameters
+    ----------
+    qi2lab_coords : ArrayLike
+        Decoded transcript coordinates.
+    qi2lab_gene_ids : ArrayLike
+        Decoded transcript gene identifiers.
+    gt_coords : ArrayLike
+        Ground-truth transcript coordinates.
+    gt_gene_ids : ArrayLike
+        Ground-truth gene identifiers.
+    radius : float
+        Maximum match distance.
+
+    Returns
+    -------
+    tuple[dict, numpy.ndarray, numpy.ndarray, numpy.ndarray]
+        Metrics, true-positive coordinates, false-positive coordinates, and
+        false-negative coordinates.
     """
     # Canonicalize inputs
     qi2lab_coords = np.asarray(qi2lab_coords, float)
@@ -187,7 +209,6 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
     sim_path: Path, default "example_16bit_cells"
         path to simulation within experiment
     """
-
     z_spacings = ["0.315", "1.0", "1.5"]
 
     top_path = root_path / Path(sim_path)
@@ -437,7 +458,7 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
 
 def main() -> None:
     """
-    Main.
+    Run the figure-building CLI.
 
     Returns
     -------
