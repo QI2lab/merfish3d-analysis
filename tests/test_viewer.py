@@ -41,9 +41,7 @@ from merfish3danalysis.viewer.sparse import (
     selected_line_data,
     selected_point_data,
 )
-from merfish3danalysis.viewer.warping import (
-    selected_warp_label,
-)
+from merfish3danalysis.viewer.warping import selected_warp_label
 
 
 class _FakeLutModel:
@@ -768,6 +766,7 @@ def test_controller_reenables_controls_before_showing_stack() -> None:
             *,
             spacing_zyx_um: np.ndarray,
             origin_zyx_um: np.ndarray | None,
+            reuse_window: bool = False,
         ) -> None:
             """Record display and assert controller interactivity."""
             assert self.window.open_button.isEnabled()
@@ -775,6 +774,7 @@ def test_controller_reenables_controls_before_showing_stack() -> None:
             assert not self.window.progress_bar.isVisible()
             assert spacing_zyx_um.shape == (3,)
             assert origin_zyx_um is None
+            assert not reuse_window
             self.show_stack_called = True
 
         def set_sparse_payload(self, payload: SparseOverlayPayload) -> None:
@@ -842,6 +842,7 @@ def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> 
             *,
             spacing_zyx_um: np.ndarray,
             origin_zyx_um: np.ndarray | None,
+            reuse_window: bool = False,
         ) -> None:
             """Accept stack display calls."""
 
@@ -892,6 +893,102 @@ def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> 
         assert window.transcript_gene_list.isEnabled()
         assert window.marker_radius_spinbox.isEnabled()
         assert window.apply_transcripts_button.isEnabled()
+    finally:
+        window.close()
+        qt_app.processEvents()
+
+
+def test_controller_local_apply_updates_existing_viewer(tmp_path: Path) -> None:
+    """Local selection changes enable Apply and reuse the NDV window."""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from qtpy import QtCore, QtWidgets
+
+    from merfish3danalysis.viewer.controller import DatastoreViewerWindow
+    from merfish3danalysis.viewer.datastore import (
+        ViewerDatastoreLoadResult,
+        ViewerDatastoreOptions,
+    )
+
+    class _RecordingView:
+        """Fake view that records whether stack display reuses a window."""
+
+        def __init__(self) -> None:
+            self.reuse_window_values: list[bool] = []
+
+        def show_stack(
+            self,
+            _stack: ChannelStack,
+            *,
+            spacing_zyx_um: np.ndarray,
+            origin_zyx_um: np.ndarray | None,
+            reuse_window: bool = False,
+        ) -> None:
+            """Record reuse-window requests."""
+            assert spacing_zyx_um.shape == (3,)
+            assert origin_zyx_um is None
+            self.reuse_window_values.append(reuse_window)
+
+        def set_sparse_payload(self, _payload: SparseOverlayPayload) -> None:
+            """Accept sparse payload calls."""
+
+        def close(self) -> None:
+            """Match the real view close API."""
+
+    qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = DatastoreViewerWindow()
+    fake_view = _RecordingView()
+    window.view = fake_view
+    try:
+        window.show()
+        qt_app.processEvents()
+        options = ViewerDatastoreOptions(
+            components={},
+            tile_ids=("tile0000",),
+            round_ids=("round001", "round002"),
+            bit_ids=("bit001",),
+            proseg_runs=(),
+            baysor_available=False,
+            transcript_gene_to_bits={},
+        )
+        window._finish_datastore_load(
+            ViewerDatastoreLoadResult(tmp_path, object(), options)
+        )
+        window._finish_progress("Datastore loaded.")
+        window.view_mode_combo.setCurrentText("Local native")
+        window._update_view_options()
+        assert not window.apply_local_selection_button.isEnabled()
+
+        window.fiducial_round_list.item(1).setCheckState(QtCore.Qt.CheckState.Checked)
+
+        assert window.apply_local_selection_button.isEnabled()
+        stack = ChannelStack(
+            np.zeros((1, 1, 2, 2), dtype=np.uint16),
+            ["tile0000:round001 native"],
+        )
+        spacing = np.ones(3, dtype=np.float32)
+        context = DisplayContext(
+            mode="local",
+            base_stack=stack,
+            base_sparse_lines=(),
+            shape_zyx=(1, 2, 2),
+            spacing_zyx_um=spacing,
+            tile="tile0000",
+        )
+        result = ViewerBuildResult(
+            stack=stack,
+            spacing_zyx_um=spacing,
+            origin_zyx_um=None,
+            context=context,
+            status="Displayed local stack.",
+            sparse_payload=SparseOverlayPayload(),
+        )
+
+        window._finish_display_worker(result)
+
+        assert fake_view.reuse_window_values == [True]
+        assert not window.apply_local_selection_button.isEnabled()
     finally:
         window.close()
         qt_app.processEvents()

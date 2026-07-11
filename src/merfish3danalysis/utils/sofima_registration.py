@@ -146,6 +146,35 @@ def _stabilize_axial_flow_component(
     }
 
 
+def _normalized_mean_squared_error(
+    fixed_zyx: np.ndarray,
+    moving_zyx: np.ndarray,
+) -> float:
+    """
+    Return normalized mean-squared error between two images.
+
+    Parameters
+    ----------
+    fixed_zyx : numpy.ndarray
+        Fixed reference image.
+    moving_zyx : numpy.ndarray
+        Moving image sampled on the reference grid.
+
+    Returns
+    -------
+    float
+        Mean-squared error after robust intensity normalization.
+    """
+    fixed = np.asarray(fixed_zyx, dtype=np.float32)
+    moving = np.asarray(moving_zyx, dtype=np.float32)
+    epsilon = np.finfo(np.float32).eps
+    fixed_scale = max(float(np.std(fixed)), epsilon)
+    moving_scale = max(float(np.std(moving)), epsilon)
+    fixed_normalized = (fixed - float(np.mean(fixed))) / fixed_scale
+    moving_normalized = (moving - float(np.mean(moving))) / moving_scale
+    return float(np.mean((fixed_normalized - moving_normalized) ** 2))
+
+
 def _compose_flow_fields_same_grid(
     base_flow_xyz: np.ndarray,
     residual_flow_xyz: np.ndarray,
@@ -615,6 +644,26 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             config,
         )
         total_metadata.update(axial_metadata)
+        corrected = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+            moving_affine_initialized_zyx,
+            transform_zyx_um=np.eye(4, dtype=np.float32),
+            spacing_zyx_um=(1.0, 1.0, 1.0),
+            reference_shape=fixed_zyx.shape,
+            sofima_flow_field_xyz_px=total_flow,
+            flow_field_stride_zyx_px=total_metadata["map_stride_zyx_px"],
+            flow_field_box_start_xyz_px=total_metadata["map_box_start_xyz_px"],
+            mode="nearest",
+        ).astype(np.float32, copy=False)
+        affine_error = _normalized_mean_squared_error(
+            fixed_zyx,
+            moving_affine_initialized_zyx,
+        )
+        sofima_error = _normalized_mean_squared_error(fixed_zyx, corrected)
+        total_metadata["affine_normalized_mse"] = affine_error
+        total_metadata["sofima_normalized_mse"] = sofima_error
+        if sofima_error >= affine_error:
+            total_metadata["status"] = "identity_fallback_no_error_improvement"
+            return np.zeros_like(total_flow, dtype=np.float32), total_metadata
         return total_flow.astype(np.float32, copy=False), total_metadata
 
     from sofima import flow_field, flow_utils

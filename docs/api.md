@@ -61,24 +61,27 @@ does not force the deconvolution PSF to be a single plane.
 
 ## Preprocessing CLI
 
-The local preprocessing command uses the same API defaults:
+The preprocessing command intentionally exposes only high-level controls:
 
 ```bash
 uv run qi2lab-preprocess \
   /path/to/experiment \
-  --decon \
-  --crop-yx-decon 2048 \
-  --ufish-model simfish
+  --num-gpus 2
 ```
 
-By default, `qi2lab-preprocess` runs local preprocessing and then global
-fiducial registration/fusion. Local registration uses the qi2lab GPU path:
-fiducial rounds are first registered laterally on a max-Z projection, then in
-XYZ, and optional SOFIMA residual flow fields are estimated after the affine
-fiducial alignment. Global registration uses multiview-stitcher registration
-and direct OME-Zarr fusion. GPU acceleration is used for the fusion backend;
-the multiview-stitcher registration step itself is configured through CPU
-parallelism and Dask scheduler options.
+Local preprocessing uses the package defaults: fiducial and readout
+deconvolution are enabled, feature prediction is always written for readout
+bits, and SOFIMA residual registration is enabled. Fiducial rounds are
+registered laterally on a max-Z projection and then in XYZ. SOFIMA flow fields
+are estimated after affine fiducial alignment and are accepted only when they
+improve the fiducial alignment error compared with affine alone. Readout and
+fiducial image arrays remain in their native local storage; decode and viewer
+paths apply the selected transform chain when they need aligned data.
+
+Global registration follows the multiview-stitcher registration and fusion
+workflow. Stage metadata initializes the tile geometry, CPU registration
+refines the global tile transforms, and the fused fiducial OME-Zarr is written
+directly to disk with the multiview-stitcher/CuPy fusion backend.
 
 To rerun the global registration and fusion stage on an existing datastore
 without redoing local preprocessing:
@@ -91,20 +94,8 @@ uv run qi2lab-preprocess \
   --overwrite
 ```
 
-Useful global-stage diagnostics and performance controls are exposed as CLI
-flags:
-
-- `--registration-diagnostics` prints per-step geometry and registration
-  diagnostics.
-- `--global-registration-parallel-jobs` sets multiview-stitcher pairwise
-  registration parallelism.
-- `--global-registration-scheduler` sets the Dask scheduler used around global
-  registration.
-- `--global-fusion-n-batch`, `--global-fusion-n-jobs`,
-  `--global-fusion-output-chunksize`, and
-  `--global-fusion-overlap-in-pixels` control direct-to-Zarr fusion batching.
-- `--sofima-*` flags parameterize SOFIMA residual registration. These are CLI
-  parameters, not environment variables.
+Registration-specific tuning is kept in the Python API rather than exposed as
+routine CLI flags.
 
 ## Pixel Decoding CLI
 
@@ -139,3 +130,23 @@ GUI model. The default diameter is `None`, so the command does not force a cell
 size unless `--diameter` is explicitly provided. The fused fiducial max
 projection is passed to Cellpose without rescaling to 8-bit; Cellpose handles
 normalization through the supplied percentile settings.
+
+## Viewer CLI
+
+Use the `viewer` entry point for read-only datastore inspection:
+
+```bash
+uv run viewer /path/to/experiment
+```
+
+The controller exposes three view modes:
+
+- `Local native` shows stored local images without alignment claims.
+- `Local warped` applies user-selected chromatic, stage/round affine, and
+  SOFIMA transform components before display.
+- `Global fused` opens the fused Zarr image lazily and overlays selected sparse
+  data.
+
+NDV displays image channels. Transcript points and cell boundaries from the
+datastore, Proseg, Cellpose, or Baysor are rendered as sparse VisPy overlays so
+changing transcript selections does not require rebuilding image arrays.

@@ -54,7 +54,6 @@ def local_register_data(root_path: Path) -> None:
         datastore=datastore,
         perform_deformable_registration=False,
         overwrite_registered=True,
-        save_all_fiducial_registered=False,
         decon_readout=True,
     )
 
@@ -101,7 +100,7 @@ def global_register_data(
     )
 
     datastore.save_global_fiducial_image(
-        fused_image=datastore.load_local_registered_image(
+        fused_image=datastore.load_local_fiducial_image(
             tile=0, round=0, return_future=False
         ),
         affine_zyx_um=affine_zyx_px,

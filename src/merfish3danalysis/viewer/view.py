@@ -125,9 +125,10 @@ class DatastoreNdvView(QtCore.QObject):
         *,
         spacing_zyx_um: Any,
         origin_zyx_um: Any | None,
+        reuse_window: bool = False,
     ) -> None:
         """
-        Display an image stack in a fresh NDV window.
+        Display an image stack in an NDV window.
 
         Parameters
         ----------
@@ -137,10 +138,15 @@ class DatastoreNdvView(QtCore.QObject):
             Z, Y, X voxel spacing in microns.
         origin_zyx_um : Any or None
             Optional global origin in microns.
+        reuse_window : bool, default=False
+            Whether to update the current NDV window when possible.
         """
-        self.close()
         data = stack_with_micron_coords(stack, spacing_zyx_um, origin_zyx_um)
         self.channel_labels = list(stack.labels)
+        if reuse_window and self._update_array_viewer(data, self.channel_labels):
+            self._enable_scale_bar(spacing_zyx_um)
+            return
+        self.close()
         self._reset_array_viewer(data, self.channel_labels)
         apply_lut_channel_labels(self.array_viewer, self.channel_labels)
         self._enable_scale_bar(spacing_zyx_um)
@@ -271,6 +277,33 @@ class DatastoreNdvView(QtCore.QObject):
         self._sparse_overlay.attach(self.array_viewer)
         self._hide_ndv_3d_button()
         self._connect_ndv_index_signal()
+
+    def _update_array_viewer(self, data: Any, labels: list[str]) -> bool:
+        """
+        Update the current NDV ArrayViewer data.
+
+        Parameters
+        ----------
+        data : Any
+            NDV-compatible image data.
+        labels : list[str]
+            Channel labels.
+
+        Returns
+        -------
+        bool
+            True when the existing viewer was updated.
+        """
+        if self.array_viewer is None or not self.viewer_windows:
+            return False
+        try:
+            self.array_viewer.data = data
+            apply_lut_channel_labels(self.array_viewer, labels)
+            self._hide_ndv_3d_button()
+            self._connect_ndv_index_signal()
+            return True
+        except Exception:
+            return False
 
     def _display_model(self, data: Any, labels: list[str], z_size: int) -> Any | None:
         """

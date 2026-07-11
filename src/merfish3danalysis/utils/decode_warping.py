@@ -156,20 +156,21 @@ def warp_image_to_reference_frame(
     ):
         return np.asarray(image, dtype=np.float32)
 
-    if loaded_flow_field is not None:
-        sofima_flow_field, flow_attrs = loaded_flow_field
-        return warp_image_with_sofima_metadata(
-            image,
-            transform_zyx_um=transform_zyx_um,
-            spacing_zyx_um=spacing_zyx_um,
-            sofima_flow_field_xyz_px=sofima_flow_field,
-            flow_attrs=flow_attrs,
-            gpu_id=gpu_id,
-        ).astype(np.float32, copy=False)
-
     from merfish3danalysis.utils.multiview_registration import (
         warp_array_to_reference_gpu,
     )
+
+    if loaded_flow_field is not None:
+        sofima_flow_field, flow_attrs = loaded_flow_field
+        if not str(flow_attrs.get("sofima_status", "")).startswith("identity_fallback"):
+            return warp_image_with_sofima_metadata(
+                image,
+                transform_zyx_um=transform_zyx_um,
+                spacing_zyx_um=spacing_zyx_um,
+                sofima_flow_field_xyz_px=sofima_flow_field,
+                flow_attrs=flow_attrs,
+                gpu_id=gpu_id,
+            ).astype(np.float32, copy=False)
 
     return warp_array_to_reference_gpu(
         image,

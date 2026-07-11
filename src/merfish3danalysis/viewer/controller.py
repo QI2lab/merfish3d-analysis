@@ -51,6 +51,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self._display_refresh_enabled = False
         self._display_refresh_pending = False
         self._transcript_refresh_pending = False
+        self._local_selection_pending = False
         self._closing = False
         self._transcript_refresh_context: DisplayContext | None = None
         self._busy_enabled_states: dict[QtWidgets.QWidget, bool] = {}
@@ -176,6 +177,9 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.chromatic_checkbox.setChecked(True)
         self.stage_affine_checkbox.setChecked(True)
         self.sofima_checkbox.setChecked(True)
+        self.chromatic_checkbox.toggled.connect(self._mark_local_selection_pending)
+        self.stage_affine_checkbox.toggled.connect(self._mark_local_selection_pending)
+        self.sofima_checkbox.toggled.connect(self._mark_local_selection_pending)
         control_layout.addWidget(self.chromatic_checkbox)
         control_layout.addWidget(self.stage_affine_checkbox)
         control_layout.addWidget(self.sofima_checkbox)
@@ -184,6 +188,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.gpu_spinbox = QtWidgets.QSpinBox()
         self.gpu_spinbox.setMinimum(0)
         self.gpu_spinbox.setMaximum(16)
+        self.gpu_spinbox.valueChanged.connect(self._mark_local_selection_pending)
         self._add_control_row(control_layout, self.gpu_label, self.gpu_spinbox)
 
     def _build_local_controls(
@@ -203,6 +208,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         """
         self.tile_label = QtWidgets.QLabel("Tile")
         self.tile_combo = QtWidgets.QComboBox()
+        self.tile_combo.currentTextChanged.connect(self._mark_local_selection_pending)
         self._add_control_row(control_layout, self.tile_label, self.tile_combo)
 
         self.fiducial_rounds_label = QtWidgets.QLabel("Fiducial rounds")
@@ -210,24 +216,29 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.fiducial_round_list = QtWidgets.QListWidget()
         self.fiducial_round_list.setSelectionMode(selection_mode)
         self.fiducial_round_list.setMaximumHeight(86)
+        self.fiducial_round_list.itemChanged.connect(self._mark_local_selection_pending)
         control_layout.addWidget(self.fiducial_round_list)
 
         self.fiducial_sources_label = QtWidgets.QLabel("Fiducial sources")
         control_layout.addWidget(self.fiducial_sources_label)
         self.fiducial_corrected = QtWidgets.QCheckBox("corrected")
-        self.fiducial_registered = QtWidgets.QCheckBox("registered/decon")
-        self.fiducial_registered.setChecked(True)
+        self.fiducial_decon = QtWidgets.QCheckBox("decon")
+        self.fiducial_corrected.toggled.connect(self._mark_local_selection_pending)
+        self.fiducial_decon.toggled.connect(self._mark_local_selection_pending)
         control_layout.addWidget(self.fiducial_corrected)
-        control_layout.addWidget(self.fiducial_registered)
+        control_layout.addWidget(self.fiducial_decon)
 
         self.readout_sources_label = QtWidgets.QLabel("Readout bit sources")
         control_layout.addWidget(self.readout_sources_label)
         self.bit_corrected = QtWidgets.QCheckBox("corrected")
-        self.bit_registered = QtWidgets.QCheckBox("registered/decon")
+        self.bit_decon = QtWidgets.QCheckBox("decon")
         self.bit_feature = QtWidgets.QCheckBox("feature predictor")
         self.bit_feature.setChecked(True)
+        self.bit_corrected.toggled.connect(self._mark_local_selection_pending)
+        self.bit_decon.toggled.connect(self._mark_local_selection_pending)
+        self.bit_feature.toggled.connect(self._mark_local_selection_pending)
         control_layout.addWidget(self.bit_corrected)
-        control_layout.addWidget(self.bit_registered)
+        control_layout.addWidget(self.bit_decon)
         control_layout.addWidget(self.bit_feature)
 
         self.bits_label = QtWidgets.QLabel("Bits")
@@ -235,7 +246,17 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.bit_list = QtWidgets.QListWidget()
         self.bit_list.setSelectionMode(selection_mode)
         self.bit_list.setMaximumHeight(110)
+        self.bit_list.itemChanged.connect(self._mark_local_selection_pending)
         control_layout.addWidget(self.bit_list)
+
+        self.apply_local_selection_button = QtWidgets.QPushButton(
+            "Apply local selection"
+        )
+        self.apply_local_selection_button.clicked.connect(
+            self._apply_local_selection_changes
+        )
+        self.apply_local_selection_button.setEnabled(False)
+        control_layout.addWidget(self.apply_local_selection_button)
 
     def _build_transcript_controls(
         self,
@@ -586,15 +607,17 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
             self.fiducial_round_list,
             self.fiducial_sources_label,
             self.fiducial_corrected,
-            self.fiducial_registered,
+            self.fiducial_decon,
             self.readout_sources_label,
             self.bit_corrected,
-            self.bit_registered,
+            self.bit_decon,
             self.bit_feature,
             self.bits_label,
             self.bit_list,
+            self.apply_local_selection_button,
         ):
             self._set_option_state(widget, visible, visible)
+        self._update_local_apply_button_state()
 
     def _set_proseg_option_states(self, mode_selected: bool) -> None:
         """
@@ -966,6 +989,41 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.apply_transcripts_button.setEnabled(False)
         self._request_transcript_refresh()
 
+    def _apply_local_selection_changes(self) -> None:
+        """Apply pending local tile image selection changes."""
+        if self.view_mode_combo.currentText() not in {"Local native", "Local warped"}:
+            return
+        self._local_selection_pending = False
+        self._update_local_apply_button_state()
+        self.display_selection()
+
+    def _mark_local_selection_pending(self, *_args: Any) -> None:
+        """
+        Enable local Apply after tile image selection changes.
+
+        Parameters
+        ----------
+        *_args : Any
+            Optional Qt signal arguments.
+        """
+        if self.view_mode_combo.currentText() not in {"Local native", "Local warped"}:
+            return
+        self._local_selection_pending = True
+        self._update_local_apply_button_state()
+
+    def _update_local_apply_button_state(self) -> None:
+        """Update local Apply button visibility and enabled state."""
+        local_mode = self.view_mode_combo.currentText() in {
+            "Local native",
+            "Local warped",
+        }
+        self.apply_local_selection_button.setVisible(local_mode)
+        self.apply_local_selection_button.setEnabled(
+            local_mode
+            and self._local_selection_pending
+            and not self.progress_bar.isVisible()
+        )
+
     def _mark_transcript_changes_pending(self, *_args: Any) -> None:
         """
         Enable the transcript apply button.
@@ -1074,6 +1132,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.chromatic_checkbox.setChecked(chromatic)
         self.stage_affine_checkbox.setChecked(stage_affine)
         self.sofima_checkbox.setChecked(sofima)
+        self._mark_local_selection_pending()
 
     def _checked_items(self, list_widget: Any) -> tuple[str, ...]:
         """
@@ -1109,8 +1168,8 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         sources: list[str] = []
         if self.fiducial_corrected.isChecked():
             sources.append("corrected")
-        if self.fiducial_registered.isChecked():
-            sources.append("registered")
+        if self.fiducial_decon.isChecked():
+            sources.append("decon")
         return tuple(sources)
 
     def _bit_sources(self) -> tuple[str, ...]:
@@ -1118,8 +1177,8 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         sources: list[str] = []
         if self.bit_corrected.isChecked():
             sources.append("corrected")
-        if self.bit_registered.isChecked():
-            sources.append("registered")
+        if self.bit_decon.isChecked():
+            sources.append("decon")
         if self.bit_feature.isChecked():
             sources.append("feature")
         return tuple(sources)
@@ -1326,11 +1385,14 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
                 spacing_zyx_um=result.spacing_zyx_um,
                 origin_zyx_um=result.origin_zyx_um,
                 sparse_payload=result.sparse_payload,
+                reuse_window=result.context.mode == "local",
             )
         except Exception as exc:
             self.status_label.setText(f"Display failed: {exc}")
             return
         self._display_refresh_enabled = True
+        if result.context.mode == "local":
+            self._local_selection_pending = False
         self._restore_controller_interaction()
         self.status_label.setText(result.status)
 
@@ -1440,6 +1502,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         spacing_zyx_um: Any,
         origin_zyx_um: Any | None,
         sparse_payload: SparseOverlayPayload | None,
+        reuse_window: bool = False,
     ) -> None:
         """
         Display an image stack and sparse overlays.
@@ -1454,11 +1517,14 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
             Optional global origin in microns.
         sparse_payload : SparseOverlayPayload or None
             Sparse overlay payload.
+        reuse_window : bool, default=False
+            Whether to update the existing NDV window when possible.
         """
         self.view.show_stack(
             stack,
             spacing_zyx_um=spacing_zyx_um,
             origin_zyx_um=origin_zyx_um,
+            reuse_window=reuse_window,
         )
         self._set_sparse_payload(sparse_payload)
 

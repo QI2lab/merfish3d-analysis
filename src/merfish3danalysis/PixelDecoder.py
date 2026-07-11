@@ -744,7 +744,7 @@ class PixelDecoder:
                     iterable_tiles = random_tiles
 
                 for tile_id in iterable_tiles:
-                    decon_image = self._datastore.load_local_registered_image(
+                    readout_image = self._datastore.load_local_readout_image(
                         tile=tile_id, bit=bit_id, return_future=False
                     )
                     feature_predictor_image = (
@@ -758,7 +758,7 @@ class PixelDecoder:
                     )
 
                     current_image = np.asarray(
-                        decon_image, dtype=np.float32
+                        readout_image, dtype=np.float32
                     ) * np.asarray(feature_predictor_image, dtype=np.float32)
                     current_image = warp_bit_image_to_reference(
                         current_image,
@@ -1500,7 +1500,7 @@ class PixelDecoder:
         images = []
         self._em_wvl = []
         for bit_id in iterable_bits:
-            decon_image = self._datastore.load_local_registered_image(
+            readout_image = self._datastore.load_local_readout_image(
                 tile=self._tile_idx,
                 bit=bit_id,
             )
@@ -1512,13 +1512,13 @@ class PixelDecoder:
             )
 
             feature_predictor_array = feature_predictor_image.result()
-            decon_array = decon_image.result()
+            readout_array = readout_image.result()
             _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
                 tile=self._tile_idx,
                 bit=bit_id,
             )
             prediction_weighted = np.asarray(
-                decon_array, dtype=np.float32
+                readout_array, dtype=np.float32
             ) * np.asarray(feature_predictor_array, dtype=np.float32)
             registered_data = warp_bit_image_to_reference(
                 prediction_weighted,
@@ -1529,7 +1529,7 @@ class PixelDecoder:
                 gpu_id=gpu_id,
             )
             images.append(registered_data[self._z_slice, :, :])
-            del feature_predictor_array, decon_array
+            del feature_predictor_array, readout_array
             self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)

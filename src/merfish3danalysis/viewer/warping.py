@@ -578,7 +578,9 @@ def _append_local_viewer_channel(
     if image is None:
         return
     image_zyx = _as_zyx(image)
-    if channel_kind == "fiducial":
+    if options.is_native:
+        warped = np.asarray(image_zyx, dtype=np.float32)
+    elif channel_kind == "fiducial":
         warped = _warp_fiducial_for_viewer(
             image_zyx,
             datastore=datastore,
@@ -637,12 +639,12 @@ def _load_fiducial_source_image(
             ),
             "fiducial corrected",
         )
-    if source == "registered":
+    if source == "decon":
         return (
-            datastore.load_local_registered_image(
+            datastore.load_local_deconvolved_fiducial_image(
                 **{"tile": tile, "round": round_id, "return_future": True}
             ),
-            "fiducial registered/decon",
+            "fiducial decon",
         )
     return None
 
@@ -680,12 +682,12 @@ def _load_bit_source_image(
             ),
             "corrected",
         )
-    if source == "registered":
+    if source == "decon":
         return (
-            datastore.load_local_registered_image(
+            datastore.load_local_deconvolved_readout_image(
                 tile=tile, bit=bit_id, return_future=True
             ),
-            "registered/decon",
+            "decon",
         )
     if source == "feature":
         return (

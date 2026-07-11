@@ -1841,7 +1841,6 @@ class qi2labDataStore:
 
         default_images = (
             "corrected_data",
-            "registered_decon_data",
             "decon_data",
             f"{self.feature_predictor_folder_name}_data",
             "opticalflow_xform_px",
@@ -2086,7 +2085,6 @@ class qi2labDataStore:
         shape = tuple(int(v) for v in np.asarray(image).shape)
         required_names = {
             "corrected_data",
-            "registered_decon_data",
             "decon_data",
             f"{self.feature_predictor_folder_name}_data",
         }
@@ -2100,7 +2098,7 @@ class qi2labDataStore:
                 raise ValueError(
                     f"Image shape mismatch in {entity_root.name}: "
                     f"{image_name}={shape} but {candidate_name}={candidate_shape}. "
-                    "corrected_data, decon/registered data, and "
+                    "corrected_data, optional decon_data, and "
                     "feature_predictor_data must match."
                 )
 
@@ -2629,7 +2627,7 @@ class qi2labDataStore:
                     print(tile_id, bit_id)
                     print("Corrected readout data missing.")
 
-        # check and validate local registered data
+        # check and validate local transform and preprocessing data
         if self._datastore_state["LocalRegistered"] and validate:
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
                 entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
@@ -2658,47 +2656,22 @@ class qi2labDataStore:
                         # print("Optical flow registration data missing.")
                         pass
 
-                current_local_zarr_path = str(
-                    entity_root / Path("registered_decon_data")
-                )
-                if round_id == self._round_ids[0]:
-                    try:
-                        self._check_for_zarr_array(
-                            self._get_kvstore_key(current_local_zarr_path),
-                            self._zarrv2_spec.copy(),
-                        )
-                    except (OSError, ZarrError):
-                        print(tile_id, round_id)
-                        print("Registered fiducial data missing.")
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(
-                    entity_root / Path("registered_decon_data")
-                )
+                decon_shape = self._image_shape(entity_root / Path("decon_data"))
                 if (
                     corrected_shape is not None
-                    and registered_shape is not None
-                    and corrected_shape != registered_shape
+                    and decon_shape is not None
+                    and corrected_shape != decon_shape
                 ):
                     raise ValueError(
-                        f"{tile_id} {round_id} corrected and registered shapes differ: "
-                        f"{corrected_shape} != {registered_shape}"
+                        f"{tile_id} {round_id} corrected and decon shapes differ: "
+                        f"{corrected_shape} != {decon_shape}"
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
                 entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
-                current_local_zarr_path = str(entity_root / Path("decon_data"))
-
-                try:
-                    self._check_for_zarr_array(
-                        self._get_kvstore_key(current_local_zarr_path),
-                        self._zarrv2_spec.copy(),
-                    )
-                except (OSError, ZarrError):
-                    print(tile_id, bit_id)
-                    print("Readout decon data missing.")
-
                 current_local_zarr_path = str(
                     entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
@@ -2714,19 +2687,19 @@ class qi2labDataStore:
                 corrected_shape = self._image_shape(
                     entity_root / Path("corrected_data")
                 )
-                registered_shape = self._image_shape(entity_root / Path("decon_data"))
+                decon_shape = self._image_shape(entity_root / Path("decon_data"))
                 feature_shape = self._image_shape(
                     entity_root / Path(f"{self.feature_predictor_folder_name}_data")
                 )
                 shapes = [
                     shape
-                    for shape in (corrected_shape, registered_shape, feature_shape)
+                    for shape in (corrected_shape, decon_shape, feature_shape)
                     if shape is not None
                 ]
                 if len(shapes) > 1 and any(shape != shapes[0] for shape in shapes[1:]):
                     raise ValueError(
                         f"{tile_id} {bit_id} corrected/decon/feature image shapes differ: "
-                        f"{corrected_shape}, {registered_shape}, {feature_shape}"
+                        f"{corrected_shape}, {decon_shape}, {feature_shape}"
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
@@ -3878,7 +3851,7 @@ class qi2labDataStore:
                         rigid_xform_xyz_px, dtype=np.float32
                     ).tolist()
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
             print("Error writing rigid transform attribute.")
@@ -4007,7 +3980,7 @@ class qi2labDataStore:
                         transform_zyx_um, dtype=np.float32
                     ).tolist()
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
             print("Error writing local round transform attribute.")
@@ -4420,27 +4393,221 @@ class qi2labDataStore:
             print("Error saving SOFIMA flow field.")
             return None
 
-    def load_local_registered_image(
+    def load_local_deconvolved_fiducial_image(
         self,
         tile: int | str,
-        round: int | str | None = None,
-        bit: int | str | None = None,
+        round: int | str,
         return_future: bool | None = True,
     ) -> ArrayLike | None:
-        """Load a fiducial registered image or an unwarped readout image.
+        """Load a native-frame deconvolved fiducial image.
 
-        Fiducial rounds are loaded from ``registered_decon_data`` after local
-        registration. Readout bits are loaded from ``decon_data`` in their
-        native, unwarped tile frame; pixel decoding applies fiducial, SOFIMA,
-        and chromatic transforms at load time.
+        Deconvolved fiducials are loaded from ``decon_data`` in their native,
+        unwarped tile frame. This image exists only when fiducial deconvolution
+        was run during preprocessing.
 
         Parameters
         ----------
         tile : int or str
             Tile index or tile id.
-        round : int or str or None
+        round : int or str
             Round index or round id.
-        bit : int or str or None
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Native-frame deconvolved fiducial image.
+        """
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        decon_path = self._fiducial_root_path / tile_id / round_id / Path("decon_data")
+        image_path = self._image_store_path(decon_path)
+        if not image_path.exists():
+            return None
+
+        try:
+            spec = self._zarrv2_spec.copy()
+            spec["metadata"]["dtype"] = "<u2"
+            return self._load_from_zarr_array(
+                self._get_kvstore_key(image_path),
+                spec,
+                return_future,
+            )
+        except (OSError, ZarrError) as e:
+            print(e)
+            print("Error loading local deconvolved fiducial image.")
+            return None
+
+    def load_local_fiducial_image(
+        self,
+        tile: int | str,
+        round: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load the best available native-frame fiducial image.
+
+        Deconvolved fiducial data are returned when ``decon_data`` exists;
+        otherwise corrected fiducial data are returned.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile id.
+        round : int or str
+            Round index or round id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Deconvolved fiducial image if available, otherwise corrected image.
+        """
+        image = self.load_local_deconvolved_fiducial_image(
+            tile=tile,
+            round=round,
+            return_future=return_future,
+        )
+        if image is not None:
+            return image
+        return self.load_local_corrected_image(
+            tile=tile,
+            round=round,
+            return_future=return_future,
+        )
+
+    def save_local_deconvolved_fiducial_image(
+        self,
+        image: ArrayLike,
+        tile: int | str,
+        round: int | str,
+        return_future: bool | None = False,
+    ) -> None:
+        """Save a native-frame deconvolved fiducial image.
+
+        Deconvolved fiducials are saved under ``decon_data`` in their native,
+        unwarped tile frame.
+
+        Parameters
+        ----------
+        image : ArrayLike
+            Image to save.
+        tile : int or str
+            Tile index or tile id.
+        round : int or str
+            Round index or round id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        None
+            Function result.
+        """
+        if isinstance(tile, int):
+            if tile < 0 or tile > self._num_tiles:
+                print("Set tile index >=0 and <=" + str(self._num_tiles))
+                return None
+            tile_id = self._tile_ids[tile]
+        elif isinstance(tile, str):
+            if tile not in self._tile_ids:
+                print("set valid tiled id")
+                return None
+            tile_id = tile
+        else:
+            print("'tile' must be integer index or string identifier")
+            return None
+
+        if isinstance(round, int):
+            if round < 0:
+                print("Set round index >=0 and <" + str(self._num_rounds))
+                return None
+            round_id = self._round_ids[round]
+        elif isinstance(round, str):
+            if round not in self._round_ids:
+                print("Set valid round id")
+                return None
+            round_id = round
+        else:
+            print("'round' must be integer index or string identifier")
+            return None
+
+        entity_root = self._fiducial_root_path / tile_id / round_id
+        decon_path = entity_root / Path("decon_data")
+        stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+
+        try:
+            self._validate_core_image_shape(
+                entity_root_path=entity_root,
+                image_name="decon_data",
+                image=image,
+            )
+            attributes = self._load_entity_attributes(entity_root)
+            attributes["deconvolution"] = True
+            spec = self._build_image_write_spec(
+                dtype="<u2",
+                stage_zyx_um=stage_position,
+                extra_attributes=attributes,
+            )
+            self._save_to_zarr_array(
+                image,
+                self._get_kvstore_key(decon_path),
+                spec,
+                return_future,
+            )
+            self._save_entity_attributes(
+                entity_root_path=entity_root,
+                updates=attributes,
+                target_image_name="decon_data",
+            )
+        except (OSError, TimeoutError, ValueError):
+            print("Error saving local deconvolved fiducial image.")
+            return None
+
+    def load_local_deconvolved_readout_image(
+        self,
+        tile: int | str,
+        bit: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load a native-frame deconvolved readout bit image.
+
+        Deconvolved readout bits are loaded from ``decon_data`` in their
+        native, unwarped tile frame. This image exists only when readout
+        deconvolution was run during preprocessing.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile id.
+        bit : int or str
             Bit index or bit id.
         return_future : bool or None
             Return future array.
@@ -4448,211 +4615,183 @@ class qi2labDataStore:
         Returns
         -------
         ArrayLike or None
-            Fiducial registered image or unwarped readout image.
+            Native-frame deconvolved readout image.
         """
-        if (round is None and bit is None) or (round is not None and bit is not None):
-            print("Provide either 'round' or 'bit', but not both")
-            return None
-
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
-            else:
-                tile_id = self._tile_ids[tile]
+            tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
-            else:
-                tile_id = tile
+            tile_id = tile
         else:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if bit is not None:
-            if isinstance(bit, int):
-                if bit < 0 or bit > len(self._bit_ids):
-                    print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
-                    return None
-                else:
-                    local_id = self._bit_ids[bit]
-            elif isinstance(bit, str):
-                if bit not in self._bit_ids:
-                    print("Set valid bit id")
-                    return None
-                else:
-                    local_id = bit
-            else:
-                print("'bit' must be integer index or string identifier")
+        if isinstance(bit, int):
+            if bit < 0 or bit > len(self._bit_ids):
+                print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                 return None
-            current_local_zarr_path = str(
-                self._readouts_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("decon_data")
-            )
+            bit_id = self._bit_ids[bit]
+        elif isinstance(bit, str):
+            if bit not in self._bit_ids:
+                print("Set valid bit id")
+                return None
+            bit_id = bit
         else:
-            if isinstance(round, int):
-                if round < 0:
-                    print("Set round index >=0 and <" + str(self._num_rounds))
-                    return None
-                else:
-                    local_id = self._round_ids[round]
-            elif isinstance(round, str):
-                if round not in self._round_ids:
-                    print("Set valid round id")
-                    return None
-                else:
-                    local_id = round
-            else:
-                print("'round' must be integer index or string identifier")
-                return None
-            current_local_zarr_path = str(
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("registered_decon_data")
-            )
+            print("'bit' must be integer index or string identifier")
+            return None
 
-        image_path = self._image_store_path(current_local_zarr_path)
+        readout_path = (
+            self._readouts_root_path / Path(tile_id) / Path(bit_id) / Path("decon_data")
+        )
+        image_path = self._image_store_path(readout_path)
         if not image_path.exists():
-            # print("Registered deconvolved image not found.")
             return None
 
         try:
             spec = self._zarrv2_spec.copy()
             spec["metadata"]["dtype"] = "<u2"
-            image = self._load_from_zarr_array(
+            return self._load_from_zarr_array(
                 self._get_kvstore_key(image_path),
                 spec,
                 return_future,
             )
-            return image
         except (OSError, ZarrError) as e:
             print(e)
-            print("Error loading local deconvolved image.")
+            print("Error loading local deconvolved readout image.")
             return None
 
-    def save_local_registered_image(
+    def load_local_readout_image(
         self,
-        registered_image: ArrayLike,
         tile: int | str,
-        deconvolution: bool = True,
-        round: int | str | None = None,
-        bit: int | str | None = None,
+        bit: int | str,
+        return_future: bool | None = True,
+    ) -> ArrayLike | None:
+        """Load the best available native-frame readout bit image.
+
+        Deconvolved readout data are returned when ``decon_data`` exists;
+        otherwise corrected readout data are returned.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or tile id.
+        bit : int or str
+            Bit index or bit id.
+        return_future : bool or None
+            Return future array.
+
+        Returns
+        -------
+        ArrayLike or None
+            Deconvolved readout image if available, otherwise corrected image.
+        """
+        image = self.load_local_deconvolved_readout_image(
+            tile=tile,
+            bit=bit,
+            return_future=return_future,
+        )
+        if image is not None:
+            return image
+        return self.load_local_corrected_image(
+            tile=tile,
+            bit=bit,
+            return_future=return_future,
+        )
+
+    def save_local_deconvolved_readout_image(
+        self,
+        image: ArrayLike,
+        tile: int | str,
+        bit: int | str,
         return_future: bool | None = False,
     ) -> None:
-        """Save a fiducial registered image or an unwarped readout image.
+        """Save a native-frame deconvolved readout bit image.
 
-        Fiducial rounds are saved under ``registered_decon_data`` after local
-        registration. Readout bits are saved under ``decon_data`` in their
+        Deconvolved readout bits are saved under ``decon_data`` in their
         native, unwarped tile frame.
 
         Parameters
         ----------
-        registered_image : ArrayLike
+        image : ArrayLike
             Image to save.
         tile : int or str
             Tile index or tile id.
-        deconvolution : bool
-            Deconvolution applied (True) or not (False).
-        round : int or str or None
-            Round index or round id.
-        bit : int or str or None
+        bit : int or str
             Bit index or bit id.
         return_future : bool or None
             Return future array.
-        """
-        if (round is None and bit is None) or (round is not None and bit is not None):
-            print("Provide either 'round' or 'bit', but not both")
-            return None
 
+        Returns
+        -------
+        None
+            Function result.
+        """
         if isinstance(tile, int):
             if tile < 0 or tile > self._num_tiles:
                 print("Set tile index >=0 and <=" + str(self._num_tiles))
                 return None
-            else:
-                tile_id = self._tile_ids[tile]
+            tile_id = self._tile_ids[tile]
         elif isinstance(tile, str):
             if tile not in self._tile_ids:
                 print("set valid tiled id")
                 return None
-            else:
-                tile_id = tile
+            tile_id = tile
         else:
             print("'tile' must be integer index or string identifier")
             return None
 
-        if bit is not None:
-            if isinstance(bit, int):
-                if bit < 0 or bit > len(self._bit_ids):
-                    print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
-                    return None
-                else:
-                    local_id = self._bit_ids[bit]
-            elif isinstance(bit, str):
-                if bit not in self._bit_ids:
-                    print("Set valid bit id")
-                    return None
-                else:
-                    local_id = bit
-            else:
-                print("'bit' must be integer index or string identifier")
+        if isinstance(bit, int):
+            if bit < 0 or bit > len(self._bit_ids):
+                print("Set bit index >=0 and <=" + str(len(self._bit_ids)))
                 return None
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("decon_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            bit_id = self._bit_ids[bit]
+        elif isinstance(bit, str):
+            if bit not in self._bit_ids:
+                print("Set valid bit id")
+                return None
+            bit_id = bit
         else:
-            if isinstance(round, int):
-                if round < 0:
-                    print("Set round index >=0 and <" + str(self._num_rounds))
-                    return None
-                else:
-                    local_id = self._round_ids[round]
-            elif isinstance(round, str):
-                if round not in self._round_ids:
-                    print("Set valid round id")
-                    return None
-                else:
-                    local_id = round
-            else:
-                print("'round' must be integer index or string identifier")
-                return None
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("registered_decon_data")
-            stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+            print("'bit' must be integer index or string identifier")
+            return None
+
+        entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
+        readout_path = entity_root / Path("decon_data")
+        stage_position = self._resolve_original_tile_position_zyx_um(
+            tile_id=tile_id,
+            bit_id=bit_id,
+        )
 
         try:
             self._validate_core_image_shape(
                 entity_root_path=entity_root,
-                image_name="decon_data" if bit is not None else "registered_decon_data",
-                image=registered_image,
+                image_name="decon_data",
+                image=image,
             )
             attributes = self._load_entity_attributes(entity_root)
-            attributes["deconvolution"] = bool(deconvolution)
+            attributes["deconvolution"] = True
             spec = self._build_image_write_spec(
                 dtype="<u2",
                 stage_zyx_um=stage_position,
                 extra_attributes=attributes,
             )
             self._save_to_zarr_array(
-                registered_image,
-                self._get_kvstore_key(current_local_zarr_path),
+                image,
+                self._get_kvstore_key(readout_path),
                 spec,
                 return_future,
             )
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates=attributes,
-                target_image_name=(
-                    "decon_data" if bit is not None else "registered_decon_data"
-                ),
+                target_image_name="decon_data",
             )
         except (OSError, TimeoutError, ValueError):
-            print("Error saving corrected image.")
+            print("Error saving local deconvolved readout image.")
             return None
 
     def load_local_feature_predictor_image(
@@ -5059,7 +5198,7 @@ class qi2labDataStore:
                         spacing_zyx_um, dtype=np.float32
                     ).tolist(),
                 },
-                target_image_name="registered_decon_data",
+                target_image_name="corrected_data",
             )
         except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError) as e:
             print(e)

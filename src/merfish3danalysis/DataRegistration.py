@@ -360,7 +360,8 @@ def _load_deconvolve_fiducial_round(
     Returns
     -------
     numpy.ndarray
-        Deconvolved or copied fiducial image as ``uint16``.
+        Deconvolved fiducial image if deconvolution is enabled, otherwise the
+        corrected fiducial image, as ``uint16``.
     """
     raw = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=round_id, return_future=False
@@ -382,6 +383,11 @@ def _load_deconvolve_fiducial_round(
             release_memory=True,
         )
         decon = decon.clip(0, 2**16 - 1).astype(np.uint16)
+        dr._datastore.save_local_deconvolved_fiducial_image(
+            decon,
+            tile=dr._tile_id,
+            round=round_id,
+        )
     else:
         decon = raw.copy().astype(np.uint16)
     _registration_diag(
@@ -444,6 +450,9 @@ def _process_fiducial_rounds_on_gpu(
             warp_array_to_reference_gpu,
         )
         from merfish3danalysis.utils.rlgc import chunked_rlgc, clear_rlgc_caches
+        from merfish3danalysis.utils.sofima_registration import (
+            estimate_sofima_flow_field_xyz_px,
+        )
 
         spacing_zyx_um = dr._datastore.voxel_size_zyx_um
         reference_float = reference_image.astype(np.float32, copy=False)
@@ -484,7 +493,7 @@ def _process_fiducial_rounds_on_gpu(
                 enabled=dr._registration_diagnostics,
             )
 
-            if dr.save_all_fiducial_registered or dr._perform_deformable_registration:
+            if dr._perform_deformable_registration:
                 warp_start_time = timeit.default_timer()
                 warped = warp_array_to_reference_gpu(
                     decon,
@@ -502,15 +511,35 @@ def _process_fiducial_rounds_on_gpu(
                     enabled=dr._registration_diagnostics,
                 )
 
-                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
-
-                dr._datastore.save_local_registered_image(
-                    registered_image=registered_image,
-                    tile=dr._tile_id,
-                    deconvolution=dr._decon_fiducial,
-                    round=round_id,
+                sofima_start_time = timeit.default_timer()
+                sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
+                    reference_float,
+                    warped.astype(np.float32, copy=False),
+                    config=dr._sofima_config,
                 )
-                del warped, registered_image
+                dr._datastore.save_local_sofima_flow_field(
+                    sofima_flow_field,
+                    tile=dr._tile_id,
+                    round=round_id,
+                    reference_round=dr._round_ids[0],
+                    map_stride_zyx_px=metadata["map_stride_zyx_px"],
+                    map_box_start_xyz_px=metadata["map_box_start_xyz_px"],
+                    map_box_size_xyz_px=metadata["map_box_size_xyz_px"],
+                    reference_shape_zyx_px=reference_image.shape,
+                    moving_shape_zyx_px=warped.shape,
+                    sofima_status=metadata.get("status", "ok"),
+                    valid_flow_vectors=metadata.get("valid_flow_vectors"),
+                    return_future=False,
+                )
+                _registration_diag(
+                    "fiducial_sofima_done "
+                    f"tile={dr._tile_id} round={round_id} "
+                    f"status={metadata.get('status', 'ok')} "
+                    f"valid_flow_vectors={metadata.get('valid_flow_vectors')} "
+                    f"elapsed_s={timeit.default_timer() - sofima_start_time:.2f}",
+                    enabled=dr._registration_diagnostics,
+                )
+                del warped, sofima_flow_field
 
             if dr._verbose >= 1:
                 print(
@@ -529,145 +558,18 @@ def _process_fiducial_rounds_on_gpu(
         raise
 
 
-def _process_sofima_rounds_on_gpu(
-    dr,  # noqa: ANN001
-    round_list: list,
-    gpu_id: int,
-    result_queue: Any,
-) -> None:
-    """
-    Estimate SOFIMA residual flow fields in an isolated GPU worker.
-
-    Parameters
-    ----------
-    dr : DataRegistration
-        Registration object pickled into the worker process.
-    round_list : list
-        Moving fiducial round identifiers assigned to this worker.
-    gpu_id : int
-        Physical GPU index assigned by the parent process.
-    result_queue : multiprocessing.Queue
-        Queue used to send completion or error messages to the parent.
-
-    Returns
-    -------
-    None
-        SOFIMA flow fields are saved to the datastore.
-    """
-    local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
-
-    import cupy as cp
-
-    try:
-        cp.cuda.Device(local_gpu_id).use()
-
-        from merfish3danalysis.utils.decode_warping import (
-            warp_image_with_sofima_metadata,
-        )
-        from merfish3danalysis.utils.sofima_registration import (
-            estimate_sofima_flow_field_xyz_px,
-        )
-
-        spacing_zyx_um = dr._datastore.voxel_size_zyx_um
-        reference_round_id = dr._round_ids[0]
-        fixed = dr._datastore.load_local_registered_image(
-            tile=dr._tile_id,
-            round=reference_round_id,
-            return_future=False,
-        )
-        if fixed is None:
-            raise RuntimeError(
-                f"Missing affine registered reference fiducial for tile={dr._tile_id} "
-                f"round={reference_round_id}."
-            )
-        fixed = fixed.astype(np.float32, copy=False)
-
-        identity_transform = np.eye(4, dtype=np.float32)
-        for round_id in round_list:
-            moving_affine = dr._datastore.load_local_registered_image(
-                tile=dr._tile_id,
-                round=round_id,
-                return_future=False,
-            )
-            if moving_affine is None:
-                raise RuntimeError(
-                    f"Missing affine registered fiducial for tile={dr._tile_id} "
-                    f"round={round_id}."
-                )
-            moving_affine = moving_affine.astype(np.float32, copy=False)
-            _release_worker_gpu_memory(cp)
-
-            start_time = timeit.default_timer()
-            sofima_flow_field, metadata = estimate_sofima_flow_field_xyz_px(
-                fixed,
-                moving_affine,
-                config=dr._sofima_config,
-            )
-            dr._datastore.save_local_sofima_flow_field(
-                sofima_flow_field,
-                tile=dr._tile_id,
-                round=round_id,
-                reference_round=reference_round_id,
-                map_stride_zyx_px=metadata["map_stride_zyx_px"],
-                map_box_start_xyz_px=metadata["map_box_start_xyz_px"],
-                map_box_size_xyz_px=metadata["map_box_size_xyz_px"],
-                reference_shape_zyx_px=fixed.shape,
-                moving_shape_zyx_px=moving_affine.shape,
-                sofima_status=metadata.get("status", "ok"),
-                valid_flow_vectors=metadata.get("valid_flow_vectors"),
-                return_future=False,
-            )
-
-            if dr.save_all_fiducial_registered:
-                warped = warp_image_with_sofima_metadata(
-                    moving_affine,
-                    transform_zyx_um=identity_transform,
-                    spacing_zyx_um=spacing_zyx_um,
-                    sofima_flow_field_xyz_px=sofima_flow_field,
-                    flow_attrs=metadata,
-                    reference_shape=fixed.shape,
-                    gpu_id=local_gpu_id,
-                )
-                registered_image = warped.clip(0, 2**16 - 1).astype(np.uint16)
-                dr._datastore.save_local_registered_image(
-                    registered_image=registered_image,
-                    tile=dr._tile_id,
-                    deconvolution=dr._decon_fiducial,
-                    round=round_id,
-                )
-                del warped, registered_image
-
-            _registration_diag(
-                "fiducial_sofima_done "
-                f"tile={dr._tile_id} round={round_id} "
-                f"status={metadata.get('status', 'ok')} "
-                f"valid_flow_vectors={metadata.get('valid_flow_vectors')} "
-                f"elapsed_s={timeit.default_timer() - start_time:.2f}",
-                enabled=dr._registration_diagnostics,
-            )
-            result_queue.put(("result", round_id, None))
-            del moving_affine, sofima_flow_field
-            _release_worker_gpu_memory(cp)
-
-        del fixed
-        _release_worker_gpu_memory(cp)
-    except Exception:
-        result_queue.put(("error", None, traceback.format_exc()))
-        raise
-
-
-def _local_registered_fiducial_path(
+def _local_fiducial_path(
     datastore: qi2labDataStore,
     tile_id: str,
     round_id: str,
 ) -> Path:
     """
-    Return the registered fiducial OME-Zarr path for one tile and round.
+    Return the best available native fiducial OME-Zarr path for one tile.
 
     Parameters
     ----------
     datastore : qi2labDataStore
-        Open datastore containing registered fiducial images.
+        Open datastore containing fiducial images.
     tile_id : str
         Tile identifier, such as ``tile0000``.
     round_id : str
@@ -676,17 +578,26 @@ def _local_registered_fiducial_path(
     Returns
     -------
     pathlib.Path
-        Path to ``registered_decon_data.ome.zarr``.
+        Path to ``decon_data.ome.zarr`` when present, otherwise
+        ``corrected_data.ome.zarr``.
     """
+    decon_path = datastore._image_store_path(
+        datastore._fiducial_root_path
+        / Path(tile_id)
+        / Path(round_id)
+        / Path("decon_data")
+    )
+    if decon_path.exists():
+        return decon_path
     return datastore._image_store_path(
         datastore._fiducial_root_path
         / Path(tile_id)
         / Path(round_id)
-        / Path("registered_decon_data")
+        / Path("corrected_data")
     )
 
 
-def _read_registered_fiducial_sim(
+def _read_fiducial_sim(
     input_path: Path,
     scale: dict[str, float],
     translation: dict[str, float],
@@ -696,12 +607,12 @@ def _read_registered_fiducial_sim(
     si_utils: Any,
 ) -> Any:
     """
-    Read one registered fiducial OME-Zarr as a SpatialImage.
+    Read one native fiducial OME-Zarr as a SpatialImage.
 
     Parameters
     ----------
     input_path : pathlib.Path
-        Local registered fiducial OME-Zarr path.
+        Local fiducial OME-Zarr path.
     scale : dict[str, float]
         Physical pixel spacing by spatial dimension.
     translation : dict[str, float]
@@ -772,7 +683,7 @@ def _sim_fusion_summary(sim: Any) -> str:
 
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
-    Deconvolve readout bits, run U-FISH, and save native-frame outputs.
+    Optionally deconvolve readout bits and always save U-FISH outputs.
 
     Parameters
     ----------
@@ -817,16 +728,20 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
         else:
             psf_idx = 2
 
-        reg_on_disk = dr._has_valid_registered_image(bit_id=bit_id)
+        decon_on_disk = dr._has_valid_deconvolved_readout_image(bit_id=bit_id)
         feature_predictor_on_disk = dr._has_valid_feature_predictor_outputs(
             bit_id=bit_id
         )
 
-        if reg_on_disk and feature_predictor_on_disk and not dr._overwrite_registered:
+        if (
+            (decon_on_disk or not dr._decon_readout)
+            and feature_predictor_on_disk
+            and not dr._overwrite_registered
+        ):
             continue
 
         if (
-            (not reg_on_disk)
+            (dr._decon_readout and not decon_on_disk)
             or (not feature_predictor_on_disk)
             or dr._overwrite_registered
         ):
@@ -845,7 +760,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # deconvolution
             if dr._decon_readout:
                 start_time = timeit.default_timer()
-                decon_image = _run_chunked_rlgc_remembering_crop(
+                predictor_input_image = _run_chunked_rlgc_remembering_crop(
                     dr=dr,
                     chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
@@ -853,28 +768,35 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     gpu_id=local_gpu_id,
                     release_memory=True,
                 )
-                decon_image = decon_image.clip(0, 2**16 - 1).astype(np.uint16)
+                predictor_input_image = predictor_input_image.clip(0, 2**16 - 1).astype(
+                    np.uint16
+                )
                 _registration_diag(
                     "bit_decon "
                     f"tile={dr._tile_id} bit={bit_id} "
                     f"input_shape={tuple(int(v) for v in corrected_image.shape)} "
-                    f"output_shape={tuple(int(v) for v in decon_image.shape)} "
+                    f"output_shape={tuple(int(v) for v in predictor_input_image.shape)} "
                     f"elapsed_s={timeit.default_timer() - start_time:.2f}",
                     enabled=dr._registration_diagnostics,
                 )
+                dr._datastore.save_local_deconvolved_readout_image(
+                    predictor_input_image,
+                    tile=dr._tile_id,
+                    bit=bit_id,
+                )
             else:
-                decon_image = corrected_image.copy()
+                predictor_input_image = corrected_image
 
             ufish = UFish(device=f"cuda:{local_gpu_id}")
             _load_ufish_model(ufish, dr._ufish_model)
             start_time = timeit.default_timer()
             feature_predictor_loc, feature_predictor_data = ufish.predict(
-                decon_image, axes="zyx", blend_3d=False, batch_size=1
+                predictor_input_image, axes="zyx", blend_3d=False, batch_size=1
             )
             _registration_diag(
                 "bit_ufish "
                 f"tile={dr._tile_id} bit={bit_id} "
-                f"image_shape={tuple(int(v) for v in decon_image.shape)} "
+                f"image_shape={tuple(int(v) for v in predictor_input_image.shape)} "
                 f"spots={len(feature_predictor_loc)} "
                 f"elapsed_s={timeit.default_timer() - start_time:.2f}",
                 enabled=dr._registration_diagnostics,
@@ -886,26 +808,14 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             torch.cuda.empty_cache()
             gc.collect()
 
-            data_reg = decon_image
             _registration_diag(
-                "bit_save_unwarped "
+                "bit_feature_predictor_done "
                 f"tile={dr._tile_id} bit={bit_id} "
                 f"round={dr._round_ids[r_idx]} "
-                f"image_shape={tuple(int(v) for v in data_reg.shape)} "
+                f"image_shape={tuple(int(v) for v in predictor_input_image.shape)} "
                 f"feature_shape={tuple(int(v) for v in feature_predictor_data.shape)} "
                 f"spots={len(feature_predictor_loc)}",
                 enabled=dr._registration_diagnostics,
-            )
-
-            # clip to uint16
-            data_reg = data_reg.clip(0, 2**16 - 1).astype(np.uint16)
-
-            # Save unwarped readout immediately so overwrite does not depend on U-FISH.
-            dr._datastore.save_local_registered_image(
-                data_reg,
-                tile=dr._tile_id,
-                deconvolution=dr._decon_readout,
-                bit=bit_id,
             )
 
             # feature_predictor ROI sums
@@ -952,7 +862,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             feature_predictor_loc["sum_decon_pixels"] = feature_predictor_loc.apply(
                 sum_pixels_in_roi,
                 axis=1,
-                image=data_reg,
+                image=predictor_input_image,
                 roi_dims=(roi_z, roi_y, roi_x),
             )
 
@@ -975,7 +885,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                     f"Finished readout tile id: {dr._tile_id}; bit id: {bit_id}.",
                 )
 
-            del data_reg, feature_predictor_data, feature_predictor_loc
+            del predictor_input_image, feature_predictor_data, feature_predictor_loc
             gc.collect()
 
     try:
@@ -1003,12 +913,10 @@ class DataRegistration:
         Deconvolve readout images before saving unwarped readout data for
         decode-time registration.
     overwrite_registered: bool, default False
-        Overwrite existing registered data and registrations
+        Overwrite existing local transforms and preprocessing outputs.
     perform_deformable_registration: bool, default True
         Estimate and save a residual SOFIMA deformable flow field after affine
         fiducial registration.
-    save_all_fiducial_registered: bool, default True
-        Save registered fiducial rounds > 1. These are not used for analysis.
     num_gpus: int, default 1
         Number of GPUs to use for registration.
     crop_yx_decon: int, default 2048
@@ -1030,7 +938,6 @@ class DataRegistration:
         decon_readout: bool = False,
         overwrite_registered: bool = False,
         perform_deformable_registration: bool = True,
-        save_all_fiducial_registered: bool = False,
         num_gpus: int = 1,
         crop_yx_decon: int = 2048,
         ufish_model: str | Path | None = None,
@@ -1055,16 +962,13 @@ class DataRegistration:
             If True, deconvolve readout images before U-FISH prediction and
             warping.
         overwrite_registered : bool
-            If True, regenerate registered images and feature predictor outputs
-            even when they already exist.
+            If True, regenerate local transforms, optional decon images, and
+            feature predictor outputs even when they already exist.
         perform_deformable_registration : bool
             If True, estimate a SOFIMA flow field after affine registration.
             The saved field uses channel order X, Y, Z; spatial order Z, Y, X;
             and a patch-centered map origin. Pixel decoding composes this field
             with affine and chromatic transforms when readout images are loaded.
-        save_all_fiducial_registered : bool
-            If True, save warped fiducial image volumes for all rounds. The
-            first fiducial round is always saved.
         num_gpus : int
             Number of GPUs available for deconvolution and readout processing.
         crop_yx_decon : int
@@ -1099,7 +1003,6 @@ class DataRegistration:
         self._data_raw = None
         self._has_registered_data = None
         self._overwrite_registered = overwrite_registered
-        self.save_all_fiducial_registered = save_all_fiducial_registered
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
         self._global_registration = global_registration
@@ -1208,7 +1111,7 @@ class DataRegistration:
         Returns
         -------
         overwrite_registered: bool
-            Overwrite existing registered data and registrations
+            Overwrite existing local transforms and preprocessing outputs.
         """
         return self._overwrite_registered
 
@@ -1255,14 +1158,13 @@ class DataRegistration:
             return self._datastore._fiducial_root_path / Path(tile_id) / Path(round_id)
         return self._datastore._readouts_root_path / Path(tile_id) / Path(bit_id)
 
-    def _has_valid_registered_image(
+    def _has_valid_deconvolved_fiducial_image(
         self,
         tile_id: str | None = None,
         round_id: str | None = None,
-        bit_id: str | None = None,
     ) -> bool:
         """
-        Has valid registered image.
+        Has valid native-frame deconvolved fiducial image.
 
         Parameters
         ----------
@@ -1270,24 +1172,53 @@ class DataRegistration:
             Function argument.
         round_id : str | None
             Function argument.
-        bit_id : str | None
-            Function argument.
 
         Returns
         -------
         bool
-            Function result.
+            True when ``decon_data`` exists and matches the corrected image shape.
         """
+        if round_id is None:
+            raise ValueError("round_id is required for fiducial images.")
+
         tile_id = self._tile_id if tile_id is None else tile_id
-        entity_root = self._entity_root(
-            tile_id=tile_id, round_id=round_id, bit_id=bit_id
-        )
+        entity_root = self._entity_root(tile_id=tile_id, round_id=round_id)
         corrected_shape = self._datastore._image_shape(
             entity_root / Path("corrected_data")
         )
-        image_name = "registered_decon_data" if round_id is not None else "decon_data"
-        registered_shape = self._datastore._image_shape(entity_root / Path(image_name))
-        return corrected_shape is not None and registered_shape == corrected_shape
+        decon_shape = self._datastore._image_shape(entity_root / Path("decon_data"))
+        return corrected_shape is not None and decon_shape == corrected_shape
+
+    def _has_valid_deconvolved_readout_image(
+        self,
+        tile_id: str | None = None,
+        bit_id: str | None = None,
+    ) -> bool:
+        """
+        Has valid native-frame deconvolved readout image.
+
+        Parameters
+        ----------
+        tile_id : str | None
+            Tile identifier.
+        bit_id : str | None
+            Bit identifier.
+
+        Returns
+        -------
+        bool
+            True when ``decon_data`` exists and matches the corrected image shape.
+        """
+        tile_id = self._tile_id if tile_id is None else tile_id
+        if bit_id is None:
+            raise ValueError("bit_id is required for readout images.")
+
+        entity_root = self._entity_root(tile_id=tile_id, bit_id=bit_id)
+        corrected_shape = self._datastore._image_shape(
+            entity_root / Path("corrected_data")
+        )
+        readout_shape = self._datastore._image_shape(entity_root / Path("decon_data"))
+        return corrected_shape is not None and readout_shape == corrected_shape
 
     def _has_valid_feature_predictor_outputs(
         self,
@@ -1317,9 +1248,6 @@ class DataRegistration:
         corrected_shape = self._datastore._image_shape(
             entity_root / Path("corrected_data")
         )
-        registered_shape = self._datastore._image_shape(
-            entity_root / Path("decon_data")
-        )
         feature_shape = self._datastore._image_shape(
             entity_root / Path(f"{self._datastore.feature_predictor_folder_name}_data")
         )
@@ -1330,7 +1258,6 @@ class DataRegistration:
         )
         return (
             corrected_shape is not None
-            and registered_shape == corrected_shape
             and feature_shape == corrected_shape
             and spots_path.exists()
         )
@@ -1349,17 +1276,23 @@ class DataRegistration:
         bool
             Function result.
         """
-        if not self._has_valid_registered_image(
-            tile_id=tile_id, round_id=self._round_ids[0]
-        ):
-            return False
-
-        if self.save_all_fiducial_registered:
-            for round_id in self._round_ids[1:]:
-                if not self._has_valid_registered_image(
-                    tile_id=tile_id, round_id=round_id
+        if self._decon_fiducial:
+            for round_id in self._round_ids:
+                if not self._has_valid_deconvolved_fiducial_image(
+                    tile_id=tile_id,
+                    round_id=round_id,
                 ):
                     return False
+
+        for round_id in self._round_ids:
+            if (
+                self._datastore.load_local_round_transform_zyx_um(
+                    tile=tile_id,
+                    round=round_id,
+                )
+                is None
+            ):
+                return False
 
         for bit_id in self._bit_ids:
             if not self._has_valid_feature_predictor_outputs(
@@ -1449,7 +1382,7 @@ class DataRegistration:
         use_stored_global_transforms: bool,
     ) -> list[Any]:
         """
-        Load locally registered reference fiducials as multiscale images.
+        Load native reference fiducials as multiscale images.
 
         Parameters
         ----------
@@ -1494,12 +1427,12 @@ class DataRegistration:
                 "y": float(np.round(tile_position_zyx_um[1], 2)),
                 "x": float(np.round(tile_position_zyx_um[2], 2)),
             }
-            input_path = _local_registered_fiducial_path(
+            input_path = _local_fiducial_path(
                 datastore=self._datastore,
                 tile_id=tile_id,
                 round_id=reference_round_id,
             )
-            sim = _read_registered_fiducial_sim(
+            sim = _read_fiducial_sim(
                 input_path=input_path,
                 scale=scale,
                 translation=tile_grid_positions,
@@ -2067,8 +2000,7 @@ class DataRegistration:
         stored as the local reference for the tile. Remaining fiducial rounds
         are split across GPU worker processes. Each worker loads its assigned
         rounds, optionally deconvolves them, registers them to round 1, saves the
-        physical-space transform, and warps/saves registered fiducials when
-        requested.
+        physical-space transform, and estimates SOFIMA residuals when requested.
 
         Returns
         -------
@@ -2093,12 +2025,6 @@ class DataRegistration:
             round_id=reference_round_id,
             gpu_id=0,
             chunked_rlgc=chunked_rlgc,
-        )
-        self._datastore.save_local_registered_image(
-            reference_image,
-            tile=self._tile_id,
-            deconvolution=self._decon_fiducial,
-            round=reference_round_id,
         )
         self._datastore.save_local_round_transform_zyx_um(
             np.eye(4, dtype=np.float32),
@@ -2176,73 +2102,6 @@ class DataRegistration:
             errors.append(f"Missing processed fiducial rounds: {missing_rounds}")
         if errors:
             raise RuntimeError("Fiducial registration failed:\n" + "\n".join(errors))
-
-        if self._perform_deformable_registration:
-            sofima_queue = mp.Queue()
-            sofima_processes = []
-            sofima_workers = min(self._num_gpus, len(moving_rounds))
-            sofima_chunk_size = (
-                len(moving_rounds) + sofima_workers - 1
-            ) // sofima_workers
-
-            for gpu_id in range(sofima_workers):
-                start = gpu_id * sofima_chunk_size
-                end = min(start + sofima_chunk_size, len(moving_rounds))
-                if start >= end:
-                    break
-
-                subset = moving_rounds[start:end]
-                process = mp.Process(
-                    target=_process_sofima_rounds_on_gpu,
-                    args=(self, subset, gpu_id, sofima_queue),
-                )
-                process.start()
-                sofima_processes.append(process)
-
-            completed_sofima_rounds = set()
-            sofima_errors = []
-            while len(completed_sofima_rounds) + len(sofima_errors) < len(
-                moving_rounds
-            ):
-                try:
-                    status, round_id, payload = sofima_queue.get(timeout=5)
-                except queue.Empty:
-                    if any(
-                        process.exitcode not in (None, 0)
-                        for process in sofima_processes
-                    ):
-                        break
-                    if all(
-                        process.exitcode is not None for process in sofima_processes
-                    ):
-                        break
-                    continue
-                if status == "result":
-                    completed_sofima_rounds.add(round_id)
-                else:
-                    sofima_errors.append(payload)
-
-            for process in sofima_processes:
-                process.join()
-                if process.exitcode not in (0, None):
-                    sofima_errors.append(
-                        f"SOFIMA worker pid={process.pid} failed with "
-                        f"exitcode={process.exitcode}."
-                    )
-
-            missing_sofima_rounds = [
-                round_id
-                for round_id in moving_rounds
-                if round_id not in completed_sofima_rounds
-            ]
-            if missing_sofima_rounds:
-                sofima_errors.append(
-                    f"Missing SOFIMA fiducial rounds: {missing_sofima_rounds}"
-                )
-            if sofima_errors:
-                raise RuntimeError(
-                    "SOFIMA registration failed:\n" + "\n".join(sofima_errors)
-                )
 
         _registration_diag(
             "fiducial_registration_all_done "

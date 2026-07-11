@@ -56,13 +56,15 @@ def fuse_all_channels(
     gene_ids = list(datastore.codebook["gene_id"])
     channel_ids = ["fiducial", *gene_ids]
 
-    first_fiducial_path = (
+    first_fiducial_root = (
         datastore_path
         / Path("fiducial")
         / Path(datastore.tile_ids[0])
         / Path(datastore.round_ids[0])
-        / Path("registered_decon_data.ome.zarr")
     )
+    first_fiducial_path = first_fiducial_root / Path("decon_data.ome.zarr")
+    if not first_fiducial_path.exists():
+        first_fiducial_path = first_fiducial_root / Path("corrected_data.ome.zarr")
     first_fiducial_sim = ngff_utils.read_sim_from_ome_zarr(
         first_fiducial_path,
         resolution_level=0,
@@ -95,13 +97,12 @@ def fuse_all_channels(
             "x": np.round(tile_position_zyx_um[2], 2),
         }
 
-        input_path = (
-            datastore_path
-            / Path("fiducial")
-            / Path(tile_id)
-            / Path("round001")
-            / Path("registered_decon_data.ome.zarr")
+        input_root = (
+            datastore_path / Path("fiducial") / Path(tile_id) / Path("round001")
         )
+        input_path = input_root / Path("decon_data.ome.zarr")
+        if not input_path.exists():
+            input_path = input_root / Path("corrected_data.ome.zarr")
         sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
             input_path,
             resolution_level=0,
@@ -150,7 +151,7 @@ def fuse_all_channels(
     for ch_idx in tqdm(range(len(channel_ids)), desc="channel"):
         msims_full = []
         for tile_idx, msim in enumerate(tqdm(msims, desc="tile")):
-            # parse the registered fiducial channel to get the registration metadata
+            # parse the fiducial channel to get the registration metadata
             affine = msi_utils.get_transform_from_msim(
                 msim, transform_key="affine_registered"
             ).data.squeeze()
@@ -170,15 +171,14 @@ def fuse_all_channels(
             # lazy load tile data
             tile_id = tile_ids[tile_idx]
 
-            # lazy load deconvolved fiducial
+            # lazy load fiducial
             if ch_idx == 0:
-                input_path = (
-                    datastore_path
-                    / Path("fiducial")
-                    / Path(tile_id)
-                    / Path("round001")
-                    / Path("registered_decon_data.ome.zarr")
+                input_root = (
+                    datastore_path / Path("fiducial") / Path(tile_id) / Path("round001")
                 )
+                input_path = input_root / Path("decon_data.ome.zarr")
+                if not input_path.exists():
+                    input_path = input_root / Path("corrected_data.ome.zarr")
                 im_data[0, :] = da.from_zarr(str(input_path)).astype(np.uint16)
             # lazy load deconvolved * (u-fish prediction>0.25) readout bits
             else:
