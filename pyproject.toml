@@ -32,7 +32,7 @@ dependencies = [
     "cuvs-cu12==26.6.*; sys_platform == 'linux'",
     "torch",
     "torchvision",
-    "onnxruntime-gpu",
+    "onnxruntime-gpu<1.26",
     "ndv[vispy,pyqt]",
     "cellpose[gui]",
     "ufish @ git+https://github.com/QI2lab/U-FISH.git@main",
