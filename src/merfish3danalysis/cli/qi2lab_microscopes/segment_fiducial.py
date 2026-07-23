@@ -268,6 +268,10 @@ def run_cellpose(
         flush=True,
     )
 
+    # update datastore state
+    datastore_state = datastore.datastore_state
+    datastore_state.update({"SegmentedCells": True})
+    datastore.datastore_state = datastore_state
 
 def _global_roi_from_pixel_roi(
     pixel_spaced_roi: ImagejRoi,
