@@ -12,7 +12,7 @@ You can try out the package in the cloud on simulated data using a [Google Colab
 
 ## Installation
 
-This project uses one `uv` environment for preprocessing, decoding, registration, stitching, viewing, development, and documentation. The Python environment installs CUDA 12.9 runtime/toolkit wheels through the project dependencies. You still need a compatible NVIDIA driver installed on the machine.
+This project uses one `uv` environment based on CUDA 12.9 runtime/toolkit. You need a compatible NVIDIA driver installed on the machine.
 
 Install `uv` if needed:
 
@@ -127,8 +127,6 @@ uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exh
 ```
 
 The standard simulation matrix runs paired affine and SOFIMA preprocessing for
-every default dataset, axial spacing, and chromatic-aberration setting. The
-test exits immediately if SOFIMA lowers the rounded F1 score relative to the
-paired affine run. The exhaustive mode keeps the longer feature-prediction
-threshold sweep and writes measured performance records to
-`tests/data/simulation_performance.json`.
+every default dataset, axial spacing, and chromatic-aberration setting. The exhaustive
+mode keeps the longer feature-prediction threshold sweep and writes measured performance 
+records to `tests/data/simulation_performance.json`.

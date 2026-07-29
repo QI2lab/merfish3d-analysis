@@ -69,7 +69,7 @@ def fuse_all_channels(
         first_fiducial_path,
         resolution_level=0,
         transform_key="stage_metadata",
-        use_dask=False,
+        array_backend="zarr",
     )
     im_shape = tuple(int(first_fiducial_sim.sizes[dim]) for dim in ("z", "y", "x"))
     del first_fiducial_sim
@@ -107,7 +107,7 @@ def fuse_all_channels(
             input_path,
             resolution_level=0,
             transform_key="stage_metadata",
-            use_dask=False,
+            array_backend="zarr",
         )
 
         # create spatial image for all channels in current tile

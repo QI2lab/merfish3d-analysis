@@ -39,7 +39,7 @@ dependencies = [
     "sofima @ git+https://github.com/google-research/sofima.git",
     "jax[cuda12]; sys_platform == 'linux'",
     "basicpy @ git+https://github.com/QI2lab/BaSiCPy.git@main",
-    "multiview-stitcher[itk-elastix]>=0.1.56",
+    "multiview-stitcher[itk-elastix]==0.1.59",
     "tifffile==2025.9.20",
     "psfmodels",
     "ndstorage",

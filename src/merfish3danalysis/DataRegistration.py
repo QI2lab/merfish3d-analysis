@@ -747,7 +747,7 @@ def _read_fiducial_sim(
         input_path,
         resolution_level=0,
         transform_key=transform_key,
-        use_dask=False,
+        array_backend="zarr",
     )
     return si_utils.get_sim_from_array(
         sim_on_disk.data,
