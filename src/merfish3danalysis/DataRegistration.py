@@ -1698,6 +1698,7 @@ class DataRegistration:
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
+        fusion_threads = max(1, 4 * (os.cpu_count() or 1))
         fused_msim = fusion.fuse(
             images=msims,
             transform_key=self._global_registration_config.new_transform_key,
@@ -1709,9 +1710,10 @@ class DataRegistration:
             },
             batch_options={
                 "batch_func": misc_utils.process_batch_using_joblib,
-                "n_batch": max(1, os.cpu_count() or 1),
+                "n_batch": fusion_threads,
                 "batch_func_kwargs": {
-                    "n_jobs": -1,
+                    "n_jobs": fusion_threads,
+                    "backend": "threading",
                 },
             },
             backend="numpy",
