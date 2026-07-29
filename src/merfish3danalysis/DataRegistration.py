@@ -115,12 +115,14 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
 
 def _configure_loky_worker_diagnostics(log_path: str) -> None:
     """
-    Record loky's worker lifecycle and memory-leak checks during fusion.
+    Configure and record loky's worker lifecycle during fusion.
 
     This initializer runs inside every fusion worker. Joblib's normal warning
     omits whether a clean worker exit was caused by its idle timeout or by its
-    RSS-growth guard; loky's internal multiprocessing messages distinguish the
-    two and include the sampled RSS values at debug level.
+    RSS-growth guard. The guard treats a 300 MB increase over the first task's
+    RSS as a memory leak, which is not valid for fusion workers that retain
+    reusable NumPy/native allocator buffers. Disable that worker recycler while
+    retaining loky's periodic garbage collection and lifecycle diagnostics.
 
     Parameters
     ----------
@@ -155,11 +157,16 @@ def _configure_loky_worker_diagnostics(log_path: str) -> None:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
+    original_memory_guard = process_executor._USE_PSUTIL
+    process_executor._USE_PSUTIL = False
     logger.info(
         "loky fusion worker diagnostics enabled: "
-        "psutil_memory_guard=%s rss_growth_limit_bytes=%d "
-        "memory_check_interval_s=%.1f",
-        process_executor._USE_PSUTIL,
+        "psutil_memory_guard_original=%s "
+        "psutil_memory_guard_disabled_for_fusion=%s "
+        "original_rss_growth_limit_bytes=%d "
+        "gc_interval_s=%.1f",
+        original_memory_guard,
+        not process_executor._USE_PSUTIL,
         process_executor._MAX_MEMORY_LEAK_SIZE,
         process_executor._MEMORY_LEAK_CHECK_DELAY,
     )
