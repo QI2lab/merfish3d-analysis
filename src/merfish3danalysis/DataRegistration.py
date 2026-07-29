@@ -1656,6 +1656,7 @@ class DataRegistration:
         msims: list[Any],
         create_max_proj_tiff: bool,
         fusion: Any,
+        misc_utils: Any,
         msi_utils: Any,
         si_utils: Any,
         TiffWriter: Any,
@@ -1672,6 +1673,8 @@ class DataRegistration:
             If True, write a fused fiducial max-projection TIFF.
         fusion : Any
             ``multiview_stitcher.fusion`` module.
+        misc_utils : Any
+            ``multiview_stitcher.misc_utils`` module.
         msi_utils : Any
             ``multiview_stitcher.msi_utils`` module.
         si_utils : Any
@@ -1704,7 +1707,14 @@ class DataRegistration:
                 "ngff_version": "0.5",
                 "overwrite": True,
             },
-            backend="cupy",
+            batch_options={
+                "batch_func": misc_utils.process_batch_using_joblib,
+                "n_batch": max(1, os.cpu_count() or 1),
+                "batch_func_kwargs": {
+                    "n_jobs": -1,
+                },
+            },
+            backend="numpy",
         )
         if self._verbose >= 1:
             print(
@@ -1789,8 +1799,7 @@ class DataRegistration:
         The method reads each tile's first fiducial round, combines stage
         metadata with multiview-stitcher global registration, saves per-tile
         global transforms back to the datastore, and fuses the transformed
-        views directly into the datastore as OME-Zarr v0.5 using CuPy-backed
-        fusion.
+        views directly into the datastore as OME-Zarr v0.5.
 
         Parameters
         ----------
@@ -1809,6 +1818,7 @@ class DataRegistration:
         from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
             fusion,
+            misc_utils,
             msi_utils,
             registration,
         )
@@ -1932,6 +1942,7 @@ class DataRegistration:
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
             fusion=fusion,
+            misc_utils=misc_utils,
             msi_utils=msi_utils,
             si_utils=si_utils,
             TiffWriter=TiffWriter,
@@ -1966,7 +1977,7 @@ class DataRegistration:
             projection are written to the datastore.
         """
         import zarr
-        from multiview_stitcher import fusion, msi_utils
+        from multiview_stitcher import fusion, misc_utils, msi_utils
         from multiview_stitcher import spatial_image_utils as si_utils
         from tifffile import TiffWriter
 
@@ -1986,6 +1997,7 @@ class DataRegistration:
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
             fusion=fusion,
+            misc_utils=misc_utils,
             msi_utils=msi_utils,
             si_utils=si_utils,
             TiffWriter=TiffWriter,
