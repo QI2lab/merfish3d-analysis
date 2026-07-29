@@ -16,10 +16,12 @@ import dask
 import dask.array as da
 import dask.diagnostics
 import numpy as np
-from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils, registration
+import zarr
+from multiview_stitcher import fusion, misc_utils, msi_utils, registration
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
+from merfish3danalysis.DataRegistration import _read_fiducial_sim
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 mp.set_start_method("spawn", force=True)
@@ -65,11 +67,14 @@ def fuse_all_channels(
     first_fiducial_path = first_fiducial_root / Path("decon_data.ome.zarr")
     if not first_fiducial_path.exists():
         first_fiducial_path = first_fiducial_root / Path("corrected_data.ome.zarr")
-    first_fiducial_sim = ngff_utils.read_sim_from_ome_zarr(
-        first_fiducial_path,
-        resolution_level=0,
+    first_fiducial_sim = _read_fiducial_sim(
+        input_path=first_fiducial_path,
+        scale={"z": 1.0, "y": 1.0, "x": 1.0},
+        translation={"z": 0.0, "y": 0.0, "x": 0.0},
+        affine_zyx_px=np.eye(4, dtype=np.float32),
         transform_key="stage_metadata",
-        array_backend="zarr",
+        zarr_module=zarr,
+        si_utils=si_utils,
     )
     im_shape = tuple(int(first_fiducial_sim.sizes[dim]) for dim in ("z", "y", "x"))
     del first_fiducial_sim
@@ -103,33 +108,19 @@ def fuse_all_channels(
         input_path = input_root / Path("decon_data.ome.zarr")
         if not input_path.exists():
             input_path = input_root / Path("corrected_data.ome.zarr")
-        sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
-            input_path,
-            resolution_level=0,
-            transform_key="stage_metadata",
-            array_backend="zarr",
-        )
-
-        # create spatial image for all channels in current tile
-        sim = si_utils.get_sim_from_array(
-            sim_on_disk.data,
-            dims=sim_on_disk.dims,
+        sim = _read_fiducial_sim(
+            input_path=input_path,
             scale=scale,
             translation=tile_grid_positions,
-            affine=affine_zyx_px,
+            affine_zyx_px=affine_zyx_px,
             transform_key="stage_metadata",
-            c_coords=(
-                sim_on_disk.coords["c"].values if "c" in sim_on_disk.coords else None
-            ),
-            t_coords=(
-                sim_on_disk.coords["t"].values if "t" in sim_on_disk.coords else None
-            ),
+            zarr_module=zarr,
+            si_utils=si_utils,
         )
 
         # convert to multiscale spatial image object and append to list for registration
         msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
         msims.append(msim)
-        del sim_on_disk
         gc.collect()
 
     # perform registration

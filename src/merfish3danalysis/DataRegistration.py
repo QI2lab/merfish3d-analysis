@@ -714,7 +714,7 @@ def _read_fiducial_sim(
     translation: dict[str, float],
     affine_zyx_px: Any,
     transform_key: str,
-    ngff_utils: Any,
+    zarr_module: Any,
     si_utils: Any,
 ) -> Any:
     """
@@ -732,8 +732,8 @@ def _read_fiducial_sim(
         Camera-to-stage affine transform loaded from datastore metadata.
     transform_key : str
         Transform key used for stage metadata in the returned SpatialImage.
-    ngff_utils : Any
-        ``multiview_stitcher.ngff_utils`` module.
+    zarr_module : Any
+        Imported ``zarr`` module.
     si_utils : Any
         ``multiview_stitcher.spatial_image_utils`` module.
 
@@ -743,21 +743,36 @@ def _read_fiducial_sim(
         SpatialImage with datastore stage metadata attached under
         ``stage_metadata``.
     """
-    sim_on_disk = ngff_utils.read_sim_from_ome_zarr(
-        input_path,
-        resolution_level=0,
-        transform_key=transform_key,
-        array_backend="zarr",
-    )
+    array = zarr_module.open_array(input_path / Path("0"), mode="r")
+    dimension_names = getattr(array.metadata, "dimension_names", None)
+    if dimension_names is None or any(name is None for name in dimension_names):
+        dims = ("t", "c", "z", "y", "x")[-array.ndim :]
+    else:
+        dims = tuple(dimension_names)
+
+    metadata = array.metadata.to_dict()
+    if metadata.get("zarr_format") == 3 and "dimension_names" in metadata:
+        # Build a second read-only handle without storage-level axis labels.
+        # multiview-stitcher receives the explicit dims above and can therefore
+        # add singleton t/c axes without producing rank-inconsistent virtual
+        # Zarr metadata. The source store and its metadata are never modified.
+        metadata.pop("dimension_names")
+        array = zarr_module.Array(
+            zarr_module.AsyncArray(
+                metadata=metadata,
+                store_path=array.store_path,
+            )
+        )
+
     return si_utils.get_sim_from_array(
-        sim_on_disk.data,
-        dims=sim_on_disk.dims,
+        array,
+        dims=dims,
         scale=scale,
         translation=translation,
         affine=affine_zyx_px,
         transform_key=transform_key,
-        c_coords=sim_on_disk.coords["c"].values if "c" in sim_on_disk.coords else None,
-        t_coords=sim_on_disk.coords["t"].values if "t" in sim_on_disk.coords else None,
+        c_coords=None,
+        t_coords=None,
     )
 
 
@@ -1486,7 +1501,7 @@ class DataRegistration:
     def _load_global_fiducial_msims(
         self,
         *,
-        ngff_utils: Any,
+        zarr_module: Any,
         msi_utils: Any,
         si_utils: Any,
         use_stored_global_transforms: bool,
@@ -1496,8 +1511,8 @@ class DataRegistration:
 
         Parameters
         ----------
-        ngff_utils : Any
-            ``multiview_stitcher.ngff_utils`` module.
+        zarr_module : Any
+            Imported ``zarr`` module.
         msi_utils : Any
             ``multiview_stitcher.msi_utils`` module.
         si_utils : Any
@@ -1548,7 +1563,7 @@ class DataRegistration:
                 translation=tile_grid_positions,
                 affine_zyx_px=affine_zyx_px,
                 transform_key=self._global_registration_config.transform_key,
-                ngff_utils=ngff_utils,
+                zarr_module=zarr_module,
                 si_utils=si_utils,
             )
             msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
@@ -1873,13 +1888,13 @@ class DataRegistration:
             Global transforms, fused fiducial OME-Zarr, datastore state, and
             optional max projection are written to the datastore.
         """
+        import zarr
         from dask import config as dask_config
         from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
             fusion,
             misc_utils,
             msi_utils,
-            ngff_utils,
             registration,
         )
         from multiview_stitcher import spatial_image_utils as si_utils
@@ -1907,7 +1922,7 @@ class DataRegistration:
             print(time_stamp(), "Starting global fiducial registration.")
 
         msims = self._load_global_fiducial_msims(
-            ngff_utils=ngff_utils,
+            zarr_module=zarr,
             msi_utils=msi_utils,
             si_utils=si_utils,
             use_stored_global_transforms=False,
@@ -2040,7 +2055,8 @@ class DataRegistration:
             Fused fiducial OME-Zarr, datastore state, and optional max
             projection are written to the datastore.
         """
-        from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
+        import zarr
+        from multiview_stitcher import fusion, misc_utils, msi_utils
         from multiview_stitcher import spatial_image_utils as si_utils
         from tifffile import TiffWriter
 
@@ -2051,7 +2067,7 @@ class DataRegistration:
             )
 
         msims = self._load_global_fiducial_msims(
-            ngff_utils=ngff_utils,
+            zarr_module=zarr,
             msi_utils=msi_utils,
             si_utils=si_utils,
             use_stored_global_transforms=True,
