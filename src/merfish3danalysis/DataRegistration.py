@@ -1699,6 +1699,16 @@ class DataRegistration:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
         fusion_workers = max(1, os.cpu_count() or 1)
+        # multiview-stitcher passes ``backend`` directly to joblib.  Supplying
+        # a configured backend instance keeps loky's reusable workers alive
+        # across long, uneven fusion batches; its 300 s default idle timeout
+        # otherwise produces worker-restart warnings and avoidable churn.
+        from joblib._parallel_backends import LokyBackend
+
+        fusion_backend = LokyBackend(
+            idle_worker_timeout=24 * 60 * 60,
+            inner_max_num_threads=1,
+        )
         fused_msim = fusion.fuse(
             images=msims,
             transform_key=self._global_registration_config.new_transform_key,
@@ -1713,7 +1723,7 @@ class DataRegistration:
                 "n_batch": 4 * fusion_workers,
                 "batch_func_kwargs": {
                     "n_jobs": fusion_workers,
-                    "backend": "threading",
+                    "backend": fusion_backend,
                 },
             },
             backend="numpy",
