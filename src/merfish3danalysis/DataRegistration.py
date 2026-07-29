@@ -32,6 +32,7 @@ import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 import os
 import warnings
+from collections.abc import Callable, Iterator
 
 warnings.filterwarnings(
     "ignore",
@@ -97,7 +98,6 @@ class GlobalFusionConfig:
     """Explicit multiview-stitcher global fusion parameters."""
 
     n_batch: int = 20
-    n_jobs: int | None = None
     overlap_in_pixels: int = 64
     backend: str = "cupy"
     output_on_backend: bool = False
@@ -743,11 +743,7 @@ def _read_fiducial_sim(
         ``stage_metadata``.
     """
     array = zarr_module.open_array(input_path / Path("0"), mode="r")
-    dimension_names = getattr(array.metadata, "dimension_names", None)
-    if dimension_names is None or any(name is None for name in dimension_names):
-        dims = ("t", "c", "z", "y", "x")[-array.ndim :]
-    else:
-        dims = tuple(dimension_names)
+    dims = _zarr_array_dims(array)
 
     metadata = array.metadata.to_dict()
     if metadata.get("zarr_format") == 3 and "dimension_names" in metadata:
@@ -772,6 +768,156 @@ def _read_fiducial_sim(
         transform_key=transform_key,
         c_coords=None,
         t_coords=None,
+    )
+
+
+def _zarr_array_dims(array: Any) -> tuple[str, ...]:
+    """Return explicit dimension names for a Zarr image array."""
+    dimension_names = getattr(array.metadata, "dimension_names", None)
+    if dimension_names is None or any(name is None for name in dimension_names):
+        if array.ndim > 5:
+            raise ValueError(
+                f"Cannot infer axes for a {array.ndim}-dimensional Zarr array."
+            )
+        return ("t", "c", "z", "y", "x")[-array.ndim :]
+    return tuple(str(name) for name in dimension_names)
+
+
+def _iter_zarr_max_projection_tiles(
+    array: Any,
+    *,
+    tile_shape_yx: tuple[int, int] = (1024, 1024),
+) -> Iterator[np.ndarray]:
+    """Yield padded YX tiles of a chunk-wise Z maximum projection."""
+    dims = _zarr_array_dims(array)
+    if not {"z", "y", "x"}.issubset(dims):
+        raise ValueError(f"Expected z, y, and x axes in fused Zarr array; got {dims}.")
+
+    axis = {dim: dims.index(dim) for dim in dims}
+    for dim in dims:
+        if dim not in {"z", "y", "x"} and int(array.shape[axis[dim]]) != 1:
+            raise ValueError(
+                "Fused max projection requires singleton non-spatial axes; "
+                f"axis {dim!r} has size {array.shape[axis[dim]]}."
+            )
+
+    z_size = int(array.shape[axis["z"]])
+    y_size = int(array.shape[axis["y"]])
+    x_size = int(array.shape[axis["x"]])
+    z_chunk = max(1, int(array.chunks[axis["z"]]))
+    tile_y, tile_x = (int(tile_shape_yx[0]), int(tile_shape_yx[1]))
+    spatial_order = [dim for dim in dims if dim in {"z", "y", "x"}]
+    transpose_order = tuple(spatial_order.index(dim) for dim in ("z", "y", "x"))
+
+    for y_start in range(0, y_size, tile_y):
+        y_stop = min(y_start + tile_y, y_size)
+        for x_start in range(0, x_size, tile_x):
+            x_stop = min(x_start + tile_x, x_size)
+            projection = None
+            for z_start in range(0, z_size, z_chunk):
+                z_stop = min(z_start + z_chunk, z_size)
+                selection: list[int | slice] = [0] * array.ndim
+                selection[axis["z"]] = slice(z_start, z_stop)
+                selection[axis["y"]] = slice(y_start, y_stop)
+                selection[axis["x"]] = slice(x_start, x_stop)
+                block = np.asarray(array[tuple(selection)])
+                block = np.transpose(block, transpose_order)
+                block_projection = np.max(block, axis=0)
+                if projection is None:
+                    projection = np.array(block_projection, copy=True)
+                else:
+                    np.maximum(projection, block_projection, out=projection)
+
+            if projection is None:
+                raise ValueError("Cannot project a fused Zarr array with an empty z axis.")
+            padded_tile = np.zeros((tile_y, tile_x), dtype=array.dtype)
+            padded_tile[: y_stop - y_start, : x_stop - x_start] = projection
+            yield padded_tile
+
+
+def _write_zarr_max_projection_tiff(
+    *,
+    array: Any,
+    filename_path: Path,
+    spacing_zyx_um: np.ndarray,
+    TiffWriter: Any,
+    tile_shape_yx: tuple[int, int] = (1024, 1024),
+) -> None:
+    """Write a tiled OME-TIFF Z projection without materializing the mosaic."""
+    dims = _zarr_array_dims(array)
+    axis = {dim: dims.index(dim) for dim in dims}
+    shape_yx = (int(array.shape[axis["y"]]), int(array.shape[axis["x"]]))
+    with TiffWriter(filename_path, bigtiff=True) as tif:
+        tif.write(
+            data=_iter_zarr_max_projection_tiles(
+                array,
+                tile_shape_yx=tile_shape_yx,
+            ),
+            shape=shape_yx,
+            dtype=array.dtype,
+            tile=tile_shape_yx,
+            resolution=(
+                1e4 / float(spacing_zyx_um[2]),
+                1e4 / float(spacing_zyx_um[1]),
+            ),
+            compression="zlib",
+            compressionargs={"level": 8},
+            predictor=True,
+            photometric="minisblack",
+            resolutionunit="CENTIMETER",
+            metadata={
+                "axes": "YX",
+                "SignificantBits": int(np.dtype(array.dtype).itemsize * 8),
+                "PhysicalSizeX": float(spacing_zyx_um[2]),
+                "PhysicalSizeXUnit": "µm",
+                "PhysicalSizeY": float(spacing_zyx_um[1]),
+                "PhysicalSizeYUnit": "µm",
+            },
+        )
+
+
+def _process_fusion_blocks_on_gpu(
+    func: Callable[[Any], Any],
+    block_ids: list[Any],
+    gpu_id: int,
+) -> None:
+    """Process one block partition sequentially on one explicitly selected GPU."""
+    import cupy as cp
+
+    with cp.cuda.Device(int(gpu_id)):
+        for block_id in block_ids:
+            func(block_id)
+
+
+def _process_fusion_batch_on_gpus(
+    func: Callable[[Any], Any],
+    block_ids: list[Any],
+    *,
+    gpu_ids: tuple[int, ...],
+) -> None:
+    """Distribute a fusion batch across GPU-bound threads without loky workers."""
+    if not gpu_ids:
+        raise ValueError("At least one GPU ID is required for CuPy fusion.")
+
+    partitions = [
+        list(block_ids[gpu_index:: len(gpu_ids)])
+        for gpu_index in range(len(gpu_ids))
+    ]
+    assignments = [
+        (gpu_id, partition)
+        for gpu_id, partition in zip(gpu_ids, partitions, strict=True)
+        if partition
+    ]
+    if len(assignments) == 1:
+        gpu_id, partition = assignments[0]
+        _process_fusion_blocks_on_gpu(func, partition, gpu_id)
+        return
+
+    from joblib import Parallel, delayed
+
+    Parallel(n_jobs=len(assignments), backend="threading")(
+        delayed(_process_fusion_blocks_on_gpu)(func, partition, gpu_id)
+        for gpu_id, partition in assignments
     )
 
 
@@ -1682,10 +1828,10 @@ class DataRegistration:
         msims: list[Any],
         create_max_proj_tiff: bool,
         fusion: Any,
-        misc_utils: Any,
         msi_utils: Any,
         si_utils: Any,
         TiffWriter: Any,
+        zarr_module: Any,
     ) -> None:
         """
         Fuse globally registered fiducial views and write datastore metadata.
@@ -1698,14 +1844,14 @@ class DataRegistration:
             If True, write a fused fiducial max-projection TIFF.
         fusion : Any
             ``multiview_stitcher.fusion`` module.
-        misc_utils : Any
-            ``multiview_stitcher.misc_utils`` module.
         msi_utils : Any
             ``multiview_stitcher.msi_utils`` module.
         si_utils : Any
             ``multiview_stitcher.spatial_image_utils`` module.
         TiffWriter : Any
             ``tifffile.TiffWriter`` class.
+        zarr_module : Any
+            Imported ``zarr`` module.
 
         Returns
         -------
@@ -1729,16 +1875,12 @@ class DataRegistration:
             shutil.rmtree(output_zarr_path)
 
         fusion_config = self._global_fusion_config
-        n_jobs = (
-            min(4, max(1, int(self._num_gpus)))
-            if fusion_config.n_jobs is None
-            else int(fusion_config.n_jobs)
-        )
+        gpu_ids = tuple(range(max(1, int(self._num_gpus))))
         batch_options = {
-            "batch_func": misc_utils.process_batch_using_joblib,
+            "batch_func": _process_fusion_batch_on_gpus,
             "n_batch": int(fusion_config.n_batch),
             "batch_func_kwargs": {
-                "n_jobs": n_jobs,
+                "gpu_ids": gpu_ids,
             },
         }
         self._print_global_fusion_diagnostics(
@@ -1811,15 +1953,6 @@ class DataRegistration:
 
         if create_max_proj_tiff:
             projection_start_time = timeit.default_timer()
-            loaded = self._datastore.load_global_fiducial_image(return_future=False)
-            if loaded is None:
-                raise RuntimeError(
-                    "Fused fiducial image was not readable after fusion."
-                )
-            fiducial_fused, _, _, spacing_zyx_um = loaded
-            fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-            del fiducial_fused
-
             cellpose_path = (
                 self._datastore._datastore_path
                 / Path("segmentation")
@@ -1827,27 +1960,17 @@ class DataRegistration:
             )
             cellpose_path.mkdir(exist_ok=True)
             filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
-            with TiffWriter(filename_path, bigtiff=True) as tif:
-                tif.write(
-                    fiducial_max_projection,
-                    resolution=(
-                        1e4 / float(spacing_zyx_um[2]),
-                        1e4 / float(spacing_zyx_um[1]),
-                    ),
-                    compression="zlib",
-                    compressionargs={"level": 8},
-                    predictor=True,
-                    photometric="minisblack",
-                    resolutionunit="CENTIMETER",
-                    metadata={
-                        "axes": "YX",
-                        "SignificantBits": 16,
-                        "PhysicalSizeX": float(spacing_zyx_um[2]),
-                        "PhysicalSizeXUnit": "µm",
-                        "PhysicalSizeY": float(spacing_zyx_um[1]),
-                        "PhysicalSizeYUnit": "µm",
-                    },
-                )
+            fused_array = zarr_module.open_array(
+                output_zarr_path / Path("0"),
+                mode="r",
+            )
+            _write_zarr_max_projection_tiff(
+                array=fused_array,
+                filename_path=filename_path,
+                spacing_zyx_um=np.asarray(spacing, dtype=np.float32),
+                TiffWriter=TiffWriter,
+            )
+            del fused_array
             if self._verbose >= 1:
                 print(
                     time_stamp(),
@@ -1892,7 +2015,6 @@ class DataRegistration:
         from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
             fusion,
-            misc_utils,
             msi_utils,
             registration,
         )
@@ -2016,10 +2138,10 @@ class DataRegistration:
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
             fusion=fusion,
-            misc_utils=misc_utils,
             msi_utils=msi_utils,
             si_utils=si_utils,
             TiffWriter=TiffWriter,
+            zarr_module=zarr,
         )
 
         if self._verbose >= 1:
@@ -2050,7 +2172,7 @@ class DataRegistration:
             projection are written to the datastore.
         """
         import zarr
-        from multiview_stitcher import fusion, misc_utils, msi_utils
+        from multiview_stitcher import fusion, msi_utils
         from multiview_stitcher import spatial_image_utils as si_utils
         from tifffile import TiffWriter
 
@@ -2070,10 +2192,10 @@ class DataRegistration:
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
             fusion=fusion,
-            misc_utils=misc_utils,
             msi_utils=msi_utils,
             si_utils=si_utils,
             TiffWriter=TiffWriter,
+            zarr_module=zarr,
         )
 
         if self._verbose >= 1:

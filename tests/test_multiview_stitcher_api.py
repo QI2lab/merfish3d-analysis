@@ -3,8 +3,15 @@ from types import SimpleNamespace
 from unittest.mock import Mock, sentinel
 
 import numpy as np
+import pytest
+from tifffile import TiffWriter, imread
 
-from merfish3danalysis.DataRegistration import _read_fiducial_sim
+import merfish3danalysis.DataRegistration as data_registration_module
+from merfish3danalysis.DataRegistration import (
+    _process_fusion_batch_on_gpus,
+    _read_fiducial_sim,
+    _write_zarr_max_projection_tiff,
+)
 
 
 class _FakeMetadata:
@@ -34,6 +41,25 @@ class _FakeAsyncArray:
 class _FakeArray:
     def __init__(self, async_array) -> None:
         self.async_array = async_array
+
+
+class _ProjectionMetadata:
+    dimension_names = ("t", "c", "z", "y", "x")
+
+
+class _ProjectionArray:
+    def __init__(self, data: np.ndarray, chunks: tuple[int, ...]) -> None:
+        self._data = data
+        self.shape = data.shape
+        self.ndim = data.ndim
+        self.dtype = data.dtype
+        self.chunks = chunks
+        self.metadata = _ProjectionMetadata()
+        self.selections: list[tuple[int | slice, ...]] = []
+
+    def __getitem__(self, selection: tuple[int | slice, ...]) -> np.ndarray:
+        self.selections.append(selection)
+        return self._data[selection]
 
 
 def test_read_fiducial_sim_builds_zarr_backed_three_dimensional_view() -> None:
@@ -74,3 +100,64 @@ def test_read_fiducial_sim_builds_zarr_backed_three_dimensional_view() -> None:
         c_coords=None,
         t_coords=None,
     )
+
+
+def test_write_zarr_max_projection_tiff_streams_spatial_tiles(
+    tmp_path: Path,
+) -> None:
+    data = np.arange(1 * 1 * 5 * 19 * 21, dtype=np.uint16).reshape(
+        1,
+        1,
+        5,
+        19,
+        21,
+    )
+    array = _ProjectionArray(data, chunks=(1, 1, 2, 8, 8))
+    output_path = tmp_path / "projection.ome.tiff"
+
+    _write_zarr_max_projection_tiff(
+        array=array,
+        filename_path=output_path,
+        spacing_zyx_um=np.asarray((0.32, 0.098, 0.098), dtype=np.float32),
+        TiffWriter=TiffWriter,
+        tile_shape_yx=(16, 16),
+    )
+
+    np.testing.assert_array_equal(imread(output_path), data.max(axis=2).squeeze())
+    assert len(array.selections) == 12
+    for selection in array.selections:
+        z_slice = selection[2]
+        y_slice = selection[3]
+        x_slice = selection[4]
+        assert isinstance(z_slice, slice)
+        assert isinstance(y_slice, slice)
+        assert isinstance(x_slice, slice)
+        assert z_slice.stop - z_slice.start <= 2
+        assert y_slice.stop - y_slice.start <= 16
+        assert x_slice.stop - x_slice.start <= 16
+
+
+def test_process_fusion_batch_partitions_blocks_by_gpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, list[int]]] = []
+
+    def record_partition(_func, block_ids, gpu_id) -> None:
+        calls.append((gpu_id, block_ids))
+
+    monkeypatch.setattr(
+        data_registration_module,
+        "_process_fusion_blocks_on_gpu",
+        record_partition,
+    )
+
+    _process_fusion_batch_on_gpus(
+        Mock(),
+        list(range(8)),
+        gpu_ids=(0, 1),
+    )
+
+    assert sorted(calls) == [
+        (0, [0, 2, 4, 6]),
+        (1, [1, 3, 5, 7]),
+    ]
