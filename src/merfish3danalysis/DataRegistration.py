@@ -75,7 +75,7 @@ class GlobalRegistrationConfig:
     reg_channel_index: int = 0
     transform_key: str = "stage_metadata"
     new_transform_key: str = "global_registered"
-    pre_registration_pruning_method: str = "keep_axis_aligned"
+    #pre_registration_pruning_method: str = "keep_axis_aligned"
     post_registration_do_quality_filter: bool = True
     reference_view: int = 0
     transform: str = "translation"
