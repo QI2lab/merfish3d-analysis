@@ -143,8 +143,7 @@ def _configure_loky_worker_diagnostics(log_path: str) -> None:
     logger.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s process=%(processName)s "
-        "pid=%(process)d %(message)s"
+        "%(asctime)s %(levelname)s process=%(processName)s pid=%(process)d %(message)s"
     )
     file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
@@ -1753,8 +1752,7 @@ class DataRegistration:
         fusion_start_time = timeit.default_timer()
         fusion_workers = max(1, os.cpu_count() or 1)
         fusion_diagnostic_log = output_zarr_path.parent / (
-            "global_fusion_loky_"
-            f"{datetime.now().strftime('%Y%m%dT%H%M%S')}.log"
+            f"global_fusion_loky_{datetime.now().strftime('%Y%m%dT%H%M%S')}.log"
         )
         if self._verbose >= 1:
             print(
