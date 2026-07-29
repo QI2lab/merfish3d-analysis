@@ -75,7 +75,6 @@ class GlobalRegistrationConfig:
     reg_channel_index: int = 0
     transform_key: str = "stage_metadata"
     new_transform_key: str = "global_registered"
-    # pre_registration_pruning_method: str = "keep_axis_aligned"
     post_registration_do_quality_filter: bool = True
     reference_view: int = 0
     transform: str = "translation"
@@ -1935,8 +1934,7 @@ class DataRegistration:
                 time_stamp(),
                 "Running multiview-stitcher global registration "
                 f"tiles={len(msims)} registration_binning={registration_binning} "
-                "pre_registration_pruning_method="
-                f"{registration_config.pre_registration_pruning_method} "
+                "pre_registration_pruning_method=None "
                 "post_registration_do_quality_filter="
                 f"{registration_config.post_registration_do_quality_filter} "
                 "n_parallel_pairwise_regs="
@@ -1951,9 +1949,7 @@ class DataRegistration:
                         reg_channel_index=int(registration_config.reg_channel_index),
                         transform_key=registration_config.transform_key,
                         new_transform_key=registration_config.new_transform_key,
-                        pre_registration_pruning_method=(
-                            registration_config.pre_registration_pruning_method
-                        ),
+                        pre_registration_pruning_method=None,
                         registration_binning=registration_binning,
                         post_registration_do_quality_filter=(
                             bool(
@@ -1974,9 +1970,7 @@ class DataRegistration:
                     reg_channel_index=int(registration_config.reg_channel_index),
                     transform_key=registration_config.transform_key,
                     new_transform_key=registration_config.new_transform_key,
-                    pre_registration_pruning_method=(
-                        registration_config.pre_registration_pruning_method
-                    ),
+                    pre_registration_pruning_method=None,
                     registration_binning=registration_binning,
                     post_registration_do_quality_filter=(
                         bool(registration_config.post_registration_do_quality_filter)

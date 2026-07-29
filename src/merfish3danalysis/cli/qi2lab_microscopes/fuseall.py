@@ -131,7 +131,7 @@ def fuse_all_channels(
             reg_channel_index=0,
             transform_key="stage_metadata",
             new_transform_key="affine_registered",
-            pre_registration_pruning_method="keep_axis_aligned",
+            pre_registration_pruning_method=None,
             registration_binning={"z": 3, "y": 6, "x": 6},
             post_registration_do_quality_filter=True,
         )
