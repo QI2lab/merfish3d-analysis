@@ -32,7 +32,7 @@ import multiprocessing as mp
 mp.set_start_method("spawn", force=True)
 import os
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 warnings.filterwarnings(
     "ignore",
@@ -91,16 +91,6 @@ class GlobalRegistrationConfig:
             "y": int(self.registration_binning_zyx[1]),
             "x": int(self.registration_binning_zyx[2]),
         }
-
-
-@dataclass(frozen=True)
-class GlobalFusionConfig:
-    """Explicit multiview-stitcher global fusion parameters."""
-
-    n_batch: int = 20
-    overlap_in_pixels: int = 64
-    backend: str = "cupy"
-    output_on_backend: bool = False
 
 
 def _registration_diag(message: str, *, enabled: bool) -> None:
@@ -878,81 +868,6 @@ def _write_zarr_max_projection_tiff(
         )
 
 
-def _process_fusion_blocks_on_gpu(
-    func: Callable[[Any], Any],
-    block_ids: list[Any],
-    gpu_id: int,
-) -> None:
-    """Process one block partition sequentially on one explicitly selected GPU."""
-    import cupy as cp
-
-    with cp.cuda.Device(int(gpu_id)):
-        for block_id in block_ids:
-            func(block_id)
-
-
-def _process_fusion_batch_on_gpus(
-    func: Callable[[Any], Any],
-    block_ids: list[Any],
-    *,
-    gpu_ids: tuple[int, ...],
-) -> None:
-    """Distribute a fusion batch across GPU-bound threads without loky workers."""
-    if not gpu_ids:
-        raise ValueError("At least one GPU ID is required for CuPy fusion.")
-
-    partitions = [
-        list(block_ids[gpu_index :: len(gpu_ids)]) for gpu_index in range(len(gpu_ids))
-    ]
-    assignments = [
-        (gpu_id, partition)
-        for gpu_id, partition in zip(gpu_ids, partitions, strict=True)
-        if partition
-    ]
-    if len(assignments) == 1:
-        gpu_id, partition = assignments[0]
-        _process_fusion_blocks_on_gpu(func, partition, gpu_id)
-        return
-
-    from joblib import Parallel, delayed
-
-    Parallel(n_jobs=len(assignments), backend="threading")(
-        delayed(_process_fusion_blocks_on_gpu)(func, partition, gpu_id)
-        for gpu_id, partition in assignments
-    )
-
-
-def _sim_fusion_summary(sim: Any) -> str:
-    """
-    Return a compact summary of one SpatialImage used for global fusion.
-
-    Parameters
-    ----------
-    sim : Any
-        SpatialImage-like object.
-
-    Returns
-    -------
-    str
-        Shape, dtype, chunk, and backend details for diagnostics.
-    """
-    data = getattr(sim, "data", None)
-    encoding = getattr(sim, "encoding", {}) or {}
-    attrs = getattr(sim, "attrs", {}) or {}
-    chunks = getattr(data, "chunks", None)
-    chunksize = getattr(data, "chunksize", None)
-    preferred_chunks = encoding.get("preferred_chunks")
-    zarr_chunks = attrs.get("_zarr_chunks")
-    return (
-        f"dims={tuple(getattr(sim, 'dims', ()))!r} "
-        f"shape={tuple(int(v) for v in getattr(sim, 'shape', ()))!r} "
-        f"dtype={getattr(data, 'dtype', None)} "
-        f"data_type={type(data).__module__}.{type(data).__name__} "
-        f"chunks={chunks!r} chunksize={chunksize!r} "
-        f"preferred_chunks={preferred_chunks!r} zarr_chunks={zarr_chunks!r}"
-    )
-
-
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
     """
     Optionally deconvolve readout bits and always save U-FISH outputs.
@@ -1217,7 +1132,6 @@ class DataRegistration:
         registration_diagnostics: bool = False,
         sofima_config: SofimaRegistrationConfig | None = None,
         global_registration_config: GlobalRegistrationConfig | None = None,
-        global_fusion_config: GlobalFusionConfig | None = None,
         verbose: int = 1,
     ) -> None:
         """
@@ -1258,8 +1172,6 @@ class DataRegistration:
             Explicit SOFIMA deformable registration parameters.
         global_registration_config : GlobalRegistrationConfig or None, default=None
             Explicit multiview-stitcher global registration parameters.
-        global_fusion_config : GlobalFusionConfig or None, default=None
-            Explicit multiview-stitcher global fusion parameters.
         verbose : int
             Verbosity level for progress messages.
         """
@@ -1282,7 +1194,6 @@ class DataRegistration:
         self._global_registration_config = (
             global_registration_config or GlobalRegistrationConfig()
         )
-        self._global_fusion_config = global_fusion_config or GlobalFusionConfig()
         self._verbose = verbose
 
     # -----------------------------------
@@ -1733,95 +1644,11 @@ class DataRegistration:
             if self._verbose >= 1:
                 print(
                     time_stamp(),
-                    "Loaded global registration input "
-                    f"tile={tile_id} {_sim_fusion_summary(sim)}",
+                    f"Loaded global registration input tile={tile_id}",
                 )
             gc.collect()
 
         return msims
-
-    def _print_global_fusion_diagnostics(
-        self,
-        *,
-        msims: list[Any],
-        output_zarr_path: Path,
-        batch_options: dict[str, Any],
-        fusion: Any,
-        msi_utils: Any,
-    ) -> None:
-        """
-        Print geometry, chunking, and batching diagnostics for global fusion.
-
-        Parameters
-        ----------
-        msims : list[Any]
-            Multiscale images passed to fusion.
-        output_zarr_path : pathlib.Path
-            Destination OME-Zarr root.
-        batch_options : dict[str, Any]
-            Fusion batch options.
-        fusion : Any
-            ``multiview_stitcher.fusion`` module.
-        msi_utils : Any
-            ``multiview_stitcher.msi_utils`` module.
-
-        Returns
-        -------
-        None
-            Diagnostics are printed when ``verbose >= 1``.
-        """
-        if self._verbose < 1:
-            return
-
-        print(time_stamp(), "Global fusion diagnostics:")
-        print(time_stamp(), f"  output_zarr_path={output_zarr_path}")
-        print(
-            time_stamp(),
-            "  backend="
-            f"{self._global_fusion_config.backend} "
-            f"output_on_backend={self._global_fusion_config.output_on_backend}",
-        )
-        print(time_stamp(), f"  batch_options={batch_options!r}")
-
-        try:
-            scale0_sims = [
-                msi_utils.get_sim_from_msim(msim, scale="scale0") for msim in msims
-            ]
-            output_stack_properties = fusion.process_output_stack_properties(
-                sims=scale0_sims,
-                output_spacing={
-                    "z": float(self._datastore.voxel_size_zyx_um[0]),
-                    "y": float(self._datastore.voxel_size_zyx_um[1]),
-                    "x": float(self._datastore.voxel_size_zyx_um[2]),
-                },
-                output_stack_mode="union",
-                transform_key=self._global_registration_config.new_transform_key,
-            )
-            output_chunksize = fusion.process_output_chunksize(scale0_sims, None)
-            spatial_shape = output_stack_properties["shape"]
-            nblocks = {
-                dim: int(np.ceil(float(spatial_shape[dim]) / output_chunksize[dim]))
-                for dim in output_chunksize
-            }
-            total_blocks = int(np.prod(list(nblocks.values())))
-            print(time_stamp(), f"  output_shape={spatial_shape}")
-            print(time_stamp(), f"  output_chunksize={output_chunksize}")
-            print(time_stamp(), f"  output_blocks={nblocks} total={total_blocks}")
-        except Exception as exc:
-            print(time_stamp(), f"  output geometry diagnostics failed: {exc!r}")
-
-        for tile_idx, msim in enumerate(msims):
-            try:
-                sim = msi_utils.get_sim_from_msim(msim, scale="scale0")
-                print(
-                    time_stamp(),
-                    f"  input_tile_index={tile_idx} {_sim_fusion_summary(sim)}",
-                )
-            except Exception as exc:
-                print(
-                    time_stamp(),
-                    f"  input_tile_index={tile_idx} summary failed: {exc!r}",
-                )
 
     def _fuse_global_registered_msims(
         self,
@@ -1860,55 +1687,24 @@ class DataRegistration:
             Fused OME-Zarr, metadata, datastore state, and optional TIFF are
             written to disk.
         """
-        import shutil
-
-        voxel_zyx_um = self._datastore.voxel_size_zyx_um
-        scale = {
-            "z": float(voxel_zyx_um[0]),
-            "y": float(voxel_zyx_um[1]),
-            "x": float(voxel_zyx_um[2]),
-        }
         output_zarr_path = self._datastore._image_store_path(
             self._datastore._fused_root_path
             / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
-        )
-        if output_zarr_path.exists():
-            shutil.rmtree(output_zarr_path)
-
-        fusion_config = self._global_fusion_config
-        gpu_ids = tuple(range(max(1, int(self._num_gpus))))
-        batch_options = {
-            "batch_func": _process_fusion_batch_on_gpus,
-            "n_batch": int(fusion_config.n_batch),
-            "batch_func_kwargs": {
-                "gpu_ids": gpu_ids,
-            },
-        }
-        self._print_global_fusion_diagnostics(
-            msims=msims,
-            output_zarr_path=output_zarr_path,
-            batch_options=batch_options,
-            fusion=fusion,
-            msi_utils=msi_utils,
         )
 
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
-        fused_sim = fusion.fuse(
-            images=[msi_utils.get_sim_from_msim(msim) for msim in msims],
+        fused_msim = fusion.fuse(
+            images=msims,
             transform_key=self._global_registration_config.new_transform_key,
-            output_spacing=scale,
-            overlap_in_pixels=int(fusion_config.overlap_in_pixels),
             output_zarr_url=str(output_zarr_path),
             zarr_options={
                 "ome_zarr": True,
                 "ngff_version": "0.5",
                 "overwrite": True,
             },
-            batch_options=batch_options,
-            backend=fusion_config.backend,
-            output_on_backend=bool(fusion_config.output_on_backend),
+            backend="cupy",
         )
         if self._verbose >= 1:
             print(
@@ -1918,9 +1714,6 @@ class DataRegistration:
             )
 
         metadata_start_time = timeit.default_timer()
-        if not hasattr(fused_sim, "data"):
-            fused_sim = msi_utils.get_sim_from_msim(fused_sim, scale="scale0")
-        fused_msim = msi_utils.get_msim_from_sim(fused_sim, scale_factors=[])
         affine = msi_utils.get_transform_from_msim(
             fused_msim,
             transform_key=self._global_registration_config.new_transform_key,
@@ -1945,7 +1738,7 @@ class DataRegistration:
                 f"elapsed_s={timeit.default_timer() - metadata_start_time:.2f}",
             )
 
-        del fused_msim, fused_sim
+        del fused_msim
         gc.collect()
 
         datastore_state = self._datastore.datastore_state

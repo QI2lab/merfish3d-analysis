@@ -3,12 +3,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, sentinel
 
 import numpy as np
-import pytest
 from tifffile import TiffWriter, imread
 
-import merfish3danalysis.DataRegistration as data_registration_module
 from merfish3danalysis.DataRegistration import (
-    _process_fusion_batch_on_gpus,
     _read_fiducial_sim,
     _write_zarr_max_projection_tiff,
 )
@@ -135,29 +132,3 @@ def test_write_zarr_max_projection_tiff_streams_spatial_tiles(
         assert z_slice.stop - z_slice.start <= 2
         assert y_slice.stop - y_slice.start <= 16
         assert x_slice.stop - x_slice.start <= 16
-
-
-def test_process_fusion_batch_partitions_blocks_by_gpu(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[int, list[int]]] = []
-
-    def record_partition(_func, block_ids, gpu_id) -> None:
-        calls.append((gpu_id, block_ids))
-
-    monkeypatch.setattr(
-        data_registration_module,
-        "_process_fusion_blocks_on_gpu",
-        record_partition,
-    )
-
-    _process_fusion_batch_on_gpus(
-        Mock(),
-        list(range(8)),
-        gpu_ids=(0, 1),
-    )
-
-    assert sorted(calls) == [
-        (0, [0, 2, 4, 6]),
-        (1, [1, 3, 5, 7]),
-    ]

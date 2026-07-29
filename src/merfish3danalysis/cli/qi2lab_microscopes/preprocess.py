@@ -55,7 +55,6 @@ def local_register_data(
             "--global-registration-only and --global-fusion-only are mutually "
             "exclusive."
         )
-
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
