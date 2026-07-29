@@ -1713,7 +1713,7 @@ class DataRegistration:
                 "n_batch": 4 * fusion_workers,
                 "batch_func_kwargs": {
                     "n_jobs": fusion_workers,
-                    "backend": "loky",
+                    "backend": "threading",
                 },
             },
             backend="numpy",
