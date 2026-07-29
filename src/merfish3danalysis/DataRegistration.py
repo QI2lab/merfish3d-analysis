@@ -829,7 +829,9 @@ def _iter_zarr_max_projection_tiles(
                     np.maximum(projection, block_projection, out=projection)
 
             if projection is None:
-                raise ValueError("Cannot project a fused Zarr array with an empty z axis.")
+                raise ValueError(
+                    "Cannot project a fused Zarr array with an empty z axis."
+                )
             padded_tile = np.zeros((tile_y, tile_x), dtype=array.dtype)
             padded_tile[: y_stop - y_start, : x_stop - x_start] = projection
             yield padded_tile
@@ -900,8 +902,7 @@ def _process_fusion_batch_on_gpus(
         raise ValueError("At least one GPU ID is required for CuPy fusion.")
 
     partitions = [
-        list(block_ids[gpu_index:: len(gpu_ids)])
-        for gpu_index in range(len(gpu_ids))
+        list(block_ids[gpu_index :: len(gpu_ids)]) for gpu_index in range(len(gpu_ids))
     ]
     assignments = [
         (gpu_id, partition)
