@@ -97,7 +97,8 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
 
-    basic = BaSiC(get_darkfield=False)
+    working_size = [max(1, size // 2) for size in maxz_images.shape[-2:]]
+    basic = BaSiC(get_darkfield=False, working_size=working_size)
     with redirect_stdout(io.StringIO()):
         basic.autotune(maxz_images[:])
         basic.fit(maxz_images[:])
