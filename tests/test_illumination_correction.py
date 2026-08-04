@@ -59,7 +59,14 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
     shading = estimate_shading([_FutureImage(image), _FutureImage(image)])
 
     assert calls == [
-        ("init", {"get_darkfield": False, "working_size": [5, 7]}),
+        (
+            "init",
+            {
+                "get_darkfield": False,
+                "sort_intensity": True,
+                "working_size": [5, 7],
+            },
+        ),
         ("autotune", (2, 10, 14)),
         ("fit", (2, 10, 14)),
     ]
