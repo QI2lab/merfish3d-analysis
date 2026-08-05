@@ -149,6 +149,49 @@ def _correct_channel_image(
     return channel_image.clip(0, 2**16 - 1).astype(np.uint16)
 
 
+def _readout_bit_ids(
+    experiment_order: np.ndarray,
+    channel_idx: int,
+    bit_ids: list[str],
+) -> list[str]:
+    """Return bit IDs acquired through one readout channel."""
+    bit_numbers = np.asarray(experiment_order[:, channel_idx], dtype=np.int64)
+    unique_bit_numbers = dict.fromkeys(int(bit_number) for bit_number in bit_numbers)
+
+    channel_bit_ids = []
+    for bit_number in unique_bit_numbers:
+        if bit_number < 1 or bit_number > len(bit_ids):
+            raise ValueError(
+                f"Invalid bit number {bit_number} in readout channel {channel_idx}."
+            )
+        channel_bit_ids.append(bit_ids[bit_number - 1])
+    return channel_bit_ids
+
+
+def _sample_readout_tile_bit_pairs(
+    bit_ids: list[str],
+    num_tiles: int,
+    max_images: int,
+    rng: np.random.Generator,
+) -> list[tuple[int, str]]:
+    """Assign unique sampled tile IDs across the bits for one dye."""
+    if max_images < 1:
+        raise ValueError("max_images must be at least 1.")
+    if num_tiles < 1 or not bit_ids:
+        raise ValueError("At least one tile and bit are required.")
+
+    sample_count = min(num_tiles, max_images)
+    tile_indices = rng.choice(num_tiles, size=sample_count, replace=False)
+    bit_cycle = np.asarray(bit_ids, dtype=object)
+    rng.shuffle(bit_cycle)
+    sample_bit_ids = np.resize(bit_cycle, sample_count)
+    rng.shuffle(sample_bit_ids)
+    return [
+        (int(tile_idx), str(bit_id))
+        for tile_idx, bit_id in zip(tile_indices, sample_bit_ids, strict=True)
+    ]
+
+
 def _stage_position_zyx_um(
     position_list: np.ndarray,
     tile_idx: int,
@@ -235,7 +278,8 @@ def convert_data(
     hot_pixel_threshold : int, default=100
         Threshold passed to hot-pixel detection when estimating illuminations.
     max_flatfield_images : int, default=100
-        Maximum number of tiles used to estimate flatfield illuminations.
+        Maximum number of unique tile IDs sampled to estimate each readout
+        flatfield. The fiducial flatfield always uses every tile from round 1.
     """
     # load illuminations if requested
     # -----------------------------------
@@ -598,22 +642,17 @@ def convert_data(
         del datastore
         datastore = qi2labDataStore(datastore_path)
 
-        if datastore.num_tiles > max_flatfield_images:
-            n_flatfield_images = max_flatfield_images
-        else:
-            n_flatfield_images = datastore.num_tiles
-        sample_indices = np.asarray(
-            np.random.choice(
-                datastore.num_tiles, size=n_flatfield_images, replace=False
-            )
-        )
         data_camera_corrected = []
 
-        # calculate fiducial correction
-        for rand_tile_idx in tqdm(sample_indices, desc="flatfield data", leave=False):
+        # Calculate the fiducial correction from every tile in round 1.
+        for tile_idx in tqdm(
+            range(datastore.num_tiles),
+            desc="fiducial flatfield data",
+            leave=False,
+        ):
             data_camera_corrected.append(
                 datastore.load_local_corrected_image(
-                    tile=int(rand_tile_idx),
+                    tile=tile_idx,
                     round=0,
                 )
             )
@@ -624,15 +663,13 @@ def convert_data(
         if save_illuminations:
             illuminations = np.zeros(
                 (
-                    len(channel_names),
+                    num_ch,
                     fiducial_illumination.shape[0],
                     fiducial_illumination.shape[1],
                 ),
                 dtype=np.float32,
             )
             illuminations[0, :] = fiducial_illumination
-        readout_illumination_psf1 = []
-        readout_illumination_psf2 = []
 
         for round_idx in tqdm(range(datastore.num_rounds), desc="rounds"):
             for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
@@ -654,67 +691,75 @@ def convert_data(
                     round=round_idx,
                 )
 
-        for bit_id in tqdm(datastore.bit_ids, desc="bit", leave=True):
+        rng = np.random.default_rng(0)
+        datastore_bit_ids = list(datastore.bit_ids)
+        for channel_idx in tqdm(
+            range(1, num_ch),
+            desc="readout flatfields",
+            leave=True,
+        ):
+            channel_bit_ids = _readout_bit_ids(
+                experiment_order,
+                channel_idx,
+                datastore_bit_ids,
+            )
+            sample_pairs = _sample_readout_tile_bit_pairs(
+                channel_bit_ids,
+                datastore.num_tiles,
+                max_flatfield_images,
+                rng,
+            )
             data_camera_corrected = []
-
-            for rand_tile_idx in tqdm(
-                sample_indices, desc="flatfield data", leave=False
+            for tile_idx, bit_id in tqdm(
+                sample_pairs,
+                desc=f"readout {channel_idx} flatfield data",
+                leave=False,
             ):
                 data_camera_corrected.append(
                     datastore.load_local_corrected_image(
-                        tile=int(rand_tile_idx),
+                        tile=tile_idx,
                         bit=bit_id,
                     )
                 )
             readout_illumination = estimate_shading(data_camera_corrected)
             del data_camera_corrected
 
-            ex_wavelength_um, _em_wavelength_um = datastore.load_local_wavelengths_um(
-                tile=0, bit=bit_id
-            )
+            if save_illuminations:
+                illuminations[channel_idx, :] = readout_illumination
 
-            if ex_wavelength_um < 0.600:
-                psf_idx = 1
-                readout_illumination_psf1.append(readout_illumination.copy())
-            else:
-                psf_idx = 2
-                readout_illumination_psf2.append(readout_illumination.copy())
-
-            for tile_idx in tqdm(range(datastore.num_tiles), desc="tile", leave=False):
-                data_camera_corrected = datastore.load_local_corrected_image(
-                    tile=tile_idx, bit=bit_id, return_future=False
-                )
-
-                data_camera_corrected = (
-                    (data_camera_corrected.astype(np.float32) / readout_illumination)
-                    .clip(0, 2**16 - 1)
-                    .astype(np.uint16)
-                )
-
-                datastore.save_local_corrected_image(
-                    data_camera_corrected.astype(np.uint16),
-                    tile=tile_idx,
-                    psf_idx=psf_idx,
-                    gain_correction=True,
-                    hotpixel_correction=False,
-                    shading_correction=True,
-                    bit=bit_id,
-                )
-
-                del data_camera_corrected
+            for bit_id in tqdm(channel_bit_ids, desc="bit", leave=False):
+                for tile_idx in tqdm(
+                    range(datastore.num_tiles),
+                    desc="tile",
+                    leave=False,
+                ):
+                    data_camera_corrected = datastore.load_local_corrected_image(
+                        tile=tile_idx,
+                        bit=bit_id,
+                        return_future=False,
+                    )
+                    data_camera_corrected = (
+                        (
+                            data_camera_corrected.astype(np.float32)
+                            / readout_illumination
+                        )
+                        .clip(0, 2**16 - 1)
+                        .astype(np.uint16)
+                    )
+                    datastore.save_local_corrected_image(
+                        data_camera_corrected,
+                        tile=tile_idx,
+                        psf_idx=channel_idx,
+                        gain_correction=True,
+                        hotpixel_correction=False,
+                        shading_correction=True,
+                        bit=bit_id,
+                    )
+                    del data_camera_corrected
             del readout_illumination
             gc.collect()
 
         if save_illuminations:
-            if readout_illumination_psf1:
-                illuminations[1, :] = np.median(
-                    np.stack(readout_illumination_psf1, axis=0), axis=0
-                ).astype(np.float32)
-            if readout_illumination_psf2:
-                illuminations[2, :] = np.median(
-                    np.stack(readout_illumination_psf2, axis=0), axis=0
-                ).astype(np.float32)
-
             from tifffile import TiffWriter
 
             illuminations_path = root_path / "illuminations.ome.tif"

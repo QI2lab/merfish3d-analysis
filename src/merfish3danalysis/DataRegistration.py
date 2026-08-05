@@ -2038,12 +2038,12 @@ class DataRegistration:
         create_max_proj_tiff: bool = True,
     ) -> None:
         """
-        Fuse fiducials using stored global transforms without registering tiles.
+        Fuse fiducials, registering globally first when transforms are absent.
 
-        This method is intended for existing datastores that already have
-        saved per-tile global transforms. It loads reference fiducials, attaches
-        the stored ``global_registered`` transforms, and runs only the fused
-        OME-Zarr creation path.
+        Existing per-tile global transforms are reused when every tile has one.
+        Before normal preprocessing, or for a partially registered datastore,
+        global registration is run from the first-round fiducials before the
+        fused OME-Zarr is created.
 
         Parameters
         ----------
@@ -2057,6 +2057,16 @@ class DataRegistration:
             Fused fiducial OME-Zarr, datastore state, and optional max
             projection are written to the datastore.
         """
+        if not self._global_transforms_available():
+            if self._verbose >= 1:
+                print(
+                    time_stamp(),
+                    "Stored global transforms are incomplete; running global "
+                    "registration before fusion.",
+                )
+            self.global_register(create_max_proj_tiff=create_max_proj_tiff)
+            return
+
         import zarr
         from multiview_stitcher import fusion, misc_utils, msi_utils
         from multiview_stitcher import spatial_image_utils as si_utils
@@ -2090,6 +2100,16 @@ class DataRegistration:
                 time_stamp(),
                 "Finished global fiducial fusion from stored transforms.",
             )
+
+    def _global_transforms_available(self) -> bool:
+        """Return whether every tile has a stored global affine transform."""
+        for tile_id in self._tile_ids:
+            affine_zyx_um, _origin_zyx_um, _spacing_zyx_um = (
+                self._datastore.load_global_coord_xforms_um(tile=tile_id)
+            )
+            if affine_zyx_um is None:
+                return False
+        return True
 
     def _load_raw_data(self) -> None:
         """

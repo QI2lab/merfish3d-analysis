@@ -57,3 +57,44 @@ def test_global_only_modes_are_mutually_exclusive() -> None:
             global_registration_only=True,
             global_fusion_only=True,
         )
+
+
+def test_no_decon_disables_readout_deconvolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor_kwargs = {}
+    register_all_tiles = Mock()
+
+    class _FakeDataRegistration:
+        def __init__(self, **kwargs) -> None:
+            constructor_kwargs.update(kwargs)
+
+        def register_all_tiles(self) -> None:
+            register_all_tiles()
+
+    monkeypatch.setattr(
+        data_registration_module,
+        "DataRegistration",
+        _FakeDataRegistration,
+    )
+    monkeypatch.setattr(
+        preprocess,
+        "qi2lab_datastore_path",
+        lambda _root_path: Path("/unused/qi2labdatastore"),
+    )
+    datastore = Mock()
+    datastore.datastore_state = {}
+    monkeypatch.setattr(
+        preprocess,
+        "qi2labDataStore",
+        lambda _datastore_path: datastore,
+    )
+
+    preprocess.local_register_data(
+        root_path=Path("/unused/experiment"),
+        decon=False,
+    )
+
+    assert constructor_kwargs["decon_fiducial"] is True
+    assert constructor_kwargs["decon_readout"] is False
+    register_all_tiles.assert_called_once_with()

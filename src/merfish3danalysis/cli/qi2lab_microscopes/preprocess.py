@@ -24,6 +24,7 @@ app.pretty_exceptions_enable = False
 def local_register_data(
     root_path: Path,
     num_gpus: int = 1,
+    decon: bool = True,
     overwrite: bool = True,
     global_registration_only: bool = False,
     global_fusion_only: bool = False,
@@ -37,13 +38,17 @@ def local_register_data(
         Experiment root directory.
     num_gpus : int, default=1
         Number of GPUs available.
+    decon : bool, default=True
+        Perform readout deconvolution. Use ``--no-decon`` to process corrected
+        readout images without deconvolution.
     overwrite : bool, default=True
         Overwrite existing registered data.
     global_registration_only : bool, default=False
         Skip local preprocessing and rerun only global tile registration and
         fused fiducial OME-Zarr creation on an existing datastore.
     global_fusion_only : bool, default=False
-        Skip all registration and fuse using stored global tile transforms.
+        Skip local preprocessing and fuse using stored global tile transforms.
+        If transforms are absent, globally register round-1 fiducials first.
     verbose : int, default=1
         Progress verbosity. Set to 0 to suppress routine progress prints.
 
@@ -64,7 +69,7 @@ def local_register_data(
     registration_factory = DataRegistration(
         datastore=datastore,
         decon_fiducial=True,
-        decon_readout=True,
+        decon_readout=decon,
         perform_deformable_registration=True,
         overwrite_outputs=overwrite,
         num_gpus=num_gpus,

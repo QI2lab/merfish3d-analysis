@@ -43,10 +43,10 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
             self.flatfield = np.ones((10, 14), dtype=np.float32)
 
         def autotune(self, images: np.ndarray) -> None:
-            calls.append(("autotune", images.shape))
+            calls.append(("autotune", images.copy()))
 
         def fit(self, images: np.ndarray) -> None:
-            calls.append(("fit", images.shape))
+            calls.append(("fit", images.copy()))
 
     monkeypatch.setitem(sys.modules, "cupy", fake_cupy)
     monkeypatch.setitem(
@@ -55,19 +55,26 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
         SimpleNamespace(BaSiC=_FakeBaSiC),
     )
 
-    image = np.ones((3, 10, 14), dtype=np.uint16)
+    image = np.stack(
+        [
+            np.full((10, 14), 1, dtype=np.uint16),
+            np.full((10, 14), 7, dtype=np.uint16),
+            np.full((10, 14), 3, dtype=np.uint16),
+        ]
+    )
     shading = estimate_shading([_FutureImage(image), _FutureImage(image)])
 
-    assert calls == [
-        (
-            "init",
-            {
-                "get_darkfield": False,
-                "sort_intensity": True,
-                "working_size": [5, 7],
-            },
-        ),
-        ("autotune", (2, 10, 14)),
-        ("fit", (2, 10, 14)),
-    ]
+    assert calls[0] == (
+        "init",
+        {
+            "get_darkfield": False,
+            "sort_intensity": True,
+            "working_size": [5, 7],
+        },
+    )
+    expected_max_projections = np.full((2, 10, 14), 7, dtype=np.uint16)
+    assert calls[1][0] == "autotune"
+    assert calls[2][0] == "fit"
+    np.testing.assert_array_equal(calls[1][1], expected_max_projections)
+    np.testing.assert_array_equal(calls[2][1], expected_max_projections)
     np.testing.assert_array_equal(shading, np.ones((10, 14), dtype=np.float32))
