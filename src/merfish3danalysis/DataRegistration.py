@@ -113,63 +113,11 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
 
-def _configure_loky_worker_diagnostics(log_path: str) -> None:
-    """
-    Configure and record loky's worker lifecycle during fusion.
-
-    This initializer runs inside every fusion worker. Joblib's normal warning
-    omits whether a clean worker exit was caused by its idle timeout or by its
-    RSS-growth guard. The guard treats a 300 MB increase over the first task's
-    RSS as a memory leak, which is not valid for fusion workers that retain
-    reusable NumPy/native allocator buffers. Disable that worker recycler while
-    retaining loky's periodic garbage collection and lifecycle diagnostics.
-
-    Parameters
-    ----------
-    log_path : str
-        Append-only diagnostic log shared by the fusion workers.
-
-    Returns
-    -------
-    None
-        Logging is configured for the current worker process.
-    """
-    import logging
-    import multiprocessing.util as mp_util
-
+def _configure_loky_fusion_worker() -> None:
+    """Disable loky's RSS-growth recycler inside fusion workers."""
     from joblib.externals.loky import process_executor
 
-    logger = mp_util.get_logger()
-    logger.handlers.clear()
-    logger.propagate = False
-    logger.setLevel(logging.DEBUG)
-
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s process=%(processName)s pid=%(process)d %(message)s"
-    )
-    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    original_memory_guard = process_executor._USE_PSUTIL
     process_executor._USE_PSUTIL = False
-    logger.info(
-        "loky fusion worker diagnostics enabled: "
-        "psutil_memory_guard_original=%s "
-        "psutil_memory_guard_disabled_for_fusion=%s "
-        "original_rss_growth_limit_bytes=%d "
-        "gc_interval_s=%.1f",
-        original_memory_guard,
-        not process_executor._USE_PSUTIL,
-        process_executor._MAX_MEMORY_LEAK_SIZE,
-        process_executor._MEMORY_LEAK_CHECK_DELAY,
-    )
 
 
 def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
@@ -1758,14 +1706,6 @@ class DataRegistration:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
         fusion_workers = max(1, os.cpu_count() or 1)
-        fusion_diagnostic_log = output_zarr_path.parent / (
-            f"global_fusion_loky_{datetime.now().strftime('%Y%m%dT%H%M%S')}.log"
-        )
-        if self._verbose >= 1:
-            print(
-                time_stamp(),
-                f"Logging loky worker diagnostics to {fusion_diagnostic_log}",
-            )
         # multiview-stitcher passes ``backend`` directly to joblib.  Supplying
         # a configured backend instance keeps loky's reusable workers alive
         # across long, uneven fusion batches; its 300 s default idle timeout
@@ -1775,8 +1715,7 @@ class DataRegistration:
         fusion_backend = LokyBackend(
             idle_worker_timeout=24 * 60 * 60,
             inner_max_num_threads=1,
-            initializer=_configure_loky_worker_diagnostics,
-            initargs=(str(fusion_diagnostic_log),),
+            initializer=_configure_loky_fusion_worker,
         )
         fused_msim = fusion.fuse(
             images=msims,
