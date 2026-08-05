@@ -27,9 +27,7 @@ def test_global_transforms_available_requires_every_tile() -> None:
     complete = _registration_with_transforms(
         {"tile0000": identity, "tile0001": identity}
     )
-    partial = _registration_with_transforms(
-        {"tile0000": identity, "tile0001": None}
-    )
+    partial = _registration_with_transforms({"tile0000": identity, "tile0001": None})
 
     assert complete._global_transforms_available()
     assert not partial._global_transforms_available()
