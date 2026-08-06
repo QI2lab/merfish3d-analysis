@@ -5077,15 +5077,13 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        if not (
+        tile_localizations_path = (
             self._feature_predictor_localizations_root_path / Path(tile_id)
-        ).exists():
-            (self._feature_predictor_localizations_root_path / Path(tile_id)).mkdir()
+        )
+        tile_localizations_path.mkdir(parents=True, exist_ok=True)
 
         current_feature_predictor_localizations_path = (
-            self._feature_predictor_localizations_root_path
-            / Path(tile_id)
-            / Path(bit_id + ".parquet")
+            tile_localizations_path / Path(bit_id + ".parquet")
         )
 
         try:
