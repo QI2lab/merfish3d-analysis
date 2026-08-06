@@ -120,6 +120,34 @@ def _configure_loky_fusion_worker() -> None:
     process_executor._USE_PSUTIL = False
 
 
+def _direct_zarr_fusion_kwargs(*, misc_utils: Any) -> dict[str, Any]:
+    """Return the shared direct-to-Zarr fusion and parallelization options."""
+    from joblib._parallel_backends import LokyBackend
+
+    fusion_workers = max(1, os.cpu_count() or 1)
+    fusion_backend = LokyBackend(
+        idle_worker_timeout=24 * 60 * 60,
+        inner_max_num_threads=1,
+        initializer=_configure_loky_fusion_worker,
+    )
+    return {
+        "zarr_options": {
+            "ome_zarr": True,
+            "ngff_version": "0.5",
+            "overwrite": True,
+        },
+        "batch_options": {
+            "batch_func": misc_utils.process_batch_using_joblib,
+            "n_batch": 4 * fusion_workers,
+            "batch_func_kwargs": {
+                "n_jobs": fusion_workers,
+                "backend": fusion_backend,
+            },
+        },
+        "backend": "numpy",
+    }
+
+
 def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
     """
     Restrict a spawned worker process to one physical CUDA device.
@@ -1705,36 +1733,11 @@ class DataRegistration:
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial fusion.")
         fusion_start_time = timeit.default_timer()
-        fusion_workers = max(1, os.cpu_count() or 1)
-        # multiview-stitcher passes ``backend`` directly to joblib.  Supplying
-        # a configured backend instance keeps loky's reusable workers alive
-        # across long, uneven fusion batches; its 300 s default idle timeout
-        # otherwise produces worker-restart warnings and avoidable churn.
-        from joblib._parallel_backends import LokyBackend
-
-        fusion_backend = LokyBackend(
-            idle_worker_timeout=24 * 60 * 60,
-            inner_max_num_threads=1,
-            initializer=_configure_loky_fusion_worker,
-        )
         fused_msim = fusion.fuse(
             images=msims,
             transform_key=self._global_registration_config.new_transform_key,
             output_zarr_url=str(output_zarr_path),
-            zarr_options={
-                "ome_zarr": True,
-                "ngff_version": "0.5",
-                "overwrite": True,
-            },
-            batch_options={
-                "batch_func": misc_utils.process_batch_using_joblib,
-                "n_batch": 4 * fusion_workers,
-                "batch_func_kwargs": {
-                    "n_jobs": fusion_workers,
-                    "backend": fusion_backend,
-                },
-            },
-            backend="numpy",
+            **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
         )
         if self._verbose >= 1:
             print(
