@@ -5082,8 +5082,8 @@ class qi2labDataStore:
         )
         tile_localizations_path.mkdir(parents=True, exist_ok=True)
 
-        current_feature_predictor_localizations_path = (
-            tile_localizations_path / Path(bit_id + ".parquet")
+        current_feature_predictor_localizations_path = tile_localizations_path / Path(
+            bit_id + ".parquet"
         )
 
         try:
