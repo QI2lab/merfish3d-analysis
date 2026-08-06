@@ -104,8 +104,7 @@ def _read_readout_data(
             f"{tile_id} {bit_id}: {image_data.shape} != {predictor_data.shape}."
         )
     return (
-        image_data.astype(np.float32)
-        * predictor_data.astype(np.float32).clip(0.25, 1)
+        image_data.astype(np.float32) * predictor_data.astype(np.float32).clip(0.25, 1)
     ).astype(np.uint16)
 
 
@@ -127,8 +126,8 @@ def _load_tile_multichannel_msim(
         "y": float(voxel_zyx_um[1]),
         "x": float(voxel_zyx_um[2]),
     }
-    tile_position_zyx_um, affine_zyx_px = (
-        datastore.load_local_stage_position_zyx_um(tile_id, reference_round_id)
+    tile_position_zyx_um, affine_zyx_px = datastore.load_local_stage_position_zyx_um(
+        tile_id, reference_round_id
     )
     translation = {
         "z": float(np.round(tile_position_zyx_um[0], 2)),

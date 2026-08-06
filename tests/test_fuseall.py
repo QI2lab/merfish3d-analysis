@@ -114,9 +114,7 @@ def test_load_tile_multichannel_msim_orders_channels_and_attaches_transform(
     )
 
     assert result is sentinel.msim
-    open_array.assert_called_once_with(
-        Path("/unused/fiducial.ome.zarr/0"), mode="r"
-    )
+    open_array.assert_called_once_with(Path("/unused/fiducial.ome.zarr/0"), mode="r")
     assert [item.kwargs["bit_id"] for item in read_readout_data.call_args_list] == [
         "bit001",
         "bit002",
@@ -154,9 +152,7 @@ def test_fuse_all_channels_writes_one_ordered_multichannel_zarr(
         bit_ids=["bit010", "bit002", "bit001"],
         load_global_coord_xforms_um=Mock(return_value=(identity, None, None)),
     )
-    load_tile_multichannel_msim = Mock(
-        side_effect=[sentinel.tile0, sentinel.tile1]
-    )
+    load_tile_multichannel_msim = Mock(side_effect=[sentinel.tile0, sentinel.tile1])
     direct_kwargs = {
         "zarr_options": sentinel.zarr_options,
         "batch_options": sentinel.batch_options,
@@ -195,15 +191,11 @@ def test_fuse_all_channels_writes_one_ordered_multichannel_zarr(
             bit_ids=["bit001", "bit002", "bit010"],
         ),
     ]
-    direct_zarr_fusion_kwargs.assert_called_once_with(
-        misc_utils=fuseall.misc_utils
-    )
+    direct_zarr_fusion_kwargs.assert_called_once_with(misc_utils=fuseall.misc_utils)
     fuse.assert_called_once_with(
         images=[sentinel.tile0, sentinel.tile1],
         transform_key="global_registered",
-        output_zarr_url=str(
-            tmp_path / "fused" / "fused_all_channels.ome.zarr"
-        ),
+        output_zarr_url=str(tmp_path / "fused" / "fused_all_channels.ome.zarr"),
         **direct_kwargs,
     )
     write_fused_metadata.assert_called_once_with(
