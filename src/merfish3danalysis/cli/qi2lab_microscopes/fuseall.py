@@ -8,6 +8,7 @@ from typing import Any
 
 import dask.array as da
 import numpy as np
+import xarray as xr
 import zarr
 from multiview_stitcher import fusion, misc_utils, msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
@@ -19,6 +20,10 @@ from merfish3danalysis.DataRegistration import (
     _zarr_array_dims,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.decode_warping import (
+    compose_decode_warp_transform_zyx_um,
+    load_bit_round_transform_zyx_um,
+)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -108,6 +113,72 @@ def _read_readout_data(
     ).astype(np.uint16)
 
 
+def _translation_affine_zyx_um(translation_zyx_um: Any) -> np.ndarray:
+    """Return a homogeneous translation in physical ZYX coordinates."""
+    affine = np.eye(4, dtype=np.float32)
+    affine[:3, 3] = np.asarray(translation_zyx_um, dtype=np.float32)
+    return affine
+
+
+def _channel_global_transforms_zyx_um(
+    *,
+    datastore: qi2labDataStore,
+    tile_id: str,
+    bit_ids: list[str],
+    tile_position_zyx_um: Any,
+    stage_transform_zyx_um: np.ndarray,
+    global_transform_zyx_um: np.ndarray,
+) -> np.ndarray:
+    """Compose native-channel coordinates directly into the global frame.
+
+    Stored local round transforms map round-1 reference coordinates into a
+    bit's native moving coordinates. The decode-time chromatic convention is
+    composed with that round transform, then inverted for fusion's
+    native-to-reference mapping. The local transform is conjugated around the
+    tile's physical coordinate origin before applying the stage and stored
+    global transforms. SOFIMA fields are intentionally not included.
+    """
+    tile_origin = _translation_affine_zyx_um(tile_position_zyx_um)
+    inverse_tile_origin = _translation_affine_zyx_um(
+        -np.asarray(tile_position_zyx_um, dtype=np.float32)
+    )
+    global_stage = (
+        np.asarray(global_transform_zyx_um, dtype=np.float32)
+        @ np.asarray(stage_transform_zyx_um, dtype=np.float32)
+    )
+    channel_transforms = [global_stage]
+    for bit_id in bit_ids:
+        _round_id, reference_to_native_zyx_um = load_bit_round_transform_zyx_um(
+            datastore,
+            tile=tile_id,
+            bit_id=bit_id,
+        )
+        wavelengths_um = datastore.load_local_wavelengths_um(
+            tile=tile_id,
+            bit=bit_id,
+        )
+        if wavelengths_um is None:
+            raise RuntimeError(
+                f"Missing wavelength metadata for tile={tile_id} bit={bit_id}."
+            )
+        emission_wavelength_um = float(wavelengths_um[1])
+        chromatic_transform_zyx_um = (
+            datastore.load_chromatic_affine_transform_zyx_um(
+                wavelength_um=emission_wavelength_um,
+            )
+        )
+        reference_to_native_zyx_um = compose_decode_warp_transform_zyx_um(
+            round_transform_zyx_um=reference_to_native_zyx_um,
+            chromatic_transform_zyx_um=chromatic_transform_zyx_um,
+        )
+        native_to_reference_zyx_um = np.linalg.inv(reference_to_native_zyx_um)
+        native_to_reference_at_tile = (
+            tile_origin @ native_to_reference_zyx_um @ inverse_tile_origin
+        )
+        channel_transforms.append(global_stage @ native_to_reference_at_tile)
+    return np.asarray(channel_transforms, dtype=np.float32)
+
+
 def _load_tile_multichannel_msim(
     *,
     datastore: qi2labDataStore,
@@ -179,9 +250,31 @@ def _load_tile_multichannel_msim(
     )
     if affine_zyx_um is None:
         raise RuntimeError(f"Stored global transform is missing for tile {tile_id!r}.")
+    stage_transform = msi_utils_module.get_transform_from_msim(
+        msim,
+        transform_key=_STAGE_TRANSFORM_KEY,
+    )
+    channel_transforms = _channel_global_transforms_zyx_um(
+        datastore=datastore,
+        tile_id=tile_id,
+        bit_ids=bit_ids,
+        tile_position_zyx_um=tile_position_zyx_um,
+        stage_transform_zyx_um=np.asarray(stage_transform).squeeze(),
+        global_transform_zyx_um=affine_zyx_um,
+    )
+    channel_transform_data = xr.DataArray(
+        channel_transforms[:, None, :, :],
+        dims=("c", "t", "x_in", "x_out"),
+        coords={
+            "c": channel_ids,
+            "t": stage_transform.coords["t"],
+            "x_in": stage_transform.coords["x_in"],
+            "x_out": stage_transform.coords["x_out"],
+        },
+    )
     msi_utils_module.set_affine_transform(
         msim,
-        np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
+        channel_transform_data,
         transform_key=_GLOBAL_TRANSFORM_KEY,
     )
     return msim
@@ -231,6 +324,10 @@ def fuse_all_channels(root_path: Path) -> None:
     fusion_kwargs = _direct_zarr_fusion_kwargs(misc_utils=misc_utils)
 
     print("\nLazy loading fiducial and ordered bit channels...")
+    print(
+        "Applying linked-round and chromatic affine transforms; "
+        "SOFIMA fields are ignored."
+    )
     tile_msims = [
         _load_tile_multichannel_msim(
             datastore=datastore,
