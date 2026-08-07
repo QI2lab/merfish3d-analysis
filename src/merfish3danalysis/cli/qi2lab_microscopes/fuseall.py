@@ -142,9 +142,8 @@ def _channel_global_transforms_zyx_um(
     inverse_tile_origin = _translation_affine_zyx_um(
         -np.asarray(tile_position_zyx_um, dtype=np.float32)
     )
-    global_stage = (
-        np.asarray(global_transform_zyx_um, dtype=np.float32)
-        @ np.asarray(stage_transform_zyx_um, dtype=np.float32)
+    global_stage = np.asarray(global_transform_zyx_um, dtype=np.float32) @ np.asarray(
+        stage_transform_zyx_um, dtype=np.float32
     )
     channel_transforms = [global_stage]
     for bit_id in bit_ids:
@@ -162,10 +161,8 @@ def _channel_global_transforms_zyx_um(
                 f"Missing wavelength metadata for tile={tile_id} bit={bit_id}."
             )
         emission_wavelength_um = float(wavelengths_um[1])
-        chromatic_transform_zyx_um = (
-            datastore.load_chromatic_affine_transform_zyx_um(
-                wavelength_um=emission_wavelength_um,
-            )
+        chromatic_transform_zyx_um = datastore.load_chromatic_affine_transform_zyx_um(
+            wavelength_um=emission_wavelength_um,
         )
         reference_to_native_zyx_um = compose_decode_warp_transform_zyx_um(
             round_transform_zyx_um=reference_to_native_zyx_um,

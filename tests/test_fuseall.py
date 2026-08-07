@@ -169,9 +169,7 @@ def test_load_tile_multichannel_msim_orders_channels_and_attaches_transform(
         load_global_coord_xforms_um=Mock(
             return_value=(global_affine, np.zeros(3), np.ones(3))
         ),
-        load_local_wavelengths_um=Mock(
-            side_effect=[(0.48, 0.52), (0.58, 0.65)]
-        ),
+        load_local_wavelengths_um=Mock(side_effect=[(0.48, 0.52), (0.58, 0.65)]),
         load_chromatic_affine_transform_zyx_um=Mock(
             side_effect=[chromatic_bit001, chromatic_bit002]
         ),
@@ -220,7 +218,9 @@ def test_load_tile_multichannel_msim_orders_channels_and_attaches_transform(
         sentinel.msim,
         transform_key="stage_metadata",
     )
-    assert [item.kwargs["bit_id"] for item in load_bit_round_transform.call_args_list] == [
+    assert [
+        item.kwargs["bit_id"] for item in load_bit_round_transform.call_args_list
+    ] == [
         "bit001",
         "bit002",
     ]
