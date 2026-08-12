@@ -117,6 +117,7 @@ from cuvs.distance import pairwise_distance
 from roifile import roiread
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, Polygon
+from skimage.draw import polygon as rasterize_polygon
 from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
@@ -533,6 +534,212 @@ class PixelDecoder:
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._blank_fraction_filter_results: dict[str, object] | None = None
+        self._normalization_cell_polygons: list[Polygon] | None = None
+        self._normalization_cell_segmentation_present = False
+        self._normalization_cell_mask_cache: dict[
+            tuple[str, tuple[int, ...], int], np.ndarray
+        ] = {}
+
+    def _load_normalization_cell_polygons(self) -> list[Polygon]:
+        """Load valid global Cellpose polygons once for normalization masking."""
+        cached = getattr(self, "_normalization_cell_polygons", None)
+        if cached is not None:
+            if not hasattr(self, "_normalization_cell_segmentation_present"):
+                self._normalization_cell_segmentation_present = True
+            return cached
+
+        outlines = None
+        segmentation_root = getattr(self._datastore, "_segmentation_root_path", None)
+        if segmentation_root is not None:
+            cellpose_root = Path(segmentation_root) / Path("cellpose")
+            roi_path = cellpose_root / Path("imagej_rois/global_coords_rois.zip")
+            outline_path = cellpose_root / Path("cell_outlines.json")
+            segmentation_geometry_exists = roi_path.exists() or outline_path.exists()
+        else:
+            segmentation_geometry_exists = callable(
+                getattr(self._datastore, "load_global_cellpose_roi_zip", None)
+            ) or callable(
+                getattr(self._datastore, "load_global_cellpose_outlines", None)
+            )
+
+        if segmentation_geometry_exists:
+            load_roi_zip = getattr(
+                self._datastore,
+                "load_global_cellpose_roi_zip",
+                None,
+            )
+            if callable(load_roi_zip):
+                outlines = load_roi_zip()
+                if outlines is not None:
+                    segmentation_geometry_exists = True
+            if not outlines:
+                load_outlines = getattr(
+                    self._datastore,
+                    "load_global_cellpose_outlines",
+                    None,
+                )
+                if callable(load_outlines):
+                    outlines = load_outlines()
+                    if outlines is not None:
+                        segmentation_geometry_exists = True
+
+        polygons = []
+        for coordinates in (outlines or {}).values():
+            coordinate_array = np.asarray(coordinates, dtype=np.float64)
+            if coordinate_array.ndim != 2 or coordinate_array.shape[1] < 2:
+                continue
+            polygon = Polygon(coordinate_array[:, :2])
+            if not polygon.is_empty and polygon.is_valid and polygon.area > 0:
+                polygons.append(polygon)
+
+        self._normalization_cell_polygons = polygons
+        self._normalization_cell_segmentation_present = (
+            segmentation_geometry_exists
+        )
+        if polygons and getattr(self, "_verbose", 0) >= 1:
+            print(
+                time_stamp(),
+                "Restricting global and iterative normalization to segmented cells.",
+            )
+        return polygons
+
+    def _normalization_cell_mask_for_tile(
+        self,
+        *,
+        tile_id: str,
+        image_shape_zyx: Sequence[int],
+    ) -> np.ndarray | None:
+        """Rasterize global cell polygons into one tile's round-1 YX grid."""
+        polygons = self._load_normalization_cell_polygons()
+        if not self._normalization_cell_segmentation_present:
+            return None
+
+        shape_zyx = tuple(int(value) for value in image_shape_zyx)
+        cache_key = (str(tile_id), shape_zyx, int(self._z_range[0]))
+        mask_cache = getattr(self, "_normalization_cell_mask_cache", None)
+        if mask_cache is None:
+            mask_cache = {}
+            self._normalization_cell_mask_cache = mask_cache
+        if cache_key in mask_cache:
+            return mask_cache[cache_key]
+
+        stage_metadata = self._datastore.load_local_stage_position_zyx_um(
+            tile=tile_id,
+            round=0,
+        )
+        stage_origin = np.zeros(3, dtype=np.float64)
+        camera_to_stage = np.eye(4, dtype=np.float64)
+        if stage_metadata is not None:
+            stage_origin, camera_to_stage = stage_metadata
+            stage_origin = np.asarray(stage_origin, dtype=np.float64)
+            if stage_origin.size == 2:
+                stage_origin = np.asarray(
+                    [0.0, stage_origin[0], stage_origin[1]],
+                    dtype=np.float64,
+                )
+            camera_to_stage = np.asarray(camera_to_stage, dtype=np.float64)
+
+        affine, origin, spacing = self._datastore.load_global_coord_xforms_um(
+            tile=tile_id
+        )
+        if affine is None:
+            affine = np.eye(4, dtype=np.float64)
+        if origin is None:
+            origin = stage_origin
+        if spacing is None:
+            spacing = self._datastore.voxel_size_zyx_um
+        affine = np.asarray(affine, dtype=np.float64)
+        origin = np.asarray(origin, dtype=np.float64)
+        spacing = np.asarray(spacing, dtype=np.float64)
+        if origin.size == 2:
+            origin = np.asarray([0.0, origin[0], origin[1]], dtype=np.float64)
+
+        pixel_to_physical = np.eye(4, dtype=np.float64)
+        pixel_to_physical[:3, :3] = np.diag(spacing)
+        pixel_to_physical[:3, 3] = origin
+        pixel_to_global = affine @ camera_to_stage @ pixel_to_physical
+        global_to_pixel = np.linalg.inv(pixel_to_global)
+
+        source_z = float(self._z_range[0]) + (shape_zyx[0] - 1) / 2.0
+        global_z = float(
+            (pixel_to_global @ np.asarray([source_z, 0.0, 0.0, 1.0]))[0]
+        )
+        mask = np.zeros(shape_zyx[-2:], dtype=bool)
+        for polygon in polygons:
+            coordinates_xy = np.asarray(polygon.exterior.coords, dtype=np.float64)
+            global_points = np.column_stack(
+                (
+                    np.full(coordinates_xy.shape[0], global_z),
+                    coordinates_xy[:, 1],
+                    coordinates_xy[:, 0],
+                    np.ones(coordinates_xy.shape[0]),
+                )
+            )
+            local_points = (global_to_pixel @ global_points.T).T
+            rows, columns = rasterize_polygon(
+                local_points[:, 1],
+                local_points[:, 2],
+                shape=mask.shape,
+            )
+            mask[rows, columns] = True
+
+        mask_cache[cache_key] = mask
+        return mask
+
+    @staticmethod
+    def _points_within_cell_polygons(
+        global_x: np.ndarray,
+        global_y: np.ndarray,
+        polygons: Sequence[Polygon],
+    ) -> np.ndarray:
+        """Return whether each global XY point is covered by any cell polygon."""
+        spatial_index = rtree.index.Index()
+        for polygon_index, polygon in enumerate(polygons):
+            spatial_index.insert(polygon_index, polygon.bounds)
+
+        inside = np.zeros(len(global_x), dtype=bool)
+        for point_index, (x_value, y_value) in enumerate(
+            zip(global_x, global_y, strict=True)
+        ):
+            if not np.isfinite(x_value) or not np.isfinite(y_value):
+                continue
+            point = Point(float(x_value), float(y_value))
+            inside[point_index] = any(
+                polygons[candidate].covers(point)
+                for candidate in spatial_index.intersection(point.bounds)
+            )
+        return inside
+
+    @staticmethod
+    def _normalization_pixels(image: object, cell_mask: object | None) -> object:
+        """Flatten all voxels, or only voxels whose YX center lies in a cell."""
+        if cell_mask is None:
+            return image.reshape(-1)
+        return image[:, cell_mask].reshape(-1)
+
+    def _restrict_barcodes_to_segmented_cells(
+        self,
+        barcodes: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Keep normalization barcodes inside cells when segmentation exists."""
+        polygons = self._load_normalization_cell_polygons()
+        if not self._normalization_cell_segmentation_present or barcodes.empty:
+            return barcodes
+        if not polygons:
+            return barcodes.iloc[0:0].copy()
+        required_columns = {"global_x", "global_y"}
+        if not required_columns.issubset(barcodes.columns):
+            missing = sorted(required_columns.difference(barcodes.columns))
+            raise ValueError(
+                "Cell-restricted iterative normalization requires global "
+                f"coordinates; missing columns: {missing}."
+            )
+        inside = self._points_within_cell_polygons(
+            barcodes["global_x"].to_numpy(dtype=np.float64),
+            barcodes["global_y"].to_numpy(dtype=np.float64),
+            polygons,
+        )
+        return barcodes.loc[inside].copy()
 
     def _load_codebook(self) -> None:
         """
@@ -708,7 +915,9 @@ class PixelDecoder:
             are sampled from the datastore.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma applied to ``data * prediction`` before estimating
-            background and foreground normalization vectors.
+            background and foreground normalization vectors. When global
+            Cellpose polygons are present, percentile samples include only
+            tile pixels inside those cells (extruded across Z).
         """
         with cp.cuda.Device(gpu_id):
             effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
@@ -736,6 +945,7 @@ class PixelDecoder:
 
             for bit_idx, bit_id in iterable_bits:
                 all_images = []
+                all_cell_masks = []
 
                 if self._verbose >= 1:
                     iterable_tiles = tqdm(
@@ -778,6 +988,12 @@ class PixelDecoder:
                         current_image,
                         sigma=effective_lowpass_sigma,
                     )
+                    all_cell_masks.append(
+                        self._normalization_cell_mask_for_tile(
+                            tile_id=tile_id,
+                            image_shape_zyx=current_image.shape,
+                        )
+                    )
                     all_images.append(cp.asnumpy(current_image).astype(np.float32))
                     del current_image
                     cp.get_default_memory_pool().free_all_blocks()
@@ -797,18 +1013,28 @@ class PixelDecoder:
                     current_image = cp.asarray(
                         all_images[tile_idx, :], dtype=cp.float32
                     )
-                    low_cutoff = cp.percentile(current_image, low_percentile_cut)
-                    low_pixels.append(
-                        current_image[current_image < low_cutoff]
-                        .flatten()
-                        .astype(cp.float32)
+                    cell_mask = all_cell_masks[tile_idx]
+                    selected_pixels = self._normalization_pixels(
+                        current_image,
+                        None if cell_mask is None else cp.asarray(cell_mask),
                     )
-                    del current_image
+                    if selected_pixels.size == 0:
+                        del current_image, selected_pixels
+                        continue
+                    low_cutoff = cp.percentile(selected_pixels, low_percentile_cut)
+                    low_pixels.append(
+                        selected_pixels[selected_pixels < low_cutoff].astype(cp.float32)
+                    )
+                    del current_image, selected_pixels
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
 
-                low_pixels = cp.concatenate(low_pixels, axis=0)
-                if low_pixels.shape[0] > 0:
+                low_pixels = (
+                    cp.concatenate(low_pixels, axis=0)
+                    if low_pixels
+                    else cp.empty((0,), dtype=cp.float32)
+                )
+                if low_pixels.size > 0:
                     background_vector[bit_idx] = cp.median(low_pixels)
                 else:
                     background_vector[bit_idx] = 0
@@ -831,19 +1057,32 @@ class PixelDecoder:
                         - background_vector[bit_idx]
                     )
                     current_image[current_image < 0] = 0
-                    high_cutoff = cp.percentile(current_image, high_percentile_cut)
+                    cell_mask = all_cell_masks[tile_idx]
+                    selected_pixels = self._normalization_pixels(
+                        current_image,
+                        None if cell_mask is None else cp.asarray(cell_mask),
+                    )
+                    if selected_pixels.size == 0:
+                        del current_image, selected_pixels
+                        continue
+                    high_cutoff = cp.percentile(
+                        selected_pixels,
+                        high_percentile_cut,
+                    )
                     high_pixels.append(
-                        current_image[current_image > high_cutoff]
-                        .flatten()
-                        .astype(cp.float32)
+                        selected_pixels[selected_pixels > high_cutoff].astype(cp.float32)
                     )
 
-                    del current_image
+                    del current_image, selected_pixels
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
 
-                high_pixels = cp.concatenate(high_pixels, axis=0)
-                if high_pixels.shape[0] > 0:
+                high_pixels = (
+                    cp.concatenate(high_pixels, axis=0)
+                    if high_pixels
+                    else cp.empty((0,), dtype=cp.float32)
+                )
+                if high_pixels.size > 0:
                     normalization_vector[bit_idx] = cp.median(high_pixels)
                 else:
                     normalization_vector[bit_idx] = 1
@@ -898,6 +1137,10 @@ class PixelDecoder:
 
     def _iterative_normalization_vectors(self, gpu_id: int = 0) -> None:
         """Calculate iterative normalization and background vectors.
+
+        When Cellpose segmentation polygons are present, the loaded temporary
+        transcript table has already been restricted to global XY positions
+        inside those cells.
 
         Parameters
         ----------
@@ -2954,6 +3197,10 @@ class PixelDecoder:
             self._df_barcodes_loaded["gene_id"].notna()
             & self._df_barcodes_loaded["gene_id"].astype(str).str.strip().ne("")
         ]
+        if self._optimize_normalization_weights:
+            self._df_barcodes_loaded = self._restrict_barcodes_to_segmented_cells(
+                self._df_barcodes_loaded
+            )
         if "distance_min" not in self._df_barcodes_loaded.columns:
             raise ValueError(
                 "Decoded transcripts are missing 'distance_min'. "
