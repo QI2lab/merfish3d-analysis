@@ -593,9 +593,7 @@ class PixelDecoder:
                 polygons.append(polygon)
 
         self._normalization_cell_polygons = polygons
-        self._normalization_cell_segmentation_present = (
-            segmentation_geometry_exists
-        )
+        self._normalization_cell_segmentation_present = segmentation_geometry_exists
         if polygons and getattr(self, "_verbose", 0) >= 1:
             print(
                 time_stamp(),
@@ -661,9 +659,7 @@ class PixelDecoder:
         global_to_pixel = np.linalg.inv(pixel_to_global)
 
         source_z = float(self._z_range[0]) + (shape_zyx[0] - 1) / 2.0
-        global_z = float(
-            (pixel_to_global @ np.asarray([source_z, 0.0, 0.0, 1.0]))[0]
-        )
+        global_z = float((pixel_to_global @ np.asarray([source_z, 0.0, 0.0, 1.0]))[0])
         mask = np.zeros(shape_zyx[-2:], dtype=bool)
         for polygon in polygons:
             coordinates_xy = np.asarray(polygon.exterior.coords, dtype=np.float64)
@@ -1070,7 +1066,9 @@ class PixelDecoder:
                         high_percentile_cut,
                     )
                     high_pixels.append(
-                        selected_pixels[selected_pixels > high_cutoff].astype(cp.float32)
+                        selected_pixels[selected_pixels > high_cutoff].astype(
+                            cp.float32
+                        )
                     )
 
                     del current_image, selected_pixels

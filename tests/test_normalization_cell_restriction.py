@@ -13,15 +13,11 @@ def test_cell_mask_rasterizes_global_segmentation_into_tile_pixels() -> None:
     datastore = SimpleNamespace(
         load_global_cellpose_roi_zip=Mock(
             return_value={
-                1: np.asarray(
-                    ((1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0))
-                )
+                1: np.asarray(((1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)))
             }
         ),
         load_global_cellpose_outlines=Mock(return_value=None),
-        load_local_stage_position_zyx_um=Mock(
-            return_value=(np.zeros(3), np.eye(4))
-        ),
+        load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(3), np.eye(4))),
         load_global_coord_xforms_um=Mock(
             return_value=(np.eye(4), np.zeros(3), np.ones(3))
         ),
@@ -61,9 +57,7 @@ def test_present_empty_segmentation_does_not_fall_back_to_all_pixels() -> None:
     datastore = SimpleNamespace(
         load_global_cellpose_roi_zip=Mock(return_value={}),
         load_global_cellpose_outlines=Mock(return_value={}),
-        load_local_stage_position_zyx_um=Mock(
-            return_value=(np.zeros(2), np.eye(4))
-        ),
+        load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(2), np.eye(4))),
         load_global_coord_xforms_um=Mock(
             return_value=(np.eye(4), np.zeros(2), np.ones(3))
         ),
