@@ -24,7 +24,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import typer
-from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 
@@ -34,6 +33,13 @@ from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import (
     estimate_shading,
     replace_hot_pixels,
+)
+from merfish3danalysis.utils.psf import (
+    QI2LAB_DEFAULT_IMMERSION_RI,
+    QI2LAB_DEFAULT_NA,
+    QI2LAB_EMISSION_WAVELENGTHS_UM,
+    QI2LAB_EXCITATION_WAVELENGTHS_UM,
+    generate_qi2lab_psf,
 )
 
 app = typer.Typer()
@@ -228,10 +234,14 @@ def convert_data(
     output_path: Path | None = None,
     codebook_path: Path | None = None,
     bit_order_path: Path | None = None,
-    fallback_na: float = 1.35,
-    fallback_ri: float = 1.51,
-    excitation_wavelengths_um: tuple[float, float, float] = (0.488, 0.561, 0.635),
-    emission_wavelengths_um: tuple[float, float, float] = (0.520, 0.580, 0.670),
+    fallback_na: float = QI2LAB_DEFAULT_NA,
+    fallback_ri: float = QI2LAB_DEFAULT_IMMERSION_RI,
+    excitation_wavelengths_um: tuple[float, float, float] = (
+        QI2LAB_EXCITATION_WAVELENGTHS_UM
+    ),
+    emission_wavelengths_um: tuple[float, float, float] = (
+        QI2LAB_EMISSION_WAVELENGTHS_UM
+    ),
     default_tile_overlap: float = 0.2,
     noise_map_shape_yx: tuple[int, int] = (2048, 2048),
     hot_pixel_threshold: int = 100,
@@ -432,19 +442,13 @@ def convert_data(
 
     channel_psfs = []
     for channel_id in channels_in_data:
-        psf = make_psf(
-            z=psf_z,
-            nx=51,
-            dxy=voxel_size_zyx_um[1],
-            dz=voxel_size_zyx_um[0],
-            NA=na,
-            wvl=em_wavelengths_um[channel_id],
-            ns=1.47,
-            ni=ri,
-            ni0=ri,
-            model="vectorial",
-        ).astype(np.float32)
-        psf = psf / np.sum(psf, axis=(0, 1, 2))
+        psf = generate_qi2lab_psf(
+            z_depth=psf_z,
+            voxel_size_zyx_um=tuple(voxel_size_zyx_um),
+            emission_wavelength_um=em_wavelengths_um[channel_id],
+            na=na,
+            immersion_ri=ri,
+        )
         channel_psfs.append(psf)
 
     # initialize datastore
