@@ -118,6 +118,28 @@ The fitting thresholds, RANSAC settings, and centroid support are exposed as
 `--chromatic-*` flags and map directly to
 `ChromaticAffineEstimationConfig`.
 
+Codewords with known biochemical failures can be suppressed while fitting the
+iterative normalization vectors. Put a UTF-8 text file in the qi2lab datastore
+directory with one codebook `gene_id` per line; blank lines and lines beginning
+with `#` are ignored:
+
+```text
+# failed probes
+GeneA
+GeneB
+```
+
+```bash
+uv run qi2lab-decode \
+  /path/to/experiment \
+  --optimization-exclusions-file bad_codewords.txt
+```
+
+Relative filenames are resolved inside the datastore directory. Absolute paths
+remain supported. The full codebook remains in the nearest-neighbor search so
+excluded signal is not reassigned to another gene. The exclusion applies only
+to iterative optimization; final tile decoding still reports these codewords.
+
 Transcript filtering now uses either the blank-fraction filter or the logistic
 regression filter selected by `--filter-method blank_fraction|lr`. The removed
 enriched blank-barcode filtering path and its options are no longer part of the

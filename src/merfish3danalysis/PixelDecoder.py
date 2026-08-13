@@ -24,6 +24,7 @@ mp.set_start_method("spawn", force=True)
 
 import ctypes
 import gc
+import hashlib
 import operator
 import os
 import shutil
@@ -321,6 +322,7 @@ def _optimize_norm_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
+    excluded_gene_ids: Sequence[str],
 ) -> None:
     """
     Worker that runs one iteration of normalization-by-decoding on a GPU.
@@ -352,6 +354,9 @@ def _optimize_norm_worker(
     collect_chromatic_centroids : bool
         If True, collect per-on-bit centroid features needed for chromatic
         affine estimation.
+    excluded_gene_ids : Sequence[str]
+        Codebook gene IDs whose winning pixel assignments are suppressed during
+        iterative optimization.
 
     Returns
     -------
@@ -375,6 +380,7 @@ def _optimize_norm_worker(
         num_gpus=1,
         verbose=0,
         decode_mode=decode_mode,
+        excluded_gene_ids=excluded_gene_ids,
     )
 
     local_decoder._load_global_normalization_vectors(
@@ -451,6 +457,7 @@ class PixelDecoder:
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
         estimate_chromatic_affines: bool = False,
         chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
+        excluded_gene_ids: Sequence[str] | None = None,
     ) -> None:
         """
         Initialize the object.
@@ -479,6 +486,10 @@ class PixelDecoder:
             fallback.
         chromatic_affine_config : ChromaticAffineEstimationConfig or None
             Explicit RNA-derived chromatic affine estimation parameters.
+        excluded_gene_ids : Sequence[str] or None
+            Codebook gene IDs whose winning pixel assignments should be
+            suppressed. The full codebook remains in the nearest-neighbor
+            search so excluded signal cannot fall through to another codeword.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -518,6 +529,11 @@ class PixelDecoder:
         self._z_slice = slice(self._z_range[0], self._z_range[1])
 
         self._load_codebook()
+        (
+            self._excluded_gene_ids,
+            self._excluded_codeword_indices,
+        ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
+        self._optimization_excluded_gene_ids = self._excluded_gene_ids
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
         self._barcode_count = self._decoding_matrix.shape[0]
@@ -782,6 +798,85 @@ class PixelDecoder:
             .sum()
         )
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
+
+    def _resolve_excluded_gene_ids(
+        self,
+        excluded_gene_ids: Sequence[str] | None,
+    ) -> tuple[tuple[str, ...], tuple[int, ...]]:
+        """Resolve requested gene IDs to stable full-codebook row indices."""
+        if not excluded_gene_ids:
+            return (), ()
+
+        requested = []
+        seen = set()
+        for value in excluded_gene_ids:
+            gene_id = str(value).strip()
+            if not gene_id or gene_id in seen:
+                continue
+            requested.append(gene_id)
+            seen.add(gene_id)
+
+        index_by_gene: dict[str, list[int]] = {}
+        for index, value in enumerate(self._gene_ids):
+            index_by_gene.setdefault(str(value), []).append(index)
+
+        unknown = [gene_id for gene_id in requested if gene_id not in index_by_gene]
+        if unknown:
+            raise ValueError(
+                "Optimization exclusion gene IDs are not present in the active "
+                f"codebook: {', '.join(unknown)}. Matching is case-sensitive."
+            )
+
+        excluded_indices = tuple(
+            index
+            for gene_id in requested
+            for index in index_by_gene[gene_id]
+        )
+        if len(excluded_indices) >= len(self._gene_ids):
+            raise ValueError("Optimization exclusions cannot remove every codeword.")
+
+        resolved_set = set(requested)
+        resolved_gene_ids = tuple(
+            str(gene_id)
+            for gene_id in self._gene_ids
+            if str(gene_id) in resolved_set
+        )
+        resolved_gene_ids = tuple(dict.fromkeys(resolved_gene_ids))
+        return resolved_gene_ids, excluded_indices
+
+    def _codebook_fingerprint(self) -> str:
+        """Return a deterministic fingerprint of active codebook IDs and bits."""
+        digest = hashlib.sha256()
+        matrix = np.ascontiguousarray(self._codebook_matrix, dtype=np.int8)
+        digest.update(np.asarray(matrix.shape, dtype=np.int64).tobytes())
+        for gene_id in self._gene_ids:
+            encoded = str(gene_id).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, byteorder="little"))
+            digest.update(encoded)
+        digest.update(matrix.tobytes())
+        return digest.hexdigest()
+
+    def _iterative_normalization_metadata(self) -> dict[str, object]:
+        """Return provenance for the current iterative-normalization fit."""
+        return {
+            "scope": "iterative_optimization",
+            "excluded_gene_ids": list(self._optimization_excluded_gene_ids),
+            "codebook_sha256": self._codebook_fingerprint(),
+        }
+
+    @staticmethod
+    def _suppress_excluded_codeword_assignments(
+        decoded_trace: object,
+        codebook_index_trace: object,
+        excluded_codeword_indices: Sequence[int],
+    ) -> None:
+        """Mark excluded winning assignments as background, without fallback."""
+        if not excluded_codeword_indices:
+            return
+        array_module = cp.get_array_module(decoded_trace)
+        decoded_trace[
+            array_module.isin(codebook_index_trace, excluded_codeword_indices)
+        ] = -1
 
     def _normalize_codebook(
         self, gpu_id: int = 0, include_errors: bool = False
@@ -1114,6 +1209,29 @@ class PixelDecoder:
             GPU identifier
         """
         with cp.cuda.Device(gpu_id):
+            load_metadata = getattr(
+                self._datastore,
+                "load_decode_normalization_metadata",
+                None,
+            )
+            metadata = (
+                load_metadata(self._decode_run_key, "iterative")
+                if callable(load_metadata)
+                else None
+            )
+            expected_fingerprint = (
+                metadata.get("codebook_sha256")
+                if isinstance(metadata, dict)
+                else None
+            )
+            if (
+                expected_fingerprint is not None
+                and expected_fingerprint != self._codebook_fingerprint()
+            ):
+                raise ValueError(
+                    "Cached iterative normalization vectors were fitted with a "
+                    "different active codebook. Re-run iterative optimization."
+                )
             normalization_vector, background_vector = (
                 self._datastore.load_decode_normalization_vectors(
                     self._decode_run_key, "iterative"
@@ -1192,6 +1310,7 @@ class PixelDecoder:
                     old_iterative_normalization_vector.astype(np.float32),
                     old_iterative_background_vector.astype(np.float32),
                     decode_mode=self._effective_decode_mode,
+                    metadata=self._iterative_normalization_metadata(),
                 )
                 return
 
@@ -1271,6 +1390,7 @@ class PixelDecoder:
                 barcode_based_normalization_vector.astype(np.float32),
                 barcode_based_background_vector.astype(np.float32),
                 decode_mode=self._effective_decode_mode,
+                metadata=self._iterative_normalization_metadata(),
             )
 
             if self._verbose > 1:
@@ -1293,6 +1413,7 @@ class PixelDecoder:
                 barcode_based_normalization_vector,
                 barcode_based_background_vector,
                 decode_mode=self._effective_decode_mode,
+                metadata=self._iterative_normalization_metadata(),
             )
 
             self._iterative_normalization_loaded = True
@@ -2495,6 +2616,11 @@ class PixelDecoder:
                 decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
                 decoded_trace[pixel_magnitude_trace < magnitude_threshold[0]] = -1
                 decoded_trace[pixel_magnitude_trace > magnitude_threshold[1]] = -1
+                self._suppress_excluded_codeword_assignments(
+                    decoded_trace,
+                    codebook_index_trace,
+                    self._excluded_codeword_indices,
+                )
 
                 self._decoded_image[z_idx, :] = cp.asnumpy(
                     cp.reshape(cp.round(decoded_trace, 5), z_plane_shape[1:])
@@ -4410,6 +4536,7 @@ class PixelDecoder:
         magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
         estimate_chromatic_affines: bool | None = None,
+        excluded_gene_ids: Sequence[str] | None = None,
     ) -> None:
         """Refine normalization vectors using exact-called transcripts.
 
@@ -4434,6 +4561,10 @@ class PixelDecoder:
             If True, estimate chromatic affine transforms after each iterative
             decoding round. If None, use the instance setting supplied at
             construction.
+        excluded_gene_ids : Sequence[str] or None, optional
+            Codebook gene IDs to suppress during iterative decoding. Excluded
+            codewords remain in the nearest-neighbor search but their winning
+            assignments are marked as background.
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
@@ -4441,6 +4572,28 @@ class PixelDecoder:
             magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
         if minimum_pixels is None:
             minimum_pixels = self._default_minimum_pixels()
+        (
+            self._optimization_excluded_gene_ids,
+            excluded_codeword_indices,
+        ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
+        if excluded_codeword_indices and self._verbose >= 1:
+            print(
+                "Excluding codewords from iterative optimization: "
+                + ", ".join(self._optimization_excluded_gene_ids)
+            )
+        blank_exclusions = [
+            gene_id
+            for gene_id in self._optimization_excluded_gene_ids
+            if gene_id.lower().startswith("blank")
+        ]
+        if blank_exclusions:
+            warnings.warn(
+                "Blank codewords already do not contribute to iterative "
+                "normalization; excluding them only suppresses their temporary "
+                "assignments: "
+                + ", ".join(blank_exclusions),
+                stacklevel=2,
+            )
         all_tiles = list(range(len(self._datastore.tile_ids)))
 
         # preload global normalization once
@@ -4516,6 +4669,7 @@ class PixelDecoder:
                         minimum_pixels,
                         feature_predictor_threshold,
                         run_chromatic_estimation,
+                        self._optimization_excluded_gene_ids,
                     ),
                     physical_gpu_id=gpu,
                 )

@@ -1183,6 +1183,7 @@ class qi2labDataStore:
         normalization_vector: ArrayLike,
         background_vector: ArrayLike,
         decode_mode: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> None:
         """
         Save default or run-scoped normalization and background vectors.
@@ -1199,11 +1200,14 @@ class qi2labDataStore:
             Background vector.
         decode_mode : str or None, default None
             Decode mode metadata.
+        metadata : Mapping[str, Any] or None, default None
+            Additional provenance for these normalization vectors.
         """
         if kind == "global":
             if decode_run_key is None:
                 self.global_normalization_vector = normalization_vector
                 self.global_background_vector = background_vector
+                self._save_default_decode_normalization_metadata(kind, metadata)
                 return
             norm_key = "global_normalization_vector"
             background_key = "global_background_vector"
@@ -1211,6 +1215,7 @@ class qi2labDataStore:
             if decode_run_key is None:
                 self.iterative_normalization_vector = normalization_vector
                 self.iterative_background_vector = background_vector
+                self._save_default_decode_normalization_metadata(kind, metadata)
                 return
             norm_key = "iterative_normalization_vector"
             background_key = "iterative_background_vector"
@@ -1223,11 +1228,47 @@ class qi2labDataStore:
         run_attrs = dict(runs.get(decode_run_key, {}))
         if decode_mode is not None:
             run_attrs["decode_mode"] = str(decode_mode)
+        if metadata is not None:
+            run_attrs[f"{kind}_metadata"] = dict(metadata)
         run_attrs[norm_key] = np.asarray(normalization_vector, dtype=np.float32)
         run_attrs[background_key] = np.asarray(background_vector, dtype=np.float32)
         runs[decode_run_key] = run_attrs
         calib_attrs["decode_normalization_runs"] = runs
         self._save_calibrations_attributes(calib_attrs)
+
+    def _save_default_decode_normalization_metadata(
+        self,
+        kind: str,
+        metadata: Mapping[str, Any] | None,
+    ) -> None:
+        """Save provenance for default, non-run-scoped normalization vectors."""
+        if metadata is None:
+            return
+        calib_attrs = self._load_calibrations_attributes()
+        all_metadata = dict(calib_attrs.get("decode_normalization_metadata", {}))
+        all_metadata[kind] = dict(metadata)
+        calib_attrs["decode_normalization_metadata"] = all_metadata
+        self._save_calibrations_attributes(calib_attrs)
+
+    def load_decode_normalization_metadata(
+        self,
+        decode_run_key: str | None,
+        kind: str,
+    ) -> dict[str, Any] | None:
+        """Load provenance for default or run-scoped normalization vectors."""
+        if kind not in {"global", "iterative"}:
+            raise ValueError("kind must be one of 'global' or 'iterative'.")
+        calib_attrs = self._load_calibrations_attributes()
+        if decode_run_key is None:
+            metadata = calib_attrs.get("decode_normalization_metadata", {}).get(kind)
+        else:
+            decode_run_key = self._validate_decode_run_key(decode_run_key)
+            metadata = (
+                calib_attrs.get("decode_normalization_runs", {})
+                .get(decode_run_key, {})
+                .get(f"{kind}_metadata")
+            )
+        return dict(metadata) if isinstance(metadata, Mapping) else None
 
     @property
     def tile_ids(self) -> Collection[str] | None:
