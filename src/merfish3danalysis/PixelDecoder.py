@@ -870,8 +870,12 @@ class PixelDecoder:
         if not excluded_codeword_indices:
             return
         array_module = cp.get_array_module(decoded_trace)
+        excluded_indices = array_module.asarray(
+            excluded_codeword_indices,
+            dtype=codebook_index_trace.dtype,
+        )
         decoded_trace[
-            array_module.isin(codebook_index_trace, excluded_codeword_indices)
+            array_module.isin(codebook_index_trace, excluded_indices)
         ] = -1
 
     def _normalize_codebook(

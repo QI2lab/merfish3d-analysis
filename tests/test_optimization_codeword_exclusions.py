@@ -119,6 +119,36 @@ def test_excluded_winner_becomes_background_without_index_fallback() -> None:
     np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2, -1, -1]))
 
 
+def test_exclusion_indices_are_converted_for_array_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decoded = np.asarray([0, 1, 2], dtype=np.int16)
+    nearest = np.asarray([0, 1, 2], dtype=np.int16)
+    converted = []
+
+    class _CupyLikeArrayModule:
+        @staticmethod
+        def asarray(values, dtype=None):
+            result = np.asarray(values, dtype=dtype)
+            converted.append(result)
+            return result
+
+        @staticmethod
+        def isin(element, test_elements):
+            assert isinstance(test_elements, np.ndarray)
+            return np.isin(element, test_elements)
+
+    fake_cp = SimpleNamespace(
+        get_array_module=lambda _array: _CupyLikeArrayModule,
+    )
+    monkeypatch.setattr(pixel_decoder_module, "cp", fake_cp)
+
+    PixelDecoder._suppress_excluded_codeword_assignments(decoded, nearest, (1,))
+
+    assert converted[0].dtype == nearest.dtype
+    np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2]))
+
+
 def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
