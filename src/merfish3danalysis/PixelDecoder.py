@@ -874,9 +874,7 @@ class PixelDecoder:
             excluded_codeword_indices,
             dtype=codebook_index_trace.dtype,
         )
-        decoded_trace[
-            array_module.isin(codebook_index_trace, excluded_indices)
-        ] = -1
+        decoded_trace[array_module.isin(codebook_index_trace, excluded_indices)] = -1
 
     def _normalize_codebook(
         self, gpu_id: int = 0, include_errors: bool = False
