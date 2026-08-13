@@ -828,18 +828,14 @@ class PixelDecoder:
             )
 
         excluded_indices = tuple(
-            index
-            for gene_id in requested
-            for index in index_by_gene[gene_id]
+            index for gene_id in requested for index in index_by_gene[gene_id]
         )
         if len(excluded_indices) >= len(self._gene_ids):
             raise ValueError("Optimization exclusions cannot remove every codeword.")
 
         resolved_set = set(requested)
         resolved_gene_ids = tuple(
-            str(gene_id)
-            for gene_id in self._gene_ids
-            if str(gene_id) in resolved_set
+            str(gene_id) for gene_id in self._gene_ids if str(gene_id) in resolved_set
         )
         resolved_gene_ids = tuple(dict.fromkeys(resolved_gene_ids))
         return resolved_gene_ids, excluded_indices
@@ -1220,9 +1216,7 @@ class PixelDecoder:
                 else None
             )
             expected_fingerprint = (
-                metadata.get("codebook_sha256")
-                if isinstance(metadata, dict)
-                else None
+                metadata.get("codebook_sha256") if isinstance(metadata, dict) else None
             )
             if (
                 expected_fingerprint is not None
@@ -4590,8 +4584,7 @@ class PixelDecoder:
             warnings.warn(
                 "Blank codewords already do not contribute to iterative "
                 "normalization; excluding them only suppresses their temporary "
-                "assignments: "
-                + ", ".join(blank_exclusions),
+                "assignments: " + ", ".join(blank_exclusions),
                 stacklevel=2,
             )
         all_tiles = list(range(len(self._datastore.tile_ids)))

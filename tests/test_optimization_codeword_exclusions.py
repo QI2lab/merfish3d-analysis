@@ -54,10 +54,13 @@ def test_load_optimization_exclusions_file_rejects_empty_input(
 def test_relative_exclusions_file_resolves_inside_datastore(tmp_path: Path) -> None:
     datastore_path = tmp_path / "qi2labdatastore"
 
-    assert _optimization_exclusions_path(
-        datastore_path,
-        Path("bad_codewords.txt"),
-    ) == datastore_path / "bad_codewords.txt"
+    assert (
+        _optimization_exclusions_path(
+            datastore_path,
+            Path("bad_codewords.txt"),
+        )
+        == datastore_path / "bad_codewords.txt"
+    )
 
 
 def test_absolute_exclusions_file_is_preserved(tmp_path: Path) -> None:
@@ -77,7 +80,10 @@ def test_cli_rejects_exclusions_when_optimization_will_not_run(
     exclusions_path = tmp_path / "bad_codewords.txt"
     exclusions_path.write_text("GeneB\n", encoding="utf-8")
 
-    kwargs = {"skip_optimization": mode == "skip", "reprocess_existing": mode == "reprocess"}
+    kwargs = {
+        "skip_optimization": mode == "skip",
+        "reprocess_existing": mode == "reprocess",
+    }
     with pytest.raises(typer.BadParameter, match="cannot be used"):
         decode_pixels(
             root_path=tmp_path,
@@ -89,9 +95,7 @@ def test_cli_rejects_exclusions_when_optimization_will_not_run(
 def test_resolve_exclusions_is_exact_deduplicated_and_index_stable() -> None:
     decoder = _decoder_with_codebook()
 
-    gene_ids, indices = decoder._resolve_excluded_gene_ids(
-        [" GeneB ", "GeneB"]
-    )
+    gene_ids, indices = decoder._resolve_excluded_gene_ids([" GeneB ", "GeneB"])
 
     assert gene_ids == ("GeneB",)
     assert indices == (1,)
