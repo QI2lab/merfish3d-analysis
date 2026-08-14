@@ -113,7 +113,7 @@ import rtree
 from cucim.skimage.measure import label
 from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter, grey_dilation
+from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
 from roifile import roiread
 from scipy.spatial import cKDTree
@@ -2702,7 +2702,7 @@ class PixelDecoder:
         self,
         df_barcode: pd.DataFrame,
         codewords_label_image: cp.ndarray,
-        intensity_image: cp.ndarray,
+        intensity_image: object,
         on_bits_1based: np.ndarray,
     ) -> pd.DataFrame:
         """
@@ -2714,8 +2714,9 @@ class PixelDecoder:
             Decoded barcode table with ``label`` and centroid columns.
         codewords_label_image : cupy.ndarray
             Connected-component label image in decoded Z, Y, X coordinates.
-        intensity_image : cupy.ndarray
-            Intensity image in Z, Y, X, bit order.
+        intensity_image : numpy.ndarray or cupy.ndarray
+            Intensity image in Z, Y, X, bit order. CPU-backed inputs are copied
+            to the GPU one Z plane at a time.
         on_bits_1based : numpy.ndarray
             On-bit indices for each barcode row, 1-based.
 
@@ -2751,9 +2752,7 @@ class PixelDecoder:
         )
         if z_support % 2 == 0:
             z_support -= 1
-        centroid_labels_cp = grey_dilation(labels_cp, size=(z_support, 1, 1))
         labels_flat = labels_cp.ravel()
-        centroid_labels_flat = centroid_labels_cp.ravel()
         max_label = int(cp.max(labels_cp).get()) if labels_cp.size else 0
         if max_label < 1:
             return pd.concat([df_barcode, extra_df], axis=1)
@@ -2764,42 +2763,24 @@ class PixelDecoder:
             cp.float32,
             copy=False,
         )
-        z_coords = cp.arange(labels_cp.shape[0], dtype=cp.float32)[:, None, None]
-        y_coords = cp.arange(labels_cp.shape[1], dtype=cp.float32)[None, :, None]
-        x_coords = cp.arange(labels_cp.shape[2], dtype=cp.float32)[None, None, :]
 
         for bit_idx in range(1, self._n_merfish_bits + 1):
             active_rows = np.flatnonzero(np.any(on_bits_1based == bit_idx, axis=1))
             if active_rows.size == 0:
                 continue
 
-            bit_image = cp.maximum(
+            (
+                weight_by_label,
+                z_sum_by_label,
+                y_sum_by_label,
+                x_sum_by_label,
+                peak_by_label,
+            ) = self._plane_wise_weighted_centroid_statistics(
+                labels_cp,
                 intensity_image[..., bit_idx - 1],
-                cp.float32(0),
-            )
-            weights_flat = bit_image.ravel()
-            weight_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=weights_flat,
+                z_support=z_support,
                 minlength=minlength,
             )
-            z_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * z_coords).ravel(),
-                minlength=minlength,
-            )
-            y_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * y_coords).ravel(),
-                minlength=minlength,
-            )
-            x_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * x_coords).ravel(),
-                minlength=minlength,
-            )
-            peak_by_label = cp.zeros(minlength, dtype=cp.float32)
-            cp.maximum.at(peak_by_label, labels_flat, weights_flat)
 
             active_labels = label_lookup[active_rows]
             weight_sum_cp = weight_by_label[active_labels]
@@ -2848,6 +2829,81 @@ class PixelDecoder:
             extra_df.loc[active_rows, f"bit{bit_idx:02d}_voxel_count"] = area
 
         return pd.concat([df_barcode, extra_df], axis=1)
+
+    @staticmethod
+    def _plane_wise_weighted_centroid_statistics(
+        labels: object,
+        intensity: object,
+        *,
+        z_support: int,
+        minlength: int,
+    ) -> tuple[object, object, object, object, object]:
+        """Accumulate centroid statistics with only one Z plane of workspace."""
+        array_module = cp.get_array_module(labels)
+        accumulator_dtype = array_module.float64
+        weight_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        z_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        y_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        x_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        peak_by_label = array_module.zeros(minlength, dtype=array_module.float32)
+        y_coords = array_module.arange(
+            labels.shape[1], dtype=array_module.float32
+        )[:, None]
+        x_coords = array_module.arange(
+            labels.shape[2], dtype=array_module.float32
+        )[None, :]
+        half_support = max(int(z_support) // 2, 0)
+
+        for z_index in range(labels.shape[0]):
+            z_start = max(0, z_index - half_support)
+            z_stop = min(labels.shape[0], z_index + half_support + 1)
+            if z_stop - z_start == 1:
+                centroid_labels = labels[z_index]
+            else:
+                centroid_labels = array_module.max(
+                    labels[z_start:z_stop],
+                    axis=0,
+                )
+            intensity_plane = array_module.asarray(
+                intensity[z_index],
+                dtype=array_module.float32,
+            )
+            weights = array_module.maximum(
+                intensity_plane,
+                array_module.float32(0),
+            )
+            centroid_labels_flat = centroid_labels.ravel()
+            weights_flat = weights.ravel()
+            plane_weight = array_module.bincount(
+                centroid_labels_flat,
+                weights=weights_flat,
+                minlength=minlength,
+            )
+            weight_by_label += plane_weight
+            z_sum_by_label += plane_weight * float(z_index)
+            y_sum_by_label += array_module.bincount(
+                centroid_labels_flat,
+                weights=(weights * y_coords).ravel(),
+                minlength=minlength,
+            )
+            x_sum_by_label += array_module.bincount(
+                centroid_labels_flat,
+                weights=(weights * x_coords).ravel(),
+                minlength=minlength,
+            )
+            array_module.maximum.at(
+                peak_by_label,
+                labels[z_index].ravel(),
+                weights_flat,
+            )
+
+        return (
+            weight_by_label,
+            z_sum_by_label,
+            y_sum_by_label,
+            x_sum_by_label,
+            peak_by_label,
+        )
 
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
@@ -3063,7 +3119,7 @@ class PixelDecoder:
                 df_barcode = self._add_on_bit_weighted_centroids(
                     df_barcode,
                     codewords_label_image_cp,
-                    cp.asarray(intensity_image, dtype=cp.float32),
+                    intensity_image,
                     on_sel,
                 )
 

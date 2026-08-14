@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import typer
+from scipy.ndimage import grey_dilation
 
 import merfish3danalysis.PixelDecoder as pixel_decoder_module
 from merfish3danalysis.cli.qi2lab_microscopes.pixeldecode import (
@@ -147,6 +148,61 @@ def test_exclusion_indices_are_converted_for_array_module(
 
     assert converted[0].dtype == nearest.dtype
     np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2]))
+
+
+def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
+    labels = np.asarray(
+        [
+            [[0, 1, 0], [0, 0, 2]],
+            [[0, 0, 0], [3, 0, 0]],
+            [[0, 1, 0], [0, 0, 2]],
+        ],
+        dtype=np.int32,
+    )
+    intensity = np.arange(1, labels.size + 1, dtype=np.float32).reshape(labels.shape)
+    intensity[0, 0, 0] = -5.0
+    minlength = int(labels.max()) + 1
+
+    observed = PixelDecoder._plane_wise_weighted_centroid_statistics(
+        labels,
+        intensity,
+        z_support=3,
+        minlength=minlength,
+    )
+
+    centroid_labels = grey_dilation(labels, size=(3, 1, 1))
+    weights = np.maximum(intensity, np.float32(0))
+    z_coords = np.arange(labels.shape[0], dtype=np.float32)[:, None, None]
+    y_coords = np.arange(labels.shape[1], dtype=np.float32)[None, :, None]
+    x_coords = np.arange(labels.shape[2], dtype=np.float32)[None, None, :]
+    expected = [
+        np.bincount(
+            centroid_labels.ravel(),
+            weights=weights.ravel(),
+            minlength=minlength,
+        ),
+        np.bincount(
+            centroid_labels.ravel(),
+            weights=(weights * z_coords).ravel(),
+            minlength=minlength,
+        ),
+        np.bincount(
+            centroid_labels.ravel(),
+            weights=(weights * y_coords).ravel(),
+            minlength=minlength,
+        ),
+        np.bincount(
+            centroid_labels.ravel(),
+            weights=(weights * x_coords).ravel(),
+            minlength=minlength,
+        ),
+    ]
+    expected_peak = np.zeros(minlength, dtype=np.float32)
+    np.maximum.at(expected_peak, labels.ravel(), weights.ravel())
+    expected.append(expected_peak)
+
+    for observed_values, expected_values in zip(observed, expected, strict=True):
+        np.testing.assert_allclose(observed_values, expected_values)
 
 
 def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
