@@ -2846,12 +2846,12 @@ class PixelDecoder:
         y_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
         x_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
         peak_by_label = array_module.zeros(minlength, dtype=array_module.float32)
-        y_coords = array_module.arange(
-            labels.shape[1], dtype=array_module.float32
-        )[:, None]
-        x_coords = array_module.arange(
-            labels.shape[2], dtype=array_module.float32
-        )[None, :]
+        y_coords = array_module.arange(labels.shape[1], dtype=array_module.float32)[
+            :, None
+        ]
+        x_coords = array_module.arange(labels.shape[2], dtype=array_module.float32)[
+            None, :
+        ]
         half_support = max(int(z_support) // 2, 0)
 
         for z_index in range(labels.shape[0]):
