@@ -16,5 +16,4 @@ def qi2lab_datastore_path(root_path: Path) -> Path:
     Path
         Standard ``qi2labdatastore`` path.
     """
-
     return root_path / "qi2labdatastore"

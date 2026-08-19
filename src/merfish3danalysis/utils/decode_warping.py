@@ -36,7 +36,6 @@ def load_bit_round_transform_zyx_um(
         Round identifier and physical Z, Y, X transform. Bits from the
         reference round return ``(None, identity)``.
     """
-
     round_index = datastore.load_local_round_linker(tile=tile, bit=bit_id) - 1
     if round_index <= 0:
         return None, np.eye(4, dtype=np.float32)
@@ -77,10 +76,109 @@ def compose_decode_warp_transform_zyx_um(
         native readout image coordinates, suitable for
         :func:`warp_array_to_reference_gpu`.
     """
-
     return np.linalg.inv(np.asarray(chromatic_transform_zyx_um, dtype=np.float32)) @ (
         np.asarray(round_transform_zyx_um, dtype=np.float32)
     )
+
+
+def compose_optional_warp_transform_zyx_um(
+    *,
+    round_transform_zyx_um: np.ndarray | None,
+    chromatic_transform_zyx_um: np.ndarray | None,
+) -> np.ndarray:
+    """
+    Compose optional chromatic and round transforms.
+
+    Parameters
+    ----------
+    round_transform_zyx_um : numpy.ndarray or None
+        Physical transform from reference-round Z, Y, X coordinates into the
+        moving image coordinates. ``None`` uses identity.
+    chromatic_transform_zyx_um : numpy.ndarray or None
+        Chromatic calibration transform in physical Z, Y, X coordinates.
+        ``None`` uses identity.
+
+    Returns
+    -------
+    numpy.ndarray
+        Physical transform mapping reference-frame output coordinates to the
+        native moving image coordinates.
+    """
+    round_transform = (
+        np.eye(4, dtype=np.float32)
+        if round_transform_zyx_um is None
+        else np.asarray(round_transform_zyx_um, dtype=np.float32)
+    )
+    chromatic_transform = (
+        np.eye(4, dtype=np.float32)
+        if chromatic_transform_zyx_um is None
+        else np.asarray(chromatic_transform_zyx_um, dtype=np.float32)
+    )
+    return compose_decode_warp_transform_zyx_um(
+        round_transform_zyx_um=round_transform,
+        chromatic_transform_zyx_um=chromatic_transform,
+    )
+
+
+def warp_image_to_reference_frame(
+    image: np.ndarray,
+    *,
+    transform_zyx_um: np.ndarray,
+    spacing_zyx_um: Sequence[float],
+    loaded_flow_field: tuple[np.ndarray, Mapping[str, Any]] | None = None,
+    gpu_id: int = 0,
+) -> np.ndarray:
+    """
+    Warp an image into the reference frame using affine and optional SOFIMA flow.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Native moving image in Z, Y, X order.
+    transform_zyx_um : numpy.ndarray
+        Physical transform from reference output coordinates into the moving
+        image coordinate system.
+    spacing_zyx_um : Sequence[float]
+        Reference image voxel spacing in microns, in Z, Y, X order.
+    loaded_flow_field : tuple[numpy.ndarray, Mapping[str, Any]] or None
+        Optional SOFIMA flow field and metadata returned by the datastore.
+    gpu_id : int, default=0
+        CUDA device ID used for interpolation.
+
+    Returns
+    -------
+    numpy.ndarray
+        Image sampled in the reference frame as float32.
+    """
+    if loaded_flow_field is None and np.allclose(
+        transform_zyx_um,
+        np.eye(4, dtype=np.float32),
+    ):
+        return np.asarray(image, dtype=np.float32)
+
+    from merfish3danalysis.utils.multiview_registration import (
+        warp_array_to_reference_gpu,
+    )
+
+    if loaded_flow_field is not None:
+        sofima_flow_field, flow_attrs = loaded_flow_field
+        if not str(flow_attrs.get("sofima_status", "")).startswith("identity_fallback"):
+            return warp_image_with_sofima_metadata(
+                image,
+                transform_zyx_um=transform_zyx_um,
+                spacing_zyx_um=spacing_zyx_um,
+                sofima_flow_field_xyz_px=sofima_flow_field,
+                flow_attrs=flow_attrs,
+                gpu_id=gpu_id,
+            ).astype(np.float32, copy=False)
+
+    return warp_array_to_reference_gpu(
+        image,
+        transform_zyx_um=transform_zyx_um,
+        spacing_zyx_um=spacing_zyx_um,
+        reference_shape=image.shape,
+        gpu_id=gpu_id,
+    ).astype(np.float32, copy=False)
 
 
 def warp_bit_image_to_reference(
@@ -116,7 +214,6 @@ def warp_bit_image_to_reference(
     numpy.ndarray
         Image sampled in the round-1 local reference frame.
     """
-
     round_id, round_transform_zyx_um = load_bit_round_transform_zyx_um(
         datastore,
         tile=tile,
@@ -139,34 +236,13 @@ def warp_bit_image_to_reference(
             return_future=False,
         )
 
-    if loaded_flow_field is None and np.allclose(
-        transform_zyx_um,
-        np.eye(4, dtype=np.float32),
-    ):
-        return np.asarray(image, dtype=np.float32)
-
-    if loaded_flow_field is not None:
-        sofima_flow_field, flow_attrs = loaded_flow_field
-        return warp_image_with_sofima_metadata(
-            image,
-            transform_zyx_um=transform_zyx_um,
-            spacing_zyx_um=spacing_zyx_um,
-            sofima_flow_field_xyz_px=sofima_flow_field,
-            flow_attrs=flow_attrs,
-            gpu_id=gpu_id,
-        ).astype(np.float32, copy=False)
-
-    from merfish3danalysis.utils.multiview_registration import (
-        warp_array_to_reference_gpu,
-    )
-
-    return warp_array_to_reference_gpu(
+    return warp_image_to_reference_frame(
         image,
         transform_zyx_um=transform_zyx_um,
         spacing_zyx_um=spacing_zyx_um,
-        reference_shape=image.shape,
+        loaded_flow_field=loaded_flow_field,
         gpu_id=gpu_id,
-    ).astype(np.float32, copy=False)
+    )
 
 
 def warp_image_with_sofima_metadata(
@@ -209,7 +285,6 @@ def warp_image_with_sofima_metadata(
     numpy.ndarray
         Image sampled in the reference frame as float32.
     """
-
     from merfish3danalysis.utils.multiview_registration import (
         warp_array_to_reference_with_affine_and_sofima_flow_gpu,
     )
@@ -231,7 +306,9 @@ def warp_image_with_sofima_metadata(
 
 __all__ = [
     "compose_decode_warp_transform_zyx_um",
+    "compose_optional_warp_transform_zyx_um",
     "load_bit_round_transform_zyx_um",
     "warp_bit_image_to_reference",
+    "warp_image_to_reference_frame",
     "warp_image_with_sofima_metadata",
 ]

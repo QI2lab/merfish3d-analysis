@@ -61,12 +61,12 @@ flowchart TD
 %%{init: { "theme": "default", "themeVariables": { "htmlLabels": true, "curve": "linear", "layout": "elk" } } }%%
 flowchart TD
  subgraph s2["MERFISH preprocessing"]
-        n17["Deconvolution"]
-        n18["feature_predictor prediction"]
-        n19["Save unwarped readout arrays"]
+        n17["Optional deconvolution"]
+        n18["Feature predictor prediction"]
+        n19["Save native readout arrays"]
   end
  subgraph s3["Fiducial preprocessing"]
-        n14["Deconvolution"]
+        n14["Optional deconvolution"]
         n15["Affine registration"]
         n16["SOFIMA residual flow field"]
   end
@@ -97,11 +97,12 @@ flowchart TD
 Fiducial registration stores the affine transform for each round relative to
 round 1. Local affine registration uses the qi2lab GPU registration path:
 lateral XY registration on a max-Z projection, followed by XYZ registration.
-When deformable registration is enabled, preprocessing then stores a SOFIMA
-residual flow field in the moving fiducial round. Readout preprocessing saves
-unwarped deconvolved images and feature-prediction images. Pixel decoding loads
-those arrays and applies chromatic, affine, and SOFIMA transforms in one
-sampling step.
+When deformable registration is enabled, preprocessing stores a SOFIMA residual
+flow field in the moving fiducial round only when the field improves fiducial
+alignment relative to affine alone. Readout preprocessing saves native
+corrected data, optional deconvolved data, and feature-prediction images. Pixel
+decoding loads those arrays and applies chromatic, affine, and SOFIMA transforms
+in one sampling step.
 
 ## Global registration and fusion of first fiducial round
 
@@ -113,7 +114,7 @@ flowchart TD
     n4["Multiview-Stitcher"]
  end
  n1["qi2labdatastore"]
- n2["XY downsampled, Z max projected, and fused global fiducial image"]
+ n2["Direct-to-Zarr fused fiducial image"]
  n5["Cellpose"]
  n6["2D cell segmentations"]
  n7["Optimized global tile positions"]
@@ -137,10 +138,10 @@ flowchart TD
 
 Global registration follows the multiview-stitcher registration and fusion
 workflow using the stage positions stored in the datastore as the starting
-geometry. The registration stage is CPU/Dask controlled; GPU acceleration is
-used by the direct OME-Zarr fusion backend. The full global stage can be rerun
-on an existing locally registered datastore with `uv run qi2lab-preprocess
-/path/to/experiment --global-registration-only`.
+geometry. The registration step refines global tile transforms on CPU. The
+fusion step writes directly to OME-Zarr with the GPU backend. The full global
+stage can be rerun on an existing locally registered datastore with
+`uv run qi2lab-preprocess /path/to/experiment --global-registration-only`.
 
 ## Pixel decoding
 
@@ -184,6 +185,15 @@ Chromatic affine estimation is optional during iterative normalization. When
 enabled, it estimates channel affines from decoded RNA centroids assigned to
 valid nonblank codewords and writes the calibration back to the datastore for
 subsequent decode-time warping.
+
+## Viewer inspection
+
+The read-only `viewer` command opens a Qt controller that can spawn NDV windows
+for local and global datastore views. NDV displays Zarr-backed image channels.
+Transcript points and cell boundaries from datastore decoding, Cellpose, Proseg,
+or Baysor are rendered as sparse VisPy overlays. Local warped views use the same
+stored chromatic, affine, and SOFIMA metadata as decoding, with independent
+controls for each transform component.
 
 ## 3D segmentation based on decoded RNA
 

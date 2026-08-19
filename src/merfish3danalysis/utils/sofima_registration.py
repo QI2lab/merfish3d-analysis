@@ -39,7 +39,6 @@ class SofimaRegistrationConfig:
 
     def as_metadata(self) -> dict[str, Any]:
         """Return JSON-compatible config metadata."""
-
         metadata = asdict(self)
         metadata["patch_size_zyx"] = [int(v) for v in self.patch_size_zyx]
         metadata["subpixel_offsets"] = [float(v) for v in self.subpixel_offsets]
@@ -59,12 +58,12 @@ def _resolve_patch_and_step(
         Shape of the fixed and moving volumes in Z, Y, X order.
     config : SofimaRegistrationConfig
         Explicit SOFIMA parameter set.
+
     Returns
     -------
     tuple[tuple[int, int, int], tuple[int, int, int]]
         Patch size and step in Z, Y, X order, clipped to the image shape.
     """
-
     patch_size = tuple(
         max(config.minimum_patch_size_px, min(axis_size, patch_size))
         for axis_size, patch_size in zip(
@@ -105,7 +104,6 @@ def _stabilize_axial_flow_component(
         Flow field with the Z channel clipped around its robust median, and
         metadata describing the clipping.
     """
-
     stabilized = np.asarray(flow_xyz, dtype=np.float32).copy()
     if stabilized.shape[0] != 3:
         raise ValueError("SOFIMA flow field must have three XYZ channels.")
@@ -148,6 +146,35 @@ def _stabilize_axial_flow_component(
     }
 
 
+def _normalized_mean_squared_error(
+    fixed_zyx: np.ndarray,
+    moving_zyx: np.ndarray,
+) -> float:
+    """
+    Return normalized mean-squared error between two images.
+
+    Parameters
+    ----------
+    fixed_zyx : numpy.ndarray
+        Fixed reference image.
+    moving_zyx : numpy.ndarray
+        Moving image sampled on the reference grid.
+
+    Returns
+    -------
+    float
+        Mean-squared error after robust intensity normalization.
+    """
+    fixed = np.asarray(fixed_zyx, dtype=np.float32)
+    moving = np.asarray(moving_zyx, dtype=np.float32)
+    epsilon = np.finfo(np.float32).eps
+    fixed_scale = max(float(np.std(fixed)), epsilon)
+    moving_scale = max(float(np.std(moving)), epsilon)
+    fixed_normalized = (fixed - float(np.mean(fixed))) / fixed_scale
+    moving_normalized = (moving - float(np.mean(moving))) / moving_scale
+    return float(np.mean((fixed_normalized - moving_normalized) ** 2))
+
+
 def _compose_flow_fields_same_grid(
     base_flow_xyz: np.ndarray,
     residual_flow_xyz: np.ndarray,
@@ -177,7 +204,6 @@ def _compose_flow_fields_same_grid(
         Composed flow field mapping reference-grid coordinates directly into
         the original affine-initialized moving image.
     """
-
     import jax
     import jax.numpy as jnp
     from jax.scipy.ndimage import map_coordinates
@@ -246,12 +272,12 @@ def _refine_flow_vectors_subpixel(
         Flow-grid step used for SOFIMA flow estimation.
     config : SofimaRegistrationConfig
         Explicit SOFIMA parameter set.
+
     Returns
     -------
     tuple[numpy.ndarray, int]
         Refined flow field and the number of vectors that were refined.
     """
-
     import itertools
 
     import jax
@@ -413,7 +439,6 @@ def _median_initial_flow_field(cleaned_flow_xyz: np.ndarray) -> np.ndarray:
     numpy.ndarray
         Dense initial flow field in ``(3, z, y, x)`` order.
     """
-
     initial_flow = np.zeros_like(cleaned_flow_xyz, dtype=np.float32)
     valid_mask = np.all(np.isfinite(cleaned_flow_xyz), axis=0)
     if not np.any(valid_mask):
@@ -453,12 +478,12 @@ def _relax_flow_field(
         Flow-grid spacing in image pixels in Z, Y, X order.
     config : SofimaRegistrationConfig
         Explicit SOFIMA parameter set.
+
     Returns
     -------
     tuple[numpy.ndarray, dict[str, Any]]
         Relaxed float-valued flow field and metadata for the mesh solve.
     """
-
     import jax
     import jax.numpy as jnp
     from sofima import mesh
@@ -550,7 +575,6 @@ def _estimate_sofima_flow_field_xyz_px_impl(
     mesh solver to produce the smooth float-valued field expected by
     :func:`merfish3danalysis.utils.multiview_registration.warp_array_to_reference_with_affine_and_sofima_flow_gpu`.
     """
-
     residual_iterations = 1 if single_residual_pass else int(config.residual_iterations)
     if residual_iterations > 1:
         from merfish3danalysis.utils.multiview_registration import (
@@ -620,6 +644,26 @@ def _estimate_sofima_flow_field_xyz_px_impl(
             config,
         )
         total_metadata.update(axial_metadata)
+        corrected = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
+            moving_affine_initialized_zyx,
+            transform_zyx_um=np.eye(4, dtype=np.float32),
+            spacing_zyx_um=(1.0, 1.0, 1.0),
+            reference_shape=fixed_zyx.shape,
+            sofima_flow_field_xyz_px=total_flow,
+            flow_field_stride_zyx_px=total_metadata["map_stride_zyx_px"],
+            flow_field_box_start_xyz_px=total_metadata["map_box_start_xyz_px"],
+            mode="nearest",
+        ).astype(np.float32, copy=False)
+        affine_error = _normalized_mean_squared_error(
+            fixed_zyx,
+            moving_affine_initialized_zyx,
+        )
+        sofima_error = _normalized_mean_squared_error(fixed_zyx, corrected)
+        total_metadata["affine_normalized_mse"] = affine_error
+        total_metadata["sofima_normalized_mse"] = sofima_error
+        if sofima_error >= affine_error:
+            total_metadata["status"] = "identity_fallback_no_error_improvement"
+            return np.zeros_like(total_flow, dtype=np.float32), total_metadata
         return total_flow.astype(np.float32, copy=False), total_metadata
 
     from sofima import flow_field, flow_utils
@@ -739,7 +783,6 @@ def estimate_sofima_flow_field_xyz_px(
         Relative SOFIMA flow field with XYZ channels and metadata describing
         the map spacing/origin.
     """
-
     if config is None:
         config = SofimaRegistrationConfig()
 

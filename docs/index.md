@@ -27,8 +27,8 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
     - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
 - Iterative estimation of background and normalization vectors across codebook bits to remove subjective normalization by user that often leads to non-optimal decoding solutions.
 - Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Proseg](https://github.com/dcjones/proseg), and [U-FISH](https://github.com/UFISH-Team/U-FISH).
-- Read-only [NDV datastore viewer](viewer.md) for local tile inspection and fused
-  global overlays.
+- Read-only [datastore viewer](viewer.md) with a Qt controller, NDV image
+  display, and VisPy sparse overlays for transcripts and cell boundaries.
 
 ## Examples
 

@@ -108,8 +108,44 @@ def calibrate(
     The lowest wavelength channel is the reference and receives an identity
     affine. Every other affine maps that channel's physical Z, Y, X coordinates
     onto the reference channel.
-    """
 
+    Parameters
+    ----------
+    bead_image : Path
+        Multi-channel bead image path.
+    output : Path
+        Output calibration JSON path.
+    datastore_path : Path or None
+        Optional datastore path to update.
+    channel_axis : str or None
+        Optional input axis string.
+    voxel_size_zyx : str or None
+        Optional Z, Y, X voxel spacing string in microns.
+    wavelengths_um : str or None
+        Optional emission wavelength string in microns.
+    na : float
+        Objective numerical aperture.
+    ri : float
+        Immersion refractive index.
+    psf_nx : int
+        Generated PSF lateral support in pixels.
+    gpu_id : int
+        CUDA device index.
+    crop_yx : int
+        Initial lateral crop size.
+    ufish_model : str or None
+        U-FISH model alias or path.
+    match_radius_um : float
+        Bead match radius in microns.
+    outlier_threshold_um : float
+        Residual threshold for affine refitting.
+    min_intensity_quantile : float
+        Minimum bead intensity quantile.
+    max_beads : int or None
+        Optional maximum beads per channel.
+    save_intermediates : bool
+        Whether to save intermediate outputs.
+    """
     datastore = qi2labDataStore(datastore_path) if datastore_path is not None else None
     calibration = run_chromatic_calibration(
         bead_image,
@@ -153,7 +189,6 @@ def main() -> None:
     None
         CLI command is executed.
     """
-
     app()
 
 

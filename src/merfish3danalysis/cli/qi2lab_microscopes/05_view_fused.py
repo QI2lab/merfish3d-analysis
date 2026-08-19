@@ -25,7 +25,6 @@ def view_fused(root_path: Path) -> None:
     root_path: Path
         path to experiment
     """
-
     # generate 17 colormaps
     colormaps = [
         Colormap("cmap:white").to_napari(),

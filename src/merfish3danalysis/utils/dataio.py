@@ -33,7 +33,7 @@ def read_metadatafile(fname: str | Path) -> dict:
 
     Parameters
     ----------
-    fname: Union[str,Path]
+    fname: str or Path
         filename
 
     Returns
@@ -41,7 +41,6 @@ def read_metadatafile(fname: str | Path) -> dict:
     metadata: Dict
         metadata dictionary
     """
-
     scan_data_raw_lines = []
 
     with open(fname) as f:
@@ -86,7 +85,6 @@ def read_config_file(config_path: Path | str) -> dict:
     dict_from_csv: dict
         instrument configuration metadata
     """
-
     dict_from_csv = (
         pd.read_csv(config_path, header=None, index_col=0).squeeze("columns").to_dict()
     )
@@ -101,10 +99,9 @@ def write_metadata(data_dict: dict, save_path: str | Path) -> None:
     ----------
     data_dict: dict
         metadata dictionary
-    save_path: Union[str,Path]
+    save_path: str or Path
         path for file
     """
-
     pd.DataFrame([data_dict]).to_csv(save_path)
 
 
@@ -127,7 +124,6 @@ def return_data_zarr(
     data: ArrayLike
         data stack
     """
-
     ndtiff_zarr_store = imread(dataset_path, mode="r+", aszarr=True)
     ndtiff_zarr = zarr.open(ndtiff_zarr_store, mode="r+")
     first_dim = str(ndtiff_zarr.attrs["_ARRAY_DIMENSIONS"][0])
@@ -149,7 +145,6 @@ def time_stamp() -> str:
     timestamp: str
         timestamp formatted as string
     """
-
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -163,7 +158,7 @@ def write_sparse_mtx(
 
     Parameters
     ----------
-    output_dir_path: Union[Path,str]
+    output_dir_path: Path or str
         Path to output directory
     matrix: ArrayLike
         Sparse matrix
@@ -172,7 +167,6 @@ def write_sparse_mtx(
     features: Sequence[str]
         Feature names
     """
-
     sparse_mat = sparse.coo_matrix(matrix.values)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
     write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
@@ -195,12 +189,11 @@ def write_tsv(filename: str | Path, data: Sequence[str | Sequence[str]]) -> None
 
     Parameters
     ----------
-    filename: Union[str, Path]
+    filename: str or Path
         Filename
-    data: Sequence[Union[str, Sequence[str]]]
+    data: Sequence[str or Sequence[str]]
         Data to write
     """
-
     with open(filename, "w", newline="") as tsvfile:
         writer = csv.writer(tsvfile, delimiter="\t", lineterminator="\n")
         for item in data:

@@ -1,5 +1,5 @@
 """
-Convert statphysbio simulation into a fake acquisition
+Convert statphysbio simulation into a fake acquisition.
 
 This is an example on how to convert a statphysbio simulation into a fake
 qi2lab acquisition. The simulation comes as a flat tiff file with all z planes
@@ -33,7 +33,6 @@ def convert_simulation(root_path: Path) -> None:
     root_path: Path
         path to simulation
     """
-
     # load metadata
     metadata_path = root_path / Path("scan_metadata.csv")
     metadata = read_metadatafile(metadata_path)
@@ -153,7 +152,7 @@ def convert_simulation(root_path: Path) -> None:
 
 def main() -> None:
     """
-    Main.
+    Run the simulation conversion CLI.
 
     Returns
     -------
