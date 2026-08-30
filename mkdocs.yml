@@ -68,12 +68,11 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             docstring_style: numpy
             filters: []
             summary: true
-          setup_commands:
-            - import sys; sys.path.insert(0, "src/")
   - minify:
       minify_html: true
   - mermaid2:
