@@ -6,22 +6,21 @@ defaults that affect most pipelines.
 
 ## U-FISH model selection
 
-`DataRegistration` uses `simfish` as the default U-FISH model when
-`ufish_model=None`.
+`DataRegistration` uses the `smfish` U-FISH weights when `ufish_model=None`.
 
 ```python
 from merfish3danalysis.DataRegistration import DataRegistration
 
 registration = DataRegistration(
     datastore=datastore,
-    decon_readout=True,
-    ufish_model=None,  # uses simfish
+    decon_readout=False,
+    ufish_model=None,  # uses smfish weights
 )
 ```
 
-Known aliases include `simfish`, `smfish`, `merfish`, `seqfish`, `deepspot`,
-and `exseq`. `simfish` and `smfish` resolve to the same packaged U-FISH
-weights. A local `.onnx` or `.pth` path can also be supplied.
+Known aliases include `smfish`, `simfish`, `merfish`, `seqfish`, `deepspot`,
+and `exseq`. `simfish` is retained as a legacy alias for `smfish`; both resolve
+to the same U-FISH weights. A local `.onnx` or `.pth` path can also be supplied.
 
 ## RLGC deconvolution
 
@@ -69,9 +68,20 @@ uv run qi2lab-preprocess \
   --num-gpus 2
 ```
 
-Local preprocessing uses the package defaults: fiducial and readout
-deconvolution are enabled, feature prediction is always written for readout
-bits, and SOFIMA residual registration is enabled. Fiducial rounds are
+The preprocessing CLI enables fiducial and readout deconvolution by default,
+writes feature prediction for every readout bit, and enables SOFIMA residual
+registration. To deconvolve only the fiducial channel, pass `--no-decon`;
+this disables readout deconvolution without changing fiducial deconvolution:
+
+```bash
+uv run qi2lab-preprocess \
+  /path/to/experiment \
+  --num-gpus 2 \
+  --no-decon
+```
+
+This differs from constructing `DataRegistration` directly, where
+`decon_readout=False` is the default. Fiducial rounds are
 registered laterally on a max-Z projection and then in XYZ. SOFIMA flow fields
 are estimated after affine fiducial alignment and are accepted only when they
 improve the fiducial alignment error compared with affine alone. Readout and

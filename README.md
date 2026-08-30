@@ -10,6 +10,14 @@ GPU accelerated post-processing for 2D / 3D iterative barcoded FISH data. This p
 ## Try it without installation
 You can try out the package in the cloud on simulated data using a [Google Colab notebook](https://colab.research.google.com/github/QI2lab/merfish3d-analysis/blob/main/examples/notebooks/Simulation_example.ipynb) that demonstrates data preprocessing and decoding.
 
+## Sample data
+
+The GPU regression workflow uses the StatPhysBio MERFISH simulations archived
+on Zenodo. Download the
+[simulation test data](https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1)
+or follow the complete [synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
+for checksum verification, extraction, model setup, and test commands.
+
 ## Installation
 
 This project uses one `uv` environment based on CUDA 12.9 runtime/toolkit. You need a compatible NVIDIA driver installed on the machine.
@@ -114,6 +122,13 @@ documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
 ## Testing
 
+The simulation tests require an NVIDIA GPU, the extracted sample data at
+`/media/dps/data/merfish3d_analysis-simulation`, and the default `smfish`
+U-FISH weights cached at
+`~/.ufish/finetune_models/v1.0.1-simfish_model.onnx`. See the
+[synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
+for setup instructions.
+
 Standard simulation matrix:
 
 ```bash
@@ -126,7 +141,8 @@ Full feature-prediction probability threshold sweep:
 uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
 ```
 
-The standard simulation matrix runs paired affine and SOFIMA preprocessing for
-every default dataset, axial spacing, and chromatic-aberration setting. The exhaustive
-mode keeps the longer feature-prediction threshold sweep and writes measured performance 
-records to `tests/data/simulation_performance.json`.
+The standard simulation matrix uses CUDA device 0 and runs paired affine and
+SOFIMA preprocessing for every default dataset, axial spacing, and
+chromatic-aberration setting. The exhaustive mode keeps the longer
+feature-prediction threshold sweep and writes measured performance records to
+`tests/data/simulation_performance.json`.

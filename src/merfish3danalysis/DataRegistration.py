@@ -1145,10 +1145,10 @@ class DataRegistration:
         Crop size for deconvolution applied to both y and x dimensions.
     ufish_model: str or pathlib.Path or None, default None
         U-FISH model to use for feature prediction. If omitted or ``None``, use
-        the package default model, ``simfish``. Known aliases include
-        ``simfish``, ``smfish``, ``merfish``, ``seqfish``, ``deepspot``, and
-        ``exseq``. A local ``.onnx``/``.pth`` path or HuggingFace weights
-        filename can also be supplied.
+        the package default ``smfish`` weights. Known aliases include
+        ``smfish``, the legacy alias ``simfish``, ``merfish``, ``seqfish``,
+        ``deepspot``, and ``exseq``. A local ``.onnx``/``.pth`` path or
+        HuggingFace weights filename can also be supplied.
     verbose : int, default 1
         Progress verbosity. Set to 0 to suppress routine progress prints.
     """

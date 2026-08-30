@@ -94,8 +94,11 @@ flowchart TD
     n19@{ shape: procs}
 ```
 
-Fiducial registration stores the affine transform for each round relative to
-round 1. Local affine registration uses the qi2lab GPU registration path:
+The qi2lab preprocessing CLI deconvolves both fiducial and readout images by
+default. Pass `--no-decon` to disable readout deconvolution while retaining
+fiducial deconvolution. Fiducial registration stores the affine transform for
+each round relative to round 1. Local affine registration uses the qi2lab GPU
+registration path:
 lateral XY registration on a max-Z projection, followed by XYZ registration.
 When deformable registration is enabled, preprocessing stores a SOFIMA residual
 flow field in the moving fiducial round only when the field improves fiducial

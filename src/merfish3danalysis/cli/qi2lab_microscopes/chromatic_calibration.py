@@ -74,7 +74,7 @@ def calibrate(
     ufish_model: str | None = typer.Option(
         None,
         "--ufish-model",
-        help="U-FISH model alias or path. Defaults to simfish.",
+        help="U-FISH model alias or path. Defaults to smfish weights.",
     ),
     match_radius_um: float = typer.Option(
         1.0,
