@@ -31,3 +31,9 @@ refinement.
 To build the documentation, install using `uv sync --group docs`.
 Then execute `uv run mkdocs build --clean` or `uv run mkdocs serve`. The
 documentation is available in your web browser at `http://127.0.0.1:8000/`.
+
+The `Documentation` GitHub Actions workflow builds and deploys the site after
+every push to `main` and can also be started manually. It uses only the `docs`
+dependency group on a standard CPU runner, so deployment does not require a
+CUDA-capable host. In the repository settings, set **Pages → Build and
+deployment → Source** to **GitHub Actions**.
