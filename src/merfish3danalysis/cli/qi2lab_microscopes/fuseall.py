@@ -17,11 +17,11 @@ from multiview_stitcher import fusion, misc_utils, msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
+from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.DataRegistration import (
     GlobalRegistrationConfig,
     _direct_zarr_fusion_kwargs,
 )
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.decode_warping import (
     compose_decode_warp_transform_zyx_um,
@@ -142,8 +142,7 @@ def export_ome_tiffs(
                         "PositionY": [origin[1]] * shape_zyx[0],
                         "PositionYUnit": ["\N{MICRO SIGN}m"] * shape_zyx[0],
                         "PositionZ": [
-                            origin[0] + z * spacing[0]
-                            for z in range(shape_zyx[0])
+                            origin[0] + z * spacing[0] for z in range(shape_zyx[0])
                         ],
                         "PositionZUnit": ["\N{MICRO SIGN}m"] * shape_zyx[0],
                     },
@@ -202,30 +201,22 @@ def fuse_all_channels(
     reference_round = datastore.round_ids[0]
     spatial_chunks = si_utils.get_default_spatial_chunksizes(3)
     spatial_chunks = tuple(spatial_chunks[dim] for dim in "zyx")
-    voxel_scale = dict(
-        zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True)
-    )
+    voxel_scale = dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True))
 
     output_directory = datastore._fused_root_path
     work_directory = output_directory / ".fuseall-work"
     if work_directory.exists():
         shutil.rmtree(work_directory)
     work_directory.mkdir()
-    staged_output = datastore._image_store_path(
-        work_directory / "fused_all_channels"
-    )
-    final_output = datastore._image_store_path(
-        output_directory / "fused_all_channels"
-    )
+    staged_output = datastore._image_store_path(work_directory / "fused_all_channels")
+    final_output = datastore._image_store_path(output_directory / "fused_all_channels")
     output_stack_properties = None
 
     for channel_index, channel in enumerate(tqdm(channels, desc="channel")):
         tile_msims = []
         for tile_id in tqdm(datastore.tile_ids, desc=f"{channel} tiles", leave=False):
-            tile_position, stage_affine = (
-                datastore.load_local_stage_position_zyx_um(
-                    tile_id, reference_round
-                )
+            tile_position, stage_affine = datastore.load_local_stage_position_zyx_um(
+                tile_id, reference_round
             )
             image = (
                 datastore.load_local_fiducial_image(
@@ -267,9 +258,7 @@ def fuse_all_channels(
                 datastore.load_global_coord_xforms_um(tile=tile_id)
             )
             if channel_transform is None:
-                raise RuntimeError(
-                    f"Missing global transform for tile={tile_id}."
-                )
+                raise RuntimeError(f"Missing global transform for tile={tile_id}.")
 
             if channel != datastore.fiducial_folder_name:
                 _round_id, local_round = load_bit_round_transform_zyx_um(
@@ -291,9 +280,7 @@ def fuse_all_channels(
                 )
                 tile_origin = np.eye(4, dtype=np.float32)
                 tile_origin[:3, 3] = np.asarray(tile_position, dtype=np.float32)
-                channel_transform = np.asarray(
-                    channel_transform, dtype=np.float32
-                ) @ (
+                channel_transform = np.asarray(channel_transform, dtype=np.float32) @ (
                     tile_origin
                     @ np.linalg.inv(reference_to_native)
                     @ np.linalg.inv(tile_origin)
@@ -347,9 +334,7 @@ def fuse_all_channels(
             output_group = zarr.open_group(staged_output, mode="r+")
             dataset_paths = [
                 dataset["path"]
-                for dataset in output_group.attrs["ome"]["multiscales"][0][
-                    "datasets"
-                ]
+                for dataset in output_group.attrs["ome"]["multiscales"][0]["datasets"]
             ]
             for dataset_path in dataset_paths:
                 array = zarr.open_array(staged_output / dataset_path, mode="r+")
@@ -366,9 +351,7 @@ def fuse_all_channels(
             source_group = zarr.open_group(channel_path, mode="r")
             source_paths = [
                 dataset["path"]
-                for dataset in source_group.attrs["ome"]["multiscales"][0][
-                    "datasets"
-                ]
+                for dataset in source_group.attrs["ome"]["multiscales"][0]["datasets"]
             ]
             if source_paths != dataset_paths:
                 raise ValueError("Fused channel pyramids do not match.")

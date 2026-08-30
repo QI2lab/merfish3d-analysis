@@ -151,8 +151,7 @@ def test_fuse_all_channels_uses_datastore_and_sequential_mvs_fusion(
     )
     assert "output_stack_properties" not in fuse.call_args_list[0].kwargs
     assert all(
-        "output_stack_properties" in call.kwargs
-        for call in fuse.call_args_list[1:]
+        "output_stack_properties" in call.kwargs for call in fuse.call_args_list[1:]
     )
     assert set_affine.call_count == 3
     assert store.call_count == 2
