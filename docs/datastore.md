@@ -63,18 +63,24 @@ Here, we use a hypothetical dataset that only has one round with two bits. We as
 Tiles, rounds, and bits are indexed from `0` in the Python API, but datastore IDs are stored as 1-based, zero-padded strings (`round001`, `bit001`, `tile0000`).
 
 ```python
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from tifffile import imread
+
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 # define the datastore directory and create the datastore
 root_path = Path(r"/path/to/dataset/")
-datastore = qi2labDataStore(root_path / Path("qi2labdatastore"))
+raw_path = root_path / "raw_data"
+datastore = qi2labDataStore(root_path / "qi2labdatastore")
 
 # required metadata
-datastore.channels_in_data = ["alexa488","alexa561","alexa647"]
+datastore.channels_in_data = ["alexa488", "alexa561", "alexa647"]
 datastore.num_rounds = 1
-datastore.codebook = Path(r"/path/to/dataset/raw_data/codebook.csv")
-datastore.experiment_order = Path(r"/path/to/dataset/raw_data/exp_order.csv")
+datastore.codebook = pd.read_csv(raw_path / "codebook.csv")
+datastore.experiment_order = pd.read_csv(raw_path / "exp_order.csv").to_numpy()
 datastore.num_tiles = 1
 datastore.microscope_type = "3D"
 datastore.tile_overlap = 0.2
@@ -82,14 +88,12 @@ datastore.e_per_ADU = 0.51
 datastore.na = 1.35
 datastore.ri = 1.51
 datastore.binning = 1
-datastore.noise_map = None
-datastore.channel_psfs = channel_psfs # either experimental or theoretical PSFs
-datastore.voxel_size_zyx_um = [.31,.098,.098]
+datastore.noise_map = np.zeros((2048, 2048), dtype=np.uint16)
+datastore.channel_psfs = channel_psfs  # one experimental or theoretical 3D PSF per channel
+datastore.voxel_size_zyx_um = [0.31, 0.098, 0.098]
 
-# Update datastore state that Calibration are created
-datastore_state = datastore.datastore_state
-datastore_state.update({"Calibrations": True})
-datastore.datastore_state = datastore_state
+# Mark calibrations complete
+datastore.datastore_state = {"Calibrations": True}
 
 # initialize the tile
 tile_idx = 0
@@ -97,7 +101,7 @@ datastore.initialize_tile(tile_idx)
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-fiducial_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[0,:]
+fiducial_data = imread(raw_path / "tile001" / "image.tif")[0, :]
 
 # save image data for tile = 0, round = 0, fiducial
 datastore.save_local_corrected_image(
@@ -112,7 +116,10 @@ datastore.save_local_corrected_image(
 
 # save stage position for tile = 0, round = 0, fiducial
 datastore.save_local_stage_position_zyx_um(
-    [1000., 200., 500.], tile=0, round=0
+    [1000.0, 200.0, 500.0],
+    np.eye(4, dtype=np.float32),
+    tile=0,
+    round=0,
 )
 
 # save excitation and emission wavelengths for tile = 0, round = 0, fiducial
@@ -125,7 +132,7 @@ datastore.save_local_wavelengths_um(
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-bit001_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[1,:]
+bit001_data = imread(raw_path / "tile001" / "image.tif")[1, :]
 
 # save first readout channel for tile = 0, bit = 0 (bit001)
 datastore.save_local_corrected_image(
@@ -147,7 +154,7 @@ datastore.save_local_wavelengths_um(
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-bit002_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[2,:]
+bit002_data = imread(raw_path / "tile001" / "image.tif")[2, :]
 
 # save second readout channel for tile = 0, bit = 1 (bit002)
 datastore.save_local_corrected_image(
@@ -167,10 +174,8 @@ datastore.save_local_wavelengths_um(
     bit=1,
 )
 
-# update datastore state that corrected data is saved 
-datastore_state = datastore.datastore_state
-datastore_state.update({"Corrected": True})
-datastore.datastore_state = datastore_state
+# Mark corrected data complete
+datastore.datastore_state = {"Corrected": True}
 ```
 
 ## SOFIMA deformable registration convention
