@@ -24,6 +24,7 @@ mp.set_start_method("spawn", force=True)
 
 import ctypes
 import gc
+import hashlib
 import operator
 import os
 import shutil
@@ -69,7 +70,6 @@ class ChromaticAffineEstimationConfig:
 
 def preload_cuda_libraries() -> None:
     """Preload CUDA libs from NVIDIA pip wheels so GPU libraries can resolve them."""
-
     if _CUDA_LIBRARY_HANDLES:
         return
 
@@ -113,11 +113,12 @@ import rtree
 from cucim.skimage.measure import label
 from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter, grey_dilation
+from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
 from roifile import roiread
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, Polygon
+from skimage.draw import polygon as rasterize_polygon
 from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
@@ -162,7 +163,6 @@ def _start_gpu_worker_process(
     multiprocessing.Process
         Started worker process.
     """
-
     previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
     try:
@@ -192,7 +192,6 @@ def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
     None
         Raises RuntimeError when at least one worker exits nonzero.
     """
-
     errors = []
     for process in processes:
         process.join()
@@ -323,6 +322,7 @@ def _optimize_norm_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
+    excluded_gene_ids: Sequence[str],
 ) -> None:
     """
     Worker that runs one iteration of normalization-by-decoding on a GPU.
@@ -354,6 +354,9 @@ def _optimize_norm_worker(
     collect_chromatic_centroids : bool
         If True, collect per-on-bit centroid features needed for chromatic
         affine estimation.
+    excluded_gene_ids : Sequence[str]
+        Codebook gene IDs whose winning pixel assignments are suppressed during
+        iterative optimization.
 
     Returns
     -------
@@ -377,6 +380,7 @@ def _optimize_norm_worker(
         num_gpus=1,
         verbose=0,
         decode_mode=decode_mode,
+        excluded_gene_ids=excluded_gene_ids,
     )
 
     local_decoder._load_global_normalization_vectors(
@@ -413,6 +417,7 @@ def _optimize_norm_worker(
 class PixelDecoder:
     """
     Retrieve and process one tile from qi2lab 3D widefield zarr structure.
+
     Normalize the MERFISH codebook and image data, perform
     plane-by-plane voxel decoding with the exact two-threshold caller,
     extract transcript features, and save decoded transcripts to disk.
@@ -452,6 +457,7 @@ class PixelDecoder:
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
         estimate_chromatic_affines: bool = False,
         chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
+        excluded_gene_ids: Sequence[str] | None = None,
     ) -> None:
         """
         Initialize the object.
@@ -459,19 +465,20 @@ class PixelDecoder:
         Parameters
         ----------
         datastore : qi2labDataStore
-            Function argument.
+            Datastore containing preprocessed images, transforms, codebook, and
+            decoded output groups.
         merfish_bits : int
-            Function argument.
+            Number of MERFISH readout bits.
         num_gpus : int
-            Function argument.
+            Number of GPUs to use for decoding.
         verbose : int
-            Function argument.
+            Progress verbosity.
         use_mask : bool | None
-            Function argument.
+            If True, use the stored fiducial mask during decoding.
         z_range : Sequence[int] | None
-            Function argument.
+            Z-index range to decode. If None, decode all planes.
         decode_mode : Literal['auto', '2d', '3d']
-            Function argument.
+            Connected-component and filtering mode.
         estimate_chromatic_affines : bool
             If True, iterative normalization estimates chromatic affine
             transforms from decoded on-bit centroids. If False, decoding uses
@@ -479,6 +486,10 @@ class PixelDecoder:
             fallback.
         chromatic_affine_config : ChromaticAffineEstimationConfig or None
             Explicit RNA-derived chromatic affine estimation parameters.
+        excluded_gene_ids : Sequence[str] or None
+            Codebook gene IDs whose winning pixel assignments should be
+            suppressed. The full codebook remains in the nearest-neighbor
+            search so excluded signal cannot fall through to another codeword.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
@@ -518,6 +529,11 @@ class PixelDecoder:
         self._z_slice = slice(self._z_range[0], self._z_range[1])
 
         self._load_codebook()
+        (
+            self._excluded_gene_ids,
+            self._excluded_codeword_indices,
+        ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
+        self._optimization_excluded_gene_ids = self._excluded_gene_ids
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
         self._barcode_count = self._decoding_matrix.shape[0]
@@ -534,6 +550,208 @@ class PixelDecoder:
         self._global_normalization_loaded = False
         self._iterative_normalization_loaded = False
         self._blank_fraction_filter_results: dict[str, object] | None = None
+        self._normalization_cell_polygons: list[Polygon] | None = None
+        self._normalization_cell_segmentation_present = False
+        self._normalization_cell_mask_cache: dict[
+            tuple[str, tuple[int, ...], int], np.ndarray
+        ] = {}
+
+    def _load_normalization_cell_polygons(self) -> list[Polygon]:
+        """Load valid global Cellpose polygons once for normalization masking."""
+        cached = getattr(self, "_normalization_cell_polygons", None)
+        if cached is not None:
+            if not hasattr(self, "_normalization_cell_segmentation_present"):
+                self._normalization_cell_segmentation_present = True
+            return cached
+
+        outlines = None
+        segmentation_root = getattr(self._datastore, "_segmentation_root_path", None)
+        if segmentation_root is not None:
+            cellpose_root = Path(segmentation_root) / Path("cellpose")
+            roi_path = cellpose_root / Path("imagej_rois/global_coords_rois.zip")
+            outline_path = cellpose_root / Path("cell_outlines.json")
+            segmentation_geometry_exists = roi_path.exists() or outline_path.exists()
+        else:
+            segmentation_geometry_exists = callable(
+                getattr(self._datastore, "load_global_cellpose_roi_zip", None)
+            ) or callable(
+                getattr(self._datastore, "load_global_cellpose_outlines", None)
+            )
+
+        if segmentation_geometry_exists:
+            load_roi_zip = getattr(
+                self._datastore,
+                "load_global_cellpose_roi_zip",
+                None,
+            )
+            if callable(load_roi_zip):
+                outlines = load_roi_zip()
+                if outlines is not None:
+                    segmentation_geometry_exists = True
+            if not outlines:
+                load_outlines = getattr(
+                    self._datastore,
+                    "load_global_cellpose_outlines",
+                    None,
+                )
+                if callable(load_outlines):
+                    outlines = load_outlines()
+                    if outlines is not None:
+                        segmentation_geometry_exists = True
+
+        polygons = []
+        for coordinates in (outlines or {}).values():
+            coordinate_array = np.asarray(coordinates, dtype=np.float64)
+            if coordinate_array.ndim != 2 or coordinate_array.shape[1] < 2:
+                continue
+            polygon = Polygon(coordinate_array[:, :2])
+            if not polygon.is_empty and polygon.is_valid and polygon.area > 0:
+                polygons.append(polygon)
+
+        self._normalization_cell_polygons = polygons
+        self._normalization_cell_segmentation_present = segmentation_geometry_exists
+        if polygons and getattr(self, "_verbose", 0) >= 1:
+            print(
+                time_stamp(),
+                "Restricting global and iterative normalization to segmented cells.",
+            )
+        return polygons
+
+    def _normalization_cell_mask_for_tile(
+        self,
+        *,
+        tile_id: str,
+        image_shape_zyx: Sequence[int],
+    ) -> np.ndarray | None:
+        """Rasterize global cell polygons into one tile's round-1 YX grid."""
+        polygons = self._load_normalization_cell_polygons()
+        if not self._normalization_cell_segmentation_present:
+            return None
+
+        shape_zyx = tuple(int(value) for value in image_shape_zyx)
+        cache_key = (str(tile_id), shape_zyx, int(self._z_range[0]))
+        mask_cache = getattr(self, "_normalization_cell_mask_cache", None)
+        if mask_cache is None:
+            mask_cache = {}
+            self._normalization_cell_mask_cache = mask_cache
+        if cache_key in mask_cache:
+            return mask_cache[cache_key]
+
+        stage_metadata = self._datastore.load_local_stage_position_zyx_um(
+            tile=tile_id,
+            round=0,
+        )
+        stage_origin = np.zeros(3, dtype=np.float64)
+        camera_to_stage = np.eye(4, dtype=np.float64)
+        if stage_metadata is not None:
+            stage_origin, camera_to_stage = stage_metadata
+            stage_origin = np.asarray(stage_origin, dtype=np.float64)
+            if stage_origin.size == 2:
+                stage_origin = np.asarray(
+                    [0.0, stage_origin[0], stage_origin[1]],
+                    dtype=np.float64,
+                )
+            camera_to_stage = np.asarray(camera_to_stage, dtype=np.float64)
+
+        affine, origin, spacing = self._datastore.load_global_coord_xforms_um(
+            tile=tile_id
+        )
+        if affine is None:
+            affine = np.eye(4, dtype=np.float64)
+        if origin is None:
+            origin = stage_origin
+        if spacing is None:
+            spacing = self._datastore.voxel_size_zyx_um
+        affine = np.asarray(affine, dtype=np.float64)
+        origin = np.asarray(origin, dtype=np.float64)
+        spacing = np.asarray(spacing, dtype=np.float64)
+        if origin.size == 2:
+            origin = np.asarray([0.0, origin[0], origin[1]], dtype=np.float64)
+
+        pixel_to_physical = np.eye(4, dtype=np.float64)
+        pixel_to_physical[:3, :3] = np.diag(spacing)
+        pixel_to_physical[:3, 3] = origin
+        pixel_to_global = affine @ camera_to_stage @ pixel_to_physical
+        global_to_pixel = np.linalg.inv(pixel_to_global)
+
+        source_z = float(self._z_range[0]) + (shape_zyx[0] - 1) / 2.0
+        global_z = float((pixel_to_global @ np.asarray([source_z, 0.0, 0.0, 1.0]))[0])
+        mask = np.zeros(shape_zyx[-2:], dtype=bool)
+        for polygon in polygons:
+            coordinates_xy = np.asarray(polygon.exterior.coords, dtype=np.float64)
+            global_points = np.column_stack(
+                (
+                    np.full(coordinates_xy.shape[0], global_z),
+                    coordinates_xy[:, 1],
+                    coordinates_xy[:, 0],
+                    np.ones(coordinates_xy.shape[0]),
+                )
+            )
+            local_points = (global_to_pixel @ global_points.T).T
+            rows, columns = rasterize_polygon(
+                local_points[:, 1],
+                local_points[:, 2],
+                shape=mask.shape,
+            )
+            mask[rows, columns] = True
+
+        mask_cache[cache_key] = mask
+        return mask
+
+    @staticmethod
+    def _points_within_cell_polygons(
+        global_x: np.ndarray,
+        global_y: np.ndarray,
+        polygons: Sequence[Polygon],
+    ) -> np.ndarray:
+        """Return whether each global XY point is covered by any cell polygon."""
+        spatial_index = rtree.index.Index()
+        for polygon_index, polygon in enumerate(polygons):
+            spatial_index.insert(polygon_index, polygon.bounds)
+
+        inside = np.zeros(len(global_x), dtype=bool)
+        for point_index, (x_value, y_value) in enumerate(
+            zip(global_x, global_y, strict=True)
+        ):
+            if not np.isfinite(x_value) or not np.isfinite(y_value):
+                continue
+            point = Point(float(x_value), float(y_value))
+            inside[point_index] = any(
+                polygons[candidate].covers(point)
+                for candidate in spatial_index.intersection(point.bounds)
+            )
+        return inside
+
+    @staticmethod
+    def _normalization_pixels(image: object, cell_mask: object | None) -> object:
+        """Flatten all voxels, or only voxels whose YX center lies in a cell."""
+        if cell_mask is None:
+            return image.reshape(-1)
+        return image[:, cell_mask].reshape(-1)
+
+    def _restrict_barcodes_to_segmented_cells(
+        self,
+        barcodes: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Keep normalization barcodes inside cells when segmentation exists."""
+        polygons = self._load_normalization_cell_polygons()
+        if not self._normalization_cell_segmentation_present or barcodes.empty:
+            return barcodes
+        if not polygons:
+            return barcodes.iloc[0:0].copy()
+        required_columns = {"global_x", "global_y"}
+        if not required_columns.issubset(barcodes.columns):
+            missing = sorted(required_columns.difference(barcodes.columns))
+            raise ValueError(
+                "Cell-restricted iterative normalization requires global "
+                f"coordinates; missing columns: {missing}."
+            )
+        inside = self._points_within_cell_polygons(
+            barcodes["global_x"].to_numpy(dtype=np.float64),
+            barcodes["global_y"].to_numpy(dtype=np.float64),
+            polygons,
+        )
+        return barcodes.loc[inside].copy()
 
     def _load_codebook(self) -> None:
         """
@@ -544,7 +762,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         self._df_codebook = self._datastore.codebook.copy()
         self._df_codebook.fillna(0, inplace=True)
         bit_columns = self._df_codebook.columns[1 : self._n_merfish_bits + 1]
@@ -582,6 +799,83 @@ class PixelDecoder:
         )
         self._gene_ids = self._df_codebook.iloc[:, 0].tolist()
 
+    def _resolve_excluded_gene_ids(
+        self,
+        excluded_gene_ids: Sequence[str] | None,
+    ) -> tuple[tuple[str, ...], tuple[int, ...]]:
+        """Resolve requested gene IDs to stable full-codebook row indices."""
+        if not excluded_gene_ids:
+            return (), ()
+
+        requested = []
+        seen = set()
+        for value in excluded_gene_ids:
+            gene_id = str(value).strip()
+            if not gene_id or gene_id in seen:
+                continue
+            requested.append(gene_id)
+            seen.add(gene_id)
+
+        index_by_gene: dict[str, list[int]] = {}
+        for index, value in enumerate(self._gene_ids):
+            index_by_gene.setdefault(str(value), []).append(index)
+
+        unknown = [gene_id for gene_id in requested if gene_id not in index_by_gene]
+        if unknown:
+            raise ValueError(
+                "Optimization exclusion gene IDs are not present in the active "
+                f"codebook: {', '.join(unknown)}. Matching is case-sensitive."
+            )
+
+        excluded_indices = tuple(
+            index for gene_id in requested for index in index_by_gene[gene_id]
+        )
+        if len(excluded_indices) >= len(self._gene_ids):
+            raise ValueError("Optimization exclusions cannot remove every codeword.")
+
+        resolved_set = set(requested)
+        resolved_gene_ids = tuple(
+            str(gene_id) for gene_id in self._gene_ids if str(gene_id) in resolved_set
+        )
+        resolved_gene_ids = tuple(dict.fromkeys(resolved_gene_ids))
+        return resolved_gene_ids, excluded_indices
+
+    def _codebook_fingerprint(self) -> str:
+        """Return a deterministic fingerprint of active codebook IDs and bits."""
+        digest = hashlib.sha256()
+        matrix = np.ascontiguousarray(self._codebook_matrix, dtype=np.int8)
+        digest.update(np.asarray(matrix.shape, dtype=np.int64).tobytes())
+        for gene_id in self._gene_ids:
+            encoded = str(gene_id).encode("utf-8")
+            digest.update(len(encoded).to_bytes(8, byteorder="little"))
+            digest.update(encoded)
+        digest.update(matrix.tobytes())
+        return digest.hexdigest()
+
+    def _iterative_normalization_metadata(self) -> dict[str, object]:
+        """Return provenance for the current iterative-normalization fit."""
+        return {
+            "scope": "iterative_optimization",
+            "excluded_gene_ids": list(self._optimization_excluded_gene_ids),
+            "codebook_sha256": self._codebook_fingerprint(),
+        }
+
+    @staticmethod
+    def _suppress_excluded_codeword_assignments(
+        decoded_trace: object,
+        codebook_index_trace: object,
+        excluded_codeword_indices: Sequence[int],
+    ) -> None:
+        """Mark excluded winning assignments as background, without fallback."""
+        if not excluded_codeword_indices:
+            return
+        array_module = cp.get_array_module(decoded_trace)
+        excluded_indices = array_module.asarray(
+            excluded_codeword_indices,
+            dtype=codebook_index_trace.dtype,
+        )
+        decoded_trace[array_module.isin(codebook_index_trace, excluded_indices)] = -1
+
     def _normalize_codebook(
         self, gpu_id: int = 0, include_errors: bool = False
     ) -> np.ndarray:
@@ -599,7 +893,6 @@ class PixelDecoder:
         all_barcodes: np.ndarray
             normalized codebook
         """
-
         with cp.cuda.Device(gpu_id):
             self._barcode_set = cp.asarray(
                 self._codebook_matrix[:, 0 : self._n_merfish_bits]
@@ -711,9 +1004,10 @@ class PixelDecoder:
             are sampled from the datastore.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma applied to ``data * prediction`` before estimating
-            background and foreground normalization vectors.
+            background and foreground normalization vectors. When global
+            Cellpose polygons are present, percentile samples include only
+            tile pixels inside those cells (extruded across Z).
         """
-
         with cp.cuda.Device(gpu_id):
             effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
             if tile_indices is not None:
@@ -740,6 +1034,7 @@ class PixelDecoder:
 
             for bit_idx, bit_id in iterable_bits:
                 all_images = []
+                all_cell_masks = []
 
                 if self._verbose >= 1:
                     iterable_tiles = tqdm(
@@ -749,7 +1044,7 @@ class PixelDecoder:
                     iterable_tiles = random_tiles
 
                 for tile_id in iterable_tiles:
-                    decon_image = self._datastore.load_local_registered_image(
+                    readout_image = self._datastore.load_local_readout_image(
                         tile=tile_id, bit=bit_id, return_future=False
                     )
                     feature_predictor_image = (
@@ -763,7 +1058,7 @@ class PixelDecoder:
                     )
 
                     current_image = np.asarray(
-                        decon_image, dtype=np.float32
+                        readout_image, dtype=np.float32
                     ) * np.asarray(feature_predictor_image, dtype=np.float32)
                     current_image = warp_bit_image_to_reference(
                         current_image,
@@ -781,6 +1076,12 @@ class PixelDecoder:
                     current_image = self._lowpass_image(
                         current_image,
                         sigma=effective_lowpass_sigma,
+                    )
+                    all_cell_masks.append(
+                        self._normalization_cell_mask_for_tile(
+                            tile_id=tile_id,
+                            image_shape_zyx=current_image.shape,
+                        )
                     )
                     all_images.append(cp.asnumpy(current_image).astype(np.float32))
                     del current_image
@@ -801,18 +1102,28 @@ class PixelDecoder:
                     current_image = cp.asarray(
                         all_images[tile_idx, :], dtype=cp.float32
                     )
-                    low_cutoff = cp.percentile(current_image, low_percentile_cut)
-                    low_pixels.append(
-                        current_image[current_image < low_cutoff]
-                        .flatten()
-                        .astype(cp.float32)
+                    cell_mask = all_cell_masks[tile_idx]
+                    selected_pixels = self._normalization_pixels(
+                        current_image,
+                        None if cell_mask is None else cp.asarray(cell_mask),
                     )
-                    del current_image
+                    if selected_pixels.size == 0:
+                        del current_image, selected_pixels
+                        continue
+                    low_cutoff = cp.percentile(selected_pixels, low_percentile_cut)
+                    low_pixels.append(
+                        selected_pixels[selected_pixels < low_cutoff].astype(cp.float32)
+                    )
+                    del current_image, selected_pixels
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
 
-                low_pixels = cp.concatenate(low_pixels, axis=0)
-                if low_pixels.shape[0] > 0:
+                low_pixels = (
+                    cp.concatenate(low_pixels, axis=0)
+                    if low_pixels
+                    else cp.empty((0,), dtype=cp.float32)
+                )
+                if low_pixels.size > 0:
                     background_vector[bit_idx] = cp.median(low_pixels)
                 else:
                     background_vector[bit_idx] = 0
@@ -835,19 +1146,34 @@ class PixelDecoder:
                         - background_vector[bit_idx]
                     )
                     current_image[current_image < 0] = 0
-                    high_cutoff = cp.percentile(current_image, high_percentile_cut)
+                    cell_mask = all_cell_masks[tile_idx]
+                    selected_pixels = self._normalization_pixels(
+                        current_image,
+                        None if cell_mask is None else cp.asarray(cell_mask),
+                    )
+                    if selected_pixels.size == 0:
+                        del current_image, selected_pixels
+                        continue
+                    high_cutoff = cp.percentile(
+                        selected_pixels,
+                        high_percentile_cut,
+                    )
                     high_pixels.append(
-                        current_image[current_image > high_cutoff]
-                        .flatten()
-                        .astype(cp.float32)
+                        selected_pixels[selected_pixels > high_cutoff].astype(
+                            cp.float32
+                        )
                     )
 
-                    del current_image
+                    del current_image, selected_pixels
                     cp.get_default_memory_pool().free_all_blocks()
                     gc.collect()
 
-                high_pixels = cp.concatenate(high_pixels, axis=0)
-                if high_pixels.shape[0] > 0:
+                high_pixels = (
+                    cp.concatenate(high_pixels, axis=0)
+                    if high_pixels
+                    else cp.empty((0,), dtype=cp.float32)
+                )
+                if high_pixels.size > 0:
                     normalization_vector[bit_idx] = cp.median(high_pixels)
                 else:
                     normalization_vector[bit_idx] = 1
@@ -881,6 +1207,27 @@ class PixelDecoder:
             GPU identifier
         """
         with cp.cuda.Device(gpu_id):
+            load_metadata = getattr(
+                self._datastore,
+                "load_decode_normalization_metadata",
+                None,
+            )
+            metadata = (
+                load_metadata(self._decode_run_key, "iterative")
+                if callable(load_metadata)
+                else None
+            )
+            expected_fingerprint = (
+                metadata.get("codebook_sha256") if isinstance(metadata, dict) else None
+            )
+            if (
+                expected_fingerprint is not None
+                and expected_fingerprint != self._codebook_fingerprint()
+            ):
+                raise ValueError(
+                    "Cached iterative normalization vectors were fitted with a "
+                    "different active codebook. Re-run iterative optimization."
+                )
             normalization_vector, background_vector = (
                 self._datastore.load_decode_normalization_vectors(
                     self._decode_run_key, "iterative"
@@ -902,6 +1249,10 @@ class PixelDecoder:
 
     def _iterative_normalization_vectors(self, gpu_id: int = 0) -> None:
         """Calculate iterative normalization and background vectors.
+
+        When Cellpose segmentation polygons are present, the loaded temporary
+        transcript table has already been restricted to global XY positions
+        inside those cells.
 
         Parameters
         ----------
@@ -955,6 +1306,7 @@ class PixelDecoder:
                     old_iterative_normalization_vector.astype(np.float32),
                     old_iterative_background_vector.astype(np.float32),
                     decode_mode=self._effective_decode_mode,
+                    metadata=self._iterative_normalization_metadata(),
                 )
                 return
 
@@ -1034,6 +1386,7 @@ class PixelDecoder:
                 barcode_based_normalization_vector.astype(np.float32),
                 barcode_based_background_vector.astype(np.float32),
                 decode_mode=self._effective_decode_mode,
+                metadata=self._iterative_normalization_metadata(),
             )
 
             if self._verbose > 1:
@@ -1056,6 +1409,7 @@ class PixelDecoder:
                 barcode_based_normalization_vector,
                 barcode_based_background_vector,
                 decode_mode=self._effective_decode_mode,
+                metadata=self._iterative_normalization_metadata(),
             )
 
             self._iterative_normalization_loaded = True
@@ -1078,7 +1432,6 @@ class PixelDecoder:
             Chromatic affine metadata are saved into the datastore calibration
             sidecar.
         """
-
         config = self._chromatic_affine_config
         min_pairs = int(config.min_pairs)
 
@@ -1430,7 +1783,6 @@ class PixelDecoder:
         None
             Identity channel transforms are written to datastore metadata.
         """
-
         bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
         reference_tile = self._datastore.tile_ids[0]
         wavelengths = []
@@ -1488,7 +1840,6 @@ class PixelDecoder:
         gpu_id : int, default=0
             CUDA device ID used for decode-time warping.
         """
-
         if self._verbose > 1:
             print("load raw data")
             iterable_bits = tqdm(
@@ -1508,7 +1859,7 @@ class PixelDecoder:
         images = []
         self._em_wvl = []
         for bit_id in iterable_bits:
-            decon_image = self._datastore.load_local_registered_image(
+            readout_image = self._datastore.load_local_readout_image(
                 tile=self._tile_idx,
                 bit=bit_id,
             )
@@ -1520,15 +1871,15 @@ class PixelDecoder:
             )
 
             feature_predictor_array = feature_predictor_image.result()
-            decon_array = decon_image.result()
+            readout_array = readout_image.result()
             _ex_wvl, em_wvl = self._datastore.load_local_wavelengths_um(
                 tile=self._tile_idx,
                 bit=bit_id,
             )
             prediction_weighted = np.asarray(
-                decon_array, dtype=np.float32
+                readout_array, dtype=np.float32
             ) * np.asarray(feature_predictor_array, dtype=np.float32)
-            registered_data = warp_bit_image_to_reference(
+            warped_data = warp_bit_image_to_reference(
                 prediction_weighted,
                 datastore=self._datastore,
                 tile=self._tile_idx,
@@ -1536,8 +1887,8 @@ class PixelDecoder:
                 emission_wavelength_um=em_wvl,
                 gpu_id=gpu_id,
             )
-            images.append(registered_data[self._z_slice, :, :])
-            del feature_predictor_array, decon_array
+            images.append(warped_data[self._z_slice, :, :])
+            del feature_predictor_array, readout_array
             self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)
@@ -1615,7 +1966,6 @@ class PixelDecoder:
         cupy.ndarray
             Filtered image. No post-filter intensity rescaling is applied.
         """
-
         if sigma is None or np.any(np.asarray(sigma, dtype=float) == 0):
             return image
         if self._is_3D:
@@ -1643,7 +1993,6 @@ class PixelDecoder:
         sigma : Sequence[int, int, int], default [3,1,1]
             Sigma values for Gaussian filter.
         """
-
         with cp.cuda.Device(gpu_id):
             self._image_data_lp = self._image_data.copy()
 
@@ -1678,7 +2027,6 @@ class PixelDecoder:
         self, sigma: Sequence[float] | None
     ) -> tuple[float, float, float] | None:
         """Return a validated sigma tuple for lowpass filtering."""
-
         if sigma is None:
             return None
         sigma_zyx = tuple(float(v) for v in sigma)
@@ -1688,7 +2036,6 @@ class PixelDecoder:
 
     def _default_minimum_pixels(self) -> float:
         """Return the production connected-component size threshold."""
-
         if not self._is_3D:
             return DEFAULT_2D_MINIMUM_PIXELS
         return DEFAULT_3D_MINIMUM_PIXELS
@@ -1737,7 +2084,6 @@ class PixelDecoder:
             and fit diagnostics. The affine is None when the point set is not
             sufficient for the lateral affine model.
         """
-
         source = np.asarray(source_zyx_um, dtype=np.float64)
         target = np.asarray(target_zyx_um, dtype=np.float64)
         diagnostics: dict[str, float | int | str | list[float]] = {
@@ -1779,6 +2125,23 @@ class PixelDecoder:
             target_yx: np.ndarray,
             fit_weights: np.ndarray,
         ) -> tuple[float, float, float]:
+            """
+            Fit lateral radial scale and translation.
+
+            Parameters
+            ----------
+            source_yx : numpy.ndarray
+                Source Y, X coordinates.
+            target_yx : numpy.ndarray
+                Target Y, X coordinates.
+            fit_weights : numpy.ndarray
+                Per-point fit weights.
+
+            Returns
+            -------
+            tuple[float, float, float]
+                Scale, Y translation, and X translation.
+            """
             design_y = np.column_stack(
                 [
                     source_yx[:, 0],
@@ -1820,6 +2183,21 @@ class PixelDecoder:
             z_offsets: np.ndarray,
             fit_weights: np.ndarray,
         ) -> float:
+            """
+            Estimate a robust weighted Z translation.
+
+            Parameters
+            ----------
+            z_offsets : numpy.ndarray
+                Per-point Z offsets.
+            fit_weights : numpy.ndarray
+                Per-point fit weights.
+
+            Returns
+            -------
+            float
+                Weighted Z translation.
+            """
             finite = np.isfinite(z_offsets) & np.isfinite(fit_weights)
             finite &= fit_weights > 0
             if not np.any(finite):
@@ -1985,11 +2363,11 @@ class PixelDecoder:
 
         Parameters
         ----------
-        pixel_traces : Union[np.ndarray, cp.ndarray]
+        pixel_traces : np.ndarray or cp.ndarray
             Pixel traces to scale.
-        background_vector : Union[np.ndarray, cp.ndarray]
+        background_vector : np.ndarray or cp.ndarray
             Background vector.
-        normalization_vector : Union[np.ndarray, cp.ndarray]
+        normalization_vector : np.ndarray or cp.ndarray
             Normalization vector.
         merfish_bits : int, default = 16
             Number of MERFISH bits. Default 16. Assume MERFISH bits are [0, merfish_bits].
@@ -2001,7 +2379,6 @@ class PixelDecoder:
         scaled_traces : cp.ndarray
             Scaled pixel traces.
         """
-
         with cp.cuda.Device(gpu_id):
             if isinstance(pixel_traces, np.ndarray):
                 pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
@@ -2034,7 +2411,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        pixel_traces : Union[np.ndarray, cp.ndarray]
+        pixel_traces : np.ndarray or cp.ndarray
             Pixel traces to clip.
         clip_lower : float, default 0.0
             clip lower bound.
@@ -2063,7 +2440,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        pixel_traces : Union[np.ndarray, cp.ndarray]
+        pixel_traces : np.ndarray or cp.ndarray
             Pixel traces to normalize.
         gpu_id: int, default = 0
             GPU identifier
@@ -2075,7 +2452,6 @@ class PixelDecoder:
         norms : cp.ndarray
             L2 norms of pixel traces.
         """
-
         with cp.cuda.Device(gpu_id):
             if isinstance(pixel_traces, np.ndarray):
                 pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
@@ -2101,9 +2477,9 @@ class PixelDecoder:
 
         Parameters
         ----------
-        pixel_traces : Union[np.ndarray, cp.ndarray]
+        pixel_traces : np.ndarray or cp.ndarray
             Pixel traces.
-        codebook_matrix : Union[np.ndarray, cp.ndarray]
+        codebook_matrix : np.ndarray or cp.ndarray
             Codebook matrix.
         gpu_id: int, default = 0
             GPU identifier
@@ -2115,7 +2491,6 @@ class PixelDecoder:
         min_indices : cp.ndarray
             Minimum indices.
         """
-
         with cp.cuda.Device(gpu_id):
             if isinstance(pixel_traces, np.ndarray):
                 pixel_traces = cp.asarray(pixel_traces, dtype=cp.float32)
@@ -2159,7 +2534,6 @@ class PixelDecoder:
         gpu_id: int, default = 0
             GPU identifier
         """
-
         with cp.cuda.Device(gpu_id):
             if self._filter_type == "lp":
                 original_shape = self._image_data_lp.shape
@@ -2238,6 +2612,11 @@ class PixelDecoder:
                 decoded_trace[mask_trace] = codebook_index_trace[mask_trace]
                 decoded_trace[pixel_magnitude_trace < magnitude_threshold[0]] = -1
                 decoded_trace[pixel_magnitude_trace > magnitude_threshold[1]] = -1
+                self._suppress_excluded_codeword_assignments(
+                    decoded_trace,
+                    codebook_index_trace,
+                    self._excluded_codeword_indices,
+                )
 
                 self._decoded_image[z_idx, :] = cp.asnumpy(
                     cp.reshape(cp.round(decoded_trace, 5), z_plane_shape[1:])
@@ -2288,21 +2667,20 @@ class PixelDecoder:
 
         Returns
         -------
-        registered_space_point : np.ndarray
-            Registered space point.
+        transformed_space_point : np.ndarray
+            Transformed physical-space point.
         """
-
         physical_space_point = pixel_space_point * spacing + origin
         if camera_to_stage_affine is not None:
             physical_space_point = (
                 np.asarray(camera_to_stage_affine)
                 @ np.array([*list(physical_space_point), 1])
             )[:-1]
-        registered_space_point = (
+        transformed_space_point = (
             np.array(affine) @ np.array([*list(physical_space_point), 1])
         )[:-1]
 
-        return registered_space_point
+        return transformed_space_point
 
     def _decoded_z_to_source_z(self, decoded_z: pd.Series | np.ndarray) -> pd.Series:
         """
@@ -2318,14 +2696,13 @@ class PixelDecoder:
         pandas.Series
             Z coordinate in the source image.
         """
-
         return float(self._z_range[0]) + decoded_z
 
     def _add_on_bit_weighted_centroids(
         self,
         df_barcode: pd.DataFrame,
         codewords_label_image: cp.ndarray,
-        intensity_image: cp.ndarray,
+        intensity_image: object,
         on_bits_1based: np.ndarray,
     ) -> pd.DataFrame:
         """
@@ -2337,8 +2714,9 @@ class PixelDecoder:
             Decoded barcode table with ``label`` and centroid columns.
         codewords_label_image : cupy.ndarray
             Connected-component label image in decoded Z, Y, X coordinates.
-        intensity_image : cupy.ndarray
-            Intensity image in Z, Y, X, bit order.
+        intensity_image : numpy.ndarray or cupy.ndarray
+            Intensity image in Z, Y, X, bit order. CPU-backed inputs are copied
+            to the GPU one Z plane at a time.
         on_bits_1based : numpy.ndarray
             On-bit indices for each barcode row, 1-based.
 
@@ -2348,7 +2726,6 @@ class PixelDecoder:
             Barcode table with sparse per-bit center and intensity-support
             columns.
         """
-
         if df_barcode.empty:
             return df_barcode
 
@@ -2375,9 +2752,7 @@ class PixelDecoder:
         )
         if z_support % 2 == 0:
             z_support -= 1
-        centroid_labels_cp = grey_dilation(labels_cp, size=(z_support, 1, 1))
         labels_flat = labels_cp.ravel()
-        centroid_labels_flat = centroid_labels_cp.ravel()
         max_label = int(cp.max(labels_cp).get()) if labels_cp.size else 0
         if max_label < 1:
             return pd.concat([df_barcode, extra_df], axis=1)
@@ -2388,42 +2763,24 @@ class PixelDecoder:
             cp.float32,
             copy=False,
         )
-        z_coords = cp.arange(labels_cp.shape[0], dtype=cp.float32)[:, None, None]
-        y_coords = cp.arange(labels_cp.shape[1], dtype=cp.float32)[None, :, None]
-        x_coords = cp.arange(labels_cp.shape[2], dtype=cp.float32)[None, None, :]
 
         for bit_idx in range(1, self._n_merfish_bits + 1):
             active_rows = np.flatnonzero(np.any(on_bits_1based == bit_idx, axis=1))
             if active_rows.size == 0:
                 continue
 
-            bit_image = cp.maximum(
+            (
+                weight_by_label,
+                z_sum_by_label,
+                y_sum_by_label,
+                x_sum_by_label,
+                peak_by_label,
+            ) = self._plane_wise_weighted_centroid_statistics(
+                labels_cp,
                 intensity_image[..., bit_idx - 1],
-                cp.float32(0),
-            )
-            weights_flat = bit_image.ravel()
-            weight_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=weights_flat,
+                z_support=z_support,
                 minlength=minlength,
             )
-            z_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * z_coords).ravel(),
-                minlength=minlength,
-            )
-            y_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * y_coords).ravel(),
-                minlength=minlength,
-            )
-            x_sum_by_label = cp.bincount(
-                centroid_labels_flat,
-                weights=(bit_image * x_coords).ravel(),
-                minlength=minlength,
-            )
-            peak_by_label = cp.zeros(minlength, dtype=cp.float32)
-            cp.maximum.at(peak_by_label, labels_flat, weights_flat)
 
             active_labels = label_lookup[active_rows]
             weight_sum_cp = weight_by_label[active_labels]
@@ -2473,6 +2830,81 @@ class PixelDecoder:
 
         return pd.concat([df_barcode, extra_df], axis=1)
 
+    @staticmethod
+    def _plane_wise_weighted_centroid_statistics(
+        labels: object,
+        intensity: object,
+        *,
+        z_support: int,
+        minlength: int,
+    ) -> tuple[object, object, object, object, object]:
+        """Accumulate centroid statistics with only one Z plane of workspace."""
+        array_module = cp.get_array_module(labels)
+        accumulator_dtype = array_module.float64
+        weight_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        z_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        y_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        x_sum_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
+        peak_by_label = array_module.zeros(minlength, dtype=array_module.float32)
+        y_coords = array_module.arange(labels.shape[1], dtype=array_module.float32)[
+            :, None
+        ]
+        x_coords = array_module.arange(labels.shape[2], dtype=array_module.float32)[
+            None, :
+        ]
+        half_support = max(int(z_support) // 2, 0)
+
+        for z_index in range(labels.shape[0]):
+            z_start = max(0, z_index - half_support)
+            z_stop = min(labels.shape[0], z_index + half_support + 1)
+            if z_stop - z_start == 1:
+                centroid_labels = labels[z_index]
+            else:
+                centroid_labels = array_module.max(
+                    labels[z_start:z_stop],
+                    axis=0,
+                )
+            intensity_plane = array_module.asarray(
+                intensity[z_index],
+                dtype=array_module.float32,
+            )
+            weights = array_module.maximum(
+                intensity_plane,
+                array_module.float32(0),
+            )
+            centroid_labels_flat = centroid_labels.ravel()
+            weights_flat = weights.ravel()
+            plane_weight = array_module.bincount(
+                centroid_labels_flat,
+                weights=weights_flat,
+                minlength=minlength,
+            )
+            weight_by_label += plane_weight
+            z_sum_by_label += plane_weight * float(z_index)
+            y_sum_by_label += array_module.bincount(
+                centroid_labels_flat,
+                weights=(weights * y_coords).ravel(),
+                minlength=minlength,
+            )
+            x_sum_by_label += array_module.bincount(
+                centroid_labels_flat,
+                weights=(weights * x_coords).ravel(),
+                minlength=minlength,
+            )
+            array_module.maximum.at(
+                peak_by_label,
+                labels[z_index].ravel(),
+                weights_flat,
+            )
+
+        return (
+            weight_by_label,
+            z_sum_by_label,
+            y_sum_by_label,
+            x_sum_by_label,
+            peak_by_label,
+        )
+
     def _extract_barcodes(
         self, minimum_pixels: int = 3, maximum_pixels: int = 500, gpu_id: int = 0
     ) -> None:
@@ -2493,7 +2925,6 @@ class PixelDecoder:
         ``distance_min`` from the voxelwise distance image and filtered locally
         against the exact transcript-distance threshold before saving.
         """
-
         self._df_barcodes = pd.DataFrame()
 
         with cp.cuda.Device(gpu_id):
@@ -2688,7 +3119,7 @@ class PixelDecoder:
                 df_barcode = self._add_on_bit_weighted_centroids(
                     df_barcode,
                     codewords_label_image_cp,
-                    cp.asarray(intensity_image, dtype=cp.float32),
+                    intensity_image,
                     on_sel,
                 )
 
@@ -2778,7 +3209,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         if self._verbose > 1:
             print("save barcodes")
 
@@ -2812,7 +3242,6 @@ class PixelDecoder:
         pd.DataFrame
             Function result.
         """
-
         if not hasattr(self, "_df_barcodes"):
             return pd.DataFrame()
         return self._df_barcodes.copy()
@@ -2827,7 +3256,6 @@ class PixelDecoder:
         np.ndarray
             Function result.
         """
-
         if not hasattr(self, "_decoded_image"):
             return np.empty((0,), dtype=np.int16)
         return self._decoded_image.copy()
@@ -2841,7 +3269,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         self._save_barcodes()
 
     def _prepare_normalization_state(
@@ -2872,7 +3299,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         if normalization_method is None:
             normalization_method = "iterative" if use_normalization else "none"
 
@@ -2902,7 +3328,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
 
@@ -2948,6 +3373,10 @@ class PixelDecoder:
             self._df_barcodes_loaded["gene_id"].notna()
             & self._df_barcodes_loaded["gene_id"].astype(str).str.strip().ne("")
         ]
+        if self._optimize_normalization_weights:
+            self._df_barcodes_loaded = self._restrict_barcodes_to_segmented_cells(
+                self._df_barcodes_loaded
+            )
         if "distance_min" not in self._df_barcodes_loaded.columns:
             raise ValueError(
                 "Decoded transcripts are missing 'distance_min'. "
@@ -2980,7 +3409,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         required_columns = {"gene_id", "magnitude_mean", "area", "distance_min"}
         missing = sorted(required_columns.difference(self._df_barcodes_loaded.columns))
         if missing:
@@ -3447,7 +3875,6 @@ class PixelDecoder:
         lr_fdr : float
             False discovery rate for the LR filter.
         """
-
         blank_mask = (
             df["gene_id"].astype("string").str.lower().str.startswith("blank", na=False)
         )
@@ -3487,7 +3914,6 @@ class PixelDecoder:
         lr_fdr_target : float, default 0.05
             False discovery rate target for LR filtering.
         """
-
         from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import classification_report
         from sklearn.model_selection import train_test_split
@@ -3656,7 +4082,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         cellpose_roi_path = (
             self._datastore._datastore_path
             / Path("segmentation")
@@ -3717,7 +4142,6 @@ class PixelDecoder:
         radius : float, default 0.75
             3D radius, in microns, for duplicate removal.
         """
-
         self._df_filtered_barcodes.reset_index(drop=True, inplace=True)
 
         coords = self._df_filtered_barcodes[["global_z", "global_y", "global_x"]].values
@@ -3947,7 +4371,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         import napari
         from qtpy.QtWidgets import QApplication
 
@@ -4099,7 +4522,6 @@ class PixelDecoder:
             4. Distance image.
             5. Decoded image.
         """
-
         with cp.cuda.Device(gpu_id):
             if magnitude_threshold is None:
                 magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
@@ -4166,8 +4588,9 @@ class PixelDecoder:
         magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
         estimate_chromatic_affines: bool | None = None,
+        excluded_gene_ids: Sequence[str] | None = None,
     ) -> None:
-        """Iteratively refine normalization vectors using exact-called transcripts.
+        """Refine normalization vectors using exact-called transcripts.
 
         Parameters
         ----------
@@ -4190,6 +4613,10 @@ class PixelDecoder:
             If True, estimate chromatic affine transforms after each iterative
             decoding round. If None, use the instance setting supplied at
             construction.
+        excluded_gene_ids : Sequence[str] or None, optional
+            Codebook gene IDs to suppress during iterative decoding. Excluded
+            codewords remain in the nearest-neighbor search but their winning
+            assignments are marked as background.
         """
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
@@ -4197,6 +4624,27 @@ class PixelDecoder:
             magnitude_threshold = DEFAULT_DECODE_MAGNITUDE_THRESHOLD
         if minimum_pixels is None:
             minimum_pixels = self._default_minimum_pixels()
+        (
+            self._optimization_excluded_gene_ids,
+            excluded_codeword_indices,
+        ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
+        if excluded_codeword_indices and self._verbose >= 1:
+            print(
+                "Excluding codewords from iterative optimization: "
+                + ", ".join(self._optimization_excluded_gene_ids)
+            )
+        blank_exclusions = [
+            gene_id
+            for gene_id in self._optimization_excluded_gene_ids
+            if gene_id.lower().startswith("blank")
+        ]
+        if blank_exclusions:
+            warnings.warn(
+                "Blank codewords already do not contribute to iterative "
+                "normalization; excluding them only suppresses their temporary "
+                "assignments: " + ", ".join(blank_exclusions),
+                stacklevel=2,
+            )
         all_tiles = list(range(len(self._datastore.tile_ids)))
 
         # preload global normalization once
@@ -4272,6 +4720,7 @@ class PixelDecoder:
                         minimum_pixels,
                         feature_predictor_threshold,
                         run_chromatic_estimation,
+                        self._optimization_excluded_gene_ids,
                     ),
                     physical_gpu_id=gpu,
                 )
@@ -4348,7 +4797,6 @@ class PixelDecoder:
         lr_fdr_target: float, default = 0.05
             False discovery rate target for LR filtering.
         """
-
         if self._num_gpus < 1:
             raise RuntimeError("No GPUs allocated.")
         if magnitude_threshold is None:
@@ -4444,7 +4892,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         if filter_method == "blank_fraction":
             if lr_fdr_target != 0.05:
                 raise ValueError(
@@ -4487,7 +4934,6 @@ class PixelDecoder:
         None
             Function result.
         """
-
         if self._verbose > 1:
             print(f"apply filter_method={filter_method}")
 
@@ -4535,7 +4981,6 @@ class PixelDecoder:
         the exact two-threshold caller. Legacy decoded outputs without
         ``distance_min`` are rejected and must be regenerated.
         """
-
         if self._verbose >= 1:
             print("reprocess existing: load decoded transcripts")
         self._load_tile_decoding = True

@@ -154,7 +154,6 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
         fixed,
         moving,
         spacing_zyx_um=spacing_zyx_um,
-        registration_binning={"z": 1, "y": 3, "x": 3},
     )
     recovered_shift_zyx_px = np.asarray(transform[:3, 3]) / np.asarray(spacing_zyx_um)
     np.testing.assert_allclose(

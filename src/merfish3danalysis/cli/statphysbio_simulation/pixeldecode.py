@@ -47,7 +47,6 @@ def _nearest_nyquist_multiple(
     float
         Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
     """
-
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -74,7 +73,6 @@ def _default_simulation_magnitude_threshold(
     tuple[float, float]
         Function result.
     """
-
     if datastore.microscope_type != "2D":
         return SIMULATION_3D_DEFAULT_MAGNITUDE_THRESHOLD
 
@@ -102,7 +100,6 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     bool
         Function result.
     """
-
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
     if tile_ids is None or bit_ids is None:
@@ -136,7 +133,6 @@ def _default_simulation_feature_predictor_threshold(
     float
         Function result.
     """
-
     if datastore.microscope_type != "2D" or not _readouts_are_deconvolved(datastore):
         return SIMULATION_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
@@ -171,7 +167,6 @@ def _validate_filter_arguments(
     None
         Function result.
     """
-
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
@@ -248,7 +243,6 @@ def decode_pixels(
         normalization. Existing datastore calibration is still used when this
         is False, with identity fallback when no calibration is present.
     """
-
     # initialize datastore
     datastore_path = root_path / Path(r"qi2labdatastore")
     datastore = qi2labDataStore(datastore_path, validate=False)
@@ -302,7 +296,7 @@ def decode_pixels(
 
 def main() -> None:
     """
-    Main.
+    Run the simulation pixel decoding CLI.
 
     Returns
     -------

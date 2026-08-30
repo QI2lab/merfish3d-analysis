@@ -110,7 +110,7 @@ def apply_transform(
     image1: ArrayLike, image2: ArrayLike, transform: sitk.Transform
 ) -> ArrayLike:
     """
-    Apply simpleITK transform
+    Apply simpleITK transform.
 
     Parameters
     ----------
@@ -126,7 +126,6 @@ def apply_transform(
     resampled_image: ArrayLike
         transformed moving image
     """
-
     image1_sitk = sitk.GetImageFromArray(image1)
     image2_sitk = sitk.GetImageFromArray(image2)
 
@@ -155,8 +154,9 @@ def compute_rigid_transform(
     gpu_id: int = 0,
 ) -> tuple[sitk.TranslationTransform, Sequence[float]]:
     """
-    Calculate initial translation transform using scikit-image
-    phase cross correlation. Create simpleITK transform using shift.
+    Calculate initial translation transform using scikit-image.
+
+    Create simpleITK transform using the measured phase-correlation shift.
 
     Parameters
     ----------
@@ -168,7 +168,7 @@ def compute_rigid_transform(
         amount of zyx downsampling applied before calling registration
     mask: ArrayLike, default None
         use provided mask
-    projection: Optional[str], default None
+    projection: str or None, default None
         projection method to use
     gpu_id: int, default = 0
         gpu id

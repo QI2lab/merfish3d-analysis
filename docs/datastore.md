@@ -63,18 +63,24 @@ Here, we use a hypothetical dataset that only has one round with two bits. We as
 Tiles, rounds, and bits are indexed from `0` in the Python API, but datastore IDs are stored as 1-based, zero-padded strings (`round001`, `bit001`, `tile0000`).
 
 ```python
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from tifffile import imread
+
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 # define the datastore directory and create the datastore
 root_path = Path(r"/path/to/dataset/")
-datastore = qi2labDataStore(root_path / Path("qi2labdatastore"))
+raw_path = root_path / "raw_data"
+datastore = qi2labDataStore(root_path / "qi2labdatastore")
 
 # required metadata
-datastore.channels_in_data = ["alexa488","alexa561","alexa647"]
+datastore.channels_in_data = ["alexa488", "alexa561", "alexa647"]
 datastore.num_rounds = 1
-datastore.codebook = Path(r"/path/to/dataset/raw_data/codebook.csv")
-datastore.experiment_order = Path(r"/path/to/dataset/raw_data/exp_order.csv")
+datastore.codebook = pd.read_csv(raw_path / "codebook.csv")
+datastore.experiment_order = pd.read_csv(raw_path / "exp_order.csv").to_numpy()
 datastore.num_tiles = 1
 datastore.microscope_type = "3D"
 datastore.tile_overlap = 0.2
@@ -82,14 +88,12 @@ datastore.e_per_ADU = 0.51
 datastore.na = 1.35
 datastore.ri = 1.51
 datastore.binning = 1
-datastore.noise_map = None
-datastore.channel_psfs = channel_psfs # either experimental or theoretical PSFs
-datastore.voxel_size_zyx_um = [.31,.098,.098]
+datastore.noise_map = np.zeros((2048, 2048), dtype=np.uint16)
+datastore.channel_psfs = channel_psfs  # one experimental or theoretical 3D PSF per channel
+datastore.voxel_size_zyx_um = [0.31, 0.098, 0.098]
 
-# Update datastore state that Calibration are created
-datastore_state = datastore.datastore_state
-datastore_state.update({"Calibrations": True})
-datastore.datastore_state = datastore_state
+# Mark calibrations complete
+datastore.datastore_state = {"Calibrations": True}
 
 # initialize the tile
 tile_idx = 0
@@ -97,7 +101,7 @@ datastore.initialize_tile(tile_idx)
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-fiducial_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[0,:]
+fiducial_data = imread(raw_path / "tile001" / "image.tif")[0, :]
 
 # save image data for tile = 0, round = 0, fiducial
 datastore.save_local_corrected_image(
@@ -112,7 +116,10 @@ datastore.save_local_corrected_image(
 
 # save stage position for tile = 0, round = 0, fiducial
 datastore.save_local_stage_position_zyx_um(
-    [1000., 200., 500.], tile=0, round=0
+    [1000.0, 200.0, 500.0],
+    np.eye(4, dtype=np.float32),
+    tile=0,
+    round=0,
 )
 
 # save excitation and emission wavelengths for tile = 0, round = 0, fiducial
@@ -125,7 +132,7 @@ datastore.save_local_wavelengths_um(
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-bit001_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[1,:]
+bit001_data = imread(raw_path / "tile001" / "image.tif")[1, :]
 
 # save first readout channel for tile = 0, bit = 0 (bit001)
 datastore.save_local_corrected_image(
@@ -147,7 +154,7 @@ datastore.save_local_wavelengths_um(
 
 # code to read image tile here
 # Assume the images are of shape [n_channels,nz,nx,ny]
-bit002_data = imread("/path/to/dataset/raw_data/tile001/image.tif")[2,:]
+bit002_data = imread(raw_path / "tile001" / "image.tif")[2, :]
 
 # save second readout channel for tile = 0, bit = 1 (bit002)
 datastore.save_local_corrected_image(
@@ -167,10 +174,8 @@ datastore.save_local_wavelengths_um(
     bit=1,
 )
 
-# update datastore state that corrected data is saved 
-datastore_state = datastore.datastore_state
-datastore_state.update({"Corrected": True})
-datastore.datastore_state = datastore_state
+# Mark corrected data complete
+datastore.datastore_state = {"Corrected": True}
 ```
 
 ## SOFIMA deformable registration convention
@@ -240,7 +245,7 @@ warped image as applying the in-memory field returned by the estimator.
     │       │   ├── corrected_data.ome.zarr/   # OME-NGFF v0.5 image
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
-    │       │   ├── registered_decon_data.ome.zarr/
+    │       │   ├── decon_data.ome.zarr/       # optional, native local frame
     │       │   │   ├── zarr.json
     │       │   │   └── 0/
     │       │   └── local_sofima_flow_field.ome.zarr/  # rounds > 1 when enabled
@@ -274,12 +279,22 @@ warped image as applying the in-memory field returned by the estimator.
     │       │   └── 0/
     │       └── fused_all_channels_zyx.ome.zarr/   # optional
     ├── segmentation/
-    │   └── cellpose/
-    │       ├── cellpose.zarr/
-    │       │   └── masks_fiducial_iso_zyx.ome.zarr/
-    │       │       ├── zarr.json
-    │       │       └── 0/
-    │       └── imagej_rois/global_coords_rois.zip
+    │   ├── cellpose/
+    │   │   ├── cellpose.zarr/
+    │   │   │   └── masks_fiducial_iso_zyx.ome.zarr/
+    │   │   │       ├── zarr.json
+    │   │   │       └── 0/
+    │   │   └── imagej_rois/global_coords_rois.zip
+    │   └── baysor/3D/
+    │       ├── molecules.parquet
+    │       └── cell_boundaries_3d.parquet
+    ├── proseg/
+    │   └── 3D/
+    │       ├── cell_polygons_3D.geojson.gz
+    │       ├── transcript_metadata_3D.csv.gz
+    │       └── <optional run name>/
+    │           ├── cell_polygons_3D.geojson.gz
+    │           └── transcript_metadata_3D.csv.gz
     ├── decoded/
     │   ├── tile0000_decoded_features.parquet
     │   └── temporary/iteration_000/tile000_temp_decoded.parquet
@@ -291,7 +306,9 @@ warped image as applying the in-memory field returned by the estimator.
 
 ## Metadata conventions
 
-- Each image directory (for example `corrected_data.ome.zarr/`, `registered_decon_data.ome.zarr/`, `decon_data.ome.zarr/`, or `feature_predictor_data.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Each image directory (for example `corrected_data.ome.zarr/`, `decon_data.ome.zarr/`, `feature_predictor_data.ome.zarr/`, or `local_sofima_flow_field.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
+- Local fiducial and readout images are stored in native tile coordinates. Registered fiducial/readout images are not saved as separate arrays; downstream decoding and viewer paths apply affine, chromatic, and SOFIMA transforms when aligned data are needed.
+- Readout `corrected_data.ome.zarr/` is always expected after datastore creation. Readout and fiducial `decon_data.ome.zarr/` are present only when deconvolution was run. Readout `feature_predictor_data.ome.zarr/` is expected after preprocessing and is produced from the deconvolved image when available, otherwise from the corrected image.
 - Folder-level metadata for non-image entities (for example `calibrations/`, `fiducial/*/round*/`, `readouts/*/bit*/`) is stored in `attributes.json`.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
 - All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).

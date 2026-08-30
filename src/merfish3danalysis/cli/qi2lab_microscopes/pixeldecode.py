@@ -56,7 +56,6 @@ def _nearest_nyquist_multiple(
     float
         Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
     """
-
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -86,7 +85,6 @@ def _effective_decode_mode(
     {'2d', '3d'}
         Effective decode mode.
     """
-
     if decode_mode == "auto":
         return "2d" if datastore.microscope_type == "2D" else "3d"
     if decode_mode in {"2d", "3d"}:
@@ -113,7 +111,6 @@ def _default_qi2lab_minimum_pixels(
     int
         Default minimum-pixel threshold.
     """
-
     if _effective_decode_mode(datastore, decode_mode) == "2d":
         return QI2LAB_2D_DEFAULT_MINIMUM_PIXELS
     return QI2LAB_3D_DEFAULT_MINIMUM_PIXELS
@@ -138,7 +135,6 @@ def _default_qi2lab_magnitude_threshold(
     tuple[float, float]
         Default magnitude threshold range.
     """
-
     if _effective_decode_mode(datastore, decode_mode) != "2d":
         return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
 
@@ -166,7 +162,6 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     bool
         True if the first registered readout records deconvolution metadata.
     """
-
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
     if tile_ids is None or bit_ids is None:
@@ -203,7 +198,6 @@ def _default_qi2lab_feature_predictor_threshold(
     float
         Default feature-predictor threshold.
     """
-
     if _effective_decode_mode(
         datastore, decode_mode
     ) != "2d" or not _readouts_are_deconvolved(datastore):
@@ -240,7 +234,6 @@ def _validate_filter_arguments(
     None
         This function raises when arguments are inconsistent.
     """
-
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
             raise typer.BadParameter(
@@ -262,6 +255,38 @@ def _validate_filter_arguments(
     raise typer.BadParameter("filter_method must be one of 'blank_fraction' or 'lr'.")
 
 
+def _load_optimization_exclusions_file(path: Path) -> list[str]:
+    """Load one codebook gene ID per line from a UTF-8 text file."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise typer.BadParameter(
+            f"Could not read optimization exclusions file {path}: {error}",
+            param_hint="--optimization-exclusions-file",
+        ) from error
+
+    gene_ids = []
+    for line in lines:
+        value = line.strip()
+        if value and not value.startswith("#"):
+            gene_ids.append(value)
+    if not gene_ids:
+        raise typer.BadParameter(
+            "Optimization exclusions file contains no gene IDs. Provide one "
+            "codebook gene_id per line; blank lines and lines beginning with "
+            "'#' are ignored.",
+            param_hint="--optimization-exclusions-file",
+        )
+    return gene_ids
+
+
+def _optimization_exclusions_path(datastore_path: Path, path: Path) -> Path:
+    """Resolve a relative exclusions filename inside the datastore directory."""
+    if path.is_absolute():
+        return path
+    return datastore_path / path
+
+
 @app.command()
 def decode_pixels(
     root_path: Path,
@@ -274,6 +299,7 @@ def decode_pixels(
     lr_fdr_target: float = 0.05,
     merfish_bits: int | None = None,
     skip_optimization: bool = False,
+    optimization_exclusions_file: Path | None = None,
     normalization_method: Literal["iterative", "global", "none"] = "iterative",
     estimate_chromatic_affines: bool = False,
     chromatic_min_pairs: int = 20,
@@ -330,6 +356,11 @@ def decode_pixels(
         Number of bits in codebook. By default uses all bits in codebook.
     skip_optimization : bool, default=False
         Skip running iterative optimization.
+    optimization_exclusions_file : Path or None, default=None
+        UTF-8 text file containing one codebook ``gene_id`` per line to suppress
+        during iterative optimization. Blank lines and ``#`` comments are
+        ignored. Relative paths are resolved inside the qi2lab datastore
+        directory. This does not exclude codewords from final decoding.
     normalization_method : {"iterative", "global", "none"}, default "iterative"
         normalization source for pixel decoding.
     estimate_chromatic_affines : bool, default=False
@@ -384,9 +415,31 @@ def decode_pixels(
         Decode mode. ``auto`` follows the datastore microscope type; explicit
         values control connected-component extraction and default thresholds.
     """
+    optimization_excluded_gene_ids: list[str] = []
+    if optimization_exclusions_file is not None:
+        if skip_optimization:
+            raise typer.BadParameter(
+                "--optimization-exclusions-file cannot be used with "
+                "--skip-optimization.",
+                param_hint="--optimization-exclusions-file",
+            )
+        if reprocess_existing:
+            raise typer.BadParameter(
+                "--optimization-exclusions-file cannot be used with "
+                "--reprocess-existing because iterative optimization does not run.",
+                param_hint="--optimization-exclusions-file",
+            )
 
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
+    if optimization_exclusions_file is not None:
+        exclusions_path = _optimization_exclusions_path(
+            datastore_path,
+            optimization_exclusions_file,
+        )
+        optimization_excluded_gene_ids = _load_optimization_exclusions_file(
+            exclusions_path
+        )
     datastore = qi2labDataStore(datastore_path, validate=False)
     _effective_decode_mode(datastore, decode_mode)
     print(f"Using datastore at {datastore_path}")
@@ -452,6 +505,18 @@ def decode_pixels(
         ),
     )
 
+    if optimization_excluded_gene_ids:
+        try:
+            resolved_gene_ids, _indices = decoder._resolve_excluded_gene_ids(
+                optimization_excluded_gene_ids
+            )
+        except ValueError as error:
+            raise typer.BadParameter(
+                str(error),
+                param_hint="--optimization-exclusions-file",
+            ) from error
+        optimization_excluded_gene_ids = list(resolved_gene_ids)
+
     if not (reprocess_existing):
         if not skip_optimization:
             # optimize normalization weights through iterative decoding and update
@@ -461,6 +526,7 @@ def decode_pixels(
                 minimum_pixels=minimum_pixels_per_RNA,
                 feature_predictor_threshold=feature_predictor_threshold,
                 magnitude_threshold=magnitude_threshold,
+                excluded_gene_ids=optimization_excluded_gene_ids,
             )
 
         # decode all tiles using iterative normalization weights

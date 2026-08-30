@@ -51,7 +51,6 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
     -------
     None
     """
-
     _fft_cache_3d.clear()
     try:
         cp.fft.config.get_plan_cache().clear()
@@ -123,7 +122,6 @@ def _axis_linear_fft_padding(
         Padding before and after the axis. The padding includes the PSF halo
         and any extra samples needed to reach an FFT-friendly length.
     """
-
     halo = max((int(psf_support) // 2) * int(halo_multiplier), 0)
     length_with_halo = length + 2 * halo
     new_length = next_gpu_fft_size(length_with_halo)
@@ -159,7 +157,6 @@ def pad_for_linear_fft(
         Padded image and the per-axis padding widths needed to remove padding
         after deconvolution.
     """
-
     if image.ndim != 3:
         raise ValueError(f"Expected 3D input, got shape {image.shape!r}")
 
@@ -195,7 +192,6 @@ def remove_padding_zyx(
     cupy.ndarray or numpy.ndarray
         View of the input with padding removed.
     """
-
     slices = []
     for axis, (pad_before, pad_after) in enumerate(pad_width):
         start = pad_before
@@ -226,7 +222,6 @@ def _symmetric_padded_axis_indices(
     tuple[numpy.ndarray, numpy.ndarray]
         Source indices for the left and right padded regions.
     """
-
     observed = np.arange(pad_before, length - pad_after, dtype=np.int64)
     padded = np.pad(observed, (pad_before, pad_after), mode="symmetric")
     return padded[:pad_before], padded[length - pad_after :]
@@ -250,7 +245,6 @@ def enforce_symmetric_boundary(
     -------
     None
     """
-
     for axis, (pad_before, pad_after) in enumerate(pad_width):
         if pad_before == 0 and pad_after == 0:
             continue
@@ -375,7 +369,6 @@ def _observed_region_mask(
     cupy.ndarray
         Float32 mask with observed voxels equal to one.
     """
-
     mask = cp.zeros(shape, dtype=cp.float32)
     slices = []
     for axis, (pad_before, pad_after) in enumerate(pad_width):
@@ -435,7 +428,6 @@ def _child_log_prefix(base_prefix: str, suffix: str) -> str:
     str
         Combined log prefix. If ``base_prefix`` is empty, returns ``suffix``.
     """
-
     return suffix if not base_prefix else f"{base_prefix} {suffix}"
 
 
@@ -464,7 +456,6 @@ def _resolve_tiled_axis_geometry(
     tuple[int, int]
         Retained tile size and hidden processing halo for the axis.
     """
-
     if requested_crop <= 0:
         raise ValueError(f"{axis_name} must be greater than 0 for tiled 3D RLGC.")
 
@@ -492,7 +483,6 @@ def _axis_retained_bounds(retained_size: int, image_size: int) -> list[tuple[int
     list[tuple[int, int]]
         Inclusive-exclusive retained bounds covering ``[0, image_size)``.
     """
-
     if retained_size <= 0:
         raise ValueError("retained_size must be greater than 0.")
     bounds = []
@@ -564,7 +554,6 @@ def rlgc(
         Deconvolved image as float32. A 2D input returns with singleton z
         removed by the caller when routed through :func:`chunked_rlgc`.
     """
-
     cp.cuda.Device(gpu_id).use()
     logging_enabled = logger is not None and logger.isEnabledFor(logging.INFO)
     log_tag = f"{log_prefix} " if log_prefix else ""
@@ -783,7 +772,6 @@ def _is_gpu_memory_error(exc: BaseException) -> bool:
         True if the exception appears to be a GPU or host memory allocation
         failure; otherwise False.
     """
-
     if isinstance(exc, MemoryError):
         return True
     if isinstance(exc, cp.cuda.memory.OutOfMemoryError):
@@ -852,7 +840,6 @@ def _chunked_rlgc_once(
     numpy.ndarray
         Deconvolved image as float32.
     """
-
     cp.cuda.Device(gpu_id).use()
     if crop_yx <= 0:
         raise ValueError("crop_yx must be greater than 0.")
@@ -1098,7 +1085,6 @@ def chunked_rlgc(
     numpy.ndarray
         Deconvolved image as float32.
     """
-
     if crop_z is not None:
         raise ValueError("RLGC no longer supports axial chunking; leave crop_z=None.")
 
