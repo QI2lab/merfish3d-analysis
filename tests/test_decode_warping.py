@@ -30,7 +30,7 @@ class _NoChromaticDatastore:
         return self.round_transform
 
     def load_chromatic_affine_transform_zyx_um(self, *, wavelength_um):
-        return None
+        return np.eye(4, dtype=np.float32)
 
     def load_local_sofima_flow_field(self, *, tile, round, return_future):
         return None
