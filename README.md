@@ -120,6 +120,12 @@ To build the documentation, install using `uv sync --group docs`.
 Then execute `uv run mkdocs build --clean` or `uv run mkdocs serve`. The
 documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
+Pushes to `main` automatically build and deploy the documentation through the
+`Documentation` GitHub Actions workflow. The workflow installs only the
+documentation dependency group and runs on a standard CPU runner; it does not
+require CUDA or GPU hardware. Configure the repository's Pages source as
+**GitHub Actions** under **Settings → Pages**.
+
 ## Testing
 
 The simulation tests require an NVIDIA GPU, the extracted sample data at
