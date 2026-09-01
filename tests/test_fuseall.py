@@ -203,9 +203,7 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
         "transform_key": "stage_metadata",
         "zarr_module": sentinel.zarr,
     }
-    for read_call, input_path in zip(
-        read_sim.call_args_list, input_paths, strict=True
-    ):
+    for read_call, input_path in zip(read_sim.call_args_list, input_paths, strict=True):
         assert read_call.kwargs["input_path"] == input_path
         assert read_call.kwargs["scale"] == expected_common["scale"]
         assert read_call.kwargs["translation"] == expected_common["translation"]

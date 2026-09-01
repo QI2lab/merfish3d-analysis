@@ -262,10 +262,7 @@ def _load_tile_multichannel_msim(
     channel_ids = [datastore.fiducial_folder_name, *bit_ids]
     channel_paths = [
         _local_fiducial_path(datastore, tile_id, reference_round),
-        *[
-            _local_readout_path(datastore, tile_id, bit_id)
-            for bit_id in bit_ids
-        ],
+        *[_local_readout_path(datastore, tile_id, bit_id) for bit_id in bit_ids],
     ]
     scale = dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True))
     translation = dict(
