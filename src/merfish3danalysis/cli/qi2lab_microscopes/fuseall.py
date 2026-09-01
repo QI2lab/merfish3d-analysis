@@ -18,7 +18,6 @@ from tqdm import tqdm
 
 from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.DataRegistration import (
-    GlobalRegistrationConfig,
     _direct_zarr_fusion_kwargs,
     _local_fiducial_path,
     _read_fiducial_sim,
@@ -41,7 +40,6 @@ def export_ome_tiffs(
     output_directory: Path,
     channel_ids: list[str],
     fused_metadata: dict[str, list[Any]],
-    registration_config: GlobalRegistrationConfig,
 ) -> None:
     """Export each full-resolution fused channel as a tiled OME-TIFF.
 
@@ -55,9 +53,6 @@ def export_ome_tiffs(
         Ordered channel names matching the OME-Zarr channel axis.
     fused_metadata : dict[str, list[Any]]
         Fused affine, origin, and spacing metadata in physical Z, Y, X order.
-    registration_config : GlobalRegistrationConfig
-        Registration transform keys used to record transform provenance.
-
     Returns
     -------
     None
@@ -73,6 +68,8 @@ def export_ome_tiffs(
     shape_zyx = tuple(int(array.shape[axes[dim]]) for dim in "zyx")
     origin = tuple(map(float, fused_metadata["origin_zyx_um"]))
     spacing = tuple(map(float, fused_metadata["spacing_zyx_um"]))
+    stage_transform_key = "stage_metadata"
+    global_transform_key = "global_registered"
 
     def tiles(channel_index: int) -> Iterator[np.ndarray]:
         """Yield padded TIFF tiles for one channel in Z, Y, X page order.
@@ -104,7 +101,7 @@ def export_ome_tiffs(
                     yield tile
 
     for channel_index, name in enumerate(tqdm(channel_ids, desc="ome-tiff")):
-        chain = [registration_config.transform_key]
+        chain = [stage_transform_key]
         if channel_index:
             chain.extend(
                 [
@@ -112,7 +109,7 @@ def export_ome_tiffs(
                     "local_round_transform_zyx_um",
                 ]
             )
-        chain.append(registration_config.new_transform_key)
+        chain.append(global_transform_key)
         with TiffWriter(
             output_directory / f"{name}.ome.tiff", bigtiff=True, ome=True
         ) as tif:
@@ -236,7 +233,24 @@ def _local_readout_path(
     tile_id: str,
     bit_id: str,
 ) -> Path:
-    """Return the best available native readout OME-Zarr path."""
+    """
+    Locate the best available native readout OME-Zarr image.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore containing the readout images.
+    tile_id : str
+        Tile identifier.
+    bit_id : str
+        Readout-bit identifier.
+
+    Returns
+    -------
+    pathlib.Path
+        Deconvolved image path when present; otherwise the corrected image
+        path.
+    """
     readout_root = datastore._readouts_root_path / tile_id / bit_id
     decon_path = datastore._image_store_path(readout_root / "decon_data")
     if decon_path.exists():
@@ -244,19 +258,26 @@ def _local_readout_path(
     return datastore._image_store_path(readout_root / "corrected_data")
 
 
-def _rounded_spacing_zyx_um(datastore: qi2labDataStore) -> dict[str, float]:
-    """Return datastore voxel spacing rounded to three decimal places."""
-    return dict(
-        zip(
-            "zyx",
-            (round(float(value), 3) for value in datastore.voxel_size_zyx_um),
-            strict=True,
-        )
-    )
-
-
 def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
-    """Parse an optional comma-separated Z, Y, X fusion chunk shape."""
+    """
+    Parse an optional comma-separated fusion chunk shape.
+
+    Parameters
+    ----------
+    value : str or None
+        Chunk sizes in Z, Y, X order, such as ``"32,2048,2048"``. ``None``
+        requests multiview-stitcher's default chunking.
+
+    Returns
+    -------
+    dict[str, int] or None
+        Positive chunk sizes keyed by spatial dimension, or ``None``.
+
+    Raises
+    ------
+    typer.BadParameter
+        If the value does not contain exactly three positive integers.
+    """
     if value is None:
         return None
     try:
@@ -279,11 +300,44 @@ def _load_tile_multichannel_msim(
     datastore: qi2labDataStore,
     tile_id: str,
     bit_ids: list[str],
+    spacing_zyx_um: dict[str, float],
     zarr_module: Any = zarr,
     msi_utils_module: Any = msi_utils,
     si_utils_module: Any = si_utils,
 ) -> Any:
-    """Build one Zarr-backed CZYX tile with channel-dependent world affines."""
+    """
+    Build a Zarr-backed multichannel tile with per-channel world affines.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore providing image paths and registration metadata.
+    tile_id : str
+        Tile identifier.
+    bit_ids : list[str]
+        Readout bits in desired output-channel order.
+    spacing_zyx_um : dict[str, float]
+        Rounded physical voxel spacing keyed by Z, Y, and X.
+    zarr_module : Any, default=zarr
+        Zarr module or compatible test double.
+    msi_utils_module : Any, default=multiview_stitcher.msi_utils
+        Multiview-stitcher multiscale-image helpers.
+    si_utils_module : Any, default=multiview_stitcher.spatial_image_utils
+        Multiview-stitcher spatial-image helpers.
+
+    Returns
+    -------
+    Any
+        MultiscaleSpatialImage whose first channel is the fiducial and whose
+        remaining channels are the ordered bits.
+
+    Raises
+    ------
+    FileNotFoundError
+        If a required channel image is absent.
+    RuntimeError
+        If the tile has no stored global refinement transform.
+    """
     reference_round = datastore.round_ids[0]
     tile_position, stage_camera = datastore.load_local_stage_position_zyx_um(
         tile_id,
@@ -294,7 +348,6 @@ def _load_tile_multichannel_msim(
         _local_fiducial_path(datastore, tile_id, reference_round),
         *[_local_readout_path(datastore, tile_id, bit_id) for bit_id in bit_ids],
     ]
-    scale = _rounded_spacing_zyx_um(datastore)
     translation = dict(
         zip(
             "zyx",
@@ -311,7 +364,7 @@ def _load_tile_multichannel_msim(
             )
         channel_sim = _read_fiducial_sim(
             input_path=input_path,
-            scale=scale,
+            scale=spacing_zyx_um,
             translation=translation,
             affine_zyx_px=stage_camera,
             transform_key="stage_metadata",
@@ -357,11 +410,29 @@ def _load_tile_multichannel_msim(
     return msim
 
 
-def _read_fused_metadata(fused_msim: Any) -> dict[str, list[Any]]:
-    """Return affine, origin, and spacing metadata from a fused image."""
+def _read_fused_metadata(
+    fused_msim: Any,
+    *,
+    transform_key: str,
+) -> dict[str, list[Any]]:
+    """
+    Read physical-coordinate metadata from a fused multiscale image.
+
+    Parameters
+    ----------
+    fused_msim : Any
+        Fused MultiscaleSpatialImage returned by multiview-stitcher.
+    transform_key : str
+        MVS coordinate-system key containing the fused affine.
+
+    Returns
+    -------
+    dict[str, list[Any]]
+        Affine, origin, and spacing values serialized as Python lists.
+    """
     affine = msi_utils.get_transform_from_msim(
         fused_msim,
-        transform_key="global_registered",
+        transform_key=transform_key,
     ).data.squeeze()
     fused_sim = msi_utils.get_sim_from_msim(fused_msim)
     origin = si_utils.get_origin_from_sim(fused_sim, asarray=True)
@@ -433,7 +504,15 @@ def fuse_all_channels(
         TIFFs are written beside it.
     """
     datastore = qi2labDataStore(qi2lab_datastore_path(root_path))
-    registration_config = GlobalRegistrationConfig()
+    stage_transform_key = "stage_metadata"
+    global_transform_key = "global_registered"
+    output_spacing = dict(
+        zip(
+            "zyx",
+            (round(float(value), 3) for value in datastore.voxel_size_zyx_um),
+            strict=True,
+        )
+    )
     bit_ids = sorted(map(str, datastore.bit_ids), key=lambda bit: int(bit[3:]))
     channels = [datastore.fiducial_folder_name, *bit_ids]
     tile_msims = [
@@ -441,6 +520,7 @@ def fuse_all_channels(
             datastore=datastore,
             tile_id=tile_id,
             bit_ids=bit_ids,
+            spacing_zyx_um=output_spacing,
         )
         for tile_id in tqdm(datastore.tile_ids, desc="tile")
     ]
@@ -453,8 +533,8 @@ def fuse_all_channels(
         fusion_call_kwargs["output_chunksize"] = output_chunksize
     fused_msim = fusion.fuse(
         images=tile_msims,
-        transform_key=registration_config.new_transform_key,
-        output_spacing=_rounded_spacing_zyx_um(datastore),
+        transform_key=global_transform_key,
+        output_spacing=output_spacing,
         output_zarr_url=str(final_output),
         **fusion_call_kwargs,
         **_direct_zarr_fusion_kwargs(
@@ -462,17 +542,20 @@ def fuse_all_channels(
             fusion_workers=fusion_workers,
         ),
     )
-    fused_metadata = _read_fused_metadata(fused_msim)
+    fused_metadata = _read_fused_metadata(
+        fused_msim,
+        transform_key=global_transform_key,
+    )
     datastore._write_extra_attributes(
         image_path=final_output,
         extra_attributes={
             **fused_metadata,
             "channel_names": channels,
             "registration_provenance": {
-                "stage_transform_key": registration_config.transform_key,
+                "stage_transform_key": stage_transform_key,
                 "chromatic_transform": "chromatic_affine_transforms_zyx_um",
                 "local_transform": "local_round_transform_zyx_um",
-                "global_transform_key": registration_config.new_transform_key,
+                "global_transform_key": global_transform_key,
                 "sofima_applied": False,
             },
         },
@@ -485,7 +568,6 @@ def fuse_all_channels(
             output_directory,
             channels,
             fused_metadata,
-            registration_config,
         )
 
     del fused_msim, tile_msims

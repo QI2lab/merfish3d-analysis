@@ -181,6 +181,7 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
         datastore=datastore,
         tile_id="tile0000",
         bit_ids=["bit001", "bit002"],
+        spacing_zyx_um={"z": 0.32, "y": 0.098, "x": 0.098},
         zarr_module=sentinel.zarr,
         msi_utils_module=SimpleNamespace(
             get_msim_from_sim=get_msim_from_sim,
@@ -295,8 +296,18 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
 
     channels = ["fiducial", "bit001", "bit002", "bit010"]
     assert load_tile.call_args_list == [
-        call(datastore=datastore, tile_id="tile0000", bit_ids=channels[1:]),
-        call(datastore=datastore, tile_id="tile0001", bit_ids=channels[1:]),
+        call(
+            datastore=datastore,
+            tile_id="tile0000",
+            bit_ids=channels[1:],
+            spacing_zyx_um={"z": 0.32, "y": 0.098, "x": 0.098},
+        ),
+        call(
+            datastore=datastore,
+            tile_id="tile0001",
+            bit_ids=channels[1:],
+            spacing_zyx_um={"z": 0.32, "y": 0.098, "x": 0.098},
+        ),
     ]
     output = fused_root / "full_dataset.ome.zarr"
     fuse.assert_called_once_with(
@@ -311,7 +322,10 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         misc_utils=fuseall.misc_utils,
         fusion_workers=40,
     )
-    read_fused_metadata.assert_called_once_with(sentinel.fused)
+    read_fused_metadata.assert_called_once_with(
+        sentinel.fused,
+        transform_key="global_registered",
+    )
     written = datastore._write_extra_attributes.call_args.kwargs
     assert written["image_path"] == output
     assert written["extra_attributes"]["channel_names"] == channels
@@ -323,9 +337,12 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         "sofima_applied": False,
     }
     if write_ome_tiffs:
-        export_call = export_ome_tiffs.call_args.args
-        assert export_call[:4] == (output, fused_root, channels, fused_metadata)
-        assert isinstance(export_call[4], fuseall.GlobalRegistrationConfig)
+        export_ome_tiffs.assert_called_once_with(
+            output,
+            fused_root,
+            channels,
+            fused_metadata,
+        )
     else:
         export_ome_tiffs.assert_not_called()
 

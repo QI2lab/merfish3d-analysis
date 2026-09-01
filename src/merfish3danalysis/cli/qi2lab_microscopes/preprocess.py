@@ -108,7 +108,15 @@ def local_register_data(
 
 
 def main() -> None:
-    """Run the Typer app."""
+    """
+    Run the qi2lab preprocessing command-line application.
+
+    Returns
+    -------
+    None
+        Typer parses the command line and runs the selected preprocessing
+        workflow.
+    """
     app()
 
 
