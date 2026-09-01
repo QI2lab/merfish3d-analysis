@@ -311,11 +311,10 @@ def _load_tile_multichannel_msim(
         global_refinement_zyx_um=global_refinement,
     )
     transform_data = xr.DataArray(
-        transforms[:, None],
-        dims=("c", "t", "x_in", "x_out"),
+        transforms,
+        dims=("c", "x_in", "x_out"),
         coords={
             "c": channel_ids,
-            "t": stage_transform.coords["t"],
             "x_in": stage_transform.coords["x_in"],
             "x_out": stage_transform.coords["x_out"],
         },

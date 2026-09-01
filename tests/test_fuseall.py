@@ -28,16 +28,15 @@ def test_multiview_fusion_applies_channel_dependent_affines() -> None:
         t_coords=None,
     )
     msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
-    transforms = np.repeat(np.eye(4)[None, None], 2, axis=0)
-    transforms[1, 0, 2, 3] = -1.0
+    transforms = np.repeat(np.eye(4)[None], 2, axis=0)
+    transforms[1, 2, 3] = -1.0
     msi_utils.set_affine_transform(
         msim,
         xr.DataArray(
             transforms,
-            dims=("c", "t", "x_in", "x_out"),
+            dims=("c", "x_in", "x_out"),
             coords={
                 "c": ["fiducial", "bit001"],
-                "t": [0],
                 "x_in": ["z", "y", "x", "1"],
                 "x_out": ["z", "y", "x", "1"],
             },
@@ -127,10 +126,9 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
 ) -> None:
     stage_camera = np.eye(4, dtype=np.float32)
     stage_transform = xr.DataArray(
-        stage_camera[None],
-        dims=("t", "x_in", "x_out"),
+        stage_camera,
+        dims=("x_in", "x_out"),
         coords={
-            "t": [0],
             "x_in": ["z", "y", "x", "1"],
             "x_out": ["z", "y", "x", "1"],
         },
@@ -226,13 +224,13 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
     )
     set_call = set_affine_transform.call_args
     transform_data = set_call.args[1]
-    assert transform_data.dims == ("c", "t", "x_in", "x_out")
+    assert transform_data.dims == ("c", "x_in", "x_out")
     assert list(transform_data.coords["c"].values) == [
         "fiducial",
         "bit001",
         "bit002",
     ]
-    np.testing.assert_array_equal(transform_data[:, 0], channel_transforms)
+    np.testing.assert_array_equal(transform_data, channel_transforms)
     assert set_call.kwargs == {"transform_key": "global_registered"}
 
 
