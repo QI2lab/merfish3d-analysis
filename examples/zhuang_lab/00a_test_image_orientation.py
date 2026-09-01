@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 
@@ -185,6 +186,8 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     n_tiles = 10
     create_overview_image(root_path, n_tiles)

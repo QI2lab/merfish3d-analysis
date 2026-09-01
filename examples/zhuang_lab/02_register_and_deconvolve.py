@@ -11,6 +11,7 @@ For readout data, all tiles and bits are deconvolved plus u-fish predicted.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import argparse
 from pathlib import Path
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -79,6 +80,8 @@ def global_register_data(
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     # local_register_data(root_path)
     global_register_data(root_path, create_max_proj_tiff=True)

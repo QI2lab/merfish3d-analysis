@@ -7,6 +7,7 @@ Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import argparse
 from pathlib import Path
 
 from merfish3danalysis.PixelDecoder import PixelDecoder
@@ -123,5 +124,7 @@ def decode_pixels(
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     decode_pixels(root_path=root_path)

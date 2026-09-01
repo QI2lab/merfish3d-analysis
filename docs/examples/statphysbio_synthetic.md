@@ -29,35 +29,32 @@ uv sync --group dev
 
 ## Download the test data
 
-The test module currently uses this fixed dataset root:
-
-```text
-/media/dps/data/merfish3d_analysis-simulation
-```
-
-Create its parent directory, download the archived
+Create a data directory, download the archived
 [simulation data](https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1),
 verify the Zenodo checksum, and extract it:
 
 ```bash
-sudo mkdir -p /media/dps/data
-sudo chown "$USER":"$USER" /media/dps/data
+mkdir -p simulation-data
 
 curl -L \
   "https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1" \
-  -o /media/dps/data/merfish3d_analysis-simulation.zip
+  -o simulation-data/merfish3d_analysis-simulation.zip
 
-echo "3c415493ca37bd19af14464badc45fae  /media/dps/data/merfish3d_analysis-simulation.zip" \
+echo "3c415493ca37bd19af14464badc45fae  simulation-data/merfish3d_analysis-simulation.zip" \
   | md5sum --check -
 
-unzip /media/dps/data/merfish3d_analysis-simulation.zip -d /media/dps/data
+unzip simulation-data/merfish3d_analysis-simulation.zip -d simulation-data
 ```
+
+At session startup, the tests verify the SHA-256 fingerprints of all six
+`aligned_1.tiff` inputs against Zenodo record 17274305. A different local or
+server-side dataset fails before GPU processing begins.
 
 After extraction, the two dataset variants used by the standard test should
 have this structure:
 
 ```text
-/media/dps/data/merfish3d_analysis-simulation/
+merfish3d_analysis-simulation/
 ├── example_16bit_cells/
 │   ├── 0.315/
 │   │   ├── aligned_1.tiff
@@ -91,7 +88,8 @@ standard matrix has no default-model parameter to collect and is skipped.
 Run the test module as-is from the repository root:
 
 ```bash
-uv run pytest tests/test_simulation_example_pipeline.py -vv
+uv run pytest tests/test_simulation_example_pipeline.py -vv \
+  --simulation-data-root simulation-data/merfish3d_analysis-simulation
 ```
 
 No separate pytest GPU option is required. The test constructs the processing
@@ -99,18 +97,56 @@ classes with `num_gpus=1`, so CUDA device 0 performs preprocessing and decoding.
 The standard matrix covers both dataset variants, all three axial spacings, and
 chromatic-aberration estimation enabled and disabled. Each case compares an
 affine-only run with a SOFIMA-enabled run and stops if the rounded SOFIMA F1
-score is lower.
+score is lower. Both results must also remain within 0.02 of the Zenodo
+baseline.
 
-## Optional exhaustive matrix
+The complete run on the current repository produced the following standard
+F1 scores (affine and SOFIMA were identical):
 
-The longer feature-prediction threshold sweep is excluded by default. Enable it
-explicitly with:
+| Dataset | Axial spacing (µm) | No chromatic aberration | Chromatic aberration |
+| --- | ---: | ---: | ---: |
+| Cells | 0.315 | 0.9848 | 0.9798 |
+| Cells | 1.0 | 0.9573 | 0.9312 |
+| Cells | 1.5 | 0.3779 | 0.3935 |
+| Uniform | 0.315 | 0.9899 | 0.9891 |
+| Uniform | 1.0 | 0.9673 | 0.9536 |
+| Uniform | 1.5 | 0.6119 | 0.5664 |
+
+## Optional full matrix
+
+The longer deconvolution matrix is excluded by default. It uses SOFIMA,
+synthetic chromatic aberration, the default `simfish` model, and both
+deconvolution modes. Enable it explicitly with:
 
 ```bash
 uv run pytest tests/test_simulation_example_pipeline.py -vv \
-  --run-simulation-exhaustive
+  --run-simulation-exhaustive \
+  --simulation-data-root simulation-data/merfish3d_analysis-simulation
 ```
 
 The exhaustive run writes performance records to
 `tests/data/simulation_performance.json` unless
 `MERFISH3D_PERFORMANCE_REPORT` selects another output path.
+
+The full repository suite, including this matrix, is:
+
+```bash
+uv run pytest -vv --run-simulation-exhaustive \
+  --simulation-data-root simulation-data/merfish3d_analysis-simulation
+```
+
+The current Zenodo F1 baselines for the additional matrix are:
+
+| Dataset | Axial spacing (µm) | Deconvolution | No deconvolution |
+| --- | ---: | ---: | ---: |
+| Cells | 0.315 | 0.9798 | 0.9899 |
+| Cells | 1.0 | 0.9312 | 0.9376 |
+| Cells | 1.5 | 0.3935 | 0.6584 |
+| Uniform | 0.315 | 0.9891 | 0.9865 |
+| Uniform | 1.0 | 0.9536 | 0.9478 |
+| Uniform | 1.5 | 0.5664 | 0.8045 |
+
+`feature_predictor_threshold` remains fixed at 0.5 for compatibility. The
+decoder currently weights readout images by the feature-predictor image rather
+than thresholding them, so sweeping this legacy argument produced identical F1
+scores and is not a useful test-matrix dimension.

@@ -343,6 +343,7 @@ def sweep_decode_params(
 
     results = {}
     save_path = root_path / "decode_params_results.json"
+    gt_path = root_path / "GT_spots.csv"
 
     for pixels in pixels_values:
         for feature_predictor in feature_predictor_values:
@@ -393,13 +394,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-if __name__ == "__main__":
-    root_path = Path(
-        r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/sim_acquisition"
-    )
-    gt_path = Path(
-        r"/media/dps/data2/qi2lab/20250904_simulations/example_16bit_cells/0.315/GT_spots.csv"
-    )
-    sweep_decode_params(root_path=root_path, gt_path=gt_path)
