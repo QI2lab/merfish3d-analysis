@@ -79,9 +79,7 @@ def test_channel_global_transforms_follow_repository_conventions(
     )
     monkeypatch.setattr(fuseall, "load_bit_round_transform_zyx_um", load_round)
     datastore = SimpleNamespace(
-        load_local_wavelengths_um=Mock(
-            side_effect=[(0.48, 0.52), (0.58, 0.65)]
-        ),
+        load_local_wavelengths_um=Mock(side_effect=[(0.48, 0.52), (0.58, 0.65)]),
         load_chromatic_affine_transform_zyx_um=Mock(
             side_effect=[chromatic_bit001, chromatic_bit002]
         ),
@@ -145,9 +143,7 @@ def test_load_tile_multichannel_msim_is_lazy_and_attaches_channel_transforms(
             return_value=(np.asarray((1.234, 5.678, 9.101)), stage_camera)
         ),
         load_local_fiducial_image=Mock(return_value=sentinel.fiducial),
-        load_local_readout_image=Mock(
-            side_effect=[sentinel.bit001, sentinel.bit002]
-        ),
+        load_local_readout_image=Mock(side_effect=[sentinel.bit001, sentinel.bit002]),
         load_global_coord_xforms_um=Mock(
             return_value=(np.eye(4), np.zeros(3), np.ones(3))
         ),

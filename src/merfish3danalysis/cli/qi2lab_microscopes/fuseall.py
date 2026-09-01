@@ -214,9 +214,7 @@ def _channel_global_transforms_zyx_um(
             bit=bit_id,
         )
         if wavelengths is None:
-            raise RuntimeError(
-                f"Missing wavelengths for tile={tile_id} bit={bit_id}."
-            )
+            raise RuntimeError(f"Missing wavelengths for tile={tile_id} bit={bit_id}.")
         chromatic_transform = datastore.load_chromatic_affine_transform_zyx_um(
             wavelength_um=float(wavelengths[1])
         )
@@ -226,10 +224,7 @@ def _channel_global_transforms_zyx_um(
         )
         native_to_reference = np.linalg.inv(reference_to_native)
         channel_transforms.append(
-            global_stage
-            @ tile_origin
-            @ native_to_reference
-            @ inverse_tile_origin
+            global_stage @ tile_origin @ native_to_reference @ inverse_tile_origin
         )
 
     return np.asarray(channel_transforms, dtype=np.float32)
@@ -281,9 +276,7 @@ def _load_tile_multichannel_msim(
     sim = si_utils_module.get_sim_from_array(
         da_module.stack(channel_data, axis=0),
         dims=("c", "z", "y", "x"),
-        scale=dict(
-            zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True)
-        ),
+        scale=dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True)),
         translation=dict(
             zip(
                 "zyx",
