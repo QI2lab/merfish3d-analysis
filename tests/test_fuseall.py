@@ -121,7 +121,8 @@ def test_channel_global_transforms_follow_repository_conventions(
     ]
 
 
-def test_load_tile_multichannel_msim_is_lazy_and_attaches_channel_transforms(
+def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     stage_camera = np.eye(4, dtype=np.float32)
@@ -135,6 +136,13 @@ def test_load_tile_multichannel_msim_is_lazy_and_attaches_channel_transforms(
         },
     )
     channel_transforms = np.repeat(np.eye(4)[None], 3, axis=0)
+    input_paths = [
+        tmp_path / "fiducial.ome.zarr",
+        tmp_path / "bit001.ome.zarr",
+        tmp_path / "bit002.ome.zarr",
+    ]
+    for input_path in input_paths:
+        input_path.mkdir()
     datastore = SimpleNamespace(
         round_ids=["round001"],
         fiducial_folder_name="fiducial",
@@ -142,16 +150,16 @@ def test_load_tile_multichannel_msim_is_lazy_and_attaches_channel_transforms(
         load_local_stage_position_zyx_um=Mock(
             return_value=(np.asarray((1.234, 5.678, 9.101)), stage_camera)
         ),
-        load_local_fiducial_image=Mock(return_value=sentinel.fiducial),
-        load_local_readout_image=Mock(side_effect=[sentinel.bit001, sentinel.bit002]),
         load_global_coord_xforms_um=Mock(
             return_value=(np.eye(4), np.zeros(3), np.ones(3))
         ),
     )
-    lazy_channels = [sentinel.lazy_fiducial, sentinel.lazy_bit001, sentinel.lazy_bit002]
-    from_array = Mock(side_effect=lazy_channels)
-    stack = Mock(return_value=sentinel.multichannel)
-    get_sim_from_array = Mock(return_value=sentinel.sim)
+    raw_sims = [Mock(), Mock(), Mock()]
+    channel_sims = [sentinel.fiducial_sim, sentinel.bit001_sim, sentinel.bit002_sim]
+    for raw_sim, channel_sim in zip(raw_sims, channel_sims, strict=True):
+        raw_sim.assign_coords.return_value = channel_sim
+    read_sim = Mock(side_effect=raw_sims)
+    concat = Mock(return_value=sentinel.multichannel_sim)
     get_msim_from_sim = Mock(return_value=sentinel.msim)
     get_transform_from_msim = Mock(return_value=stage_transform)
     set_affine_transform = Mock()
@@ -161,41 +169,58 @@ def test_load_tile_multichannel_msim_is_lazy_and_attaches_channel_transforms(
         "_channel_global_transforms_zyx_um",
         channel_global_transforms,
     )
+    local_fiducial_path = Mock(return_value=input_paths[0])
+    local_readout_path = Mock(side_effect=input_paths[1:])
+    monkeypatch.setattr(fuseall, "_local_fiducial_path", local_fiducial_path)
+    monkeypatch.setattr(fuseall, "_local_readout_path", local_readout_path)
+    monkeypatch.setattr(fuseall, "_read_fiducial_sim", read_sim)
 
     result = fuseall._load_tile_multichannel_msim(
         datastore=datastore,
         tile_id="tile0000",
         bit_ids=["bit001", "bit002"],
-        da_module=SimpleNamespace(from_array=from_array, stack=stack),
+        zarr_module=sentinel.zarr,
         msi_utils_module=SimpleNamespace(
             get_msim_from_sim=get_msim_from_sim,
             get_transform_from_msim=get_transform_from_msim,
             set_affine_transform=set_affine_transform,
         ),
         si_utils_module=SimpleNamespace(
-            get_default_spatial_chunksizes=Mock(
-                return_value={"z": 256, "y": 256, "x": 256}
-            ),
-            get_sim_from_array=get_sim_from_array,
+            concat=concat,
         ),
     )
 
     assert result is sentinel.msim
-    assert [item.args[0] for item in from_array.call_args_list] == [
-        sentinel.fiducial,
-        sentinel.bit001,
-        sentinel.bit002,
+    local_fiducial_path.assert_called_once_with(datastore, "tile0000", "round001")
+    assert local_readout_path.call_args_list == [
+        call(datastore, "tile0000", "bit001"),
+        call(datastore, "tile0000", "bit002"),
     ]
-    stack.assert_called_once_with(lazy_channels, axis=0)
-    get_sim_from_array.assert_called_once_with(
-        sentinel.multichannel,
-        dims=("c", "z", "y", "x"),
-        scale={"z": 0.4, "y": 0.1, "x": 0.1},
-        translation={"z": 1.23, "y": 5.68, "x": 9.1},
-        affine=stage_camera,
-        transform_key="stage_metadata",
-        c_coords=["fiducial", "bit001", "bit002"],
-        t_coords=None,
+    expected_common = {
+        "scale": {"z": 0.4, "y": 0.1, "x": 0.1},
+        "translation": {"z": 1.23, "y": 5.68, "x": 9.1},
+        "affine_zyx_px": stage_camera,
+        "transform_key": "stage_metadata",
+        "zarr_module": sentinel.zarr,
+    }
+    for read_call, input_path in zip(
+        read_sim.call_args_list, input_paths, strict=True
+    ):
+        assert read_call.kwargs["input_path"] == input_path
+        assert read_call.kwargs["scale"] == expected_common["scale"]
+        assert read_call.kwargs["translation"] == expected_common["translation"]
+        np.testing.assert_array_equal(
+            read_call.kwargs["affine_zyx_px"], expected_common["affine_zyx_px"]
+        )
+        assert read_call.kwargs["transform_key"] == "stage_metadata"
+        assert read_call.kwargs["zarr_module"] is sentinel.zarr
+    for raw_sim, channel_id in zip(
+        raw_sims, ["fiducial", "bit001", "bit002"], strict=True
+    ):
+        raw_sim.assign_coords.assert_called_once_with(c=[channel_id])
+    concat.assert_called_once_with(channel_sims, dim="c")
+    get_msim_from_sim.assert_called_once_with(
+        sentinel.multichannel_sim, scale_factors=[]
     )
     get_transform_from_msim.assert_called_once_with(
         sentinel.msim,

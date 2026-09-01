@@ -8,7 +8,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
 
-import dask.array as da
 import numpy as np
 import typer
 import xarray as xr
@@ -21,6 +20,8 @@ from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_pa
 from merfish3danalysis.DataRegistration import (
     GlobalRegistrationConfig,
     _direct_zarr_fusion_kwargs,
+    _local_fiducial_path,
+    _read_fiducial_sim,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.decode_warping import (
@@ -230,65 +231,69 @@ def _channel_global_transforms_zyx_um(
     return np.asarray(channel_transforms, dtype=np.float32)
 
 
+def _local_readout_path(
+    datastore: qi2labDataStore,
+    tile_id: str,
+    bit_id: str,
+) -> Path:
+    """Return the best available native readout OME-Zarr path."""
+    readout_root = datastore._readouts_root_path / tile_id / bit_id
+    decon_path = datastore._image_store_path(readout_root / "decon_data")
+    if decon_path.exists():
+        return decon_path
+    return datastore._image_store_path(readout_root / "corrected_data")
+
+
 def _load_tile_multichannel_msim(
     *,
     datastore: qi2labDataStore,
     tile_id: str,
     bit_ids: list[str],
-    da_module: Any = da,
+    zarr_module: Any = zarr,
     msi_utils_module: Any = msi_utils,
     si_utils_module: Any = si_utils,
 ) -> Any:
-    """Build one lazy CZYX tile with channel-dependent world affines."""
+    """Build one Zarr-backed CZYX tile with channel-dependent world affines."""
     reference_round = datastore.round_ids[0]
     tile_position, stage_camera = datastore.load_local_stage_position_zyx_um(
         tile_id,
         reference_round,
     )
-    chunks_by_dim = si_utils_module.get_default_spatial_chunksizes(3)
-    spatial_chunks = tuple(chunks_by_dim[dim] for dim in "zyx")
-
-    fiducial = datastore.load_local_fiducial_image(
-        tile=tile_id,
-        round=reference_round,
-        return_future=None,
-    )
-    if fiducial is None:
-        raise FileNotFoundError(
-            f"Missing fusion input for tile={tile_id} channel="
-            f"{datastore.fiducial_folder_name}."
-        )
-    channel_data = [da_module.from_array(fiducial, chunks=spatial_chunks)]
-
-    for bit_id in bit_ids:
-        readout = datastore.load_local_readout_image(
-            tile=tile_id,
-            bit=bit_id,
-            return_future=None,
-        )
-        if readout is None:
-            raise FileNotFoundError(
-                f"Missing fusion input for tile={tile_id} channel={bit_id}."
-            )
-        channel_data.append(da_module.from_array(readout, chunks=spatial_chunks))
-
     channel_ids = [datastore.fiducial_folder_name, *bit_ids]
-    sim = si_utils_module.get_sim_from_array(
-        da_module.stack(channel_data, axis=0),
-        dims=("c", "z", "y", "x"),
-        scale=dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True)),
-        translation=dict(
-            zip(
-                "zyx",
-                np.round(tile_position, 2).astype(float),
-                strict=True,
-            )
-        ),
-        affine=stage_camera,
-        transform_key="stage_metadata",
-        c_coords=channel_ids,
-        t_coords=None,
+    channel_paths = [
+        _local_fiducial_path(datastore, tile_id, reference_round),
+        *[
+            _local_readout_path(datastore, tile_id, bit_id)
+            for bit_id in bit_ids
+        ],
+    ]
+    scale = dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True))
+    translation = dict(
+        zip(
+            "zyx",
+            np.round(tile_position, 2).astype(float),
+            strict=True,
+        )
     )
+    channel_sims = []
+    for channel_id, input_path in zip(channel_ids, channel_paths, strict=True):
+        if not input_path.exists():
+            raise FileNotFoundError(
+                f"Missing fusion input for tile={tile_id} channel={channel_id}: "
+                f"{input_path}"
+            )
+        channel_sim = _read_fiducial_sim(
+            input_path=input_path,
+            scale=scale,
+            translation=translation,
+            affine_zyx_px=stage_camera,
+            transform_key="stage_metadata",
+            zarr_module=zarr_module,
+            si_utils=si_utils_module,
+        )
+        channel_sims.append(channel_sim.assign_coords(c=[channel_id]))
+
+    sim = si_utils_module.concat(channel_sims, dim="c")
     msim = msi_utils_module.get_msim_from_sim(sim, scale_factors=[])
     stage_transform = msi_utils_module.get_transform_from_msim(
         msim,
