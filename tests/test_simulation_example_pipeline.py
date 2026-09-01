@@ -69,12 +69,30 @@ RESULT_KEYS = {
 # payloads prevents an older server-side simulation set from silently being
 # used for the published F1 baselines.
 ZENODO_ALIGNED_IMAGE_SHA256 = {
-    ("cells", "0.315"): "2a60a8a2442c91c1b2e41bb8de5e21daba097c278be442c9056eb0481a41dfc5",
-    ("cells", "1.0"): "591f1a0231637dd68a3331b8ba3521f690ec89db4cf36f4e54529572687f9eec",
-    ("cells", "1.5"): "9f1a0b86fafa287105cac80038330246f127bbf46b6ead9470a7b258cf8cd02e",
-    ("uniform", "0.315"): "068e8d6974cf67c54ed45b96e3a1eb66364dbd8677be6588e0ad70f017b923f1",
-    ("uniform", "1.0"): "830fea90b1e0da349e3b8e91558ca470361ab536f0d1d86e08ca32b095a89c81",
-    ("uniform", "1.5"): "9e21b88fc5cb0cb39f4a9c9f90540145e903e6b6fcc6c1e94b012d6042a83b16",
+    (
+        "cells",
+        "0.315",
+    ): "2a60a8a2442c91c1b2e41bb8de5e21daba097c278be442c9056eb0481a41dfc5",
+    (
+        "cells",
+        "1.0",
+    ): "591f1a0231637dd68a3331b8ba3521f690ec89db4cf36f4e54529572687f9eec",
+    (
+        "cells",
+        "1.5",
+    ): "9f1a0b86fafa287105cac80038330246f127bbf46b6ead9470a7b258cf8cd02e",
+    (
+        "uniform",
+        "0.315",
+    ): "068e8d6974cf67c54ed45b96e3a1eb66364dbd8677be6588e0ad70f017b923f1",
+    (
+        "uniform",
+        "1.0",
+    ): "830fea90b1e0da349e3b8e91558ca470361ab536f0d1d86e08ca32b095a89c81",
+    (
+        "uniform",
+        "1.5",
+    ): "9e21b88fc5cb0cb39f4a9c9f90540145e903e6b6fcc6c1e94b012d6042a83b16",
 }
 
 # Baselines measured from Zenodo record 17274305 with the repository defaults.
@@ -329,9 +347,10 @@ def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
         )
 
     fingerprint_errors: list[str] = []
-    for (variant, axial_spacing_um), expected_hash in (
-        ZENODO_ALIGNED_IMAGE_SHA256.items()
-    ):
+    for (
+        variant,
+        axial_spacing_um,
+    ), expected_hash in ZENODO_ALIGNED_IMAGE_SHA256.items():
         image_path = resolved_dirs[variant] / axial_spacing_um / "aligned_1.tiff"
         if not image_path.exists():
             fingerprint_errors.append(f"missing {image_path}")
