@@ -8,6 +8,7 @@ Shepherd 2025/01 - create script.
 Codex 2026/05 - switch qi2lab input to filtered decoded features within cells.
 """
 
+import argparse
 from pathlib import Path
 from pprint import pp
 
@@ -274,7 +275,9 @@ def calculate_F1(
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     merlin_spots_path = root_path / Path(
         r"mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv"
     )

@@ -12,6 +12,7 @@ Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -146,7 +147,9 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     cellpose_parameters = {
         "normalization": [1.0, 99.0],
         "flow_threshold": 0.6,

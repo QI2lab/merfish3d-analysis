@@ -1,5 +1,6 @@
 """Fuse all channels from stored global transforms into one OME-NGFF store."""
 
+import argparse
 import gc
 import multiprocessing as mp
 import warnings
@@ -348,5 +349,7 @@ def fuse_all_channels(root_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     fuse_all_channels(root_path)

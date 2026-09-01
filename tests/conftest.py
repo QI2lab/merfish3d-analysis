@@ -22,6 +22,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Run the exhaustive local simulation matrix tests.",
     )
     parser.addoption(
+        "--simulation-data-root",
+        action="store",
+        default=None,
+        help="Path to the extracted Zenodo simulation dataset.",
+    )
+    parser.addoption(
         "--sofima-output-png",
         action="store",
         default=None,
