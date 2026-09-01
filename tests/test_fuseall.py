@@ -144,7 +144,11 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
     datastore = SimpleNamespace(
         round_ids=["round001"],
         fiducial_folder_name="fiducial",
-        voxel_size_zyx_um=(0.4, 0.1, 0.1),
+        voxel_size_zyx_um=(
+            0.31999999999993634,
+            0.09799999999995634,
+            0.098,
+        ),
         load_local_stage_position_zyx_um=Mock(
             return_value=(np.asarray((1.234, 5.678, 9.101)), stage_camera)
         ),
@@ -195,7 +199,7 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
         call(datastore, "tile0000", "bit002"),
     ]
     expected_common = {
-        "scale": {"z": 0.4, "y": 0.1, "x": 0.1},
+        "scale": {"z": 0.32, "y": 0.098, "x": 0.098},
         "translation": {"z": 1.23, "y": 5.68, "x": 9.1},
         "affine_zyx_px": stage_camera,
         "transform_key": "stage_metadata",
@@ -246,6 +250,11 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         tile_ids=["tile0000", "tile0001"],
         bit_ids=["bit010", "bit002", "bit001"],
         fiducial_folder_name="fiducial",
+        voxel_size_zyx_um=(
+            0.31999999999993634,
+            0.09799999999995634,
+            0.098,
+        ),
         _fused_root_path=fused_root,
         _image_store_path=fuseall.qi2labDataStore._image_store_path,
         _write_extra_attributes=Mock(),
@@ -277,7 +286,12 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
     monkeypatch.setattr(fuseall, "export_ome_tiffs", export_ome_tiffs)
     monkeypatch.setattr(fuseall, "tqdm", lambda iterable, **_kwargs: iterable)
 
-    fuseall.fuse_all_channels(tmp_path, write_ome_tiffs=write_ome_tiffs)
+    fuseall.fuse_all_channels(
+        tmp_path,
+        write_ome_tiffs=write_ome_tiffs,
+        output_chunk_zyx="32,2048,2048",
+        fusion_workers=40,
+    )
 
     channels = ["fiducial", "bit001", "bit002", "bit010"]
     assert load_tile.call_args_list == [
@@ -288,8 +302,14 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
     fuse.assert_called_once_with(
         images=[sentinel.tile0, sentinel.tile1],
         transform_key="global_registered",
+        output_spacing={"z": 0.32, "y": 0.098, "x": 0.098},
+        output_chunksize={"z": 32, "y": 2048, "x": 2048},
         output_zarr_url=str(output),
         **fusion_options,
+    )
+    direct_options.assert_called_once_with(
+        misc_utils=fuseall.misc_utils,
+        fusion_workers=40,
     )
     read_fused_metadata.assert_called_once_with(sentinel.fused)
     written = datastore._write_extra_attributes.call_args.kwargs
@@ -313,7 +333,14 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
 def test_fuseall_cli_has_no_gpu_option() -> None:
     assert "gpu_id" not in inspect.signature(fuseall.fuse_all_channels).parameters
 
-    result = CliRunner().invoke(fuseall.app, ["--help"])
+    result = CliRunner().invoke(
+        fuseall.app,
+        ["--help"],
+        env={"COLUMNS": "160"},
+        terminal_width=160,
+    )
 
     assert result.exit_code == 0
     assert "--gpu-id" not in result.stdout
+    assert "--output-chunk-zyx" in result.stdout
+    assert "--fusion-workers" in result.stdout

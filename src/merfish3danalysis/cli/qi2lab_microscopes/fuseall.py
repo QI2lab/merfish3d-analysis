@@ -244,6 +244,37 @@ def _local_readout_path(
     return datastore._image_store_path(readout_root / "corrected_data")
 
 
+def _rounded_spacing_zyx_um(datastore: qi2labDataStore) -> dict[str, float]:
+    """Return datastore voxel spacing rounded to three decimal places."""
+    return dict(
+        zip(
+            "zyx",
+            (round(float(value), 3) for value in datastore.voxel_size_zyx_um),
+            strict=True,
+        )
+    )
+
+
+def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
+    """Parse an optional comma-separated Z, Y, X fusion chunk shape."""
+    if value is None:
+        return None
+    try:
+        chunks = tuple(int(part.strip()) for part in value.split(","))
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "Use three comma-separated integers, for example 32,2048,2048.",
+            param_hint="--output-chunk-zyx",
+        ) from exc
+    if len(chunks) != 3 or any(chunk < 1 for chunk in chunks):
+        raise typer.BadParameter(
+            "Use three positive comma-separated integers, for example "
+            "32,2048,2048.",
+            param_hint="--output-chunk-zyx",
+        )
+    return dict(zip("zyx", chunks, strict=True))
+
+
 def _load_tile_multichannel_msim(
     *,
     datastore: qi2labDataStore,
@@ -264,7 +295,7 @@ def _load_tile_multichannel_msim(
         _local_fiducial_path(datastore, tile_id, reference_round),
         *[_local_readout_path(datastore, tile_id, bit_id) for bit_id in bit_ids],
     ]
-    scale = dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True))
+    scale = _rounded_spacing_zyx_um(datastore)
     translation = dict(
         zip(
             "zyx",
@@ -355,6 +386,24 @@ def fuse_all_channels(
             help="Also write one full-resolution OME-TIFF per fused channel.",
         ),
     ] = False,
+    output_chunk_zyx: Annotated[
+        str | None,
+        typer.Option(
+            "--output-chunk-zyx",
+            help=(
+                "Fusion/output chunk shape as Z,Y,X. Larger chunks reduce task "
+                "overhead but increase memory and downstream read amplification."
+            ),
+        ),
+    ] = None,
+    fusion_workers: Annotated[
+        int | None,
+        typer.Option(
+            "--fusion-workers",
+            min=1,
+            help="Number of CPU fusion worker processes (default: available CPUs).",
+        ),
+    ] = None,
 ) -> None:
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
@@ -371,6 +420,11 @@ def fuse_all_channels(
     write_ome_tiffs : bool, default=False
         Write one full-resolution tiled OME-TIFF for each fused channel when
         ``True``.
+    output_chunk_zyx : str or None, default=None
+        Optional comma-separated Z, Y, X fusion and output chunk shape. When
+        omitted, multiview-stitcher preserves the source Zarr chunk shape.
+    fusion_workers : int or None, default=None
+        Number of CPU worker processes. Defaults to the available CPU count.
 
     Returns
     -------
@@ -394,11 +448,20 @@ def fuse_all_channels(
     output_directory = datastore._fused_root_path
     output_directory.mkdir(parents=True, exist_ok=True)
     final_output = datastore._image_store_path(output_directory / "full_dataset")
+    output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
+    fusion_call_kwargs: dict[str, Any] = {}
+    if output_chunksize is not None:
+        fusion_call_kwargs["output_chunksize"] = output_chunksize
     fused_msim = fusion.fuse(
         images=tile_msims,
         transform_key=registration_config.new_transform_key,
+        output_spacing=_rounded_spacing_zyx_um(datastore),
         output_zarr_url=str(final_output),
-        **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
+        **fusion_call_kwargs,
+        **_direct_zarr_fusion_kwargs(
+            misc_utils=misc_utils,
+            fusion_workers=fusion_workers,
+        ),
     )
     fused_metadata = _read_fused_metadata(fused_msim)
     datastore._write_extra_attributes(

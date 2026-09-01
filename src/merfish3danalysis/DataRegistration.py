@@ -120,11 +120,18 @@ def _configure_loky_fusion_worker() -> None:
     process_executor._USE_PSUTIL = False
 
 
-def _direct_zarr_fusion_kwargs(*, misc_utils: Any) -> dict[str, Any]:
+def _direct_zarr_fusion_kwargs(
+    *,
+    misc_utils: Any,
+    fusion_workers: int | None = None,
+) -> dict[str, Any]:
     """Return the shared direct-to-Zarr fusion and parallelization options."""
     from joblib._parallel_backends import LokyBackend
 
-    fusion_workers = max(1, os.cpu_count() or 1)
+    if fusion_workers is None:
+        fusion_workers = max(1, os.cpu_count() or 1)
+    elif fusion_workers < 1:
+        raise ValueError("fusion_workers must be at least 1.")
     fusion_backend = LokyBackend(
         idle_worker_timeout=24 * 60 * 60,
         inner_max_num_threads=1,
