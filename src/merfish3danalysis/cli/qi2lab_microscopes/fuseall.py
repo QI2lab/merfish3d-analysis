@@ -3,7 +3,6 @@
 import gc
 import json
 import multiprocessing as mp
-import shutil
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Annotated, Any
 import dask.array as da
 import numpy as np
 import typer
+import xarray as xr
 import zarr
 from multiview_stitcher import fusion, misc_utils, msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
@@ -157,6 +157,198 @@ def export_ome_tiffs(
             )
 
 
+def _channel_global_transforms_zyx_um(
+    *,
+    datastore: qi2labDataStore,
+    tile_id: str,
+    bit_ids: list[str],
+    tile_position_zyx_um: Any,
+    stage_camera_zyx_um: np.ndarray,
+    global_refinement_zyx_um: np.ndarray,
+) -> np.ndarray:
+    """Compose native channel coordinates into the refined world frame.
+
+    The stored chromatic affine maps a native readout channel to its reference
+    wavelength. The stored local-round affine has the opposite direction: it
+    maps round-1 reference coordinates to the moving round. Consequently, the
+    forward native-to-round-1 channel transform is ``inverse(local) @
+    chromatic``. The known stage-camera affine is used as stored, followed by
+    the multiview-stitcher global refinement. SOFIMA fields are not loaded.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore containing local and chromatic transform metadata.
+    tile_id : str
+        Tile identifier.
+    bit_ids : list[str]
+        Ordered readout bit identifiers.
+    tile_position_zyx_um : Any
+        Tile stage origin in physical Z, Y, X coordinates.
+    stage_camera_zyx_um : numpy.ndarray
+        Known stage-camera affine, used without inversion.
+    global_refinement_zyx_um : numpy.ndarray
+        Stored multiview-stitcher world refinement.
+
+    Returns
+    -------
+    numpy.ndarray
+        One forward 4x4 affine per channel, ordered as fiducial then bits.
+    """
+    tile_origin = np.eye(4, dtype=np.float32)
+    tile_origin[:3, 3] = np.asarray(tile_position_zyx_um, dtype=np.float32)
+    inverse_tile_origin = np.linalg.inv(tile_origin)
+    global_stage = np.asarray(global_refinement_zyx_um, dtype=np.float32) @ np.asarray(
+        stage_camera_zyx_um, dtype=np.float32
+    )
+    channel_transforms = [global_stage]
+
+    for bit_id in bit_ids:
+        _round_id, round_transform = load_bit_round_transform_zyx_um(
+            datastore,
+            tile=tile_id,
+            bit_id=bit_id,
+        )
+        wavelengths = datastore.load_local_wavelengths_um(
+            tile=tile_id,
+            bit=bit_id,
+        )
+        if wavelengths is None:
+            raise RuntimeError(
+                f"Missing wavelengths for tile={tile_id} bit={bit_id}."
+            )
+        chromatic_transform = datastore.load_chromatic_affine_transform_zyx_um(
+            wavelength_um=float(wavelengths[1])
+        )
+        reference_to_native = compose_decode_warp_transform_zyx_um(
+            round_transform_zyx_um=round_transform,
+            chromatic_transform_zyx_um=chromatic_transform,
+        )
+        native_to_reference = np.linalg.inv(reference_to_native)
+        channel_transforms.append(
+            global_stage
+            @ tile_origin
+            @ native_to_reference
+            @ inverse_tile_origin
+        )
+
+    return np.asarray(channel_transforms, dtype=np.float32)
+
+
+def _load_tile_multichannel_msim(
+    *,
+    datastore: qi2labDataStore,
+    tile_id: str,
+    bit_ids: list[str],
+    da_module: Any = da,
+    msi_utils_module: Any = msi_utils,
+    si_utils_module: Any = si_utils,
+) -> Any:
+    """Build one lazy CZYX tile with channel-dependent world affines."""
+    reference_round = datastore.round_ids[0]
+    tile_position, stage_camera = datastore.load_local_stage_position_zyx_um(
+        tile_id,
+        reference_round,
+    )
+    chunks_by_dim = si_utils_module.get_default_spatial_chunksizes(3)
+    spatial_chunks = tuple(chunks_by_dim[dim] for dim in "zyx")
+
+    fiducial = datastore.load_local_fiducial_image(
+        tile=tile_id,
+        round=reference_round,
+        return_future=None,
+    )
+    if fiducial is None:
+        raise FileNotFoundError(
+            f"Missing fusion input for tile={tile_id} channel="
+            f"{datastore.fiducial_folder_name}."
+        )
+    channel_data = [da_module.from_array(fiducial, chunks=spatial_chunks)]
+
+    for bit_id in bit_ids:
+        readout = datastore.load_local_readout_image(
+            tile=tile_id,
+            bit=bit_id,
+            return_future=None,
+        )
+        if readout is None:
+            raise FileNotFoundError(
+                f"Missing fusion input for tile={tile_id} channel={bit_id}."
+            )
+        channel_data.append(da_module.from_array(readout, chunks=spatial_chunks))
+
+    channel_ids = [datastore.fiducial_folder_name, *bit_ids]
+    sim = si_utils_module.get_sim_from_array(
+        da_module.stack(channel_data, axis=0),
+        dims=("c", "z", "y", "x"),
+        scale=dict(
+            zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True)
+        ),
+        translation=dict(
+            zip(
+                "zyx",
+                np.round(tile_position, 2).astype(float),
+                strict=True,
+            )
+        ),
+        affine=stage_camera,
+        transform_key="stage_metadata",
+        c_coords=channel_ids,
+        t_coords=None,
+    )
+    msim = msi_utils_module.get_msim_from_sim(sim, scale_factors=[])
+    stage_transform = msi_utils_module.get_transform_from_msim(
+        msim,
+        transform_key="stage_metadata",
+    )
+    global_refinement, _origin, _spacing = datastore.load_global_coord_xforms_um(
+        tile=tile_id
+    )
+    if global_refinement is None:
+        raise RuntimeError(f"Missing global transform for tile={tile_id}.")
+
+    transforms = _channel_global_transforms_zyx_um(
+        datastore=datastore,
+        tile_id=tile_id,
+        bit_ids=bit_ids,
+        tile_position_zyx_um=tile_position,
+        stage_camera_zyx_um=np.asarray(stage_transform).squeeze(),
+        global_refinement_zyx_um=global_refinement,
+    )
+    transform_data = xr.DataArray(
+        transforms[:, None],
+        dims=("c", "t", "x_in", "x_out"),
+        coords={
+            "c": channel_ids,
+            "t": stage_transform.coords["t"],
+            "x_in": stage_transform.coords["x_in"],
+            "x_out": stage_transform.coords["x_out"],
+        },
+    )
+    msi_utils_module.set_affine_transform(
+        msim,
+        transform_data,
+        transform_key="global_registered",
+    )
+    return msim
+
+
+def _read_fused_metadata(fused_msim: Any) -> dict[str, list[Any]]:
+    """Return affine, origin, and spacing metadata from a fused image."""
+    affine = msi_utils.get_transform_from_msim(
+        fused_msim,
+        transform_key="global_registered",
+    ).data.squeeze()
+    fused_sim = msi_utils.get_sim_from_msim(fused_msim)
+    origin = si_utils.get_origin_from_sim(fused_sim, asarray=True)
+    spacing = si_utils.get_spacing_from_sim(fused_sim, asarray=True)
+    return {
+        "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
+        "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
+        "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+    }
+
+
 @app.command()
 def fuse_all_channels(
     root_path: Annotated[
@@ -172,10 +364,11 @@ def fuse_all_channels(
 ) -> None:
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
-    Each channel is fused sequentially from lazy datastore arrays. Readout
-    channels receive their stored chromatic and local-round affine chain before
-    the stored global tile transform is applied. The fiducial fusion defines
-    the common output grid used by every subsequent bit.
+    Each tile is represented as one lazy multichannel spatial image. Channel-
+    dependent multiview-stitcher affines compose chromatic correction, local
+    round registration, the known stage-camera affine, stage location, and the
+    stored global refinement. SOFIMA fields are intentionally ignored. One CPU
+    fusion writes fiducial first, followed by numerically ordered codebook bits.
 
     Parameters
     ----------
@@ -189,193 +382,35 @@ def fuse_all_channels(
     -------
     None
         The multiscale image is written to
-        ``qi2labdatastore/fused/fused_all_channels.ome.zarr``. Optional TIFFs
-        are written beside it.
+        ``qi2labdatastore/fused/fused_all_channels_zyx.ome.zarr``. Optional
+        TIFFs are written beside it.
     """
     datastore = qi2labDataStore(qi2lab_datastore_path(root_path))
     registration_config = GlobalRegistrationConfig()
-    channels = [
-        datastore.fiducial_folder_name,
-        *sorted(map(str, datastore.bit_ids), key=lambda bit: int(bit[3:])),
-    ]
-    reference_round = datastore.round_ids[0]
-    spatial_chunks = si_utils.get_default_spatial_chunksizes(3)
-    spatial_chunks = tuple(spatial_chunks[dim] for dim in "zyx")
-    voxel_scale = dict(zip("zyx", map(float, datastore.voxel_size_zyx_um), strict=True))
-
-    output_directory = datastore._fused_root_path
-    work_directory = output_directory / ".fuseall-work"
-    if work_directory.exists():
-        shutil.rmtree(work_directory)
-    work_directory.mkdir()
-    staged_output = datastore._image_store_path(work_directory / "fused_all_channels")
-    final_output = datastore._image_store_path(output_directory / "fused_all_channels")
-    output_stack_properties = None
-
-    for channel_index, channel in enumerate(tqdm(channels, desc="channel")):
-        tile_msims = []
-        for tile_id in tqdm(datastore.tile_ids, desc=f"{channel} tiles", leave=False):
-            tile_position, stage_affine = datastore.load_local_stage_position_zyx_um(
-                tile_id, reference_round
-            )
-            image = (
-                datastore.load_local_fiducial_image(
-                    tile=tile_id,
-                    round=reference_round,
-                    return_future=None,
-                )
-                if channel == datastore.fiducial_folder_name
-                else datastore.load_local_readout_image(
-                    tile=tile_id,
-                    bit=channel,
-                    return_future=None,
-                )
-            )
-            if image is None:
-                raise FileNotFoundError(
-                    f"Missing fusion input for tile={tile_id} channel={channel}."
-                )
-
-            image = da.from_array(image, chunks=spatial_chunks)
-            sim = si_utils.get_sim_from_array(
-                image,
-                dims=("z", "y", "x"),
-                scale=voxel_scale,
-                translation=dict(
-                    zip(
-                        "zyx",
-                        np.round(tile_position, 2).astype(float),
-                        strict=True,
-                    )
-                ),
-                affine=stage_affine,
-                transform_key=registration_config.transform_key,
-                c_coords=None,
-                t_coords=None,
-            )
-            msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
-            channel_transform, _origin, _spacing = (
-                datastore.load_global_coord_xforms_um(tile=tile_id)
-            )
-            if channel_transform is None:
-                raise RuntimeError(f"Missing global transform for tile={tile_id}.")
-
-            if channel != datastore.fiducial_folder_name:
-                _round_id, local_round = load_bit_round_transform_zyx_um(
-                    datastore, tile=tile_id, bit_id=channel
-                )
-                wavelengths = datastore.load_local_wavelengths_um(
-                    tile=tile_id, bit=channel
-                )
-                if wavelengths is None:
-                    raise RuntimeError(
-                        f"Missing wavelengths for tile={tile_id} bit={channel}."
-                    )
-                chromatic = datastore.load_chromatic_affine_transform_zyx_um(
-                    wavelength_um=float(wavelengths[1])
-                )
-                reference_to_native = compose_decode_warp_transform_zyx_um(
-                    round_transform_zyx_um=local_round,
-                    chromatic_transform_zyx_um=chromatic,
-                )
-                tile_origin = np.eye(4, dtype=np.float32)
-                tile_origin[:3, 3] = np.asarray(tile_position, dtype=np.float32)
-                channel_transform = np.asarray(channel_transform, dtype=np.float32) @ (
-                    tile_origin
-                    @ np.linalg.inv(reference_to_native)
-                    @ np.linalg.inv(tile_origin)
-                )
-
-            msi_utils.set_affine_transform(
-                msim,
-                np.asarray(channel_transform, dtype=np.float32)[None],
-                transform_key=registration_config.new_transform_key,
-            )
-            tile_msims.append(msim)
-
-        channel_path = datastore._image_store_path(work_directory / channel)
-        fusion_kwargs = _direct_zarr_fusion_kwargs(misc_utils=misc_utils)
-        if output_stack_properties is not None:
-            fusion_kwargs["output_stack_properties"] = output_stack_properties
-        fused_msim = fusion.fuse(
-            images=tile_msims,
-            transform_key=registration_config.new_transform_key,
-            output_zarr_url=str(channel_path),
-            **fusion_kwargs,
+    bit_ids = sorted(map(str, datastore.bit_ids), key=lambda bit: int(bit[3:]))
+    channels = [datastore.fiducial_folder_name, *bit_ids]
+    tile_msims = [
+        _load_tile_multichannel_msim(
+            datastore=datastore,
+            tile_id=tile_id,
+            bit_ids=bit_ids,
         )
-
-        if channel_index == 0:
-            fused_sim = msi_utils.get_sim_from_msim(fused_msim)
-            spatial_dims = tuple(si_utils.get_spatial_dims_from_sim(fused_sim))
-            spacing = np.asarray(
-                si_utils.get_spacing_from_sim(fused_sim, asarray=True),
-                dtype=np.float64,
-            )
-            origin = np.asarray(
-                si_utils.get_origin_from_sim(fused_sim, asarray=True),
-                dtype=np.float64,
-            )
-            output_stack_properties = {
-                "spacing": dict(zip(spatial_dims, spacing.tolist(), strict=True)),
-                "origin": dict(zip(spatial_dims, origin.tolist(), strict=True)),
-                "shape": {dim: int(fused_sim.sizes[dim]) for dim in spatial_dims},
-            }
-            affine = msi_utils.get_transform_from_msim(
-                fused_msim,
-                transform_key=registration_config.new_transform_key,
-            ).data.squeeze()
-            fused_metadata = {
-                "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
-                "origin_zyx_um": origin.astype(np.float32).tolist(),
-                "spacing_zyx_um": spacing.astype(np.float32).tolist(),
-            }
-
-            shutil.copytree(channel_path, staged_output)
-            output_group = zarr.open_group(staged_output, mode="r+")
-            dataset_paths = [
-                dataset["path"]
-                for dataset in output_group.attrs["ome"]["multiscales"][0]["datasets"]
-            ]
-            for dataset_path in dataset_paths:
-                array = zarr.open_array(staged_output / dataset_path, mode="r+")
-                dims = tuple(str(dim) for dim in array.metadata.dimension_names)
-                channel_axis = dims.index("c")
-                shape = list(array.shape)
-                shape[channel_axis] = len(channels)
-                array.resize(tuple(shape))
-            output_group.attrs["channel_names"] = channels
-            output_group.attrs["omero"] = {
-                "channels": [{"label": name} for name in channels]
-            }
-        else:
-            source_group = zarr.open_group(channel_path, mode="r")
-            source_paths = [
-                dataset["path"]
-                for dataset in source_group.attrs["ome"]["multiscales"][0]["datasets"]
-            ]
-            if source_paths != dataset_paths:
-                raise ValueError("Fused channel pyramids do not match.")
-            for dataset_path in dataset_paths:
-                source = zarr.open_array(channel_path / dataset_path, mode="r")
-                target = zarr.open_array(staged_output / dataset_path, mode="r+")
-                dims = tuple(str(dim) for dim in source.metadata.dimension_names)
-                channel_axis = dims.index("c")
-                region = [slice(None)] * source.ndim
-                region[channel_axis] = slice(channel_index, channel_index + 1)
-                da.store(
-                    da.from_array(source, chunks=source.chunks),
-                    target,
-                    regions=tuple(region),
-                    lock=False,
-                    compute=True,
-                )
-
-        del fused_msim, tile_msims
-        gc.collect()
-        shutil.rmtree(channel_path)
-
+        for tile_id in tqdm(datastore.tile_ids, desc="tile")
+    ]
+    output_directory = datastore._fused_root_path
+    output_directory.mkdir(parents=True, exist_ok=True)
+    final_output = datastore._image_store_path(
+        output_directory / "fused_all_channels_zyx"
+    )
+    fused_msim = fusion.fuse(
+        images=tile_msims,
+        transform_key=registration_config.new_transform_key,
+        output_zarr_url=str(final_output),
+        **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
+    )
+    fused_metadata = _read_fused_metadata(fused_msim)
     datastore._write_extra_attributes(
-        image_path=staged_output,
+        image_path=final_output,
         extra_attributes={
             **fused_metadata,
             "channel_names": channels,
@@ -389,10 +424,6 @@ def fuse_all_channels(
         },
         merge=True,
     )
-    if final_output.exists():
-        shutil.rmtree(final_output)
-    staged_output.replace(final_output)
-    shutil.rmtree(work_directory)
 
     if write_ome_tiffs:
         export_ome_tiffs(
@@ -402,6 +433,9 @@ def fuse_all_channels(
             fused_metadata,
             registration_config,
         )
+
+    del fused_msim, tile_msims
+    gc.collect()
 
 
 def main() -> None:
