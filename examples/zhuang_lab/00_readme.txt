@@ -7,7 +7,7 @@ multiple GPUs and/or faster hard disks (SSD or NVMe).
 
 Order to run:
 
-uv run python examples/zhuang_lab/00a_test_image_orientation.py /path/to/zhuang-data (minutes)
+uv run python examples/zhuang_lab/00a_test_image_orientation.py /path/to/zhuang-data --n-tiles 2 (minutes)
 uv run python examples/zhuang_lab/01_convert_to_qi2lab.py /path/to/zhuang-data/mop/mouse_sample1_raw (1 day)
 uv run python examples/zhuang_lab/02_register_and_deconvolve.py /path/to/zhuang-data (~1 week)
 uv run python examples/zhuang_lab/03_cellpose_segmentation.py /path/to/zhuang-data (hours)

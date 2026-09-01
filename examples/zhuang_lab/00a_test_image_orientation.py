@@ -188,6 +188,7 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
-    n_tiles = 10
-    create_overview_image(root_path, n_tiles)
+    parser.add_argument("--n-tiles", type=int, default=2)
+    args = parser.parse_args()
+    root_path = args.root_path.expanduser().resolve()
+    create_overview_image(root_path, args.n_tiles)

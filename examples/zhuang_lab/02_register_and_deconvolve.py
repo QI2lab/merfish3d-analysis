@@ -34,11 +34,10 @@ def local_register_data(root_path: Path) -> None:
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        bkd_subtract_fiducial=False,
+        decon_fiducial=True,
         decon_readout=True,
-        perform_optical_flow=False,
-        overwrite_registered=True,
-        save_all_fiducial_registered=False,
+        perform_deformable_registration=False,
+        overwrite_outputs=True,
         crop_yx_decon=2048,
     )
 
@@ -66,22 +65,28 @@ def global_register_data(
         Default = True
     """
 
-    from merfish3danalysis.cli.qi2lab_microscopes.global_register import (
-        global_register_data as run_global_register_data,
-    )
+    from merfish3danalysis.DataRegistration import DataRegistration
 
-    run_global_register_data(
-        root_path=root_path,
-        fused_chunk_size=512,
-        create_max_proj_tiff=bool(create_max_proj_tiff),
-        use_gpu_fusion=True,
-        ngff_version="0.5",
+    datastore = qi2labDataStore(root_path / "qi2labdatastore")
+    registration_factory = DataRegistration(
+        datastore=datastore,
+        perform_deformable_registration=False,
+        global_registration=True,
+    )
+    registration_factory.global_register(
+        create_max_proj_tiff=bool(create_max_proj_tiff)
     )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
-    # local_register_data(root_path)
-    global_register_data(root_path, create_max_proj_tiff=True)
+    stages = parser.add_mutually_exclusive_group()
+    stages.add_argument("--local-only", action="store_true")
+    stages.add_argument("--global-only", action="store_true")
+    args = parser.parse_args()
+    root_path = args.root_path.expanduser().resolve()
+    if not args.global_only:
+        local_register_data(root_path)
+    if not args.local_only:
+        global_register_data(root_path, create_max_proj_tiff=True)
