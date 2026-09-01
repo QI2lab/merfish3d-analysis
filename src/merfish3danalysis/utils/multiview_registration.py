@@ -109,6 +109,42 @@ def _overlap_slices_after_translation(
     return tuple(slices)
 
 
+def _maximum_overlap_phase_shift_px(
+    shift_px: Sequence[float],
+    shape: Sequence[int],
+) -> np.ndarray:
+    """
+    Select periodic phase-shift aliases with maximum image overlap.
+
+    FFT phase correlation identifies shifts modulo each axis length. Real-space
+    disambiguation can therefore report a shift close to ``+/-axis_size`` that
+    overlaps only a small part of the images even when the equivalent
+    near-zero shift is physically supported. For equal-shaped local-
+    registration images, the representative in
+    ``[-axis_size / 2, axis_size / 2)`` retains at least half of every field of
+    view.
+
+    Parameters
+    ----------
+    shift_px : Sequence[float]
+        Phase-correlation shift in pixels for each axis.
+    shape : Sequence[int]
+        Phase-correlation image shape in the same axis order.
+
+    Returns
+    -------
+    numpy.ndarray
+        Equivalent periodic shifts with maximum overlap on every axis.
+    """
+    shift = np.asarray(shift_px, dtype=np.float64)
+    period = np.asarray(shape, dtype=np.float64)
+    if shift.ndim != 1 or period.shape != shift.shape:
+        raise ValueError("shift_px and shape must be one-dimensional and equal length.")
+    if np.any(period <= 0):
+        raise ValueError("All image dimensions must be positive.")
+    return np.remainder(shift + period / 2.0, period) - period / 2.0
+
+
 def _zyx_dict(values: Sequence[float]) -> dict[str, float]:
     """
     Convert a ZYX vector into the axis dictionary expected by multiview-stitcher.
@@ -266,9 +302,22 @@ def register_pair_to_fixed(
         fixed_projection,
         moving_projection,
         upsample_factor=10,
-        disambiguate=True,
+        disambiguate=False,
     )[0]
-    xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
+    raw_xy_push_shift_px = cp.asnumpy(xy_push_shift_px).astype(np.float32)
+    maximum_overlap_xy_push_shift_px = _maximum_overlap_phase_shift_px(
+        raw_xy_push_shift_px,
+        fixed_projection.shape,
+    ).astype(np.float32)
+    if not np.allclose(raw_xy_push_shift_px, maximum_overlap_xy_push_shift_px):
+        _diag(
+            "lateral_phase_alias_corrected "
+            f"raw_push_yx_px={tuple(float(v) for v in raw_xy_push_shift_px)} "
+            "maximum_overlap_push_yx_px="
+            f"{tuple(float(v) for v in maximum_overlap_xy_push_shift_px)}",
+            enabled=diagnostics,
+        )
+    xy_pull_shift_px = -maximum_overlap_xy_push_shift_px
     del fixed_projection, moving_projection, xy_push_shift_px
     _clear_cupy_memory(cp)
 
@@ -297,14 +346,32 @@ def register_pair_to_fixed(
             fixed_gpu[overlap_slices],
             moving_xy_registered_gpu[overlap_slices],
             upsample_factor=10,
-            disambiguate=True,
+            disambiguate=False,
         )[0]
         residual_push_shift_px = cp.asnumpy(residual_push_shift_px).astype(np.float32)
+        raw_residual_push_shift_px = residual_push_shift_px.copy()
+        residual_push_shift_px = _maximum_overlap_phase_shift_px(
+            residual_push_shift_px,
+            fixed_gpu[overlap_slices].shape,
+        ).astype(np.float32)
+        if not np.allclose(raw_residual_push_shift_px, residual_push_shift_px):
+            _diag(
+                "residual_phase_alias_corrected "
+                "raw_push_zyx_px="
+                f"{tuple(float(v) for v in raw_residual_push_shift_px)} "
+                "maximum_overlap_push_zyx_px="
+                f"{tuple(float(v) for v in residual_push_shift_px)}",
+                enabled=diagnostics,
+            )
     residual_pull_shift_px = -residual_push_shift_px.astype(np.float32, copy=False)
     del fixed_gpu, moving_xy_registered_gpu, moving_xy_registered
     total_shift_px = residual_pull_shift_px.copy()
     total_shift_px[1] += xy_pull_shift_px[0]
     total_shift_px[2] += xy_pull_shift_px[1]
+    total_shift_px = _maximum_overlap_phase_shift_px(
+        total_shift_px,
+        fixed.shape,
+    ).astype(np.float32)
 
     transform = np.eye(4, dtype=np.float32)
     transform[:3, 3] = total_shift_px * spacing

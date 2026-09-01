@@ -5,6 +5,60 @@ import numpy as np
 import pytest
 
 
+def test_phase_shift_uses_maximum_overlap_alias_on_every_axis() -> None:
+    from merfish3danalysis.utils.multiview_registration import (
+        _maximum_overlap_phase_shift_px,
+    )
+
+    corrected = _maximum_overlap_phase_shift_px(
+        (62.1, -2047.2, 2046.75),
+        (63, 2048, 2048),
+    )
+    np.testing.assert_allclose(corrected, (-0.9, 0.8, -1.25), atol=1e-10)
+
+
+def test_register_pair_to_fixed_corrects_near_full_axis_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cp = pytest.importorskip("cupy")
+    registration = pytest.importorskip("cucim.skimage.registration")
+
+    from merfish3danalysis.utils.multiview_registration import register_pair_to_fixed
+
+    try:
+        cp.cuda.runtime.getDeviceCount()
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("CUDA device is not available.")
+
+    def phase_cross_correlation(
+        fixed: object,
+        moving: object,
+        **kwargs: object,
+    ) -> tuple[object, float, float]:
+        del moving
+        assert kwargs["disambiguate"] is False
+        shift = (15.1, -15.2) if fixed.ndim == 2 else (-62.1, 0.0, 0.0)
+        return cp.asarray(shift, dtype=cp.float32), 0.0, 0.0
+
+    monkeypatch.setattr(
+        registration,
+        "phase_cross_correlation",
+        phase_cross_correlation,
+    )
+    image = np.zeros((63, 16, 16), dtype=np.float32)
+    image[31, 8, 8] = 1.0
+    spacing_zyx_um = (0.32, 0.098, 0.098)
+
+    transform = register_pair_to_fixed(
+        image,
+        image,
+        spacing_zyx_um=spacing_zyx_um,
+    )
+
+    recovered_shift_zyx_px = np.asarray(transform[:3, 3]) / np.asarray(spacing_zyx_um)
+    np.testing.assert_allclose(recovered_shift_zyx_px, (-0.9, 0.9, -0.8), atol=1e-5)
+
+
 def _flow_to_rgb(flow_xyz: np.ndarray, max_abs_flow: float) -> np.ndarray:
     """
     Convert XYZ flow components into an RGB image.

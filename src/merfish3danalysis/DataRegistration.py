@@ -1486,14 +1486,21 @@ class DataRegistration:
             and spots_path.exists()
         )
 
-    def _is_tile_complete(self, tile_id: str) -> bool:
+    def _is_tile_complete(
+        self,
+        tile_id: str,
+        *,
+        process_readouts: bool = True,
+    ) -> bool:
         """
         Is tile complete.
 
         Parameters
         ----------
         tile_id : str
-            Function argument.
+            Tile identifier.
+        process_readouts : bool, default=True
+            If False, assess only fiducial deconvolution and local transforms.
 
         Returns
         -------
@@ -1518,6 +1525,9 @@ class DataRegistration:
             ):
                 return False
 
+        if not process_readouts:
+            return True
+
         for bit_id in self._bit_ids:
             if not self._has_valid_feature_predictor_outputs(
                 tile_id=tile_id, bit_id=bit_id
@@ -1526,9 +1536,17 @@ class DataRegistration:
 
         return True
 
-    def register_all_tiles(self) -> None:
+    def register_all_tiles(self, *, process_readouts: bool = True) -> None:
         """
         Register all tiles.
+
+        Parameters
+        ----------
+        process_readouts : bool, default=True
+            If True, also regenerate readout deconvolution and U-FISH outputs.
+            Set False to recompute only the complete fiducial registration
+            chain: local affine transforms, optional SOFIMA fields, global
+            transforms, and global fiducial fusion.
 
         Returns
         -------
@@ -1539,7 +1557,10 @@ class DataRegistration:
         start_idx = 0
         if not self._overwrite_outputs:
             for idx, tile_id in enumerate(tile_ids):
-                if self._is_tile_complete(tile_id):
+                if self._is_tile_complete(
+                    tile_id,
+                    process_readouts=process_readouts,
+                ):
                     start_idx = idx + 1
                     continue
                 start_idx = idx
@@ -1565,7 +1586,8 @@ class DataRegistration:
         for tile_id in tile_ids[start_idx:]:
             self.tile_id = tile_id
             self._generate_registrations()
-            self._apply_registration_to_bits()
+            if process_readouts:
+                self._apply_registration_to_bits()
 
         if self._global_registration:
             self.global_register()
