@@ -12,7 +12,7 @@ __author__ = "Douglas Shepherd"
 __email__ = "douglas.shepherd@asu.edu"
 
 # Default/fallback version; may be overwritten below by package metadata.
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 import importlib
 import importlib.util as _ilus
@@ -98,7 +98,7 @@ try:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        __version__ = version("merfish3danalysis")
+        __version__ = version("merfish3d-analysis")
     except PackageNotFoundError:
         __version__ = "0+src"
 except ImportError:

@@ -1,12 +1,12 @@
-"""Simulation pipeline regression tests.
+"""Simulation pipeline regression tests against the published Zenodo data.
 
-The matrix converts cached StatPhysBio simulation outputs into qi2lab
-datastores, runs preprocessing, decodes transcripts, and scores decoded
-features against simulation ground truth. The optional exhaustive mode expands
-the matrix across feature-prediction probability thresholds and cached U-FISH
-models so README result tables can be regenerated from the same report.
+The matrix converts StatPhysBio simulation outputs into qi2lab datastores,
+runs preprocessing, decodes transcripts, and scores decoded features against
+simulation ground truth. The optional exhaustive mode adds deconvolution-off
+coverage to the standard Zenodo F1 regression matrix.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -20,7 +20,6 @@ import pytest
 
 from merfish3danalysis.DataRegistration import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
 
-LOCAL_SIMULATION_DATA_ROOT = Path("/media/dps/data/merfish3d_analysis-simulation")
 DEFAULT_TESTS_DATA_DIR = Path(__file__).resolve().parent / "data"
 PERFORMANCE_REPORT_ENV = "MERFISH3D_PERFORMANCE_REPORT"
 DEFAULT_PERFORMANCE_REPORT = str(DEFAULT_TESTS_DATA_DIR / "simulation_performance.json")
@@ -33,9 +32,9 @@ PREPROCESS_MODES = {
     "no-decon": False,
     "decon": True,
 }
-FEATURE_PREDICTOR_THRESHOLDS = (0.1, 0.2, 0.3, 0.4, 0.5)
 DEFAULT_PREPROCESS_MODE = "decon"
 DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
+F1_ABS_TOLERANCE = 0.02
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
 DEFAULT_MINIMUM_PIXELS_2D = 7
@@ -66,6 +65,67 @@ RESULT_KEYS = {
     "False Negatives",
 }
 
+# SHA-256 of each aligned_1.tiff in Zenodo record 17274305. Hashing the image
+# payloads prevents an older server-side simulation set from silently being
+# used for the published F1 baselines.
+ZENODO_ALIGNED_IMAGE_SHA256 = {
+    (
+        "cells",
+        "0.315",
+    ): "2a60a8a2442c91c1b2e41bb8de5e21daba097c278be442c9056eb0481a41dfc5",
+    (
+        "cells",
+        "1.0",
+    ): "591f1a0231637dd68a3331b8ba3521f690ec89db4cf36f4e54529572687f9eec",
+    (
+        "cells",
+        "1.5",
+    ): "9f1a0b86fafa287105cac80038330246f127bbf46b6ead9470a7b258cf8cd02e",
+    (
+        "uniform",
+        "0.315",
+    ): "068e8d6974cf67c54ed45b96e3a1eb66364dbd8677be6588e0ad70f017b923f1",
+    (
+        "uniform",
+        "1.0",
+    ): "830fea90b1e0da349e3b8e91558ca470361ab536f0d1d86e08ca32b095a89c81",
+    (
+        "uniform",
+        "1.5",
+    ): "9e21b88fc5cb0cb39f4a9c9f90540145e903e6b6fcc6c1e94b012d6042a83b16",
+}
+
+# Baselines measured from Zenodo record 17274305 with the repository defaults.
+STANDARD_EXPECTED_F1_SCORES = {
+    ("cells", "0.315", "no-chromatic"): 0.9848,
+    ("cells", "0.315", "chromatic"): 0.9798,
+    ("cells", "1.0", "no-chromatic"): 0.9573,
+    ("cells", "1.0", "chromatic"): 0.9312,
+    ("cells", "1.5", "no-chromatic"): 0.3779,
+    ("cells", "1.5", "chromatic"): 0.3935,
+    ("uniform", "0.315", "no-chromatic"): 0.9899,
+    ("uniform", "0.315", "chromatic"): 0.9891,
+    ("uniform", "1.0", "no-chromatic"): 0.9673,
+    ("uniform", "1.0", "chromatic"): 0.9536,
+    ("uniform", "1.5", "no-chromatic"): 0.6119,
+    ("uniform", "1.5", "chromatic"): 0.5664,
+}
+
+EXHAUSTIVE_EXPECTED_F1_SCORES = {
+    ("cells", "0.315", "decon"): 0.9798,
+    ("cells", "0.315", "no-decon"): 0.9899,
+    ("cells", "1.0", "decon"): 0.9312,
+    ("cells", "1.0", "no-decon"): 0.9376,
+    ("cells", "1.5", "decon"): 0.3935,
+    ("cells", "1.5", "no-decon"): 0.6584,
+    ("uniform", "0.315", "decon"): 0.9891,
+    ("uniform", "0.315", "no-decon"): 0.9865,
+    ("uniform", "1.0", "decon"): 0.9536,
+    ("uniform", "1.0", "no-decon"): 0.9478,
+    ("uniform", "1.5", "decon"): 0.5664,
+    ("uniform", "1.5", "no-decon"): 0.8045,
+}
+
 
 def _nearest_nyquist_multiple(
     thresholds_by_multiple: dict[float, float],
@@ -87,6 +147,13 @@ def _total_seconds(record: dict[str, Any]) -> float:
     """Return elapsed seconds from a performance record."""
 
     return float(record["total_seconds"])
+
+
+def _sha256_file(path: Path) -> str:
+    """Return the SHA-256 digest of a file without loading it into memory."""
+
+    with path.open("rb") as file_handle:
+        return hashlib.file_digest(file_handle, "sha256").hexdigest()
 
 
 def _ufish_label_from_weights_path(weights_path: Path) -> str:
@@ -189,46 +256,7 @@ UFISH_MODELS = _available_ufish_models()
 DEFAULT_UFISH_MODELS = tuple(
     model for model in UFISH_MODELS if model[0] == DEFAULT_UFISH_MODEL
 )
-FULL_SIMULATION_MATRIX = tuple(
-    {
-        "dataset_variant": dataset_variant,
-        "dataset_dir": dataset_dir,
-        "axial_spacing_um": axial_spacing_um,
-        "ufish_model_name": ufish_model_name,
-        "ufish_model": ufish_model,
-        "preprocess_mode": preprocess_mode,
-        "decon_readout": decon_readout,
-        "registration_mode": registration_mode,
-        "perform_deformable_registration": perform_deformable_registration,
-        "chromatic_mode": chromatic_mode,
-        "synthetic_chromatic_aberration": synthetic_chromatic_aberration,
-        "estimate_chromatic_affines": estimate_chromatic_affines,
-        "feature_predictor_threshold": feature_predictor_threshold,
-    }
-    for (dataset_variant, dataset_dir), axial_spacing_um, (
-        ufish_model_name,
-        ufish_model,
-    ), (
-        preprocess_mode,
-        decon_readout,
-    ), (
-        registration_mode,
-        perform_deformable_registration,
-    ), (
-        chromatic_mode,
-        synthetic_chromatic_aberration,
-        estimate_chromatic_affines,
-    ), feature_predictor_threshold in product(
-        SIMULATION_DATASET_DIRS.items(),
-        AXIAL_SPACING_UM,
-        DEFAULT_UFISH_MODELS,
-        PREPROCESS_MODES.items(),
-        (("sofima", True),),
-        (("chromatic", True, True),),
-        FEATURE_PREDICTOR_THRESHOLDS,
-    )
-)
-FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
+EXHAUSTIVE_SIMULATION_MATRIX = tuple(
     {
         "dataset_variant": dataset_variant,
         "dataset_dir": dataset_dir,
@@ -268,9 +296,9 @@ FULL_SWEEP_BASE_SIMULATION_MATRIX = tuple(
 
 
 @pytest.fixture(scope="session")
-def simulation_dataset_root() -> Path:
+def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
     """
-    Resolve the local simulation dataset root configured in this test file.
+    Resolve the simulation dataset root passed to pytest.
 
     Returns
     -------
@@ -278,7 +306,10 @@ def simulation_dataset_root() -> Path:
         Function result.
     """
 
-    root = LOCAL_SIMULATION_DATA_ROOT.expanduser().resolve()
+    configured_root = pytestconfig.getoption("--simulation-data-root")
+    if not configured_root:
+        pytest.skip("Pass --simulation-data-root with the extracted Zenodo dataset.")
+    root = Path(configured_root).expanduser().resolve()
     if not root.exists():
         pytest.skip(f"Local simulation dataset root does not exist: {root}")
     return _normalize_dataset_root(root)
@@ -315,6 +346,27 @@ def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
             f"{simulation_dataset_root}: {missing_variants}"
         )
 
+    fingerprint_errors: list[str] = []
+    for (
+        variant,
+        axial_spacing_um,
+    ), expected_hash in ZENODO_ALIGNED_IMAGE_SHA256.items():
+        image_path = resolved_dirs[variant] / axial_spacing_um / "aligned_1.tiff"
+        if not image_path.exists():
+            fingerprint_errors.append(f"missing {image_path}")
+            continue
+        actual_hash = _sha256_file(image_path)
+        if actual_hash != expected_hash:
+            fingerprint_errors.append(
+                f"{image_path}: expected {expected_hash}, got {actual_hash}"
+            )
+
+    if fingerprint_errors:
+        pytest.fail(
+            "Simulation data do not match Zenodo record 17274305:\n"
+            + "\n".join(fingerprint_errors)
+        )
+
     return resolved_dirs
 
 
@@ -337,7 +389,7 @@ def _normalize_dataset_root(root: Path) -> Path:
     if not example_dir.exists():
         pytest.skip(
             f"Could not find 'example_16bit_flat' under dataset root: {root}. "
-            "Update LOCAL_SIMULATION_DATA_ROOT in this test file."
+            "Pass --simulation-data-root with the extracted Zenodo dataset."
         )
 
     return root
@@ -1252,7 +1304,7 @@ def test_simulation_standard_matrix(
     tmp_path: Path,
 ) -> None:
     """
-    Assert SOFIMA does not reduce standard simulation F1.
+    Assert standard simulation F1 matches the published Zenodo baselines.
 
     Parameters
     ----------
@@ -1305,6 +1357,20 @@ def test_simulation_standard_matrix(
     )
     _assert_standard_result_valid(sofima_result)
 
+    dataset_variant, _ = simulation_standard_dataset_case
+    chromatic_mode, _, _ = simulation_standard_chromatic_case
+    expected_f1 = STANDARD_EXPECTED_F1_SCORES[
+        (dataset_variant, simulation_standard_axial_spacing_um, chromatic_mode)
+    ]
+    assert affine_result["performance_metrics"]["f1_score"] == pytest.approx(
+        expected_f1,
+        abs=F1_ABS_TOLERANCE,
+    )
+    assert sofima_result["performance_metrics"]["f1_score"] == pytest.approx(
+        expected_f1,
+        abs=F1_ABS_TOLERANCE,
+    )
+
     affine_f1 = round(affine_result["performance_metrics"]["f1_score"], 3)
     sofima_f1 = round(sofima_result["performance_metrics"]["f1_score"], 3)
     if sofima_f1 < affine_f1:
@@ -1319,7 +1385,7 @@ def test_simulation_standard_matrix(
 
 
 @pytest.fixture(
-    params=FULL_SWEEP_BASE_SIMULATION_MATRIX,
+    params=EXHAUSTIVE_SIMULATION_MATRIX,
     ids=[
         (
             f"{case['dataset_variant']}-"
@@ -1328,10 +1394,10 @@ def test_simulation_standard_matrix(
             f"{case['preprocess_mode']}-"
             f"{case['registration_mode']}"
         )
-        for case in FULL_SWEEP_BASE_SIMULATION_MATRIX
+        for case in EXHAUSTIVE_SIMULATION_MATRIX
     ],
 )
-def simulation_full_sweep_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
+def simulation_exhaustive_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
     """
     Parametrize the exhaustive local simulation base cases.
 
@@ -1353,11 +1419,11 @@ def simulation_full_sweep_case_spec(request: pytest.FixtureRequest) -> dict[str,
 def simulation_full_preprocessed_case(
     simulation_dataset_dirs: dict[str, Path],
     simulation_api: dict[str, Any],
-    simulation_full_sweep_case_spec: dict[str, Any],
+    simulation_exhaustive_case_spec: dict[str, Any],
     tmp_path: Path,
 ) -> dict[str, Any]:
     """
-    Prepare one exhaustive simulation base case before FP sweeps.
+    Prepare one exhaustive simulation case before decoding.
 
     Parameters
     ----------
@@ -1365,7 +1431,7 @@ def simulation_full_preprocessed_case(
         Function argument.
     simulation_api : dict[str, Any]
         Function argument.
-    simulation_full_sweep_case_spec : dict[str, Any]
+    simulation_exhaustive_case_spec : dict[str, Any]
         Function argument.
     tmp_path : Path
         Function argument.
@@ -1379,7 +1445,7 @@ def simulation_full_preprocessed_case(
     return _prepare_preprocessed_magnitude_case(
         simulation_dataset_dirs,
         simulation_api,
-        simulation_full_sweep_case_spec,
+        simulation_exhaustive_case_spec,
         tmp_path,
         run_calibration_decode=True,
     )
@@ -1392,7 +1458,7 @@ def simulation_full_case_result(
     simulation_full_preprocessed_case: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Run the exhaustive FP-threshold sweep on one calibrated base case.
+    Decode and score one exhaustive simulation case.
 
     Parameters
     ----------
@@ -1421,72 +1487,70 @@ def simulation_full_case_result(
     decon_readout = case_spec["decon_readout"]
     registration_mode = case_spec["registration_mode"]
     perform_deformable_registration = case_spec["perform_deformable_registration"]
+    chromatic_mode = case_spec["chromatic_mode"]
+    synthetic_chromatic_aberration = case_spec["synthetic_chromatic_aberration"]
+    estimate_chromatic_affines = case_spec["estimate_chromatic_affines"]
     default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
     default_magnitude_threshold = _default_standard_magnitude_threshold(
         axial_spacing_um
     )
 
-    sweep_results: list[dict[str, Any]] = []
-    for feature_predictor_threshold in FEATURE_PREDICTOR_THRESHOLDS:
-        threshold_case_label = f"{case_label[:-5]}fp{feature_predictor_threshold}"
-        f1_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
-            case_root,
-            simulation_api,
-            search_radius,
-            feature_predictor_threshold=feature_predictor_threshold,
-            lowpass_sigma=DEFAULT_LOWPASS_SIGMA,
-            magnitude_threshold=default_magnitude_threshold,
-            minimum_pixels_per_rna=default_minimum_pixels,
-            case_label=threshold_case_label,
-            skip_optimization=True,
-        )
-        timings_seconds = {
-            **setup_timings,
-            **{key: value for key, value in decode_timings.items() if key != "total"},
-        }
-        timings_seconds["total"] = sum(timings_seconds.values())
-        record = {
-            "dataset_variant": dataset_variant,
-            "axial_spacing_um": axial_spacing_um,
-            "ufish_model": ufish_model_name,
-            "preprocess_mode": preprocess_mode,
-            "decon_readout": decon_readout,
-            "registration_mode": registration_mode,
-            "perform_deformable_registration": perform_deformable_registration,
-            "feature_predictor_threshold": feature_predictor_threshold,
-            "magnitude_threshold_lower": default_magnitude_threshold[0],
-            "lowpass_sigma": list(DEFAULT_LOWPASS_SIGMA),
-            "minimum_pixels_per_rna": default_minimum_pixels,
-            "f1_search_radius_um": search_radius,
-            "timings_seconds": timings_seconds,
-            "total_seconds": timings_seconds["total"],
-            **performance_metrics,
-        }
-        performance_records.append(record)
-        print(
-            (
-                f"[{threshold_case_label}] performance summary: "
-                f"total={timings_seconds['total']:.2f}s, "
-                f"decode={timings_seconds['decode_pixels']:.2f}s, "
-                f"F1={performance_metrics['f1_score']:.4f}, "
-                f"TP/s={performance_metrics['true_positives_per_second']:.2f}"
-            ),
-            flush=True,
-        )
-        sweep_results.append(
-            {
-                "feature_predictor_threshold": feature_predictor_threshold,
-                "f1_results": f1_results,
-                "timings_seconds": timings_seconds,
-                "performance_metrics": performance_metrics,
-            }
-        )
+    f1_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
+        case_root,
+        simulation_api,
+        search_radius,
+        feature_predictor_threshold=DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
+        lowpass_sigma=DEFAULT_LOWPASS_SIGMA,
+        magnitude_threshold=default_magnitude_threshold,
+        minimum_pixels_per_rna=default_minimum_pixels,
+        case_label=case_label,
+        skip_optimization=True,
+    )
+    timings_seconds = {
+        **setup_timings,
+        **{key: value for key, value in decode_timings.items() if key != "total"},
+    }
+    timings_seconds["total"] = sum(timings_seconds.values())
+    record = {
+        "dataset_variant": dataset_variant,
+        "axial_spacing_um": axial_spacing_um,
+        "ufish_model": ufish_model_name,
+        "preprocess_mode": preprocess_mode,
+        "decon_readout": decon_readout,
+        "registration_mode": registration_mode,
+        "perform_deformable_registration": perform_deformable_registration,
+        "chromatic_mode": chromatic_mode,
+        "synthetic_chromatic_aberration": synthetic_chromatic_aberration,
+        "estimate_chromatic_affines": estimate_chromatic_affines,
+        "feature_predictor_threshold": DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
+        "magnitude_threshold_lower": default_magnitude_threshold[0],
+        "lowpass_sigma": list(DEFAULT_LOWPASS_SIGMA),
+        "minimum_pixels_per_rna": default_minimum_pixels,
+        "f1_search_radius_um": search_radius,
+        "timings_seconds": timings_seconds,
+        "total_seconds": timings_seconds["total"],
+        **performance_metrics,
+    }
+    performance_records.append(record)
+    print(
+        (
+            f"[{case_label}] performance summary: "
+            f"total={timings_seconds['total']:.2f}s, "
+            f"decode={timings_seconds['decode_pixels']:.2f}s, "
+            f"F1={performance_metrics['f1_score']:.4f}, "
+            f"TP/s={performance_metrics['true_positives_per_second']:.2f}"
+        ),
+        flush=True,
+    )
 
     return {
         "case_root": case_root,
         "case_label": case_label,
         "case_spec": case_spec,
-        "results": sweep_results,
+        "f1_results": f1_results,
+        "timings_seconds": timings_seconds,
+        "performance_metrics": performance_metrics,
+        "record": record,
     }
 
 
@@ -1512,12 +1576,22 @@ def test_simulation_exhaustive_matrix(
         simulation_full_case_result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     )
     assert datastore_path.exists()
-    assert len(simulation_full_case_result["results"]) == len(
-        FEATURE_PREDICTOR_THRESHOLDS
+    assert isinstance(simulation_full_case_result["f1_results"], dict)
+    assert RESULT_KEYS.issubset(simulation_full_case_result["f1_results"])
+    performance_metrics = simulation_full_case_result["performance_metrics"]
+    assert performance_metrics["true_positives"] >= 0
+    assert performance_metrics["false_positives"] >= 0
+    assert performance_metrics["false_negatives"] >= 0
+
+    case_spec = simulation_full_case_result["case_spec"]
+    expected_f1 = EXHAUSTIVE_EXPECTED_F1_SCORES[
+        (
+            case_spec["dataset_variant"],
+            case_spec["axial_spacing_um"],
+            case_spec["preprocess_mode"],
+        )
+    ]
+    assert performance_metrics["f1_score"] == pytest.approx(
+        expected_f1,
+        abs=F1_ABS_TOLERANCE,
     )
-    for result in simulation_full_case_result["results"]:
-        assert isinstance(result["f1_results"], dict)
-        assert RESULT_KEYS.issubset(result["f1_results"])
-        assert result["performance_metrics"]["true_positives"] >= 0
-        assert result["performance_metrics"]["false_positives"] >= 0
-        assert result["performance_metrics"]["false_negatives"] >= 0

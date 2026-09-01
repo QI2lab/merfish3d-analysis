@@ -9,6 +9,7 @@ Shepherd 2025/01 - rework script to accept parameters
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -235,7 +236,9 @@ def convert_data(
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/media/dps/data/zhuang/mop/mouse_sample1_raw")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
 
     convert_data(
         root_path=root_path,

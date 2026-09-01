@@ -4,6 +4,7 @@ View fused channels using neuroglancer.
 Shepherd 2025/03 - created script.
 """
 
+import argparse
 import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -69,5 +70,7 @@ def view_fused(root_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    root_path = Path(r"/mnt/data2/bioprotean/20250220_Bartelle_control_smFISH_TqIB")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root_path", type=Path)
+    root_path = parser.parse_args().root_path.expanduser().resolve()
     view_fused(root_path)

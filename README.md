@@ -128,27 +128,31 @@ require CUDA or GPU hardware. Configure the repository's Pages source as
 
 ## Testing
 
-The simulation tests require an NVIDIA GPU, the extracted sample data at
-`/media/dps/data/merfish3d_analysis-simulation`, and the default `smfish`
-U-FISH weights cached at
-`~/.ufish/finetune_models/v1.0.1-simfish_model.onnx`. See the
+The simulation tests require an NVIDIA GPU, the extracted Zenodo sample data,
+and the default `smfish` U-FISH weights cached by U-FISH. Pass the extracted
+dataset directory with `--simulation-data-root`. See the
 [synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
 for setup instructions.
 
 Standard simulation matrix:
 
 ```bash
-uv run pytest tests/test_simulation_example_pipeline.py -vv
+uv run pytest tests/test_simulation_example_pipeline.py -vv \
+  --simulation-data-root simulation-data/merfish3d_analysis-simulation
 ```
 
-Full feature-prediction probability threshold sweep:
+Full repository suite, including the exhaustive simulation matrix:
 
 ```bash
-uv run pytest tests/test_simulation_example_pipeline.py -vv --run-simulation-exhaustive
+uv run pytest -vv --run-simulation-exhaustive \
+  --simulation-data-root simulation-data/merfish3d_analysis-simulation
 ```
 
 The standard simulation matrix uses CUDA device 0 and runs paired affine and
 SOFIMA preprocessing for every default dataset, axial spacing, and
-chromatic-aberration setting. The exhaustive mode keeps the longer
-feature-prediction threshold sweep and writes measured performance records to
-`tests/data/simulation_performance.json`.
+chromatic-aberration setting. The exhaustive mode adds deconvolution-on and
+deconvolution-off coverage using SOFIMA and synthetic chromatic aberration. It
+writes measured performance records to
+`tests/data/simulation_performance.json`. The tests verify the Zenodo image
+fingerprints and enforce the documented F1 baselines with an absolute tolerance
+of 0.02.
