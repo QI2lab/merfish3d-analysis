@@ -1226,7 +1226,7 @@ class DataRegistration:
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
         self._perform_deformable_registration = perform_deformable_registration
-        self._data_raw = None
+        self._tile_id: str | None = None
         self._overwrite_outputs = overwrite_outputs
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
@@ -1250,26 +1250,10 @@ class DataRegistration:
         qi2labDataStore
             qi2labDataStore object
         """
-        if self._dataset_path is not None:
-            return self._datastore
-        else:
-            print("Datastore not defined.")
-            return None
-
-    @datastore.setter
-    def dataset_path(self, value: qi2labDataStore) -> None:
-        """Set the qi2labDataStore object.
-
-        Parameters
-        ----------
-        value : qi2labDataStore
-            qi2labDataStore object
-        """
-        del self._datastore
-        self._datastore = value
+        return self._datastore
 
     @property
-    def tile_id(self) -> str:
+    def tile_id(self) -> str | None:
         """Get the current tile id.
 
         Returns
@@ -1277,12 +1261,7 @@ class DataRegistration:
         tile_id: int or str
             Tile id
         """
-        if self._tile_id is not None:
-            tile_id = self._tile_id
-            return tile_id
-        else:
-            print("Tile coordinate not defined.")
-            return None
+        return self._tile_id
 
     @tile_id.setter
     def tile_id(self, value: int | str) -> None:
@@ -2081,36 +2060,6 @@ class DataRegistration:
             if affine_zyx_um is None:
                 return False
         return True
-
-    def _load_raw_data(self) -> None:
-        """
-        Load raw data across rounds for one tile.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
-        self._data_raw = []
-        stage_positions = []
-
-        for round_id in self._round_ids:
-            self._data_raw.append(
-                self._datastore.load_local_corrected_image(
-                    tile=self._tile_id,
-                    round=round_id,
-                )
-            )
-
-            stage_position, _ = self._datastore.load_local_stage_position_zyx_um(
-                tile=self._tile_id, round=round_id
-            )
-
-            stage_positions.append(stage_position)
-
-        self._stage_positions = np.stack(stage_positions, axis=0)
-        del stage_positions
-        gc.collect()
 
     def _generate_registrations(self) -> None:
         """
