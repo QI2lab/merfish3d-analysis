@@ -375,7 +375,7 @@ def fuse_all_channels(
     -------
     None
         The multiscale image is written to
-        ``qi2labdatastore/fused/fused_all_channels_zyx.ome.zarr``. Optional
+        ``qi2labdatastore/fused/full_dataset.ome.zarr``. Optional
         TIFFs are written beside it.
     """
     datastore = qi2labDataStore(qi2lab_datastore_path(root_path))
@@ -392,9 +392,7 @@ def fuse_all_channels(
     ]
     output_directory = datastore._fused_root_path
     output_directory.mkdir(parents=True, exist_ok=True)
-    final_output = datastore._image_store_path(
-        output_directory / "fused_all_channels_zyx"
-    )
+    final_output = datastore._image_store_path(output_directory / "full_dataset")
     fused_msim = fusion.fuse(
         images=tile_msims,
         transform_key=registration_config.new_transform_key,

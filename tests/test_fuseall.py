@@ -263,7 +263,7 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         call(datastore=datastore, tile_id="tile0000", bit_ids=channels[1:]),
         call(datastore=datastore, tile_id="tile0001", bit_ids=channels[1:]),
     ]
-    output = fused_root / "fused_all_channels_zyx.ome.zarr"
+    output = fused_root / "full_dataset.ome.zarr"
     fuse.assert_called_once_with(
         images=[sentinel.tile0, sentinel.tile1],
         transform_key="global_registered",
