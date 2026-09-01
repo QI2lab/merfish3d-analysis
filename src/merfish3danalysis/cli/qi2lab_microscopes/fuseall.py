@@ -268,8 +268,7 @@ def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
         ) from exc
     if len(chunks) != 3 or any(chunk < 1 for chunk in chunks):
         raise typer.BadParameter(
-            "Use three positive comma-separated integers, for example "
-            "32,2048,2048.",
+            "Use three positive comma-separated integers, for example 32,2048,2048.",
             param_hint="--output-chunk-zyx",
         )
     return dict(zip("zyx", chunks, strict=True))
