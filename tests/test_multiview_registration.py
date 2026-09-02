@@ -4,6 +4,33 @@ import numpy as np
 import pytest
 
 
+def _low_snr_shifted_fiducials() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Create correlated broad signal with decorrelated high-frequency noise."""
+    from scipy.ndimage import gaussian_filter
+    from scipy.ndimage import shift as ndi_shift
+
+    shape = (24, 128, 128)
+    true_pull_shift_px = np.asarray((3.0, 8.0, -6.0), dtype=np.float32)
+    rng = np.random.default_rng(0)
+    impulses = np.zeros(shape, dtype=np.float32)
+    for _ in range(30):
+        z, y, x = [rng.integers(3, size - 3) for size in shape]
+        impulses[z, y, x] = rng.uniform(20, 100)
+    signal = gaussian_filter(impulses, (1.5, 3.0, 3.0))
+
+    # Consume the lower-noise realization used while isolating this regression.
+    for noise_scale in (0.02, 0.05):
+        fixed = signal + rng.normal(0, noise_scale, shape).astype(np.float32)
+        moving = ndi_shift(
+            signal,
+            true_pull_shift_px,
+            order=1,
+            mode="constant",
+        ) * np.float32(0.15)
+        moving += rng.normal(0, noise_scale, shape).astype(np.float32)
+    return fixed, moving, true_pull_shift_px
+
+
 def _cucim_tiny_overlap_alias_images() -> tuple[np.ndarray, np.ndarray]:
     """Create images for which CuCIM prefers a one-plane periodic alias."""
     rng = np.random.default_rng(20260901)
@@ -36,6 +63,42 @@ def test_phase_shift_uses_maximum_overlap_alias_on_every_axis() -> None:
         (63, 2048, 2048),
     )
     np.testing.assert_allclose(corrected, (-0.9, 0.8, -1.25), atol=1e-10)
+
+
+def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> None:
+    from skimage.registration import phase_cross_correlation
+
+    from merfish3danalysis.utils.multiview_registration import (
+        _select_phase_correlation_pull_shift_px,
+    )
+
+    fixed, moving, true_pull_shift_px = _low_snr_shifted_fiducials()
+    phase_only_pull = -phase_cross_correlation(
+        fixed,
+        moving,
+        upsample_factor=10,
+        disambiguate=False,
+        normalization="phase",
+    )[0]
+    assert np.linalg.norm(phase_only_pull - true_pull_shift_px) > 20
+
+    recovered_zyx = _select_phase_correlation_pull_shift_px(
+        fixed,
+        moving,
+        phase_cross_correlation=phase_cross_correlation,
+        array_module=np,
+        to_numpy=np.asarray,
+    )
+    recovered_yx = _select_phase_correlation_pull_shift_px(
+        fixed.max(axis=0),
+        moving.max(axis=0),
+        phase_cross_correlation=phase_cross_correlation,
+        array_module=np,
+        to_numpy=np.asarray,
+    )
+
+    np.testing.assert_allclose(recovered_zyx, true_pull_shift_px, atol=1.0)
+    np.testing.assert_allclose(recovered_yx, true_pull_shift_px[1:], atol=1.5)
 
 
 def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:

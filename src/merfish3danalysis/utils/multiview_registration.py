@@ -143,6 +143,184 @@ def _maximum_overlap_phase_shift_px(
     return np.remainder(shift + period / 2.0, period) - period / 2.0
 
 
+def _translation_overlap_slices(
+    shape: Sequence[int],
+    pull_shift_px: Sequence[float],
+) -> tuple[tuple[slice, ...], tuple[slice, ...]] | None:
+    """
+    Return fixed and moving slices for an integerized pull translation.
+
+    Parameters
+    ----------
+    shape : Sequence[int]
+        Equal fixed and moving image shape.
+    pull_shift_px : Sequence[float]
+        Translation for which output coordinate ``p`` samples moving
+        coordinate ``p + pull_shift_px``.
+
+    Returns
+    -------
+    tuple[tuple[slice, ...], tuple[slice, ...]] or None
+        Matching fixed and moving overlap slices, or ``None`` when there is no
+        overlap.
+    """
+    fixed_slices = []
+    moving_slices = []
+    for axis_size, axis_shift_px in zip(shape, pull_shift_px, strict=True):
+        integer_shift = int(np.rint(float(axis_shift_px)))
+        fixed_start = max(0, -integer_shift)
+        fixed_stop = min(int(axis_size), int(axis_size) - integer_shift)
+        if fixed_stop <= fixed_start:
+            return None
+        fixed_slices.append(slice(fixed_start, fixed_stop))
+        moving_slices.append(
+            slice(fixed_start + integer_shift, fixed_stop + integer_shift)
+        )
+    return tuple(fixed_slices), tuple(moving_slices)
+
+
+def _overlap_weighted_translation_score(
+    fixed: Any,
+    moving: Any,
+    *,
+    pull_shift_px: Sequence[float],
+    array_module: Any,
+) -> float:
+    """
+    Score a pull translation using correlation and retained image overlap.
+
+    Parameters
+    ----------
+    fixed : Any
+        Fixed image array.
+    moving : Any
+        Moving image array with the same shape as ``fixed``.
+    pull_shift_px : Sequence[float]
+        Candidate fixed-to-moving pull translation in pixels.
+    array_module : Any
+        NumPy-compatible module implementing array arithmetic. Runtime GPU
+        registration supplies CuPy; CPU tests supply NumPy.
+
+    Returns
+    -------
+    float
+        Pearson correlation multiplied by the fraction of fixed-image pixels
+        retained in the overlap. Invalid or constant overlaps score negative
+        infinity.
+    """
+    overlap = _translation_overlap_slices(fixed.shape, pull_shift_px)
+    if overlap is None:
+        return float("-inf")
+    fixed_slices, moving_slices = overlap
+    fixed_values = fixed[fixed_slices].astype(array_module.float32, copy=False)
+    moving_values = moving[moving_slices].astype(array_module.float32, copy=False)
+    fixed_centered = fixed_values - array_module.mean(fixed_values)
+    moving_centered = moving_values - array_module.mean(moving_values)
+    denominator = array_module.sqrt(
+        array_module.sum(fixed_centered * fixed_centered)
+        * array_module.sum(moving_centered * moving_centered)
+    )
+    denominator_value = float(denominator)
+    if not np.isfinite(denominator_value) or denominator_value <= 0:
+        return float("-inf")
+    correlation = float(
+        array_module.sum(fixed_centered * moving_centered) / denominator
+    )
+    if not np.isfinite(correlation):
+        return float("-inf")
+    overlap_fraction = float(fixed_values.size) / float(fixed.size)
+    return correlation * overlap_fraction
+
+
+def _select_phase_correlation_pull_shift_px(
+    fixed: Any,
+    moving: Any,
+    *,
+    phase_cross_correlation: Any,
+    array_module: Any,
+    to_numpy: Any,
+    diagnostics: bool = False,
+) -> np.ndarray:
+    """
+    Select a reliable phase-correlation translation candidate.
+
+    Phase normalization can amplify decorrelated high-frequency noise in
+    fiducial images and produce a strong but physically unsupported peak near
+    half an image period. This function evaluates phase-normalized,
+    unnormalized, and identity candidates in real space. It selects the
+    candidate with the best overlap-weighted Pearson correlation after mapping
+    every periodic shift to its maximum-overlap representative.
+
+    Parameters
+    ----------
+    fixed : Any
+        Fixed image array.
+    moving : Any
+        Moving image array with the same shape as ``fixed``.
+    phase_cross_correlation : Any
+        NumPy-compatible phase-correlation callable.
+    array_module : Any
+        NumPy-compatible array module used for real-space scoring.
+    to_numpy : Any
+        Callable converting a phase-correlation result to a NumPy array.
+    diagnostics : bool, default=False
+        If True, print candidate shifts and scores.
+
+    Returns
+    -------
+    numpy.ndarray
+        Selected fixed-to-moving pull translation in pixels.
+    """
+    if fixed.shape != moving.shape:
+        raise ValueError(
+            "Phase-correlation candidate images must have matching shapes, got "
+            f"{fixed.shape!r} and {moving.shape!r}."
+        )
+
+    candidates: list[tuple[str, np.ndarray]] = [
+        ("identity", np.zeros(fixed.ndim, dtype=np.float32))
+    ]
+    for normalization in ("phase", None):
+        push_shift_px = phase_cross_correlation(
+            fixed,
+            moving,
+            upsample_factor=10,
+            disambiguate=False,
+            normalization=normalization,
+        )[0]
+        pull_shift_px = _maximum_overlap_phase_shift_px(
+            -np.asarray(to_numpy(push_shift_px), dtype=np.float64),
+            fixed.shape,
+        ).astype(np.float32)
+        if not any(
+            np.allclose(pull_shift_px, existing_shift)
+            for _label, existing_shift in candidates
+        ):
+            label = "phase" if normalization == "phase" else "unnormalized"
+            candidates.append((label, pull_shift_px))
+
+    scores = [
+        _overlap_weighted_translation_score(
+            fixed,
+            moving,
+            pull_shift_px=pull_shift_px,
+            array_module=array_module,
+        )
+        for _label, pull_shift_px in candidates
+    ]
+    selected_index = int(np.argmax(scores))
+    if diagnostics:
+        details = ", ".join(
+            f"{label}:pull_px={tuple(float(v) for v in shift)}:score={score:.6f}"
+            for (label, shift), score in zip(candidates, scores, strict=True)
+        )
+        _diag(
+            f"phase_candidates {details} selected={candidates[selected_index][0]}",
+            enabled=True,
+        )
+    return candidates[selected_index][1].copy()
+
+
 def register_pair_to_fixed(
     fixed: np.ndarray,
     moving: np.ndarray,
@@ -157,9 +335,11 @@ def register_pair_to_fixed(
     microns. The registration first estimates lateral translation from maximum
     Z projections, warps the moving volume by that lateral estimate, then runs
     phase correlation on the full volume to estimate the residual translation.
-    The returned affine maps fixed/reference physical coordinates to
-    moving-image physical coordinates, matching the convention expected by
-    :func:`warp_array_to_reference_gpu`.
+    At both stages, phase-normalized, unnormalized, and identity candidates are
+    scored in real space so decorrelated noise cannot promote a large
+    half-period displacement. The returned affine maps fixed/reference
+    physical coordinates to moving-image physical coordinates, matching the
+    convention expected by :func:`warp_array_to_reference_gpu`.
 
     Parameters
     ----------
@@ -200,14 +380,15 @@ def register_pair_to_fixed(
     spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
     fixed_projection = _max_z_projection_gpu(fixed, cp)
     moving_projection = _max_z_projection_gpu(moving, cp)
-    xy_push_shift_px = phase_cross_correlation(
+    xy_pull_shift_px = _select_phase_correlation_pull_shift_px(
         fixed_projection,
         moving_projection,
-        upsample_factor=10,
-        disambiguate=False,
-    )[0]
-    xy_pull_shift_px = -cp.asnumpy(xy_push_shift_px).astype(np.float32)
-    del fixed_projection, moving_projection, xy_push_shift_px
+        phase_cross_correlation=phase_cross_correlation,
+        array_module=cp,
+        to_numpy=cp.asnumpy,
+        diagnostics=diagnostics,
+    )
+    del fixed_projection, moving_projection
     _clear_cupy_memory(cp)
 
     xy_transform = np.eye(4, dtype=np.float32)
@@ -227,22 +408,22 @@ def register_pair_to_fixed(
         (0.0, float(xy_pull_shift_px[0]), float(xy_pull_shift_px[1])),
     )
     if overlap_slices is None:
-        residual_push_shift_px = np.zeros(3, dtype=np.float32)
+        residual_pull_shift_px = np.zeros(3, dtype=np.float32)
     else:
         fixed_overlap = cp.asarray(fixed[overlap_slices], dtype=cp.float32)
         moving_overlap = cp.asarray(
             moving_xy_registered[overlap_slices],
             dtype=cp.float32,
         )
-        residual_push_shift_px = phase_cross_correlation(
+        residual_pull_shift_px = _select_phase_correlation_pull_shift_px(
             fixed_overlap,
             moving_overlap,
-            upsample_factor=10,
-            disambiguate=False,
-        )[0]
-        residual_push_shift_px = cp.asnumpy(residual_push_shift_px).astype(np.float32)
+            phase_cross_correlation=phase_cross_correlation,
+            array_module=cp,
+            to_numpy=cp.asnumpy,
+            diagnostics=diagnostics,
+        )
         del fixed_overlap, moving_overlap
-    residual_pull_shift_px = -residual_push_shift_px
     del moving_xy_registered
     total_shift_px = residual_pull_shift_px.copy()
     total_shift_px[1] += xy_pull_shift_px[0]
