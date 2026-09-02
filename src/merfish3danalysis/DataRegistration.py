@@ -47,6 +47,7 @@ import gc
 import queue
 import timeit
 import traceback
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -70,27 +71,44 @@ DEFAULT_UFISH_MODEL = "simfish"
 
 @dataclass(frozen=True)
 class GlobalRegistrationConfig:
-    """Explicit multiview-stitcher global registration parameters."""
+    """
+    Configure global multiview-stitcher registration behavior.
+
+    Attributes
+    ----------
+    registration_binning_zyx : tuple[int, int, int]
+        Integer registration binning in physical Z, Y, X axis order.
+    reg_channel_index : int
+        Channel index used to register each tile.
+    post_registration_do_quality_filter : bool
+        Whether multiview-stitcher removes low-quality pairwise links.
+    reference_view : int
+        Tile index fixed during groupwise transform resolution.
+    transform : str
+        Transform family used for groupwise resolution.
+    n_parallel_pairwise_regs : int
+        Maximum number of concurrent pairwise registrations.
+    dask_scheduler : str
+        Dask scheduler used while evaluating registration tasks.
+    affine_round_decimals : int or None
+        Decimal places retained when transforms are stored. ``None`` disables
+        rounding.
+
+    Notes
+    -----
+    MVS transform-key strings are intentionally not configurable. They are
+    implementation-local identifiers that must agree across image loading,
+    registration, and fusion.
+    """
 
     registration_binning_zyx: tuple[int, int, int] = (3, 6, 6)
     reg_channel_index: int = 0
-    transform_key: str = "stage_metadata"
-    new_transform_key: str = "global_registered"
     post_registration_do_quality_filter: bool = True
     reference_view: int = 0
     transform: str = "translation"
     n_parallel_pairwise_regs: int = 1
     dask_scheduler: str = "single-threaded"
     affine_round_decimals: int | None = 2
-
-    @property
-    def registration_binning(self) -> dict[str, int]:
-        """Return binning keyed by multiview-stitcher spatial dimension name."""
-        return {
-            "z": int(self.registration_binning_zyx[0]),
-            "y": int(self.registration_binning_zyx[1]),
-            "x": int(self.registration_binning_zyx[2]),
-        }
 
 
 def _registration_diag(message: str, *, enabled: bool) -> None:
@@ -114,17 +132,56 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
 
 
 def _configure_loky_fusion_worker() -> None:
-    """Disable loky's RSS-growth recycler inside fusion workers."""
+    """
+    Configure a spawned Loky process for long-running fusion work.
+
+    Returns
+    -------
+    None
+        Loky's process-level RSS-growth recycler is disabled in place.
+
+    Notes
+    -----
+    This must remain a module-level callable because Loky pickles the
+    initializer when starting worker processes.
+    """
     from joblib.externals.loky import process_executor
 
     process_executor._USE_PSUTIL = False
 
 
-def _direct_zarr_fusion_kwargs(*, misc_utils: Any) -> dict[str, Any]:
-    """Return the shared direct-to-Zarr fusion and parallelization options."""
+def _direct_zarr_fusion_kwargs(
+    *,
+    misc_utils: Any,
+    fusion_workers: int | None = None,
+) -> dict[str, Any]:
+    """
+    Build direct-to-Zarr fusion and process-parallelization options.
+
+    Parameters
+    ----------
+    misc_utils : Any
+        Imported ``multiview_stitcher.misc_utils`` module.
+    fusion_workers : int or None, default=None
+        Number of Loky worker processes. The available CPU count is used when
+        omitted.
+
+    Returns
+    -------
+    dict[str, Any]
+        Keyword arguments for ``multiview_stitcher.fusion.fuse``.
+
+    Raises
+    ------
+    ValueError
+        If ``fusion_workers`` is less than one.
+    """
     from joblib._parallel_backends import LokyBackend
 
-    fusion_workers = max(1, os.cpu_count() or 1)
+    if fusion_workers is None:
+        fusion_workers = max(1, os.cpu_count() or 1)
+    elif fusion_workers < 1:
+        raise ValueError("fusion_workers must be at least 1.")
     fusion_backend = LokyBackend(
         idle_worker_timeout=24 * 60 * 60,
         inner_max_num_threads=1,
@@ -797,7 +854,25 @@ def _read_fiducial_sim(
 
 
 def _zarr_array_dims(array: Any) -> tuple[str, ...]:
-    """Return explicit dimension names for a Zarr image array."""
+    """
+    Resolve explicit dimension names for a Zarr image array.
+
+    Parameters
+    ----------
+    array : Any
+        Open Zarr array whose metadata and rank describe the image axes.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Dimension names in storage order. Conventional trailing TCZYX names
+        are inferred when the array has no dimension-name metadata.
+
+    Raises
+    ------
+    ValueError
+        If dimension names are absent from an array with more than five axes.
+    """
     dimension_names = getattr(array.metadata, "dimension_names", None)
     if dimension_names is None or any(name is None for name in dimension_names):
         if array.ndim > 5:
@@ -813,7 +888,29 @@ def _iter_zarr_max_projection_tiles(
     *,
     tile_shape_yx: tuple[int, int] = (1024, 1024),
 ) -> Iterator[np.ndarray]:
-    """Yield padded YX tiles of a chunk-wise Z maximum projection."""
+    """
+    Yield padded tiles from a streaming Z maximum projection.
+
+    Parameters
+    ----------
+    array : Any
+        Open Zarr array containing Z, Y, and X dimensions. Any additional
+        dimensions must be singleton.
+    tile_shape_yx : tuple[int, int], default=(1024, 1024)
+        Output tile height and width.
+
+    Yields
+    ------
+    numpy.ndarray
+        One YX projection tile. Tiles at the image boundary are zero-padded to
+        ``tile_shape_yx``.
+
+    Raises
+    ------
+    ValueError
+        If required spatial axes are missing, a non-spatial axis is not
+        singleton, or the Z axis is empty.
+    """
     dims = _zarr_array_dims(array)
     if not {"z", "y", "x"}.issubset(dims):
         raise ValueError(f"Expected z, y, and x axes in fused Zarr array; got {dims}.")
@@ -870,7 +967,27 @@ def _write_zarr_max_projection_tiff(
     TiffWriter: Any,
     tile_shape_yx: tuple[int, int] = (1024, 1024),
 ) -> None:
-    """Write a tiled OME-TIFF Z projection without materializing the mosaic."""
+    """
+    Write a tiled OME-TIFF Z projection without materializing the mosaic.
+
+    Parameters
+    ----------
+    array : Any
+        Open fused Zarr array.
+    filename_path : pathlib.Path
+        Destination OME-TIFF path.
+    spacing_zyx_um : numpy.ndarray
+        Physical voxel spacing in micrometers and Z, Y, X order.
+    TiffWriter : Any
+        ``tifffile.TiffWriter`` class or a compatible test double.
+    tile_shape_yx : tuple[int, int], default=(1024, 1024)
+        TIFF tile height and width.
+
+    Returns
+    -------
+    None
+        The projection is streamed to ``filename_path``.
+    """
     dims = _zarr_array_dims(array)
     axis = {dim: dims.index(dim) for dim in dims}
     shape_yx = (int(array.shape[axis["y"]]), int(array.shape[axis["x"]]))
@@ -1219,7 +1336,7 @@ class DataRegistration:
         self._num_gpus = num_gpus
         self._crop_yx_decon = crop_yx_decon
         self._perform_deformable_registration = perform_deformable_registration
-        self._data_raw = None
+        self._tile_id: str | None = None
         self._overwrite_outputs = overwrite_outputs
         self._decon_readout = decon_readout
         self._ufish_model = ufish_model
@@ -1243,26 +1360,10 @@ class DataRegistration:
         qi2labDataStore
             qi2labDataStore object
         """
-        if self._dataset_path is not None:
-            return self._datastore
-        else:
-            print("Datastore not defined.")
-            return None
-
-    @datastore.setter
-    def dataset_path(self, value: qi2labDataStore) -> None:
-        """Set the qi2labDataStore object.
-
-        Parameters
-        ----------
-        value : qi2labDataStore
-            qi2labDataStore object
-        """
-        del self._datastore
-        self._datastore = value
+        return self._datastore
 
     @property
-    def tile_id(self) -> str:
+    def tile_id(self) -> str | None:
         """Get the current tile id.
 
         Returns
@@ -1270,12 +1371,7 @@ class DataRegistration:
         tile_id: int or str
             Tile id
         """
-        if self._tile_id is not None:
-            tile_id = self._tile_id
-            return tile_id
-        else:
-            print("Tile coordinate not defined.")
-            return None
+        return self._tile_id
 
     @tile_id.setter
     def tile_id(self, value: int | str) -> None:
@@ -1479,14 +1575,21 @@ class DataRegistration:
             and spots_path.exists()
         )
 
-    def _is_tile_complete(self, tile_id: str) -> bool:
+    def _is_tile_complete(
+        self,
+        tile_id: str,
+        *,
+        process_readouts: bool = True,
+    ) -> bool:
         """
         Is tile complete.
 
         Parameters
         ----------
         tile_id : str
-            Function argument.
+            Tile identifier.
+        process_readouts : bool, default=True
+            If False, assess only fiducial deconvolution and local transforms.
 
         Returns
         -------
@@ -1511,6 +1614,9 @@ class DataRegistration:
             ):
                 return False
 
+        if not process_readouts:
+            return True
+
         for bit_id in self._bit_ids:
             if not self._has_valid_feature_predictor_outputs(
                 tile_id=tile_id, bit_id=bit_id
@@ -1519,9 +1625,17 @@ class DataRegistration:
 
         return True
 
-    def register_all_tiles(self) -> None:
+    def register_all_tiles(self, *, process_readouts: bool = True) -> None:
         """
         Register all tiles.
+
+        Parameters
+        ----------
+        process_readouts : bool, default=True
+            If True, also regenerate readout deconvolution and U-FISH outputs.
+            Set False to recompute only the complete fiducial registration
+            chain: local affine transforms, optional SOFIMA fields, global
+            transforms, and global fiducial fusion.
 
         Returns
         -------
@@ -1532,7 +1646,10 @@ class DataRegistration:
         start_idx = 0
         if not self._overwrite_outputs:
             for idx, tile_id in enumerate(tile_ids):
-                if self._is_tile_complete(tile_id):
+                if self._is_tile_complete(
+                    tile_id,
+                    process_readouts=process_readouts,
+                ):
                     start_idx = idx + 1
                     continue
                 start_idx = idx
@@ -1558,7 +1675,8 @@ class DataRegistration:
         for tile_id in tile_ids[start_idx:]:
             self.tile_id = tile_id
             self._generate_registrations()
-            self._apply_registration_to_bits()
+            if process_readouts:
+                self._apply_registration_to_bits()
 
         if self._global_registration:
             self.global_register()
@@ -1618,6 +1736,8 @@ class DataRegistration:
         list[Any]
             MultiscaleSpatialImages for global registration or fusion.
         """
+        stage_transform_key = "stage_metadata"
+        global_transform_key = "global_registered"
         voxel_zyx_um = self._datastore.voxel_size_zyx_um
         scale = {
             "z": float(voxel_zyx_um[0]),
@@ -1654,7 +1774,7 @@ class DataRegistration:
                 scale=scale,
                 translation=tile_grid_positions,
                 affine_zyx_px=affine_zyx_px,
-                transform_key=self._global_registration_config.transform_key,
+                transform_key=stage_transform_key,
                 zarr_module=zarr_module,
                 si_utils=si_utils,
             )
@@ -1672,7 +1792,7 @@ class DataRegistration:
                 msi_utils.set_affine_transform(
                     msim,
                     np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
-                    transform_key=self._global_registration_config.new_transform_key,
+                    transform_key=global_transform_key,
                 )
 
             msims.append(msim)
@@ -1725,6 +1845,7 @@ class DataRegistration:
             Fused OME-Zarr, metadata, datastore state, and optional TIFF are
             written to disk.
         """
+        global_transform_key = "global_registered"
         output_zarr_path = self._datastore._image_store_path(
             self._datastore._fused_root_path
             / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
@@ -1735,7 +1856,7 @@ class DataRegistration:
         fusion_start_time = timeit.default_timer()
         fused_msim = fusion.fuse(
             images=msims,
-            transform_key=self._global_registration_config.new_transform_key,
+            transform_key=global_transform_key,
             output_zarr_url=str(output_zarr_path),
             **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
         )
@@ -1749,7 +1870,7 @@ class DataRegistration:
         metadata_start_time = timeit.default_timer()
         affine = msi_utils.get_transform_from_msim(
             fused_msim,
-            transform_key=self._global_registration_config.new_transform_key,
+            transform_key=global_transform_key,
         ).data.squeeze()
         fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
         origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
@@ -1877,7 +1998,15 @@ class DataRegistration:
         )
 
         registration_config = self._global_registration_config
-        registration_binning = registration_config.registration_binning
+        stage_transform_key = "stage_metadata"
+        global_transform_key = "global_registered"
+        registration_binning = dict(
+            zip(
+                "zyx",
+                (int(value) for value in registration_config.registration_binning_zyx),
+                strict=True,
+            )
+        )
         if self._verbose >= 1:
             print(
                 time_stamp(),
@@ -1890,48 +2019,29 @@ class DataRegistration:
                 f"{registration_config.n_parallel_pairwise_regs}",
             )
         registration_start_time = timeit.default_timer()
-        with dask_config.set(scheduler=registration_config.dask_scheduler):
-            if self._verbose >= 1:
-                with ProgressBar():
-                    global_transforms = registration.register(
-                        msims,
-                        reg_channel_index=int(registration_config.reg_channel_index),
-                        transform_key=registration_config.transform_key,
-                        new_transform_key=registration_config.new_transform_key,
-                        pre_registration_pruning_method=None,
-                        registration_binning=registration_binning,
-                        post_registration_do_quality_filter=(
-                            bool(
-                                registration_config.post_registration_do_quality_filter
-                            )
-                        ),
-                        groupwise_resolution_kwargs={
-                            "reference_view": int(registration_config.reference_view),
-                            "transform": registration_config.transform,
-                        },
-                        n_parallel_pairwise_regs=int(
-                            registration_config.n_parallel_pairwise_regs
-                        ),
-                    )
-            else:
-                global_transforms = registration.register(
-                    msims,
-                    reg_channel_index=int(registration_config.reg_channel_index),
-                    transform_key=registration_config.transform_key,
-                    new_transform_key=registration_config.new_transform_key,
-                    pre_registration_pruning_method=None,
-                    registration_binning=registration_binning,
-                    post_registration_do_quality_filter=(
-                        bool(registration_config.post_registration_do_quality_filter)
-                    ),
-                    groupwise_resolution_kwargs={
-                        "reference_view": int(registration_config.reference_view),
-                        "transform": registration_config.transform,
-                    },
-                    n_parallel_pairwise_regs=int(
-                        registration_config.n_parallel_pairwise_regs
-                    ),
-                )
+        progress = ProgressBar() if self._verbose >= 1 else nullcontext()
+        with (
+            dask_config.set(scheduler=registration_config.dask_scheduler),
+            progress,
+        ):
+            global_transforms = registration.register(
+                msims,
+                reg_channel_index=int(registration_config.reg_channel_index),
+                transform_key=stage_transform_key,
+                new_transform_key=global_transform_key,
+                pre_registration_pruning_method=None,
+                registration_binning=registration_binning,
+                post_registration_do_quality_filter=bool(
+                    registration_config.post_registration_do_quality_filter
+                ),
+                groupwise_resolution_kwargs={
+                    "reference_view": int(registration_config.reference_view),
+                    "transform": registration_config.transform,
+                },
+                n_parallel_pairwise_regs=int(
+                    registration_config.n_parallel_pairwise_regs
+                ),
+            )
         if self._verbose >= 1:
             print(
                 time_stamp(),
@@ -2044,7 +2154,14 @@ class DataRegistration:
             )
 
     def _global_transforms_available(self) -> bool:
-        """Return whether every tile has a stored global affine transform."""
+        """
+        Check whether every tile has a stored global affine transform.
+
+        Returns
+        -------
+        bool
+            ``True`` only when every tile has a non-null global affine.
+        """
         for tile_id in self._tile_ids:
             affine_zyx_um, _origin_zyx_um, _spacing_zyx_um = (
                 self._datastore.load_global_coord_xforms_um(tile=tile_id)
@@ -2052,36 +2169,6 @@ class DataRegistration:
             if affine_zyx_um is None:
                 return False
         return True
-
-    def _load_raw_data(self) -> None:
-        """
-        Load raw data across rounds for one tile.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
-        self._data_raw = []
-        stage_positions = []
-
-        for round_id in self._round_ids:
-            self._data_raw.append(
-                self._datastore.load_local_corrected_image(
-                    tile=self._tile_id,
-                    round=round_id,
-                )
-            )
-
-            stage_position, _ = self._datastore.load_local_stage_position_zyx_um(
-                tile=self._tile_id, round=round_id
-            )
-
-            stage_positions.append(stage_position)
-
-        self._stage_positions = np.stack(stage_positions, axis=0)
-        del stage_positions
-        gc.collect()
 
     def _generate_registrations(self) -> None:
         """

@@ -104,6 +104,20 @@ uv run qi2lab-preprocess \
   --overwrite
 ```
 
+To regenerate the complete fiducial registration chain while preserving
+existing readout deconvolution and U-FISH outputs, run:
+
+```bash
+uv run qi2lab-preprocess \
+  /path/to/experiment \
+  --num-gpus 1 \
+  --fiducial-registration-only \
+  --overwrite
+```
+
+This recomputes every local affine transform and SOFIMA field, then reruns
+global registration and global fiducial fusion.
+
 Registration-specific tuning is kept in the Python API rather than exposed as
 routine CLI flags.
 
