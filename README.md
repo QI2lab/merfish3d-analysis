@@ -64,8 +64,33 @@ uv run qi2lab-preprocess /path/to/experiment
 Local fiducial registration uses the qi2lab GPU registration path: lateral XY
 registration on max-Z projections, XYZ registration, and optional SOFIMA
 residual flow fields after affine fiducial alignment. Global registration and
-fused fiducial OME-Zarr creation follow the multiview-stitcher workflow; GPU
-acceleration is used in the direct fusion step.
+fused fiducial OME-Zarr creation follow the multiview-stitcher workflow, using
+CPU registration and CPU direct-to-Zarr fusion.
+
+## Fuse all channels
+
+After local and global registration, fuse the first-round fiducial and codebook
+bits into `qi2labdatastore/fused/full_dataset.ome.zarr`:
+
+```bash
+uv run qi2lab-fuseall /path/to/experiment \
+  --output-chunk-zyx 32,2048,2048 \
+  --fusion-workers 30 \
+  --compression blosc-lz4 \
+  --compression-level 1
+```
+
+All output levels use lossless compression. The shared default for fiducial
+and all-channel fusion is `blosc-zstd` with bitshuffle at level 1. The example
+selects `blosc-lz4` with bitshuffle for faster encoding; compression ratio and
+speed depend on the data. `zstd` is also available. Levels 1 through 9 are
+accepted; compression cannot be disabled. Changing compression preserves the
+pixel values produced by fusion.
+
+The output is OME-Zarr v0.5, with the fiducial first and then bits in numeric
+codebook order. The command uses stored chromatic, local-round, stage and global
+transforms; SOFIMA is omitted. See the [fusion workflow](https://qi2lab.github.io/merfish3d-analysis/workflow/#fuse-all-channels)
+for resource settings and restart behavior.
 
 ## View a qi2lab datastore
 

@@ -223,32 +223,33 @@ def decode_tiles_worker(
     Parameters
     ----------
     datastore_path : Path
-        Function argument.
+        Path to the qi2lab datastore containing the tiles to decode.
     tile_indices : Sequence[int]
-        Function argument.
+        Datastore tile indices assigned to this worker.
     gpu_id : int
-        Function argument.
+        Process-local CUDA device index. Isolated workers use 0; progress logs
+        report the corresponding identifier in ``CUDA_VISIBLE_DEVICES`` instead.
     merfish_bits : int
-        Function argument.
+        Number of MERFISH bits used by the decoder.
     verbose : int
-        Function argument.
+        Print tile start and completion messages when at least 1.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     lowpass_sigma : Sequence[float]
-        Function argument.
+        Gaussian lowpass standard deviations in ZYX pixel units.
     magnitude_threshold : Sequence[float]
-        Function argument.
+        Lower and upper pixel-trace magnitude thresholds.
     minimum_pixels : float
-        Function argument.
+        Minimum connected-component size accepted as a transcript.
     feature_predictor_threshold : float
-        Function argument.
+        Minimum feature-predictor probability passed to tile decoding.
     normalization_method : Literal['iterative', 'global', 'none']
-        Function argument.
+        Normalization source used for pixel traces.
 
     Returns
     -------
     None
-        Function result.
+        Decoded transcripts are saved to the datastore for each assigned tile.
     """
     preload_cuda_libraries()
 
@@ -258,6 +259,12 @@ def decode_tiles_worker(
     torch.cuda.set_device(gpu_id)
     cp.cuda.Device(gpu_id).use()
     cp.cuda.Stream.null.synchronize()
+
+    # CUDA renumbers each isolated worker's assigned GPU to local device 0.
+    visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    gpu_label = (
+        visible_devices.split(",")[gpu_id].strip() if visible_devices else str(gpu_id)
+    )
 
     local_datastore = qi2labDataStore(datastore_path, validate=False)
     local_decoder = PixelDecoder(
@@ -280,7 +287,7 @@ def decode_tiles_worker(
         if verbose >= 1:
             print(
                 time_stamp(),
-                f"GPU {gpu_id}: starting tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
+                f"GPU {gpu_label}: starting tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
                 flush=True,
             )
         local_decoder.decode_one_tile(
@@ -300,7 +307,7 @@ def decode_tiles_worker(
         if verbose >= 1:
             print(
                 time_stamp(),
-                f"GPU {gpu_id}: decoded and saved tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
+                f"GPU {gpu_label}: decoded and saved tile {tile_tracker + 1} of {len(tile_indices)} (tile index: {tile_idx}).",
                 flush=True,
             )
 

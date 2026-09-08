@@ -142,9 +142,50 @@ flowchart TD
 Global registration follows the multiview-stitcher registration and fusion
 workflow using the stage positions stored in the datastore as the starting
 geometry. The registration step refines global tile transforms on CPU. The
-fusion step writes directly to OME-Zarr with the GPU backend. The full global
+fusion step writes directly to OME-Zarr with the CPU backend. The full global
 stage can be rerun on an existing locally registered datastore with
 `uv run qi2lab-preprocess /path/to/experiment --global-registration-only`.
+
+## Fuse all channels
+
+Once local and global registrations are complete, create one multichannel
+OME-Zarr v0.5:
+
+```bash
+uv run qi2lab-fuseall /path/to/experiment \
+  --output-chunk-zyx 32,2048,2048 \
+  --fusion-workers 30 \
+  --compression blosc-lz4 \
+  --compression-level 1
+```
+
+The output is `qi2labdatastore/fused/full_dataset.ome.zarr`. Channel 0 is the
+first-round fiducial; remaining channels are the codebook bits in numeric order.
+MVS composes the stored chromatic correction, local-round affine, stage-camera
+affine, stage position and global refinement while sampling native images.
+SOFIMA fields are ignored. `--write-ome-tiffs` additionally exports one
+full-resolution OME-TIFF per channel beside the OME-Zarr.
+
+Both this command and `DataRegistration.py` use the same CPU fusion options.
+The shared default codec is lossless Blosc-Zstd with bitshuffle at level 1.
+`--compression blosc-lz4` selects lossless Blosc-LZ4 with bitshuffle for faster
+encoding, with a data-dependent compression ratio. `--compression zstd` selects
+plain Zstd. `--compression-level` accepts 1 through 9, with 1 favoring speed.
+Compression is mandatory and applies to the full-resolution array and every
+pyramid level. Codec changes do not alter fused pixels.
+
+`--output-chunk-zyx` controls both computation and storage chunks. When omitted,
+MVS uses the source chunk shape. Larger chunks reduce scheduling overhead but
+increase each worker's interpolation and blending memory. `--fusion-workers`
+sets the number of CPU worker processes. The example is intended for a machine
+with substantial RAM; choose resources for the machine running the command.
+Progress updates after each batch of four times the worker count, and pyramid
+creation follows full-resolution fusion.
+
+Rerunning the command replaces the existing `full_dataset.ome.zarr`; it does not
+resume a partial fusion. Stop any existing fusion process before rerunning with
+different compression settings. Registration metadata and source images are
+reused, so preprocessing does not need to be repeated.
 
 ## Pixel decoding
 
