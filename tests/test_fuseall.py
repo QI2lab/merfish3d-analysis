@@ -292,6 +292,8 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         write_ome_tiffs=write_ome_tiffs,
         output_chunk_zyx="32,2048,2048",
         fusion_workers=40,
+        compression="blosc-lz4",
+        compression_level=2,
     )
 
     channels = ["fiducial", "bit001", "bit002", "bit010"]
@@ -321,6 +323,8 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
     direct_options.assert_called_once_with(
         misc_utils=fuseall.misc_utils,
         fusion_workers=40,
+        compression="blosc-lz4",
+        compression_level=2,
     )
     read_fused_metadata.assert_called_once_with(
         sentinel.fused,
@@ -361,3 +365,27 @@ def test_fuseall_cli_has_no_gpu_option() -> None:
     assert "--gpu-id" not in result.stdout
     assert "--output-chunk-zyx" in result.stdout
     assert "--fusion-workers" in result.stdout
+    assert "--compression" in result.stdout
+    assert "--compression-level" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--compression", "none"],
+        ["--compression", "unknown"],
+        ["--compression-level", "0"],
+        ["--compression-level", "10"],
+    ],
+)
+def test_fuseall_rejects_invalid_compression_before_loading_data(
+    monkeypatch: pytest.MonkeyPatch, options: list[str]
+) -> None:
+    datastore = Mock()
+    monkeypatch.setattr(fuseall, "qi2labDataStore", datastore)
+
+    result = CliRunner().invoke(fuseall.app, ["/unused/experiment", *options])
+
+    assert result.exit_code == 2
+    assert "Invalid value" in result.output
+    datastore.assert_not_called()

@@ -91,7 +91,11 @@ paths apply the selected transform chain when they need aligned data.
 Global registration follows the multiview-stitcher registration and fusion
 workflow. Stage metadata initializes the tile geometry, CPU registration
 refines the global tile transforms, and the fused fiducial OME-Zarr is written
-directly to disk with the multiview-stitcher/CuPy fusion backend.
+directly to disk with the multiview-stitcher CPU fusion backend. Both fiducial
+fusion and `qi2lab-fuseall` use lossless Blosc-Zstd with bitshuffle at level 1 by
+default. The all-channel command also accepts `--compression blosc-lz4` or
+`--compression zstd` and `--compression-level` from 1 through 9. All pyramid
+levels remain compressed; see the [fusion workflow](workflow.md#fuse-all-channels).
 
 To rerun the global registration and fusion stage on an existing datastore
 without redoing local preprocessing:

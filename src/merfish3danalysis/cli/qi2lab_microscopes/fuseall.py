@@ -474,6 +474,25 @@ def fuse_all_channels(
             help="Number of CPU fusion worker processes (default: available CPUs).",
         ),
     ] = None,
+    compression: Annotated[
+        str,
+        typer.Option(
+            "--compression",
+            help=(
+                "Lossless output compression: blosc-zstd, blosc-lz4, or zstd. "
+                "Blosc codecs use bitshuffle; compression is always enabled."
+            ),
+        ),
+    ] = "blosc-zstd",
+    compression_level: Annotated[
+        int,
+        typer.Option(
+            "--compression-level",
+            min=1,
+            max=9,
+            help="Compression effort for every resolution level (1 is fastest).",
+        ),
+    ] = 1,
 ) -> None:
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
@@ -495,6 +514,12 @@ def fuse_all_channels(
         omitted, multiview-stitcher preserves the source Zarr chunk shape.
     fusion_workers : int or None, default=None
         Number of CPU worker processes. Defaults to the available CPU count.
+    compression : str, default="blosc-zstd"
+        Lossless output codec: ``blosc-zstd``, ``blosc-lz4``, or ``zstd``.
+        Blosc codecs use bitshuffle. All resolution levels remain compressed.
+    compression_level : int, default=1
+        Compression effort from 1 through 9. Higher levels can trade encoding
+        speed for a smaller output without changing pixel values.
 
     Returns
     -------
@@ -503,6 +528,17 @@ def fuse_all_channels(
         ``qi2labdatastore/fused/full_dataset.ome.zarr``. Optional
         TIFFs are written beside it.
     """
+    output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
+    try:
+        fusion_options = _direct_zarr_fusion_kwargs(
+            misc_utils=misc_utils,
+            fusion_workers=fusion_workers,
+            compression=compression,
+            compression_level=compression_level,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
     datastore = qi2labDataStore(qi2lab_datastore_path(root_path))
     stage_transform_key = "stage_metadata"
     global_transform_key = "global_registered"
@@ -527,7 +563,6 @@ def fuse_all_channels(
     output_directory = datastore._fused_root_path
     output_directory.mkdir(parents=True, exist_ok=True)
     final_output = datastore._image_store_path(output_directory / "full_dataset")
-    output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
     fusion_call_kwargs: dict[str, Any] = {}
     if output_chunksize is not None:
         fusion_call_kwargs["output_chunksize"] = output_chunksize
@@ -537,10 +572,7 @@ def fuse_all_channels(
         output_spacing=output_spacing,
         output_zarr_url=str(final_output),
         **fusion_call_kwargs,
-        **_direct_zarr_fusion_kwargs(
-            misc_utils=misc_utils,
-            fusion_workers=fusion_workers,
-        ),
+        **fusion_options,
     )
     fused_metadata = _read_fused_metadata(
         fused_msim,

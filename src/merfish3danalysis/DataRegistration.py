@@ -154,6 +154,8 @@ def _direct_zarr_fusion_kwargs(
     *,
     misc_utils: Any,
     fusion_workers: int | None = None,
+    compression: str = "blosc-zstd",
+    compression_level: int = 1,
 ) -> dict[str, Any]:
     """
     Build direct-to-Zarr fusion and process-parallelization options.
@@ -165,6 +167,12 @@ def _direct_zarr_fusion_kwargs(
     fusion_workers : int or None, default=None
         Number of Loky worker processes. The available CPU count is used when
         omitted.
+    compression : str, default="blosc-zstd"
+        Lossless output codec: ``blosc-zstd``, ``blosc-lz4``, or ``zstd``.
+        Blosc codecs use bitshuffle with the array's element size. The codec
+        applies to both full-resolution fusion and the OME-Zarr pyramid.
+    compression_level : int, default=1
+        Compression effort from 1 through 9. Compression is always enabled.
 
     Returns
     -------
@@ -174,9 +182,26 @@ def _direct_zarr_fusion_kwargs(
     Raises
     ------
     ValueError
-        If ``fusion_workers`` is less than one.
+        If the worker count, codec, or compression level is invalid.
     """
     from joblib._parallel_backends import LokyBackend
+    from zarr.codecs import BloscCodec, BytesCodec, ZstdCodec
+
+    if compression not in ("blosc-zstd", "blosc-lz4", "zstd"):
+        raise ValueError(
+            "Compression must be blosc-zstd, blosc-lz4, or zstd; "
+            "uncompressed fusion output is not supported."
+        )
+    if not 1 <= compression_level <= 9:
+        raise ValueError("Compression level must be between 1 and 9.")
+    if compression == "zstd":
+        compressor = ZstdCodec(level=compression_level)
+    else:
+        compressor = BloscCodec(
+            cname=compression.removeprefix("blosc-"),
+            clevel=compression_level,
+            shuffle="bitshuffle",
+        )
 
     if fusion_workers is None:
         fusion_workers = max(1, os.cpu_count() or 1)
@@ -192,6 +217,9 @@ def _direct_zarr_fusion_kwargs(
             "ome_zarr": True,
             "ngff_version": "0.5",
             "overwrite": True,
+            "zarr_array_creation_kwargs": {
+                "codecs": [BytesCodec(endian="little"), compressor],
+            },
         },
         "batch_options": {
             "batch_func": misc_utils.process_batch_using_joblib,
