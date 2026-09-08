@@ -100,6 +100,8 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
                 "--outlines-only",
                 "--min-cell-area-um2",
                 str(cutoff),
+                "--roi-workers",
+                "2",
             ],
         )
         assert result.exit_code == 0, result.output
@@ -147,6 +149,11 @@ def test_inference_exports_filtered_global_rois(
     monkeypatch.setattr(
         segment_fiducial.io, "imread_2D", lambda _path: np.ones((20, 20))
     )
+    monkeypatch.setattr(
+        segment_fiducial,
+        "roiread",
+        Mock(side_effect=AssertionError("must reuse pixel ROIs in memory")),
+    )
     roiwrite(pixel_path.with_name("global_coords_rois.zip"), roiread(pixel_path))
 
     segment_fiducial.run_cellpose(
@@ -164,3 +171,27 @@ def test_inference_exports_filtered_global_rois(
     np.testing.assert_array_equal(
         datastore.save_global_cellpose_segmentation_image.call_args.args[0], masks
     )
+
+
+def test_invalid_worker_count_is_rejected_before_loading_data():
+    with pytest.raises(typer.BadParameter, match="non-negative"):
+        segment_fiducial.run_cellpose(Path("/unused"), roi_workers=-1)
+
+
+def test_failed_streamed_export_preserves_existing_zip(tmp_path, monkeypatch):
+    output_path = tmp_path / "global_coords_rois.zip"
+    roi = ImagejRoi.frompoints([[0, 0], [1, 0], [1, 1]], name="original")
+    roiwrite(output_path, [roi])
+    original_bytes = output_path.read_bytes()
+
+    def failed_export(*_args, **_kwargs):
+        yield roi
+        raise ValueError("invalid outline")
+
+    monkeypatch.setattr(segment_fiducial, "global_rois", failed_export)
+    with pytest.raises(ValueError, match="invalid outline"):
+        segment_fiducial._save_global_rois(
+            [roi], output_path, np.ones(3), np.zeros(3), np.eye(4), 0, workers=2
+        )
+    assert output_path.read_bytes() == original_bytes
+    assert list(tmp_path.iterdir()) == [output_path]

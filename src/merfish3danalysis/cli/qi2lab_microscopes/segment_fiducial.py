@@ -6,7 +6,10 @@ Shepherd 2024/12 - refactor
 Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
+import os
+from collections.abc import Iterator
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Annotated
 
@@ -14,10 +17,10 @@ import numpy as np
 import typer
 from cellpose import io, models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
-from shapely.geometry import Polygon
 
 from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.cellpose_rois import extract_pixel_rois, global_rois
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -47,6 +50,12 @@ def run_cellpose(
             help="Rebuild global outlines from saved pixel ROIs without running Cellpose."
         ),
     ] = False,
+    roi_workers: Annotated[
+        int,
+        typer.Option(
+            help="CPU workers for ROI extraction/export; 0 uses up to 8 available CPUs."
+        ),
+    ] = 0,
 ) -> None:
     """Run Cellpose and save masks plus ImageJ ROIs.
 
@@ -69,7 +78,8 @@ def run_cellpose(
         Cellpose model name or path. Built-in GUI names include cpsam_v2,
         cpdino, cpdino-vitb, and cpsam.
     roi_multiprocessing : bool, default=True
-        Use Cellpose multiprocessing for ImageJ ROI outline extraction.
+        Enable parallel ROI extraction and export. Workers use threads to
+        share the mask image without copying it between processes.
     save_outputs : bool, default=True
         Save mask image and ImageJ ROIs after Cellpose finishes. Disable this
         for fast parameter comparison against the Cellpose GUI.
@@ -83,6 +93,9 @@ def run_cellpose(
     outlines_only : bool, default=False
         Regenerate global ROIs from saved pixel ROIs without running Cellpose.
         Requires save_outputs=True.
+    roi_workers : int, default=0
+        Number of CPU workers for ROI extraction and export. Zero selects up
+        to eight available CPUs; roi_multiprocessing=False forces one worker.
     """
     if not np.isfinite(min_cell_area_um2) or min_cell_area_um2 < 0:
         raise typer.BadParameter(
@@ -90,6 +103,14 @@ def run_cellpose(
         )
     if outlines_only and not save_outputs:
         raise typer.BadParameter("--outlines-only requires --save-outputs")
+    if roi_workers < 0:
+        raise typer.BadParameter("must be non-negative", param_hint="--roi-workers")
+    available_cpus = (
+        len(os.sched_getaffinity(0))
+        if hasattr(os, "sched_getaffinity")
+        else os.cpu_count() or 1
+    )
+    workers = (roi_workers or min(8, available_cpus)) if roi_multiprocessing else 1
 
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
@@ -125,6 +146,7 @@ def run_cellpose(
             origin_zyx_um,
             affine_zyx_um,
             min_cell_area_um2,
+            workers=workers,
         )
         datastore_state = datastore.datastore_state
         datastore_state.update({"SegmentedCells": True})
@@ -259,29 +281,23 @@ def run_cellpose(
     # save pixel spaced ROIs
     step_start = perf_counter()
     imagej_roi_path_dir.mkdir(exist_ok=True)
-    imagej_roi_path = imagej_roi_path_dir / "pixel_spacing"
     print(
-        f"Saving pixel-space ImageJ ROIs to {imagej_roi_path}_rois.zip "
-        f"multiprocessing={roi_multiprocessing}.",
+        f"Extracting pixel-space ImageJ ROIs with {workers} workers.",
         flush=True,
     )
-    if mask_count:
-        io.save_rois(masks, str(imagej_roi_path), multiprocessing=roi_multiprocessing)
-    else:
-        # Cellpose skips writing empty masks; replace any previous ROIs.
-        roiwrite(cellpose_roi_path, [], mode="w")
+    pixel_spacing_rois = extract_pixel_rois(
+        masks, mask_labels[mask_labels != 0], workers=workers
+    )
+    print(
+        f"Extracted {len(pixel_spacing_rois)} pixel-space ROIs in "
+        f"{perf_counter() - step_start:.1f} s.",
+        flush=True,
+    )
+    step_start = perf_counter()
+    print(f"Saving pixel-space ImageJ ROIs to {cellpose_roi_path}.", flush=True)
+    roiwrite(cellpose_roi_path, pixel_spacing_rois, mode="w")
     print(
         f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
-        flush=True,
-    )
-
-    # load pixel spaced ROIs
-    step_start = perf_counter()
-    print(f"Loading pixel-space ImageJ ROIs from {cellpose_roi_path}.", flush=True)
-    pixel_spacing_rois = roiread(cellpose_roi_path)
-    print(
-        f"Loaded {len(pixel_spacing_rois)} pixel-space ROIs in "
-        f"{perf_counter() - step_start:.1f} s.",
         flush=True,
     )
 
@@ -292,6 +308,7 @@ def run_cellpose(
         origin_zyx_um,
         affine_zyx_um,
         min_cell_area_um2,
+        workers=workers,
     )
 
     # update datastore state
@@ -307,79 +324,44 @@ def _save_global_rois(
     origin_zyx_um: np.ndarray,
     affine_zyx_um: np.ndarray,
     min_cell_area_um2: float,
+    *,
+    workers: int = 1,
 ) -> None:
-    """Warp pixel ROIs, filter by global XY polygon area, and replace the ZIP."""
+    """Stream parallel, vectorized outline filtering into a replacement ZIP."""
     step_start = perf_counter()
-    print("Warping ImageJ ROIs into global coordinates.", flush=True)
-    global_spacing_rois = []
-    for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
-        roi = _global_roi_from_pixel_roi(
-            pixel_spaced_roi,
-            len(global_spacing_rois),
+    print(
+        f"Warping, filtering, and saving global ImageJ ROIs to {global_roi_path} "
+        f"with {workers} workers.",
+        flush=True,
+    )
+    kept_count = 0
+
+    def retained_rois() -> Iterator[ImagejRoi]:
+        nonlocal kept_count
+        for roi in global_rois(
+            pixel_spacing_rois,
             spacing_zyx_um,
             origin_zyx_um,
             affine_zyx_um,
-        )
-        if (
-            min_cell_area_um2 == 0
-            or Polygon(roi.coordinates()).area >= min_cell_area_um2
+            min_cell_area_um2,
+            workers=workers,
         ):
-            global_spacing_rois.append(roi)
-        del roi
-        if (cell_idx + 1) % 1000 == 0:
-            print(
-                f"Warped {cell_idx + 1}/{len(pixel_spacing_rois)} ROIs.",
-                flush=True,
-            )
+            kept_count += 1
+            yield roi
+            if kept_count % 10000 == 0:
+                print(f"Saved {kept_count} global ImageJ ROIs.", flush=True)
+
+    with TemporaryDirectory(dir=global_roi_path.parent) as temporary_directory:
+        temporary_path = Path(temporary_directory) / global_roi_path.name
+        roiwrite(temporary_path, retained_rois(), mode="w")
+        temporary_path.replace(global_roi_path)
     print(
-        f"Kept {len(global_spacing_rois)}/{len(pixel_spacing_rois)} ImageJ ROIs; "
-        f"removed {len(pixel_spacing_rois) - len(global_spacing_rois)} with "
+        f"Saved {kept_count}/{len(pixel_spacing_rois)} ImageJ ROIs; "
+        f"removed {len(pixel_spacing_rois) - kept_count} with "
         f"min_cell_area_um2={min_cell_area_um2} in "
         f"{perf_counter() - step_start:.1f} s.",
         flush=True,
     )
-
-    # write global coordinate ROIs
-    step_start = perf_counter()
-    print(f"Saving global-coordinate ImageJ ROIs to {global_roi_path}.", flush=True)
-    roiwrite(global_roi_path, global_spacing_rois, mode="w")
-    print(
-        f"Saved global-coordinate ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
-        flush=True,
-    )
-
-
-def _global_roi_from_pixel_roi(
-    pixel_spaced_roi: ImagejRoi,
-    cell_idx: int,
-    spacing_zyx_um: np.ndarray,
-    origin_zyx_um: np.ndarray,
-    affine_zyx_um: np.ndarray,
-) -> ImagejRoi:
-    """Warp one pixel-space ROI into global ImageJ xy coordinates.
-
-    Pixel-space ROIs are stored as xy points. The global transform expects zyx
-    points, so this pads a dummy z plane, flips xy to yx for the transform, then
-    drops z and flips back to xy for ImageJ ROI storage.
-    """
-    pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
-    global_coordinates_padded = warp_points(
-        np.column_stack(
-            (
-                np.full(pixel_coordinates.shape[0], 10, dtype=np.float32),
-                pixel_coordinates[:, 1],
-                pixel_coordinates[:, 0],
-            )
-        ),
-        spacing_zyx_um,
-        origin_zyx_um,
-        affine_zyx_um,
-    )
-    roi = ImagejRoi.frompoints(
-        np.round(global_coordinates_padded[:, 1:][:, ::-1], 2).astype(np.float32)
-    )
-    roi.name = "cell_" + str(cell_idx).zfill(7)
-    return roi
 
 
 def warp_points(

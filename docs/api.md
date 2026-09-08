@@ -209,6 +209,13 @@ the new boundaries; rerun decoding if existing cell assignments or normalization
 need to reflect the filtered outlines. Exported cell IDs are renumbered in ROI
 order when the retained set changes.
 
+ROI extraction uses each label's bounding box and shares the mask across CPU
+workers. Global transforms and polygon areas are computed in vectorized batches,
+and retained outlines stream into the ZIP. Normal segmentation reuses the
+extracted pixel ROIs in memory for global export. Both modes use up to eight CPU
+workers by default; set `--roi-workers 4` to choose a worker count or
+`--no-roi-multiprocessing` to run with one worker.
+
 ## Viewer CLI
 
 Use the `viewer` entry point for read-only datastore inspection:
