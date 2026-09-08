@@ -1455,7 +1455,7 @@ def cell_boundary_polylines_for_tile(
         Sparse local cell_boundary geometry.
     """
     cell_boundaries = datastore.load_global_cellpose_roi_zip()
-    if not cell_boundaries:
+    if cell_boundaries is None:
         cell_boundaries = datastore.load_global_cellpose_outlines()
     if cell_boundaries is None:
         return None
@@ -1500,7 +1500,7 @@ def global_cell_boundary_geometry(
         Sparse global cell-boundary geometry.
     """
     cell_boundaries = datastore.load_global_cellpose_roi_zip()
-    if not cell_boundaries:
+    if cell_boundaries is None:
         cell_boundaries = datastore.load_global_cellpose_outlines()
     if cell_boundaries is None:
         return None

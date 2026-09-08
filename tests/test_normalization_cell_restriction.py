@@ -56,7 +56,9 @@ def test_global_normalization_pixel_selection_excludes_noncell_voxels() -> None:
 def test_present_empty_segmentation_does_not_fall_back_to_all_pixels() -> None:
     datastore = SimpleNamespace(
         load_global_cellpose_roi_zip=Mock(return_value={}),
-        load_global_cellpose_outlines=Mock(return_value={}),
+        load_global_cellpose_outlines=Mock(
+            side_effect=AssertionError("must not restore outlines from legacy JSON")
+        ),
         load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(2), np.eye(4))),
         load_global_coord_xforms_um=Mock(
             return_value=(np.eye(4), np.zeros(2), np.ones(3))

@@ -595,7 +595,7 @@ class PixelDecoder:
                 outlines = load_roi_zip()
                 if outlines is not None:
                     segmentation_geometry_exists = True
-            if not outlines:
+            if outlines is None:
                 load_outlines = getattr(
                     self._datastore,
                     "load_global_cellpose_outlines",

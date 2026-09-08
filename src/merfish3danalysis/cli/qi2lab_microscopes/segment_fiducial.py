@@ -8,11 +8,13 @@ Shepherd 2024/11 - created script to run cellpose given determined parameters.
 
 from pathlib import Path
 from time import perf_counter
+from typing import Annotated
 
 import numpy as np
 import typer
 from cellpose import io, models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
+from shapely.geometry import Polygon
 
 from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -33,6 +35,18 @@ def run_cellpose(
     roi_multiprocessing: bool = True,
     save_outputs: bool = True,
     use_gpu: bool = True,
+    min_cell_area_um2: Annotated[
+        float,
+        typer.Option(
+            help="Minimum exported outline area in square microns; 0 disables filtering."
+        ),
+    ] = 0.0,
+    outlines_only: Annotated[
+        bool,
+        typer.Option(
+            help="Rebuild global outlines from saved pixel ROIs without running Cellpose."
+        ),
+    ] = False,
 ) -> None:
     """Run Cellpose and save masks plus ImageJ ROIs.
 
@@ -62,7 +76,21 @@ def run_cellpose(
     use_gpu : bool, default=True
         Run Cellpose on CUDA. If True and CUDA is unavailable to PyTorch, raise
         an error instead of silently falling back to slow CPU inference.
+    min_cell_area_um2 : float, default=0.0
+        Minimum global XY outline area in square microns. Outlines smaller
+        than this are excluded from the global ROI ZIP used by the viewer and
+        decoder. Zero disables filtering. Raw masks and pixel ROIs are retained.
+    outlines_only : bool, default=False
+        Regenerate global ROIs from saved pixel ROIs without running Cellpose.
+        Requires save_outputs=True.
     """
+    if not np.isfinite(min_cell_area_um2) or min_cell_area_um2 < 0:
+        raise typer.BadParameter(
+            "must be finite and non-negative", param_hint="--min-cell-area-um2"
+        )
+    if outlines_only and not save_outputs:
+        raise typer.BadParameter("--outlines-only requires --save-outputs")
+
     # initialize datastore
     datastore_path = qi2lab_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
@@ -80,6 +108,28 @@ def run_cellpose(
     affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
     origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
     spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+
+    imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
+    cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
+    global_roi_path = imagej_roi_path_dir / "global_coords_rois.zip"
+    if outlines_only:
+        if not cellpose_roi_path.exists():
+            raise FileNotFoundError(
+                f"Saved pixel-space ROIs not found: {cellpose_roi_path}. "
+                "Run qi2lab-segment without --outlines-only first."
+            )
+        _save_global_rois(
+            roiread(cellpose_roi_path),
+            global_roi_path,
+            spacing_zyx_um,
+            origin_zyx_um,
+            affine_zyx_um,
+            min_cell_area_um2,
+        )
+        datastore_state = datastore.datastore_state
+        datastore_state.update({"SegmentedCells": True})
+        datastore.datastore_state = datastore_state
+        return
 
     max_projection_path = (
         datastore_path
@@ -208,7 +258,6 @@ def run_cellpose(
 
     # save pixel spaced ROIs
     step_start = perf_counter()
-    imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
     imagej_roi_path_dir.mkdir(exist_ok=True)
     imagej_roi_path = imagej_roi_path_dir / "pixel_spacing"
     print(
@@ -216,7 +265,11 @@ def run_cellpose(
         f"multiprocessing={roi_multiprocessing}.",
         flush=True,
     )
-    io.save_rois(masks, str(imagej_roi_path), multiprocessing=roi_multiprocessing)
+    if mask_count:
+        io.save_rois(masks, str(imagej_roi_path), multiprocessing=roi_multiprocessing)
+    else:
+        # Cellpose skips writing empty masks; replace any previous ROIs.
+        roiwrite(cellpose_roi_path, [], mode="w")
     print(
         f"Saved pixel-space ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
         flush=True,
@@ -224,7 +277,6 @@ def run_cellpose(
 
     # load pixel spaced ROIs
     step_start = perf_counter()
-    cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
     print(f"Loading pixel-space ImageJ ROIs from {cellpose_roi_path}.", flush=True)
     pixel_spacing_rois = roiread(cellpose_roi_path)
     print(
@@ -233,18 +285,46 @@ def run_cellpose(
         flush=True,
     )
 
+    _save_global_rois(
+        pixel_spacing_rois,
+        global_roi_path,
+        spacing_zyx_um,
+        origin_zyx_um,
+        affine_zyx_um,
+        min_cell_area_um2,
+    )
+
+    # update datastore state
+    datastore_state = datastore.datastore_state
+    datastore_state.update({"SegmentedCells": True})
+    datastore.datastore_state = datastore_state
+
+
+def _save_global_rois(
+    pixel_spacing_rois: list[ImagejRoi],
+    global_roi_path: Path,
+    spacing_zyx_um: np.ndarray,
+    origin_zyx_um: np.ndarray,
+    affine_zyx_um: np.ndarray,
+    min_cell_area_um2: float,
+) -> None:
+    """Warp pixel ROIs, filter by global XY polygon area, and replace the ZIP."""
     step_start = perf_counter()
     print("Warping ImageJ ROIs into global coordinates.", flush=True)
     global_spacing_rois = []
     for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
         roi = _global_roi_from_pixel_roi(
             pixel_spaced_roi,
-            cell_idx,
+            len(global_spacing_rois),
             spacing_zyx_um,
             origin_zyx_um,
             affine_zyx_um,
         )
-        global_spacing_rois.append(roi)
+        if (
+            min_cell_area_um2 == 0
+            or Polygon(roi.coordinates()).area >= min_cell_area_um2
+        ):
+            global_spacing_rois.append(roi)
         del roi
         if (cell_idx + 1) % 1000 == 0:
             print(
@@ -252,25 +332,21 @@ def run_cellpose(
                 flush=True,
             )
     print(
-        f"Warped {len(global_spacing_rois)} ImageJ ROIs in "
+        f"Kept {len(global_spacing_rois)}/{len(pixel_spacing_rois)} ImageJ ROIs; "
+        f"removed {len(pixel_spacing_rois) - len(global_spacing_rois)} with "
+        f"min_cell_area_um2={min_cell_area_um2} in "
         f"{perf_counter() - step_start:.1f} s.",
         flush=True,
     )
 
     # write global coordinate ROIs
     step_start = perf_counter()
-    global_roi_path = imagej_roi_path_dir / "global_coords_rois.zip"
     print(f"Saving global-coordinate ImageJ ROIs to {global_roi_path}.", flush=True)
-    roiwrite(global_roi_path, global_spacing_rois)
+    roiwrite(global_roi_path, global_spacing_rois, mode="w")
     print(
         f"Saved global-coordinate ImageJ ROIs in {perf_counter() - step_start:.1f} s.",
         flush=True,
     )
-
-    # update datastore state
-    datastore_state = datastore.datastore_state
-    datastore_state.update({"SegmentedCells": True})
-    datastore.datastore_state = datastore_state
 
 
 def _global_roi_from_pixel_roi(

@@ -181,6 +181,34 @@ size unless `--diameter` is explicitly provided. The fused fiducial max
 projection is passed to Cellpose without rescaling to 8-bit; Cellpose handles
 normalization through the supplied percentile settings.
 
+Use `--min-cell-area-um2` to exclude small outlines from the global ImageJ ROI
+ZIP used for Cellpose boundaries in the viewer and downstream decoding. The
+cutoff is the enclosed XY polygon area in square microns, after applying the
+fused image spacing and global transform. Outlines at the cutoff are retained;
+the default `0` disables this filter. Cellpose's `--min-size` remains a separate
+minimum mask size in pixels during inference.
+
+For example, to exclude outlines smaller than 20 µm² during segmentation:
+
+```bash
+uv run qi2lab-segment /path/to/experiment --min-cell-area-um2 20
+```
+
+To apply or adjust the cutoff on existing extracted outlines without rerunning
+Cellpose or loading the fused image:
+
+```bash
+uv run qi2lab-segment /path/to/experiment --outlines-only --min-cell-area-um2 20
+```
+
+This regenerates `segmentation/cellpose/imagej_rois/global_coords_rois.zip`
+from the saved `pixel_spacing_rois.zip` and fused-image transform metadata.
+Raw masks and pixel-space ROIs are retained so the cutoff can be lowered later.
+The command reports the retained and removed counts. Reload the viewer to see
+the new boundaries; rerun decoding if existing cell assignments or normalization
+need to reflect the filtered outlines. Exported cell IDs are renumbered in ROI
+order when the retained set changes.
+
 ## Viewer CLI
 
 Use the `viewer` entry point for read-only datastore inspection:
