@@ -89,7 +89,9 @@ datastore.na = 1.35
 datastore.ri = 1.51
 datastore.binning = 1
 datastore.noise_map = np.zeros((2048, 2048), dtype=np.uint16)
-datastore.channel_psfs = channel_psfs  # one experimental or theoretical 3D PSF per channel
+datastore.channel_psfs = (
+    channel_psfs  # one experimental or theoretical 3D PSF per channel
+)
 datastore.voxel_size_zyx_um = [0.31, 0.098, 0.098]
 
 # Mark calibrations complete
@@ -125,7 +127,7 @@ datastore.save_local_stage_position_zyx_um(
 # save excitation and emission wavelengths for tile = 0, round = 0, fiducial
 # this position is used for any bits linked to this round
 datastore.save_local_wavelengths_um(
-    (.488, .520),
+    (0.488, 0.520),
     tile=0,
     round=0,
 )
@@ -147,7 +149,7 @@ datastore.save_local_corrected_image(
 
 # save excitation and emission wavelengths for tile = 0, bit = 0
 datastore.save_local_wavelengths_um(
-    (.561, .590),
+    (0.561, 0.590),
     tile=0,
     bit=0,
 )
@@ -169,7 +171,7 @@ datastore.save_local_corrected_image(
 
 # save excitation and emission wavelengths for tile = 0, bit = 1
 datastore.save_local_wavelengths_um(
-    (.635, .670),
+    (0.635, 0.670),
     tile=0,
     bit=1,
 )
