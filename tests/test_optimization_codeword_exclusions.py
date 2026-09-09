@@ -205,8 +205,10 @@ def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
         np.testing.assert_allclose(observed_values, expected_values)
 
 
+@pytest.mark.parametrize("normalization_features", ["all", "cells"])
 def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     monkeypatch: pytest.MonkeyPatch,
+    normalization_features: str,
 ) -> None:
     decoder = _decoder_with_codebook()
     decoder._num_gpus = 1
@@ -218,6 +220,7 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     decoder._effective_decode_mode = "3d"
     decoder._n_merfish_bits = 4
     decoder._estimate_chromatic_affines = False
+    decoder._normalization_features = normalization_features
     decoder._is_3D = True
     decoder._cleanup = lambda: None
     decoder._load_all_barcodes = lambda: None
@@ -269,7 +272,12 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     )
 
     assert len(captured_args) == 1
-    assert captured_args[0][1][-1] == ("GeneB",)
+    assert captured_args[0][1][-2] == ("GeneB",)
+    assert captured_args[0][1][-1] == normalization_features
+    assert (
+        decoder._iterative_normalization_metadata()["normalization_features"]
+        == normalization_features
+    )
 
 
 def test_run_scoped_normalization_metadata_round_trips() -> None:

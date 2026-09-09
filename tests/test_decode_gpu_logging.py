@@ -33,6 +33,7 @@ def worker_dependencies(monkeypatch):
         device=device,
         set_device=torch.cuda.set_device,
         decoder=local_decoder,
+        decoder_factory=decoder_factory,
     )
 
 
@@ -97,9 +98,38 @@ def test_worker_logs_visible_gpu_but_computes_on_local_device(
     )
 
 
+@pytest.mark.parametrize("normalization_method", ["global", "none"])
+def test_worker_does_not_load_unused_iterative_normalization(
+    tmp_path, worker_dependencies, normalization_method
+):
+    pixel_decoder_module.decode_tiles_worker(
+        datastore_path=tmp_path,
+        tile_indices=[0],
+        gpu_id=0,
+        merfish_bits=4,
+        verbose=0,
+        decode_mode="3d",
+        lowpass_sigma=(3, 1, 1),
+        magnitude_threshold=(1.5, 10),
+        minimum_pixels=1,
+        feature_predictor_threshold=0.1,
+        normalization_method=normalization_method,
+        normalization_features="all",
+    )
+    assert (
+        worker_dependencies.decoder_factory.call_args.kwargs["normalization_features"]
+        == "all"
+    )
+    worker_dependencies.decoder._load_iterative_normalization_vectors.assert_not_called()
+    assert worker_dependencies.decoder._load_global_normalization_vectors.called == (
+        normalization_method == "global"
+    )
+
+
 @pytest.mark.parametrize("verbose", [0, 1])
+@pytest.mark.parametrize("normalization_features", ["all", "cells"])
 def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
-    monkeypatch, capsys, tmp_path, worker_dependencies, verbose
+    monkeypatch, capsys, tmp_path, worker_dependencies, verbose, normalization_features
 ):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     started_masks = []
@@ -129,6 +159,7 @@ def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
     decoder._verbose = verbose
     decoder._decode_mode = "3d"
     decoder._is_3D = True
+    decoder._normalization_features = normalization_features
     decoder._df_barcodes_loaded = []
     for method in (
         "_load_all_barcodes",
@@ -141,6 +172,10 @@ def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
     decoder.decode_all_tiles(assign_to_cells=False, minimum_pixels=1)
 
     assert started_masks == ["0", "1"]
+    assert [
+        invocation.kwargs["normalization_features"]
+        for invocation in worker_dependencies.decoder_factory.call_args_list
+    ] == [normalization_features, normalization_features]
     assert "CUDA_VISIBLE_DEVICES" not in os.environ
     assert worker_dependencies.device.call_args_list == [call(0), call(0)]
     assert worker_dependencies.set_device.call_args_list == [call(0), call(0)]

@@ -131,6 +131,27 @@ Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
 datastore microscope type; explicit modes also select the matching default
 minimum-pixel, magnitude, and feature-predictor thresholds.
 
+Use `--normalization-features all|cells` to choose the features used to fit
+global and iterative normalization:
+
+```bash
+uv run qi2lab-decode /path/to/experiment --normalization-features all
+uv run qi2lab-decode /path/to/experiment --normalization-features cells
+```
+
+The default `cells` uses features inside the saved Cellpose outlines, including
+their boundaries. Global percentile estimation samples the corresponding tile
+pixels across Z; iterative fitting uses decoded feature positions in global XY.
+If no segmentation exists, it uses all features. An existing empty segmentation
+selects no features. `all` bypasses the cell-mask restriction entirely.
+
+This setting controls normalization fitting, including optional chromatic
+estimation during optimization; it does not spatially filter the final decoded
+feature export. Both GPU worker paths receive the selection. When switching
+feature modes, rerun optimization (omit `--skip-optimization`): cached iterative
+vectors from the other mode are rejected, and global vectors are recalculated.
+`--reprocess-existing` only refilters saved decoding and does not refit normalization.
+
 Chromatic affine estimation is opt-in during iterative normalization:
 
 ```bash
