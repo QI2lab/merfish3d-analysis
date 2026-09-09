@@ -131,6 +131,27 @@ Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
 datastore microscope type; explicit modes also select the matching default
 minimum-pixel, magnitude, and feature-predictor thresholds.
 
+Use `--normalization-features all|cells` to choose the features used to fit
+global and iterative normalization:
+
+```bash
+uv run qi2lab-decode /path/to/experiment --normalization-features all
+uv run qi2lab-decode /path/to/experiment --normalization-features cells
+```
+
+The default `cells` uses features inside the saved Cellpose outlines, including
+their boundaries. Global percentile estimation samples the corresponding tile
+pixels across Z; iterative fitting uses decoded feature positions in global XY.
+If no segmentation exists, it uses all features. An existing empty segmentation
+selects no features. `all` bypasses the cell-mask restriction entirely.
+
+This setting controls normalization fitting, including optional chromatic
+estimation during optimization; it does not spatially filter the final decoded
+feature export. Both GPU worker paths receive the selection. When switching
+feature modes, rerun optimization (omit `--skip-optimization`): cached iterative
+vectors from the other mode are rejected, and global vectors are recalculated.
+`--reprocess-existing` only refilters saved decoding and does not refit normalization.
+
 Chromatic affine estimation is opt-in during iterative normalization:
 
 ```bash
@@ -180,6 +201,41 @@ GUI model. The default diameter is `None`, so the command does not force a cell
 size unless `--diameter` is explicitly provided. The fused fiducial max
 projection is passed to Cellpose without rescaling to 8-bit; Cellpose handles
 normalization through the supplied percentile settings.
+
+Use `--min-cell-area-um2` to exclude small outlines from the global ImageJ ROI
+ZIP used for Cellpose boundaries in the viewer and downstream decoding. The
+cutoff is the enclosed XY polygon area in square microns, after applying the
+fused image spacing and global transform. Outlines at the cutoff are retained;
+the default `0` disables this filter. Cellpose's `--min-size` remains a separate
+minimum mask size in pixels during inference.
+
+For example, to exclude outlines smaller than 20 µm² during segmentation:
+
+```bash
+uv run qi2lab-segment /path/to/experiment --min-cell-area-um2 20
+```
+
+To apply or adjust the cutoff on existing extracted outlines without rerunning
+Cellpose or loading the fused image:
+
+```bash
+uv run qi2lab-segment /path/to/experiment --outlines-only --min-cell-area-um2 20
+```
+
+This regenerates `segmentation/cellpose/imagej_rois/global_coords_rois.zip`
+from the saved `pixel_spacing_rois.zip` and fused-image transform metadata.
+Raw masks and pixel-space ROIs are retained so the cutoff can be lowered later.
+The command reports the retained and removed counts. Reload the viewer to see
+the new boundaries; rerun decoding if existing cell assignments or normalization
+need to reflect the filtered outlines. Exported cell IDs are renumbered in ROI
+order when the retained set changes.
+
+ROI extraction uses each label's bounding box and shares the mask across CPU
+workers. Global transforms and polygon areas are computed in vectorized batches,
+and retained outlines stream into the ZIP. Normal segmentation reuses the
+extracted pixel ROIs in memory for global export. Both modes use up to eight CPU
+workers by default; set `--roi-workers 4` to choose a worker count or
+`--no-roi-multiprocessing` to run with one worker.
 
 ## Viewer CLI
 

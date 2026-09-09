@@ -216,6 +216,7 @@ def decode_tiles_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
     normalization_method: Literal["iterative", "global", "none"],
+    normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
     Worker that runs decode_one_tile on a subset of tiles under one GPU.
@@ -245,6 +246,8 @@ def decode_tiles_worker(
         Minimum feature-predictor probability passed to tile decoding.
     normalization_method : Literal['iterative', 'global', 'none']
         Normalization source used for pixel traces.
+    normalization_features : Literal['all', 'cells']
+        Feature population used to fit normalization vectors.
 
     Returns
     -------
@@ -274,13 +277,16 @@ def decode_tiles_worker(
         num_gpus=1,
         verbose=0,
         decode_mode=decode_mode,
+        normalization_features=normalization_features,
     )
 
-    local_decoder._load_global_normalization_vectors(
-        gpu_id=gpu_id,
-        lowpass_sigma=lowpass_sigma,
-    )
-    local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
+    if normalization_method != "none":
+        local_decoder._load_global_normalization_vectors(
+            gpu_id=gpu_id,
+            lowpass_sigma=lowpass_sigma,
+        )
+    if normalization_method == "iterative":
+        local_decoder._load_iterative_normalization_vectors(gpu_id=gpu_id)
     local_decoder._optimize_normalization_weights = False
 
     for tile_tracker, tile_idx in enumerate(tile_indices):
@@ -330,6 +336,7 @@ def _optimize_norm_worker(
     feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
     excluded_gene_ids: Sequence[str],
+    normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
     Worker that runs one iteration of normalization-by-decoding on a GPU.
@@ -364,6 +371,8 @@ def _optimize_norm_worker(
     excluded_gene_ids : Sequence[str]
         Codebook gene IDs whose winning pixel assignments are suppressed during
         iterative optimization.
+    normalization_features : Literal['all', 'cells']
+        Feature population used to fit normalization vectors.
 
     Returns
     -------
@@ -388,6 +397,7 @@ def _optimize_norm_worker(
         verbose=0,
         decode_mode=decode_mode,
         excluded_gene_ids=excluded_gene_ids,
+        normalization_features=normalization_features,
     )
 
     local_decoder._load_global_normalization_vectors(
@@ -465,6 +475,7 @@ class PixelDecoder:
         estimate_chromatic_affines: bool = False,
         chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
         excluded_gene_ids: Sequence[str] | None = None,
+        normalization_features: Literal["all", "cells"] = "cells",
     ) -> None:
         """
         Initialize the object.
@@ -497,12 +508,20 @@ class PixelDecoder:
             Codebook gene IDs whose winning pixel assignments should be
             suppressed. The full codebook remains in the nearest-neighbor
             search so excluded signal cannot fall through to another codeword.
+        normalization_features : Literal['all', 'cells']
+            Fit global and iterative normalization with all features or only
+            features inside Cellpose outlines. Without segmentation, ``cells``
+            falls back to all features. This does not spatially filter the
+            final decoded output.
         """
         self._datastore_path = Path(datastore._datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
         self._verbose = verbose
         self._barcodes_filtered = False
+        if normalization_features not in {"all", "cells"}:
+            raise ValueError("normalization_features must be 'all' or 'cells'.")
+        self._normalization_features = normalization_features
 
         self._n_merfish_bits = merfish_bits
 
@@ -565,6 +584,9 @@ class PixelDecoder:
 
     def _load_normalization_cell_polygons(self) -> list[Polygon]:
         """Load valid global Cellpose polygons once for normalization masking."""
+        if getattr(self, "_normalization_features", "cells") == "all":
+            self._normalization_cell_segmentation_present = False
+            return []
         cached = getattr(self, "_normalization_cell_polygons", None)
         if cached is not None:
             if not hasattr(self, "_normalization_cell_segmentation_present"):
@@ -595,7 +617,7 @@ class PixelDecoder:
                 outlines = load_roi_zip()
                 if outlines is not None:
                     segmentation_geometry_exists = True
-            if not outlines:
+            if outlines is None:
                 load_outlines = getattr(
                     self._datastore,
                     "load_global_cellpose_outlines",
@@ -865,7 +887,19 @@ class PixelDecoder:
             "scope": "iterative_optimization",
             "excluded_gene_ids": list(self._optimization_excluded_gene_ids),
             "codebook_sha256": self._codebook_fingerprint(),
+            "normalization_features": getattr(self, "_normalization_features", "cells"),
         }
+
+    def _normalization_features_match_metadata(
+        self, metadata: dict[str, object] | None
+    ) -> bool:
+        """Treat legacy untagged vectors as the previous cell-based default."""
+        cached_features = (
+            metadata.get("normalization_features", "cells")
+            if isinstance(metadata, dict)
+            else "cells"
+        )
+        return cached_features == getattr(self, "_normalization_features", "cells")
 
     @staticmethod
     def _suppress_excluded_codeword_assignments(
@@ -966,10 +1000,19 @@ class PixelDecoder:
                     self._decode_run_key, "global"
                 )
             )
+            load_metadata = getattr(
+                self._datastore, "load_decode_normalization_metadata", None
+            )
+            metadata = (
+                load_metadata(self._decode_run_key, "global")
+                if callable(load_metadata)
+                else None
+            )
             if (
                 not recalculate
                 and normalization_vector is not None
                 and background_vector is not None
+                and self._normalization_features_match_metadata(metadata)
             ):
                 self._global_normalization_vector = cp.asarray(normalization_vector)
                 self._global_background_vector = cp.asarray(background_vector)
@@ -1012,8 +1055,9 @@ class PixelDecoder:
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma applied to ``data * prediction`` before estimating
             background and foreground normalization vectors. When global
-            Cellpose polygons are present, percentile samples include only
-            tile pixels inside those cells (extruded across Z).
+            Cellpose polygons are present and normalization_features='cells',
+            percentile samples include only tile pixels inside those cells
+            (extruded across Z). The 'all' setting uses all tile pixels.
         """
         with cp.cuda.Device(gpu_id):
             effective_lowpass_sigma = self._effective_lowpass_sigma(lowpass_sigma)
@@ -1195,6 +1239,11 @@ class PixelDecoder:
                 cp.asnumpy(normalization_vector).astype(np.float32),
                 cp.asnumpy(background_vector).astype(np.float32),
                 decode_mode=self._effective_decode_mode,
+                metadata={
+                    "normalization_features": getattr(
+                        self, "_normalization_features", "cells"
+                    )
+                },
             )
 
             self._global_background_vector = background_vector
@@ -1242,6 +1291,12 @@ class PixelDecoder:
             )
 
             if normalization_vector is not None and background_vector is not None:
+                if not self._normalization_features_match_metadata(metadata):
+                    raise ValueError(
+                        "Cached iterative normalization uses a different "
+                        "normalization_features setting. Re-run qi2lab-decode "
+                        "without --skip-optimization to fit the selected features."
+                    )
                 background_vector = np.nan_to_num(background_vector, 0.0)
                 normalization_vector = np.nan_to_num(normalization_vector, 1.0)
                 self._iterative_normalization_vector = cp.asarray(normalization_vector)
@@ -1257,9 +1312,9 @@ class PixelDecoder:
     def _iterative_normalization_vectors(self, gpu_id: int = 0) -> None:
         """Calculate iterative normalization and background vectors.
 
-        When Cellpose segmentation polygons are present, the loaded temporary
-        transcript table has already been restricted to global XY positions
-        inside those cells.
+        With normalization_features='cells' and Cellpose segmentation present,
+        the loaded temporary transcript table is restricted to global XY
+        positions inside cells. The 'all' setting uses the full transcript table.
 
         Parameters
         ----------
@@ -4728,6 +4783,7 @@ class PixelDecoder:
                         feature_predictor_threshold,
                         run_chromatic_estimation,
                         self._optimization_excluded_gene_ids,
+                        getattr(self, "_normalization_features", "cells"),
                     ),
                     physical_gpu_id=gpu,
                 )
@@ -4839,6 +4895,7 @@ class PixelDecoder:
                     minimum_pixels,
                     feature_predictor_threshold,
                     normalization_method,
+                    getattr(self, "_normalization_features", "cells"),
                 ),
                 physical_gpu_id=gpu,
             )

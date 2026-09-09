@@ -3,6 +3,8 @@
 import gzip
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -32,16 +34,37 @@ from merfish3danalysis.viewer.overlays import (
     PointOverlayIndex,
     PolylineGeometry,
     ZPolylineGeometry,
+    cell_boundary_polylines_for_tile,
+    global_cell_boundary_geometry,
     global_transcript_index,
     local_datastore_transcript_index,
     local_transcript_index,
 )
+from merfish3danalysis.viewer.repository import ViewerDataRepository
 from merfish3danalysis.viewer.sparse import (
     SparseVispyOverlay,
     selected_line_data,
     selected_point_data,
 )
 from merfish3danalysis.viewer.warping import selected_warp_label
+
+
+def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines() -> None:
+    datastore = SimpleNamespace(
+        load_global_cellpose_roi_zip=Mock(return_value={}),
+        load_global_cellpose_outlines=Mock(
+            side_effect=AssertionError("must not restore filtered outlines")
+        ),
+        load_global_coord_xforms_um=Mock(
+            return_value=(np.eye(4), np.zeros(3), np.ones(3))
+        ),
+    )
+    repository = ViewerDataRepository()
+    repository.set_datastore(datastore)
+    assert repository.cellpose_boundaries() == {}
+    cell_boundary_polylines_for_tile(datastore, "tile0000", (1, 10, 10))
+    global_cell_boundary_geometry(datastore, (1, 10, 10), np.zeros(3), np.ones(3))
+    datastore.load_global_cellpose_outlines.assert_not_called()
 
 
 class _FakeLutModel:
