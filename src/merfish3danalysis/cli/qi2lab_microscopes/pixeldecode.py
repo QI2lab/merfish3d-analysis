@@ -8,7 +8,7 @@ Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import typer
 
@@ -325,6 +325,12 @@ def decode_pixels(
     chromatic_centroid_weight_epsilon: float = 1e-6,
     reprocess_existing: bool = False,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
+    normalization_features: Annotated[
+        Literal["all", "cells"],
+        typer.Option(
+            help="Features used to fit normalization: all, or inside Cellpose masks (cells)."
+        ),
+    ] = "cells",
 ) -> None:
     """Perform pixel decoding.
 
@@ -414,6 +420,10 @@ def decode_pixels(
     decode_mode : {"auto", "2d", "3d"}, default "auto"
         Decode mode. ``auto`` follows the datastore microscope type; explicit
         values control connected-component extraction and default thresholds.
+    normalization_features : {"all", "cells"}, default "cells"
+        Use all features or only features inside Cellpose outlines to estimate
+        global and iterative normalization. With no segmentation, ``cells``
+        uses all features. This controls fitting, not the final feature export.
     """
     optimization_excluded_gene_ids: list[str] = []
     if optimization_exclusions_file is not None:
@@ -443,6 +453,7 @@ def decode_pixels(
     datastore = qi2labDataStore(datastore_path, validate=False)
     _effective_decode_mode(datastore, decode_mode)
     print(f"Using datastore at {datastore_path}")
+    print(f"Normalization features: {normalization_features}")
     if merfish_bits is None:
         merfish_bits = datastore.num_bits
     if minimum_pixels_per_RNA is None:
@@ -473,6 +484,7 @@ def decode_pixels(
         num_gpus=num_gpus,
         verbose=1,
         decode_mode=decode_mode,
+        normalization_features=normalization_features,
         estimate_chromatic_affines=estimate_chromatic_affines,
         chromatic_affine_config=ChromaticAffineEstimationConfig(
             min_pairs=chromatic_min_pairs,

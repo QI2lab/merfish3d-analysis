@@ -218,7 +218,7 @@ class ViewerDataRepository:
             return self._cellpose_boundaries
         datastore = self.require_datastore()
         boundaries = datastore.load_global_cellpose_roi_zip()
-        if not boundaries:
+        if boundaries is None:
             boundaries = datastore.load_global_cellpose_outlines()
         self._cellpose_boundaries = boundaries
         self._cellpose_boundaries_loaded = True
