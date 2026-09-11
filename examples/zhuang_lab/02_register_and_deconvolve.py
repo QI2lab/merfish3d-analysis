@@ -34,8 +34,8 @@ def local_register_data(root_path: Path) -> None:
     # initialize registration class
     registration_factory = DataRegistration(
         datastore=datastore,
-        decon_fiducial=True,
-        decon_readout=True,
+        decon_fiducial=False,
+        decon_readout=False,
         perform_deformable_registration=False,
         overwrite_outputs=True,
         crop_yx_decon=2048,
