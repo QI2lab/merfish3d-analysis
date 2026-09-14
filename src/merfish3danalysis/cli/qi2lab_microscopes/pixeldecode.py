@@ -411,7 +411,8 @@ def decode_pixels(
     chromatic_ransac_sample_size : int, default=3
         Number of paired transcripts sampled per RANSAC proposal.
     chromatic_centroid_z_support : int, default=7
-        Z-support window for on-bit weighted centroid extraction.
+        Z-support window for on-bit weighted centroid extraction in 3D mode.
+        2D mode always uses one plane and estimates only lateral corrections.
     chromatic_centroid_weight_epsilon : float, default=1e-6
         Epsilon used for weighted-centroid normalization.
     reprocess_existing : bool, default=False
