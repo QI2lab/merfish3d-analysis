@@ -127,6 +127,7 @@ def convert_data(
     datastore.channels_in_data = channel_names
     datastore.experiment_order = experiment_order
     datastore.num_tiles = num_tiles
+    # Required throughout this workflow: Z planes are spaced 1.5 microns apart.
     datastore.microscope_type = "2D"
     datastore.camera_model = "zhuang_orcav3"
     datastore.tile_overlap = 0.2

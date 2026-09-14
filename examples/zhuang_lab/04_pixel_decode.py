@@ -36,19 +36,16 @@ def _nearest_nyquist_multiple(
     return best_multiple
 
 
-def _default_minimum_pixels(datastore: qi2labDataStore) -> int:
-    """Return the current qi2lab default minimum-pixel threshold."""
+def _default_minimum_pixels() -> int:
+    """Return the required 2D workflow's minimum-pixel threshold."""
 
-    return 7 if datastore.microscope_type == "2D" else 28
+    return 7
 
 
 def _default_magnitude_threshold(
     datastore: qi2labDataStore,
 ) -> tuple[float, float]:
     """Return the current qi2lab default magnitude threshold."""
-
-    if datastore.microscope_type != "2D":
-        return (0.9, 10.0)
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
@@ -74,13 +71,12 @@ def decode_pixels(
         path to experiment
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
-        Defaults to the current qi2lab policy: 7 for 2D and 28 for 3D.
+        Defaults to 7 for this required 2D workflow.
     feature_predictor_threshold : float
         threshold to accept feature_predictor prediction. Default = 0.5
     magnitude_threshold: tuple[float,float], optional
         lower and upper magnitude threshold to accept a spot.
-        Defaults to the current qi2lab policy:
-        3D -> (0.9, 10.0), 2D -> lookup by axial sampling.
+        Defaults to the 2D lookup by axial sampling.
     target_gross_misid_rate : float
         gross barcode misidentification-rate target for blank-fraction filtering.
         Default = .05
@@ -91,13 +87,14 @@ def decode_pixels(
     datastore = qi2labDataStore(datastore_path, validate=False)
     merfish_bits = 22
     if minimum_pixels_per_RNA is None:
-        minimum_pixels_per_RNA = _default_minimum_pixels(datastore)
+        minimum_pixels_per_RNA = _default_minimum_pixels()
     if magnitude_threshold is None:
         magnitude_threshold = _default_magnitude_threshold(datastore)
 
     # initialize decodor class
     decoder = PixelDecoder(
         datastore=datastore,
+        decode_mode="2d",  # Required for the 1.5 micron axial spacing.
         use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=1,

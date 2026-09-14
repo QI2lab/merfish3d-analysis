@@ -138,8 +138,11 @@ The important conversion settings are:
 
 The 1.5 µm axial spacing is about five times the approximately 0.315 µm axial
 Nyquist step for this optical configuration. Treating neighboring planes as a
-well-sampled 3D volume would therefore be misleading. The example records the
-experiment as 2D so deconvolution and decoding operate plane by plane.
+well-sampled 3D volume would therefore be misleading. **This example MUST use
+2D processing throughout**, including registration, deconvolution, segmentation,
+normalization, decoding, and chromatic estimation. Keep `microscope_type="2D"`
+and explicitly use `decode_mode="2d"` (`--decode-mode 2d` with the CLI).
+The 1.5 µm Z spacing must still be retained for physical coordinates.
 
 The conversion also constructs channel-specific PSFs from the emission
 wavelengths, NA, refractive index, and lateral pixel size. The BIL files do not
@@ -228,6 +231,7 @@ The important decoding settings are:
 
 | Parameter | Current behavior |
 | --- | --- |
+| Decode mode | Explicitly `2d`, required for the 1.5 µm axial spacing |
 | Normalization tiles | 10 randomly selected tiles |
 | Normalization iterations | 5 |
 | Minimum pixels per RNA | 7 for this 2D datastore |
@@ -240,6 +244,11 @@ strongly undersampled axial geometry. The decoder optimizes normalization on a
 subset of tiles before decoding the full dataset. Runtime on the reference
 system was approximately half a week, with storage throughput often becoming
 the limiting factor.
+
+If chromatic estimation is enabled, it must use only the transcript's own plane
+and fit X/Y translations and a shared lateral scale. The estimated chromatic
+correction must preserve Z; neighboring planes must not contribute to its
+centroids or outlier filtering.
 
 ## Compare with deposited transcripts
 

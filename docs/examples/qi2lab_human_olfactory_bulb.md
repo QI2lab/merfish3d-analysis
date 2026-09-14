@@ -124,11 +124,6 @@ nonblank codewords. The resulting calibration is stored in the datastore and
 used by the final decoding pass. Normalization and final tile decoding both use
 the requested two GPUs.
 
-With `--decode-mode 2d`, chromatic estimation uses only the transcript's own
-plane and fits X/Y translations and a shared lateral scale. Z remains unchanged
-by the estimated chromatic correction. In 3D mode, centroid extraction can use
-neighboring planes and the estimator also fits a Z translation.
-
 ### Datastore viewing
 
 Open the read-only viewer with:

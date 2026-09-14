@@ -92,6 +92,7 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     # run cellpose on fiducial max projection
     masks, _, _ = model.eval(
         fiducial_max_projection,
+        do_3D=False,
         diameter=cellpose_parameters["diameter"],
         flow_threshold=cellpose_parameters["flow_threshold"],
         cellprob_threshold=-cellpose_parameters["cellprob_threshold"],
