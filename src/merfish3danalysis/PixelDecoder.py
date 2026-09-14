@@ -124,6 +124,7 @@ from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
@@ -693,7 +694,7 @@ class PixelDecoder:
             spacing = self._datastore.voxel_size_zyx_um
         affine = np.asarray(affine, dtype=np.float64)
         origin = np.asarray(origin, dtype=np.float64)
-        spacing = np.asarray(spacing, dtype=np.float64)
+        spacing = round_spacing_um(spacing)
         if origin.size == 2:
             origin = np.asarray([0.0, origin[0], origin[1]], dtype=np.float64)
 
@@ -1546,7 +1547,7 @@ class PixelDecoder:
 
         unique_wavelengths = sorted(set(bit_wavelengths.values()))
         reference_wavelength = unique_wavelengths[0]
-        spacing = np.asarray(self._datastore.voxel_size_zyx_um, dtype=np.float32)
+        spacing = round_spacing_um(self._datastore.voxel_size_zyx_um).astype(np.float32)
         wavelength_to_index = {
             wavelength: index for index, wavelength in enumerate(unique_wavelengths)
         }
@@ -1824,7 +1825,7 @@ class PixelDecoder:
         self._datastore.save_chromatic_affine_transforms_zyx_um(
             {
                 "reference_wavelength_um": float(reference_wavelength),
-                "voxel_size_zyx_um": [float(v) for v in spacing],
+                "voxel_size_zyx_um": round_spacing_um(spacing).tolist(),
                 "estimator": (
                     "decoded_rna_on_bit_weighted_centroid_z_translation_yx_affine_graph"
                 ),
@@ -2001,7 +2002,7 @@ class PixelDecoder:
 
         self._affine = np.asarray(affine, dtype=np.float32)
         self._origin = np.asarray(origin, dtype=np.float32)
-        self._spacing = np.asarray(spacing, dtype=np.float32)
+        self._spacing = round_spacing_um(spacing).astype(np.float32)
         self._camera_to_stage_affine = camera_to_stage_affine
 
         del images

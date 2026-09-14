@@ -20,6 +20,8 @@ To create a `qi2labDataStore`, we need to know the following metadata:
 - the acquisition order in each tile (channel,z) or (z,channel)
 - the excitation and emission wavelengths for each channel
 
+Physical pixel sizes and voxel spacing are rounded to three decimal places in microns (0.001 µm). This applies when loading and saving calibration metadata and throughout registration, fusion, decoding, segmentation, and image export. Legacy spacing values are rounded on read; existing files are updated when written again. Global fusion uses the rounded native voxel spacing, and fused OME metadata records the spacing of the fused image. The shared rounding helpers are in `merfish3danalysis.utils.spacing`.
+
 Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in [napari](https://github.com/napari) and explore different orientations of the images and stage direction.
 
 Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientation such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the [Zhuang lab examples](examples/zhuang_lab_mouse_brain.md), we show how to determine the camera and stage orientations when the metadata is not available.

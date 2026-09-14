@@ -11,6 +11,8 @@ import pandas as pd
 from scipy.spatial import cKDTree
 from tifffile import TiffFile, imread
 
+from merfish3danalysis.utils.spacing import round_spacing_um
+
 UFISH_MODEL_ALIASES = {
     "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
     "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
@@ -123,7 +125,7 @@ def _parse_ome_metadata(
     size_x = _xml_float(pixels.attrib.get("PhysicalSizeX"))
     spacing = None
     if size_z is not None and size_y is not None and size_x is not None:
-        spacing = (float(size_z), float(size_y), float(size_x))
+        spacing = tuple(round_spacing_um((size_z, size_y, size_x)))
 
     wavelengths = []
     names = []
@@ -214,7 +216,13 @@ def load_bead_channel_stack(
             f"Expected CZYX stack after axis normalization, got {stack.shape}."
         )
 
-    spacing = tuple(float(v) for v in (voxel_size_zyx_um or ome_spacing or (1, 1, 1)))
+    spacing = tuple(
+        round_spacing_um(
+            voxel_size_zyx_um
+            if voxel_size_zyx_um is not None
+            else ome_spacing or (1, 1, 1)
+        )
+    )
     if len(spacing) != 3:
         raise ValueError("voxel_size_zyx_um must contain three values.")
 
@@ -456,7 +464,7 @@ def generate_channel_psfs(
     """
     from psfmodels import make_psf
 
-    spacing = tuple(float(v) for v in voxel_size_zyx_um)
+    spacing = tuple(round_spacing_um(voxel_size_zyx_um))
     if len(spacing) != 3:
         raise ValueError("voxel_size_zyx_um must contain three values.")
 
@@ -637,7 +645,7 @@ def estimate_chromatic_affines(
     dict[str, Any]
         Calibration metadata with one affine per channel.
     """
-    spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(voxel_size_zyx_um).astype(np.float32)
     wavelengths = np.asarray(wavelengths_um, dtype=np.float32)
     reference_index = int(np.argmin(wavelengths))
     if channel_names is None:
@@ -707,7 +715,7 @@ def estimate_chromatic_affines(
         "reference_channel_index": reference_index,
         "reference_channel_name": str(channel_names[reference_index]),
         "reference_wavelength_um": float(wavelengths[reference_index]),
-        "voxel_size_zyx_um": [float(v) for v in spacing],
+        "voxel_size_zyx_um": round_spacing_um(spacing).tolist(),
         "channels": channels,
     }
 

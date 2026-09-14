@@ -34,6 +34,7 @@ from tqdm.auto import tqdm
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import read_metadatafile
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -82,7 +83,7 @@ def synthetic_chromatic_affines_zyx_um(
         Mapping from emission wavelength to channel-to-reference affine in
         Z/Y/X microns.
     """
-    spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(voxel_size_zyx_um).astype(np.float32)
     shape = np.asarray(image_shape_zyx, dtype=np.float32)
     center_um = (shape - 1.0) * spacing / 2.0
     yx_radius_px = max(float(shape[1] - 1.0), float(shape[2] - 1.0)) / 2.0
@@ -305,6 +306,7 @@ def convert_data(
         metadata["yx_pixel_um"],
         metadata["yx_pixel_um"],
     ]
+    voxel_size_zyx_um = round_spacing_um(voxel_size_zyx_um).tolist()
     na = metadata["na"]
     ri = metadata["ri"]
 

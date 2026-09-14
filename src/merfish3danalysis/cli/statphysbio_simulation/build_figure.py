@@ -10,6 +10,8 @@ from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
 from tifffile import imread
 
+from merfish3danalysis.utils.spacing import round_pixel_size_um
+
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
@@ -225,14 +227,14 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             / Path("data_r0001_tile0000.tif")
         )
         metadata = pd.read_csv(top_path / Path(str(z)) / Path("scan_metadata.csv"))
-        print(float(metadata["axial_step_size [micron]"]))
-        print(float(metadata["pixel_size [micron]"]))
+        print(round_pixel_size_um(metadata["axial_step_size [micron]"]))
+        print(round_pixel_size_um(metadata["pixel_size [micron]"]))
         if z == "0.315":
             image_0315_voxel = np.array(
                 [
-                    float(metadata["axial_step_size [micron]"]),
-                    float(metadata["pixel_size [micron]"]),
-                    float(metadata["pixel_size [micron]"]),
+                    round_pixel_size_um(metadata["axial_step_size [micron]"]),
+                    round_pixel_size_um(metadata["pixel_size [micron]"]),
+                    round_pixel_size_um(metadata["pixel_size [micron]"]),
                 ]
             )
             images.append(temp)
@@ -241,9 +243,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             if z == "1.0":
                 image_10_voxel = np.array(
                     [
-                        float(metadata["axial_step_size [micron]"]),
-                        float(metadata["pixel_size [micron]"]),
-                        float(metadata["pixel_size [micron]"]),
+                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
+                        round_pixel_size_um(metadata["pixel_size [micron]"]),
+                        round_pixel_size_um(metadata["pixel_size [micron]"]),
                     ]
                 )
                 for z_idx in range(temp.shape[1]):
@@ -256,9 +258,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             elif z == "1.5":
                 image_15_voxel = np.array(
                     [
-                        float(metadata["axial_step_size [micron]"]),
-                        float(metadata["pixel_size [micron]"]),
-                        float(metadata["pixel_size [micron]"]),
+                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
+                        round_pixel_size_um(metadata["pixel_size [micron]"]),
+                        round_pixel_size_um(metadata["pixel_size [micron]"]),
                     ]
                 )
                 for z_idx in range(temp.shape[1]):

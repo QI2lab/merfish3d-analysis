@@ -20,6 +20,7 @@ from cellpose import io, models
 from roifile import ImagejRoi, roiread, roiwrite
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 
 def warp_point(
@@ -48,6 +49,7 @@ def warp_point(
 
     """
 
+    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
     physical_space_point = pixel_space_point * spacing + origin
     registered_space_point = (
         np.array(affine) @ np.array([*list(physical_space_point), 1])

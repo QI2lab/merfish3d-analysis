@@ -5,6 +5,8 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
+
 
 @dataclass(frozen=True)
 class ChannelStack:
@@ -403,7 +405,7 @@ def stack_with_micron_coords(
         return stack.data
 
     data = np.asarray(stack.data)
-    voxel = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    voxel = round_spacing_um(voxel_size_zyx_um).astype(np.float32)
     origin = (
         np.zeros(3, dtype=np.float32)
         if origin_zyx_um is None

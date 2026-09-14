@@ -10,6 +10,8 @@ import zarr
 from tifffile import imread
 from tqdm import tqdm
 
+from merfish3danalysis.utils.spacing import round_pixel_size_um
+
 
 def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
     """Load and create blended tile overview image.
@@ -47,7 +49,7 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
     )
     with open(microscope_json_path) as file:
         data = json.load(file)
-    yx_pixel_size_um = float(data["microns_per_pixel"])
+    yx_pixel_size_um = round_pixel_size_um(data["microns_per_pixel"])
 
     # Load the global stage translations for each tile in microns
     stage_translation_path = root_path / Path(

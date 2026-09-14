@@ -41,6 +41,7 @@ from merfish3danalysis.utils.psf import (
     QI2LAB_EXCITATION_WAVELENGTHS_UM,
     generate_qi2lab_psf,
 )
+from merfish3danalysis.utils.spacing import round_pixel_size_um
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -360,18 +361,17 @@ def convert_data(
     # in the imaging data itself. We added it to > v8 qi2lab-scope metadata csv to make the
     # access pattern easier.
     try:
-        z_pixel_um = float(metadata["z_step_um"])
-        yx_pixel_um = float(metadata["yx_pixel_um"])
+        z_pixel_um = round_pixel_size_um(metadata["z_step_um"])
+        yx_pixel_um = round_pixel_size_um(metadata["yx_pixel_um"])
         voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
     except (KeyError, TypeError, ValueError):
-        yx_pixel_um = np.round(float(ndtiff_metadata["PixelSizeUm"]), 3)
+        yx_pixel_um = round_pixel_size_um(ndtiff_metadata["PixelSizeUm"])
         next_ndtiff_metadata = dataset.read_metadata(channel=channel_to_test, z=1)
-        z_pixel_um = np.round(
+        z_pixel_um = round_pixel_size_um(
             np.abs(
                 float(next_ndtiff_metadata["ZPosition_um_Intended"])
                 - float(ndtiff_metadata["ZPosition_um_Intended"])
             ),
-            3,
         )
         voxel_size_zyx_um = [z_pixel_um, yx_pixel_um, yx_pixel_um]
 

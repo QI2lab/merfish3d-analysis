@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.colors import transcript_color_hex
 from merfish3danalysis.viewer.models import (
     SparseLineLayer,
@@ -849,7 +850,7 @@ def _display_scale_zyx(spacing_zyx_um: tuple[float, float, float]) -> np.ndarray
     numpy.ndarray
         Relative Z, Y, X display scale.
     """
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     if spacing.shape != (3,) or not np.isfinite(spacing).all() or np.any(spacing <= 0):
         raise ValueError("Expected positive finite Z, Y, X voxel spacing.")
     return spacing / spacing[2]

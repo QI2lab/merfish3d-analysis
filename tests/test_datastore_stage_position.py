@@ -20,7 +20,7 @@ def stage_datastore(tmp_path):
     datastore._num_tiles = 1
     datastore._num_rounds = 2
     datastore._fiducial_root_path = tmp_path / "fiducial"
-    datastore._voxel_size_zyx_um = [1.5, 0.108, 0.108]
+    datastore._voxel_size_zyx_um = [1.50012, 0.107999995, 0.10831]
     affine = np.eye(4, dtype=np.float32)
     affine[1, 1] = -1
     affine[2, 3] = 12.5
@@ -154,6 +154,7 @@ def test_global_registration_and_fusion_load_legacy_and_3d_stage_positions(
     )
 
     assert result == [sentinel.msim]
+    assert read_sim.call_args.kwargs["scale"] == {"z": 1.5, "y": 0.108, "x": 0.108}
     assert read_sim.call_args.kwargs["translation"] == {
         "z": expected_z,
         "y": 125.5,
