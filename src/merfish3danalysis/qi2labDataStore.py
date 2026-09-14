@@ -2025,6 +2025,19 @@ class qi2labDataStore:
                 self._save_to_json(metadata, metadata_path)
                 return
 
+    @staticmethod
+    def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
+        """Return ZYX stage coordinates, padding legacy YX positions with Z=0."""
+        stage = np.asarray(stage_zyx_um, dtype=np.float32)
+        if stage.shape == (2,):
+            return np.asarray((0.0, stage[0], stage[1]), dtype=np.float32)
+        if stage.shape != (3,):
+            raise ValueError(
+                "Stage position must contain two (Y, X) or three (Z, Y, X) "
+                f"coordinates; got shape {stage.shape}."
+            )
+        return stage
+
     def _resolve_original_tile_position_zyx_um(
         self,
         tile_id: str,
@@ -2053,7 +2066,7 @@ class qi2labDataStore:
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
             if stage is not None:
-                return [float(v) for v in stage]
+                return self._normalize_stage_position_zyx_um(stage).tolist()
 
         if bit_id is not None:
             round_linker = self.load_local_round_linker(tile=tile_id, bit=bit_id)
@@ -2065,7 +2078,7 @@ class qi2labDataStore:
                 attrs = self._load_entity_attributes(fiducial_entity)
                 stage = attrs.get("stage_zyx_um")
                 if stage is not None:
-                    return [float(v) for v in stage]
+                    return self._normalize_stage_position_zyx_um(stage).tolist()
 
         if getattr(self, "_round_ids", None):
             fiducial_entity = (
@@ -2074,7 +2087,7 @@ class qi2labDataStore:
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
             if stage is not None:
-                return [float(v) for v in stage]
+                return self._normalize_stage_position_zyx_um(stage).tolist()
         return None
 
     def _resolve_reference_tile_position_zyx_um(
@@ -3210,7 +3223,7 @@ class qi2labDataStore:
         self,
         tile: int | str,
         round: int | str,
-    ) -> ArrayLike | None:
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         """Load tile stage position for one tile.
 
         Parameters
@@ -3223,7 +3236,8 @@ class qi2labDataStore:
         Returns
         -------
         stage_zyx_um : ArrayLike or None
-            Tile stage position for one tile.
+            Tile stage position in Z, Y, X microns. Legacy two-coordinate Y, X
+            metadata is returned with Z=0 without modifying the stored data.
         affine_zyx_um: ArrayLike or None
             Affine transformation between stage and camera
         """
@@ -3268,7 +3282,7 @@ class qi2labDataStore:
                 print(tile_id, round_id)
                 print("Stage position attribute not found.")
                 return None
-            return np.asarray(stage_zyx_um, dtype=np.float32), np.asarray(
+            return self._normalize_stage_position_zyx_um(stage_zyx_um), np.asarray(
                 affine_zyx_px, dtype=np.float32
             )
         except (TypeError, ValueError):
@@ -3288,7 +3302,8 @@ class qi2labDataStore:
         Parameters
         ----------
         stage_zyx_um : ArrayLike
-            Tile stage position for one tile.
+            Tile stage position in Z, Y, X microns. Two-coordinate Y, X input
+            is accepted and stored as Z, Y, X with Z=0.
         affine_zyx_px: ArrayLike
             4x4 homogeneous affine matrix for stage transformation
         tile : int or str
@@ -3330,7 +3345,7 @@ class qi2labDataStore:
 
         try:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            stage_zyx_um = np.asarray(stage_zyx_um, dtype=np.float32)
+            stage_zyx_um = self._normalize_stage_position_zyx_um(stage_zyx_um)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
