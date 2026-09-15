@@ -132,6 +132,24 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
 
+def _cleanup_fusion_worker_semaphore(name: str) -> None:
+    """Unregister a worker semaphore even if another cleanup already removed it.
+
+    Python 3.12's SemLock cleanup skips unregistering when sem_unlink raises
+    FileNotFoundError. That leaves a stale entry in the standard resource
+    tracker, producing another missing-semaphore warning at shutdown. Only
+    ENOENT is harmless here; other unlink errors must remain visible and tracked.
+    """
+    from multiprocessing.resource_tracker import unregister
+    from multiprocessing.synchronize import sem_unlink
+
+    try:
+        sem_unlink(name)
+    except FileNotFoundError:
+        pass
+    unregister(name, "semaphore")
+
+
 def _configure_loky_fusion_worker() -> None:
     """
     Configure a spawned Loky process for long-running fusion work.
@@ -139,7 +157,8 @@ def _configure_loky_fusion_worker() -> None:
     Returns
     -------
     None
-        Loky's process-level RSS-growth recycler is disabled in place.
+        Disable Loky's process-level RSS-growth recycler and make standard
+        multiprocessing semaphore cleanup tolerate an already-removed name.
 
     Notes
     -----
@@ -149,6 +168,13 @@ def _configure_loky_fusion_worker() -> None:
     from joblib.externals.loky import process_executor
 
     process_executor._USE_PSUTIL = False
+    if os.name == "posix":
+        from multiprocessing.synchronize import SemLock
+
+        # This initializer runs in the child only. Keep Loky's own tracker and
+        # synchronization primitives unchanged; this handles stdlib locks that
+        # libraries create inside fusion workers.
+        SemLock._cleanup = staticmethod(_cleanup_fusion_worker_semaphore)
 
 
 def _direct_zarr_fusion_kwargs(

@@ -68,7 +68,7 @@ def test_direct_fusion_compresses_every_level_without_changing_pixels(
     output = tmp_path / "full_dataset.ome.zarr"
     options = _direct_zarr_fusion_kwargs(
         misc_utils=misc_utils,
-        fusion_workers=1,
+        fusion_workers=2,
         compression=compression,
         compression_level=2,
     )
