@@ -671,7 +671,7 @@ def rlgc(
                 / update_norm
             )
             del split2
-            HTratio = HTratio1 + HTratio2
+            HTratio = cp.float32(0.5) * (HTratio1 + HTratio2)
             del Hu
 
             consensus_map = fft_conv(
