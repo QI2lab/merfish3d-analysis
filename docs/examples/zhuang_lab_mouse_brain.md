@@ -187,35 +187,27 @@ of shape `[40, 7, 2048, 2408]` took about eight days on the reference system.
 
 ## Tune and run Cellpose
 
-The example segments a maximum-Z projection of the fused fiducial image and
-then rewrites ImageJ ROIs in global coordinates:
+The example calls the same segmentation API as `qi2lab-segment`, with the same
+options and defaults. It uses the fused fiducial maximum-Z projection and
+explicitly runs Cellpose in 2D (`do_3D=False`), as required for this dataset:
 
 ```bash
 uv run python examples/zhuang_lab/03_cellpose_segmentation.py \
   /path/to/zhuang-data
 ```
 
-The current example values are:
+The shared defaults are `cpsam_v2`, normalization percentiles `(1.0, 99.0)`,
+flow threshold `0.4`, cell-probability threshold `0.0`, minimum mask size `15`,
+and no forced diameter. Thresholds are passed directly to Cellpose without
+negating the cell-probability threshold. Inspect the fused image in the Cellpose
+GUI and tune these settings using the same CLI options as `qi2lab-segment`.
+Run the example with `--help` for all options.
 
-```python
-cellpose_parameters = {
-    "normalization": [1.0, 99.0],
-    "flow_threshold": 0.6,
-    "cellprob_threshold": 1.0,
-    "diameter": 20,
-}
-```
-
-- `normalization` sets the lower and upper image percentiles passed to
-  Cellpose.
-- `flow_threshold` rejects masks whose reconstructed flow is inconsistent.
-- `cellprob_threshold` controls how permissive foreground detection is.
-- `diameter` supplies the expected cell diameter in pixels.
-
-These are starting values, not universal defaults. Inspect the fused image in
-the Cellpose GUI and tune them for the downloaded data before committing to the
-full segmentation run. A custom model may be needed if the supplied model does
-not describe the tissue well.
+The shared implementation loads the saved projection TIFF when available,
+saves masks, exports pixel and global ImageJ ROIs in parallel, and updates the
+datastore segmentation state. It also supports `--min-cell-area-um2` for small
+outline filtering and `--outlines-only` to regenerate global outlines without
+rerunning inference.
 
 ## Decode transcripts
 
