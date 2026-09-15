@@ -57,6 +57,7 @@ import numpy as np
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.sofima_registration import SofimaRegistrationConfig
+from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
 
 UFISH_MODEL_ALIASES = {
     "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
@@ -131,6 +132,24 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
 
+def _cleanup_fusion_worker_semaphore(name: str) -> None:
+    """Unregister a worker semaphore even if another cleanup already removed it.
+
+    Python 3.12's SemLock cleanup skips unregistering when sem_unlink raises
+    FileNotFoundError. That leaves a stale entry in the standard resource
+    tracker, producing another missing-semaphore warning at shutdown. Only
+    ENOENT is harmless here; other unlink errors must remain visible and tracked.
+    """
+    from multiprocessing.resource_tracker import unregister
+    from multiprocessing.synchronize import sem_unlink
+
+    try:
+        sem_unlink(name)
+    except FileNotFoundError:
+        pass
+    unregister(name, "semaphore")
+
+
 def _configure_loky_fusion_worker() -> None:
     """
     Configure a spawned Loky process for long-running fusion work.
@@ -138,7 +157,8 @@ def _configure_loky_fusion_worker() -> None:
     Returns
     -------
     None
-        Loky's process-level RSS-growth recycler is disabled in place.
+        Disable Loky's process-level RSS-growth recycler and make standard
+        multiprocessing semaphore cleanup tolerate an already-removed name.
 
     Notes
     -----
@@ -148,6 +168,13 @@ def _configure_loky_fusion_worker() -> None:
     from joblib.externals.loky import process_executor
 
     process_executor._USE_PSUTIL = False
+    if os.name == "posix":
+        from multiprocessing.synchronize import SemLock
+
+        # This initializer runs in the child only. Keep Loky's own tracker and
+        # synchronization primitives unchanged; this handles stdlib locks that
+        # libraries create inside fusion workers.
+        SemLock._cleanup = staticmethod(_cleanup_fusion_worker_semaphore)
 
 
 def _direct_zarr_fusion_kwargs(
@@ -869,6 +896,7 @@ def _read_fiducial_sim(
             )
         )
 
+    scale = {axis: round_pixel_size_um(value) for axis, value in scale.items()}
     return si_utils.get_sim_from_array(
         array,
         dims=dims,
@@ -1029,8 +1057,8 @@ def _write_zarr_max_projection_tiff(
             dtype=array.dtype,
             tile=tile_shape_yx,
             resolution=(
-                1e4 / float(spacing_zyx_um[2]),
-                1e4 / float(spacing_zyx_um[1]),
+                1e4 / round_pixel_size_um(spacing_zyx_um[2]),
+                1e4 / round_pixel_size_um(spacing_zyx_um[1]),
             ),
             compression="zlib",
             compressionargs={"level": 8},
@@ -1040,9 +1068,9 @@ def _write_zarr_max_projection_tiff(
             metadata={
                 "axes": "YX",
                 "SignificantBits": int(np.dtype(array.dtype).itemsize * 8),
-                "PhysicalSizeX": float(spacing_zyx_um[2]),
+                "PhysicalSizeX": round_pixel_size_um(spacing_zyx_um[2]),
                 "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": float(spacing_zyx_um[1]),
+                "PhysicalSizeY": round_pixel_size_um(spacing_zyx_um[1]),
                 "PhysicalSizeYUnit": "µm",
             },
         )
@@ -1766,7 +1794,7 @@ class DataRegistration:
         """
         stage_transform_key = "stage_metadata"
         global_transform_key = "global_registered"
-        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        voxel_zyx_um = round_spacing_um(self._datastore.voxel_size_zyx_um)
         scale = {
             "z": float(voxel_zyx_um[0]),
             "y": float(voxel_zyx_um[1]),
@@ -1885,6 +1913,13 @@ class DataRegistration:
         fused_msim = fusion.fuse(
             images=msims,
             transform_key=global_transform_key,
+            output_spacing=dict(
+                zip(
+                    "zyx",
+                    round_spacing_um(self._datastore.voxel_size_zyx_um),
+                    strict=True,
+                )
+            ),
             output_zarr_url=str(output_zarr_path),
             **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
         )
@@ -1902,14 +1937,16 @@ class DataRegistration:
         ).data.squeeze()
         fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
         origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
-        spacing = si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+        spacing = round_spacing_um(
+            si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+        )
 
         qi2labDataStore._write_extra_attributes(
             image_path=output_zarr_path,
             extra_attributes={
                 "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
                 "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
-                "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+                "spacing_zyx_um": round_spacing_um(spacing).tolist(),
             },
             merge=True,
         )
@@ -2001,10 +2038,7 @@ class DataRegistration:
             self._datastore.save_global_coord_xforms_um(
                 affine_zyx_um=np.eye(4, dtype=np.float32),
                 origin_zyx_um=np.zeros(3, dtype=np.float32),
-                spacing_zyx_um=np.asarray(
-                    self._datastore.voxel_size_zyx_um,
-                    dtype=np.float32,
-                ),
+                spacing_zyx_um=round_spacing_um(self._datastore.voxel_size_zyx_um),
                 tile=self._tile_ids[0],
             )
             self._datastore.datastore_state = {"GlobalRegistered": True}
@@ -2091,7 +2125,7 @@ class DataRegistration:
                 )
             sim = msi_utils.get_sim_from_msim(msim)
             origin = si_utils.get_origin_from_sim(sim, asarray=True)
-            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
+            spacing = round_spacing_um(si_utils.get_spacing_from_sim(sim, asarray=True))
             self._datastore.save_global_coord_xforms_um(
                 affine_zyx_um=affine,
                 origin_zyx_um=origin,

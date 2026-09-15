@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from merfish3danalysis.PixelDecoder import ChromaticAffineEstimationConfig, PixelDecoder
 
@@ -211,6 +213,7 @@ def test_chromatic_estimator_recovers_affine_with_distractors() -> None:
     )
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._datastore = datastore
+    decoder._is_3D = True
     decoder._n_merfish_bits = 4
     decoder._chromatic_affine_config = ChromaticAffineEstimationConfig(min_pairs=20)
     decoder._df_barcodes_loaded = _make_chromatic_barcode_table(
@@ -285,6 +288,7 @@ def test_chromatic_estimator_counts_only_valid_nonblank_cross_wavelength_rows() 
 
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._datastore = datastore
+    decoder._is_3D = True
     decoder._n_merfish_bits = 4
     decoder._chromatic_affine_config = ChromaticAffineEstimationConfig(min_pairs=5)
     decoder._df_barcodes_loaded = pd.concat(
@@ -303,3 +307,114 @@ def test_chromatic_estimator_counts_only_valid_nonblank_cross_wavelength_rows() 
     assert fit["candidate_pairs"] == 9
     assert fit["used_pairs"] >= 5
     np.testing.assert_allclose(estimated_affine, true_affine, atol=0.02)
+
+
+def test_2d_chromatic_estimator_ignores_z_and_removes_previous_axial_correction():
+    spacing = np.array([1.5, 0.108, 0.108], dtype=np.float32)
+    true_affine = _chromatic_affine_zyx_um()
+    previous_affine = np.eye(4)
+    previous_affine[0, 3] = 1.2
+    previous_affine[0, 1] = 0.02
+    previous_affine[1, 0] = 0.03
+    datastore = _FakeDataStore(
+        voxel_size_zyx_um=spacing,
+        bit_ids=["bit001", "bit002", "bit003", "bit004"],
+        tile_ids=["tile0000"],
+        calibration={
+            "channels": {
+                "red": {
+                    "wavelength_um": 0.67,
+                    "affine_zyx_um": previous_affine.tolist(),
+                }
+            }
+        },
+    )
+    decoder = PixelDecoder.__new__(PixelDecoder)
+    decoder._datastore = datastore
+    decoder._is_3D = False
+    decoder._n_merfish_bits = 4
+    decoder._chromatic_affine_config = ChromaticAffineEstimationConfig(min_pairs=20)
+    decoder._df_barcodes_loaded = _make_chromatic_barcode_table(
+        spacing_zyx_um=spacing,
+        true_affine_zyx_um=true_affine,
+    )
+    # Axial data, including invalid values, must not affect lateral fitting.
+    for bit in range(1, 5):
+        decoder._df_barcodes_loaded[f"bit{bit:02d}_center_z"] = np.nan
+    decoder._estimate_chromatic_affines_from_barcodes()
+
+    channel = datastore.calibration["channels"]["wavelength_0.670000"]
+    estimated = np.asarray(channel["affine_zyx_um"])
+    true_affine[0, 3] = 0
+    assert channel["status"] == "affine_estimated"
+    assert channel["diagnostics"]["path_fits"][0]["fit"]["model"] == "yx_radial_scale"
+    assert "z_translation" not in datastore.calibration["estimator"]
+    np.testing.assert_allclose(estimated, true_affine, atol=0.006)
+    np.testing.assert_array_equal(estimated[0], [1, 0, 0, 0])
+    np.testing.assert_array_equal(estimated[:, 0], [1, 0, 0, 0])
+
+
+def test_lateral_fit_excludes_axial_offsets_from_outlier_rejection():
+    rng = np.random.default_rng(10)
+    source = rng.uniform(0, 100, (50, 3))
+    target = source.copy()
+    target[:, 1:] = source[:, 1:] * 0.99 + [0.4, -0.3]
+    target[:, 0] = rng.uniform(-1000, 1000, len(source))
+    affine, diagnostics = PixelDecoder._fit_affine_zyx_um(
+        source,
+        target,
+        min_pairs=20,
+        config=ChromaticAffineEstimationConfig(),
+        estimate_z=False,
+    )
+    expected = np.diag([1, 0.99, 0.99, 1])
+    expected[1:3, 3] = [0.4, -0.3]
+    np.testing.assert_allclose(affine, expected, atol=1e-6)
+    assert diagnostics["used_pairs"] == len(source)
+
+
+@pytest.mark.parametrize("is_3d", [False, True])
+def test_centroid_support_uses_only_own_plane_in_2d(monkeypatch, is_3d):
+    # Exercise centroid collection on CPU, including the production accumulator.
+    import importlib
+
+    module = importlib.import_module("merfish3danalysis.PixelDecoder")
+    numpy_cp = SimpleNamespace(
+        **{
+            name: getattr(np, name)
+            for name in (
+                "int32",
+                "float32",
+                "bincount",
+                "asarray",
+                "clip",
+                "column_stack",
+                "maximum",
+            )
+        },
+        asnumpy=np.asarray,
+        get_array_module=lambda array: np,
+        max=lambda array: SimpleNamespace(get=lambda: np.max(array)),
+    )
+    monkeypatch.setattr(module, "cp", numpy_cp)
+    decoder = PixelDecoder.__new__(PixelDecoder)
+    decoder._is_3D = is_3d
+    decoder._n_merfish_bits = 1
+    decoder._z_crop = False
+    decoder._chromatic_affine_config = ChromaticAffineEstimationConfig()
+    labels = np.zeros((3, 3, 3), dtype=np.int32)
+    labels[1, 1, 1:] = 1
+    intensity = np.zeros((*labels.shape, 1), dtype=np.float32)
+    intensity[1, 1, 1:, 0] = [1, 3]
+    intensity[2, 1, 1, 0] = 100
+    table = pd.DataFrame({"label": [1], "z": [1.0], "y": [1.0], "x": [1.5]})
+    observed = decoder._add_on_bit_weighted_centroids(
+        table, labels, intensity, np.array([[1]])
+    ).iloc[0]
+    if is_3d:
+        assert observed["bit01_center_z"] == pytest.approx(204 / 104)
+        assert observed["bit01_center_x"] == pytest.approx(107 / 104)
+    else:
+        assert observed["bit01_center_z"] == 1
+        assert observed["bit01_center_x"] == 1.75
+        assert observed["bit01_intensity_sum"] == 4

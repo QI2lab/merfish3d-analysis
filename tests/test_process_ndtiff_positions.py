@@ -147,7 +147,7 @@ def test_generate_channel_psfs_uses_repository_microscope_parameters(
         assert call == {
             "z": 7,
             "nx": 51,
-            "dxy": 0.0985,
+            "dxy": 0.098,
             "dz": 0.32,
             "NA": 1.35,
             "wvl": call["wvl"],

@@ -27,6 +27,7 @@ from merfish3danalysis.utils.decode_warping import (
     compose_decode_warp_transform_zyx_um,
     load_bit_round_transform_zyx_um,
 )
+from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -67,7 +68,7 @@ def export_ome_tiffs(
     axes = {dim: dims.index(dim) for dim in dims}
     shape_zyx = tuple(int(array.shape[axes[dim]]) for dim in "zyx")
     origin = tuple(map(float, fused_metadata["origin_zyx_um"]))
-    spacing = tuple(map(float, fused_metadata["spacing_zyx_um"]))
+    spacing = tuple(round_spacing_um(fused_metadata["spacing_zyx_um"]))
     stage_transform_key = "stage_metadata"
     global_transform_key = "global_registered"
 
@@ -364,7 +365,10 @@ def _load_tile_multichannel_msim(
             )
         channel_sim = _read_fiducial_sim(
             input_path=input_path,
-            scale=spacing_zyx_um,
+            scale={
+                axis: round_pixel_size_um(value)
+                for axis, value in spacing_zyx_um.items()
+            },
             translation=translation,
             affine_zyx_px=stage_camera,
             transform_key="stage_metadata",
@@ -440,7 +444,7 @@ def _read_fused_metadata(
     return {
         "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
         "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
-        "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+        "spacing_zyx_um": round_spacing_um(spacing).tolist(),
     }
 
 
@@ -545,7 +549,7 @@ def fuse_all_channels(
     output_spacing = dict(
         zip(
             "zyx",
-            (round(float(value), 3) for value in datastore.voxel_size_zyx_um),
+            round_spacing_um(datastore.voxel_size_zyx_um),
             strict=True,
         )
     )

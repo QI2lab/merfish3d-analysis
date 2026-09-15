@@ -15,6 +15,7 @@ from merfish3danalysis.utils.psf import (
     QI2LAB_EMISSION_WAVELENGTHS_UM,
     generate_qi2lab_psf,
 )
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
@@ -246,7 +247,7 @@ def voxel_size_zyx_um(
     if not np.isfinite(z_size_um) or z_size_um <= 0:
         raise ValueError(f"Invalid NDTiff axial pixel size: {z_size_um!r}.")
 
-    return z_size_um, pixel_size_yx, pixel_size_yx
+    return tuple(round_spacing_um((z_size_um, pixel_size_yx, pixel_size_yx)))
 
 
 def _z_spacing_from_plane_metadata(dataset: Any, layout: DatasetLayout) -> float:
@@ -468,7 +469,7 @@ def _write_stack(
     channel_name: str,
 ) -> None:
     """Write one uncompressed, calibrated ZYX OME-TIFF stack."""
-    z_size_um, y_size_um, x_size_um = voxel_size_zyx_um
+    z_size_um, y_size_um, x_size_um = round_spacing_um(voxel_size_zyx_um)
     stack_array = np.asarray(stack)
     imwrite(
         path,

@@ -7,6 +7,7 @@ import ndv
 import numpy as np
 from qtpy import QtCore
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
     SparseOverlayPayload,
     stack_with_micron_coords,
@@ -425,7 +426,7 @@ def _x_spacing(spacing_zyx_um: Any) -> float:
     float
         Positive X spacing in microns.
     """
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     x_spacing_um = float(spacing[2]) if spacing.size >= 3 else 1.0
     if not np.isfinite(x_spacing_um) or x_spacing_um <= 0:
         return 1.0

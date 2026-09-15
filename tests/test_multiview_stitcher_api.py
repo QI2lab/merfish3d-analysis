@@ -66,7 +66,7 @@ def test_read_fiducial_sim_builds_zarr_backed_three_dimensional_view() -> None:
 
     result = _read_fiducial_sim(
         input_path=Path("/unused/input.ome.zarr"),
-        scale={"z": 2.0, "y": 0.5, "x": 0.5},
+        scale={"z": 2.00039, "y": 0.49989, "x": 0.50041},
         translation={"z": 3.0, "y": 4.0, "x": 5.0},
         affine_zyx_px=affine_zyx_px,
         transform_key="stage_metadata",

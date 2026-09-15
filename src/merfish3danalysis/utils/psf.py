@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
+
 QI2LAB_DEFAULT_NA = 1.35
 QI2LAB_DEFAULT_IMMERSION_RI = 1.51
 QI2LAB_SAMPLE_RI = 1.47
@@ -23,7 +25,7 @@ def generate_qi2lab_psf(
 
     if z_depth < 1:
         raise ValueError(f"PSF Z depth must be positive; received {z_depth}.")
-    z_size_um, y_size_um, _x_size_um = voxel_size_zyx_um
+    z_size_um, y_size_um, _x_size_um = round_spacing_um(voxel_size_zyx_um)
     psf = make_psf(
         z=z_depth,
         nx=QI2LAB_PSF_NX,

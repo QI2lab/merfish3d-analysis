@@ -1,5 +1,12 @@
 See comments in each file and the Zhuang example documentation for specifics.
 
+The Zhuang data has 1.5 micron axial spacing and MUST use 2D processing for
+everything: registration, deconvolution, segmentation, normalization, decoding,
+and chromatic estimation. Keep microscope_type="2D" and decode_mode="2d"
+(--decode-mode 2d with the CLI). Chromatic estimation must use only the
+transcript's own plane and preserve Z. Retain the 1.5 micron Z spacing for
+physical coordinates.
+
 Run every script through the project's uv environment and pass its data root as
 the positional argument. Provided time estimates are for a single workstation
 with an RTX 3090 GPU and standard hard disk. Run time can be decreased by using

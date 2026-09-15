@@ -25,6 +25,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 
+from merfish3danalysis.utils.spacing import round_ome_spatial_scales, round_spacing_um
+
 try:
     from zarr.errors import ZarrError
 except Exception:
@@ -186,6 +188,11 @@ class qi2labDataStore:
         None
             Metadata are written to ``calibrations/attributes.json``.
         """
+        calibration = dict(calibration)
+        if "voxel_size_zyx_um" in calibration:
+            calibration["voxel_size_zyx_um"] = round_spacing_um(
+                calibration["voxel_size_zyx_um"]
+            ).tolist()
         self._set_calibration_attribute(
             "chromatic_affine_transforms_zyx_um",
             calibration,
@@ -207,6 +214,10 @@ class qi2labDataStore:
             return {}
         calibration = attributes.get("chromatic_affine_transforms_zyx_um", {})
         if isinstance(calibration, dict):
+            if "voxel_size_zyx_um" in calibration:
+                calibration["voxel_size_zyx_um"] = round_spacing_um(
+                    calibration["voxel_size_zyx_um"]
+                ).tolist()
             return calibration
         return {}
 
@@ -861,7 +872,8 @@ class qi2labDataStore:
         voxel_size_zyx_um : ArrayLike
             Voxel size, zyx order (microns).
         """
-        return getattr(self, "_voxel_size_zyx_um", None)
+        value = getattr(self, "_voxel_size_zyx_um", None)
+        return None if value is None else round_spacing_um(value).tolist()
 
     @voxel_size_zyx_um.setter
     def voxel_size_zyx_um(self, value: ArrayLike) -> None:
@@ -872,8 +884,8 @@ class qi2labDataStore:
         value : ArrayLike
             New voxel size, zyx order (microns).
         """
-        self._voxel_size_zyx_um = value
-        self._set_calibration_attribute("voxel_size_zyx_um", value)
+        self._voxel_size_zyx_um = round_spacing_um(value).tolist()
+        self._set_calibration_attribute("voxel_size_zyx_um", self._voxel_size_zyx_um)
 
     @property
     def global_normalization_vector(self) -> ArrayLike | None:
@@ -1736,6 +1748,9 @@ class qi2labDataStore:
         open_group, _, _ = qi2labDataStore._import_yaozarrs()
         attrs = dict(open_group(str(image_root)).attrs)
         attrs.pop("ome", None)
+        for key in ("spacing_zyx_um", "voxel_size_zyx_um"):
+            if key in attrs:
+                attrs[key] = round_spacing_um(attrs[key]).tolist()
         return attrs
 
     @staticmethod
@@ -1770,6 +1785,10 @@ class qi2labDataStore:
             for k, v in dict(extra_attributes).items()
         }
 
+        for key in ("spacing_zyx_um", "voxel_size_zyx_um"):
+            if key in payload:
+                payload[key] = round_spacing_um(payload[key]).tolist()
+
         zarr_json_path = image_root / Path("zarr.json")
         if zarr_json_path.exists():
             with zarr_json_path.open("r", encoding="utf-8") as handle:
@@ -1782,6 +1801,7 @@ class qi2labDataStore:
                 metadata["attributes"] = attributes
             else:
                 metadata["attributes"] = payload
+            round_ome_spatial_scales(metadata["attributes"])
             with zarr_json_path.open("w", encoding="utf-8") as handle:
                 json.dump(metadata, handle, indent=2)
             return
@@ -1795,6 +1815,7 @@ class qi2labDataStore:
         else:
             attributes = {}
         attributes.update(payload)
+        round_ome_spatial_scales(attributes)
         with zattrs_path.open("w", encoding="utf-8") as handle:
             json.dump(attributes, handle, indent=2)
 
@@ -1971,7 +1992,7 @@ class qi2labDataStore:
         if dtype is not None:
             spec["metadata"]["dtype"] = dtype
 
-        voxel_size = getattr(self, "_voxel_size_zyx_um", None)
+        voxel_size = self.voxel_size_zyx_um
         if voxel_size is not None:
             spec["ome_scale"] = [float(v) for v in np.asarray(voxel_size).tolist()]
         if stage_zyx_um is not None:
@@ -2025,6 +2046,19 @@ class qi2labDataStore:
                 self._save_to_json(metadata, metadata_path)
                 return
 
+    @staticmethod
+    def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
+        """Return ZYX stage coordinates, padding legacy YX positions with Z=0."""
+        stage = np.asarray(stage_zyx_um, dtype=np.float32)
+        if stage.shape == (2,):
+            return np.asarray((0.0, stage[0], stage[1]), dtype=np.float32)
+        if stage.shape != (3,):
+            raise ValueError(
+                "Stage position must contain two (Y, X) or three (Z, Y, X) "
+                f"coordinates; got shape {stage.shape}."
+            )
+        return stage
+
     def _resolve_original_tile_position_zyx_um(
         self,
         tile_id: str,
@@ -2053,7 +2087,7 @@ class qi2labDataStore:
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
             if stage is not None:
-                return [float(v) for v in stage]
+                return self._normalize_stage_position_zyx_um(stage).tolist()
 
         if bit_id is not None:
             round_linker = self.load_local_round_linker(tile=tile_id, bit=bit_id)
@@ -2065,7 +2099,7 @@ class qi2labDataStore:
                 attrs = self._load_entity_attributes(fiducial_entity)
                 stage = attrs.get("stage_zyx_um")
                 if stage is not None:
-                    return [float(v) for v in stage]
+                    return self._normalize_stage_position_zyx_um(stage).tolist()
 
         if getattr(self, "_round_ids", None):
             fiducial_entity = (
@@ -2074,7 +2108,7 @@ class qi2labDataStore:
             attrs = self._load_entity_attributes(fiducial_entity)
             stage = attrs.get("stage_zyx_um")
             if stage is not None:
-                return [float(v) for v in stage]
+                return self._normalize_stage_position_zyx_um(stage).tolist()
         return None
 
     def _resolve_reference_tile_position_zyx_um(
@@ -2336,6 +2370,7 @@ class qi2labDataStore:
         )
 
         axes = qi2labDataStore._build_axes(v05, image_array.ndim)
+        scale[-3:] = round_spacing_um(scale[-3:]).tolist()
         transforms = [
             v05.ScaleTransformation(scale=scale),
             v05.TranslationTransformation(translation=translation),
@@ -2491,7 +2526,9 @@ class qi2labDataStore:
             self._num_bits = attributes["num_bits"]
             self._microscope_type = attributes["microscope_type"]
             self._camera_model = attributes["camera_model"]
-            self._voxel_size_zyx_um = attributes["voxel_size_zyx_um"]
+            self._voxel_size_zyx_um = round_spacing_um(
+                attributes["voxel_size_zyx_um"]
+            ).tolist()
 
             if getattr(self, "_exp_order", None) is not None:
                 self._experiment_order = self._coerce_experiment_order_dataframe(
@@ -3210,7 +3247,7 @@ class qi2labDataStore:
         self,
         tile: int | str,
         round: int | str,
-    ) -> ArrayLike | None:
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         """Load tile stage position for one tile.
 
         Parameters
@@ -3223,7 +3260,8 @@ class qi2labDataStore:
         Returns
         -------
         stage_zyx_um : ArrayLike or None
-            Tile stage position for one tile.
+            Tile stage position in Z, Y, X microns. Legacy two-coordinate Y, X
+            metadata is returned with Z=0 without modifying the stored data.
         affine_zyx_um: ArrayLike or None
             Affine transformation between stage and camera
         """
@@ -3268,7 +3306,7 @@ class qi2labDataStore:
                 print(tile_id, round_id)
                 print("Stage position attribute not found.")
                 return None
-            return np.asarray(stage_zyx_um, dtype=np.float32), np.asarray(
+            return self._normalize_stage_position_zyx_um(stage_zyx_um), np.asarray(
                 affine_zyx_px, dtype=np.float32
             )
         except (TypeError, ValueError):
@@ -3288,7 +3326,8 @@ class qi2labDataStore:
         Parameters
         ----------
         stage_zyx_um : ArrayLike
-            Tile stage position for one tile.
+            Tile stage position in Z, Y, X microns. Two-coordinate Y, X input
+            is accepted and stored as Z, Y, X with Z=0.
         affine_zyx_px: ArrayLike
             4x4 homogeneous affine matrix for stage transformation
         tile : int or str
@@ -3330,7 +3369,7 @@ class qi2labDataStore:
 
         try:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            stage_zyx_um = np.asarray(stage_zyx_um, dtype=np.float32)
+            stage_zyx_um = self._normalize_stage_position_zyx_um(stage_zyx_um)
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
@@ -5177,7 +5216,7 @@ class qi2labDataStore:
             attributes = self._load_entity_attributes(entity_root)
             affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
             origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-            spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+            spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
             return (affine_zyx_um, origin_zyx_um, spacing_zyx_um)
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             print(tile_id, self._round_ids[0])
@@ -5233,9 +5272,7 @@ class qi2labDataStore:
                     "origin_zyx_um": np.asarray(
                         origin_zyx_um, dtype=np.float32
                     ).tolist(),
-                    "spacing_zyx_um": np.asarray(
-                        spacing_zyx_um, dtype=np.float32
-                    ).tolist(),
+                    "spacing_zyx_um": round_spacing_um(spacing_zyx_um).tolist(),
                 },
                 target_image_name="corrected_data",
             )
@@ -5284,7 +5321,7 @@ class qi2labDataStore:
             attributes = self._read_extra_attributes(image_path)
             affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
             origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-            spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+            spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
             return fused_image, affine_zyx_um, origin_zyx_um, spacing_zyx_um
         except (OSError, ZarrError, KeyError):
             print("Error loading globally registered, fused image.")
@@ -5325,7 +5362,7 @@ class qi2labDataStore:
         metadata_attrs = {
             "affine_zyx_um": np.asarray(affine_zyx_um, dtype=np.float32).tolist(),
             "origin_zyx_um": np.asarray(origin_zyx_um, dtype=np.float32).tolist(),
-            "spacing_zyx_um": np.asarray(spacing_zyx_um, dtype=np.float32).tolist(),
+            "spacing_zyx_um": round_spacing_um(spacing_zyx_um).tolist(),
         }
         fused_array = np.asarray(fused_image)
         try:
@@ -5333,6 +5370,7 @@ class qi2labDataStore:
                 dtype="<u2",
                 extra_attributes=metadata_attrs,
             )
+            spec["ome_scale"] = metadata_attrs["spacing_zyx_um"]
             spec["metadata"]["chunks"] = self._fused_image_chunks(fused_array)
             self._save_to_zarr_array(
                 fused_array.astype(np.uint16),

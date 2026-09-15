@@ -124,6 +124,7 @@ from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
@@ -693,7 +694,7 @@ class PixelDecoder:
             spacing = self._datastore.voxel_size_zyx_um
         affine = np.asarray(affine, dtype=np.float64)
         origin = np.asarray(origin, dtype=np.float64)
-        spacing = np.asarray(spacing, dtype=np.float64)
+        spacing = round_spacing_um(spacing)
         if origin.size == 2:
             origin = np.asarray([0.0, origin[0], origin[1]], dtype=np.float64)
 
@@ -1486,7 +1487,7 @@ class PixelDecoder:
         self,
     ) -> None:
         """
-        Estimate 3D chromatic affine matrices from decoded RNA on-bit centroids.
+        Estimate chromatic matrices from RNA centroids in the decoding dimensions.
 
         Returns
         -------
@@ -1546,7 +1547,7 @@ class PixelDecoder:
 
         unique_wavelengths = sorted(set(bit_wavelengths.values()))
         reference_wavelength = unique_wavelengths[0]
-        spacing = np.asarray(self._datastore.voxel_size_zyx_um, dtype=np.float32)
+        spacing = round_spacing_um(self._datastore.voxel_size_zyx_um).astype(np.float32)
         wavelength_to_index = {
             wavelength: index for index, wavelength in enumerate(unique_wavelengths)
         }
@@ -1600,6 +1601,8 @@ class PixelDecoder:
                 if not all(col in barcode_table.columns for col in center_cols):
                     continue
                 centers = barcode_table[center_cols].to_numpy(dtype=np.float64)
+                if not self._is_3D:
+                    centers[:, 0] = 0.0
                 intensity_col = f"bit{bit:02d}_intensity_sum"
                 if intensity_col in barcode_table.columns:
                     weights = barcode_table[intensity_col].to_numpy(dtype=np.float64)
@@ -1680,10 +1683,15 @@ class PixelDecoder:
                 weights=pair_weights,
                 min_pairs=min_pairs,
                 config=config,
-                residual_threshold_um=max(
-                    float(config.residual_threshold_um),
-                    float(config.residual_threshold_z_spacing_fraction)
-                    * float(spacing[0]),
+                estimate_z=self._is_3D,
+                residual_threshold_um=(
+                    max(
+                        float(config.residual_threshold_um),
+                        float(config.residual_threshold_z_spacing_fraction)
+                        * float(spacing[0]),
+                    )
+                    if self._is_3D
+                    else float(config.residual_threshold_um)
                 ),
             )
             diagnostics["candidate_pairs"] = int(source_points.shape[0])
@@ -1784,6 +1792,11 @@ class PixelDecoder:
                 wavelength,
                 np.eye(4, dtype=np.float32),
             )
+            if not self._is_3D:
+                # Do not carry axial corrections from a previous 3D calibration.
+                previous_affine = previous_affine.copy()
+                previous_affine[0, :] = [1.0, 0.0, 0.0, 0.0]
+                previous_affine[:, 0] = [1.0, 0.0, 0.0, 0.0]
             cumulative_affine = residual_affine @ previous_affine
             if np.isclose(wavelength, reference_wavelength):
                 cumulative_affine = np.eye(4, dtype=np.float32)
@@ -1824,9 +1837,11 @@ class PixelDecoder:
         self._datastore.save_chromatic_affine_transforms_zyx_um(
             {
                 "reference_wavelength_um": float(reference_wavelength),
-                "voxel_size_zyx_um": [float(v) for v in spacing],
+                "voxel_size_zyx_um": round_spacing_um(spacing).tolist(),
                 "estimator": (
                     "decoded_rna_on_bit_weighted_centroid_z_translation_yx_affine_graph"
+                    if self._is_3D
+                    else "decoded_rna_on_bit_weighted_centroid_yx_affine_graph"
                 ),
                 "pair_constraints": int(
                     sum(points[0].shape[0] for points in pair_points.values())
@@ -2001,7 +2016,7 @@ class PixelDecoder:
 
         self._affine = np.asarray(affine, dtype=np.float32)
         self._origin = np.asarray(origin, dtype=np.float32)
-        self._spacing = np.asarray(spacing, dtype=np.float32)
+        self._spacing = round_spacing_um(spacing).astype(np.float32)
         self._camera_to_stage_affine = camera_to_stage_affine
 
         del images
@@ -2111,6 +2126,7 @@ class PixelDecoder:
         min_pairs: int,
         config: ChromaticAffineEstimationConfig,
         residual_threshold_um: float = 0.35,
+        estimate_z: bool = True,
     ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
         """
         Fit a robust chromatic affine from decoded transcript centroids.
@@ -2122,6 +2138,7 @@ class PixelDecoder:
         scale or shear. This fit estimates the chromatic model supported by
         decoded RNA features: one shared radial Y/X scale, Y/X translations,
         and a Z translation, returned as a 4x4 Z, Y, X physical transform.
+        In 2D mode, Z is excluded from both fitting and residual filtering.
 
         Parameters
         ----------
@@ -2138,6 +2155,9 @@ class PixelDecoder:
             Explicit fitting parameters.
         residual_threshold_um : float, default=0.35
             Residual threshold used for iterative outlier rejection.
+        estimate_z : bool, default=True
+            Estimate axial translation. If False, fit only lateral coordinates
+            and preserve the identity Z axis.
 
         Returns
         -------
@@ -2154,7 +2174,9 @@ class PixelDecoder:
             "median_residual_um": np.nan,
             "p95_residual_um": np.nan,
             "source_extent_zyx_um": [0.0, 0.0, 0.0],
-            "model": "z_translation_yx_radial_scale",
+            "model": "z_translation_yx_radial_scale"
+            if estimate_z
+            else "yx_radial_scale",
             "status": "insufficient_pairs",
         }
         if source.shape != target.shape or source.ndim != 2 or source.shape[1] != 3:
@@ -2162,6 +2184,11 @@ class PixelDecoder:
             return None, diagnostics
         if source.shape[0] < max(3, int(min_pairs)):
             return None, diagnostics
+        if not estimate_z:
+            source = source.copy()
+            target = target.copy()
+            source[:, 0] = 0.0
+            target[:, 0] = 0.0
         if weights is None:
             weights_arr = np.ones(source.shape[0], dtype=np.float64)
         else:
@@ -2315,10 +2342,11 @@ class PixelDecoder:
                 )
             )
             sample_affine = np.eye(4, dtype=np.float64)
-            sample_affine[0, 3] = robust_weighted_z_translation(
-                target[sample_indices, 0] - sample_source[:, 0],
-                weights_arr[sample_indices],
-            )
+            if estimate_z:
+                sample_affine[0, 3] = robust_weighted_z_translation(
+                    target[sample_indices, 0] - sample_source[:, 0],
+                    weights_arr[sample_indices],
+                )
             sample_affine[1, 1] = sample_scale
             sample_affine[1, 3] = sample_y_translation
             sample_affine[2, 2] = sample_scale
@@ -2364,10 +2392,12 @@ class PixelDecoder:
                 target[keep, 1:3],
                 weights_arr[keep],
             )
-            z_offsets = target[keep, 0] - source[keep, 0]
-            z_translation = robust_weighted_z_translation(z_offsets, weights_arr[keep])
             affine = np.eye(4, dtype=np.float64)
-            affine[0, 3] = z_translation
+            if estimate_z:
+                z_offsets = target[keep, 0] - source[keep, 0]
+                affine[0, 3] = robust_weighted_z_translation(
+                    z_offsets, weights_arr[keep]
+                )
             affine[1, 1] = scale
             affine[1, 3] = y_translation
             affine[2, 2] = scale
@@ -2809,7 +2839,7 @@ class PixelDecoder:
         labels_cp = codewords_label_image.astype(cp.int32, copy=False)
         config = self._chromatic_affine_config
         z_support = min(
-            int(config.centroid_z_support),
+            int(config.centroid_z_support) if self._is_3D else 1,
             labels_cp.shape[0] if labels_cp.ndim == 3 else 1,
         )
         if z_support % 2 == 0:

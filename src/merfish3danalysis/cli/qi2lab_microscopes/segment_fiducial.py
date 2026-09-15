@@ -21,6 +21,7 @@ from roifile import ImagejRoi, roiread, roiwrite
 from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.cellpose_rois import extract_pixel_rois, global_rois
+from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -128,7 +129,7 @@ def run_cellpose(
     attributes = datastore._read_extra_attributes(fused_image_path)
     affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
     origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-    spacing_zyx_um = np.asarray(attributes["spacing_zyx_um"], dtype=np.float32)
+    spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"]).astype(np.float32)
 
     imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
     cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
@@ -389,6 +390,7 @@ def warp_points(
     numpy.ndarray
         Warped physical Z, Y, X coordinates.
     """
+    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
     physical_space_points = pixel_space_points * spacing + origin
     homogeneous_points = np.column_stack(
         (

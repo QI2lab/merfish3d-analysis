@@ -12,6 +12,8 @@ import numpy as np
 from roifile import ImagejRoi
 from scipy.ndimage import find_objects
 
+from merfish3danalysis.utils.spacing import round_spacing_um
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
 
@@ -127,7 +129,9 @@ def global_rois(
     """
     transform = partial(
         _transform_roi_batch,
-        spacing_zyx_um=np.asarray(spacing_zyx_um),
+        spacing_zyx_um=round_spacing_um(spacing_zyx_um).astype(
+            np.asarray(spacing_zyx_um).dtype
+        ),
         origin_zyx_um=np.asarray(origin_zyx_um),
         affine_zyx_um=np.asarray(affine_zyx_um),
         min_cell_area_um2=min_cell_area_um2,

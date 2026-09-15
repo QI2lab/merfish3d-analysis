@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
+
 
 def _diag(message: str, *, enabled: bool) -> None:
     """
@@ -377,7 +379,7 @@ def register_pair_to_fixed(
         )
 
     start_time = timeit.default_timer()
-    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(spacing_zyx_um).astype(np.float32)
     fixed_projection = _max_z_projection_gpu(fixed, cp)
     moving_projection = _max_z_projection_gpu(moving, cp)
     xy_pull_shift_px = _select_phase_correlation_pull_shift_px(
@@ -511,7 +513,7 @@ def warp_array_to_reference_gpu(
 
     cp.cuda.Device(gpu_id).use()
 
-    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(spacing_zyx_um).astype(np.float32)
     origin = np.asarray(reference_origin_zyx_um, dtype=np.float32)
     transform = np.asarray(transform_zyx_um, dtype=np.float32)
     linear_um = transform[:3, :3]
@@ -641,7 +643,7 @@ def warp_array_to_reference_with_affine_and_sofima_flow_gpu(
     cp.cuda.Device(gpu_id).use()
 
     ref_shape = tuple(int(v) for v in reference_shape)
-    spacing = cp.asarray(spacing_zyx_um, dtype=cp.float32)
+    spacing = cp.asarray(round_spacing_um(spacing_zyx_um), dtype=cp.float32)
     origin = cp.asarray(reference_origin_zyx_um, dtype=cp.float32)
     transform = cp.asarray(transform_zyx_um, dtype=cp.float32)
     flow_field = cp.asarray(sofima_flow_field_xyz_px, dtype=cp.float32)

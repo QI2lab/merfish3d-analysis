@@ -212,6 +212,7 @@ def decode_pixels(
     # initialize decodor class
     decoder = PixelDecoder(
         datastore=datastore,
+        decode_mode="2d",  # Required for the 1.5 micron axial spacing.
         use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=1,
