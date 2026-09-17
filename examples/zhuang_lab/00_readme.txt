@@ -1,11 +1,14 @@
 See comments in each file and the Zhuang example documentation for specifics.
 
 The Zhuang data has 1.5 micron axial spacing and MUST use 2D processing for
-everything: registration, deconvolution, segmentation, normalization, decoding,
-and chromatic estimation. Keep microscope_type="2D" and decode_mode="2d"
+deconvolution, segmentation, normalization, decoding, and chromatic estimation.
+Keep microscope_type="2D" and decode_mode="2d"
 (--decode-mode 2d with the CLI). Chromatic estimation must use only the
 transcript's own plane and preserve Z. Retain the 1.5 micron Z spacing for
-physical coordinates.
+physical coordinates. Global tile registration uses the shared DataRegistration
+workflow with ZYX binning (1, 3, 3). The fit estimates offsets in Z as well as YX.
+Fiducial fusion and its maximum-Z TIFF use the downsampled segmentation grid.
+The saved spacing is used to transform Cellpose pixel ROIs to global coordinates.
 
 Run every script through the project's uv environment and pass its data root as
 the positional argument. Provided time estimates are for a single workstation

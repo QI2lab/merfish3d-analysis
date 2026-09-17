@@ -1,20 +1,21 @@
-"""Generate deconvolved data and create "fake" local tile registrations.
+"""Register Zhuang MOP data and generate U-FISH predictions.
 
-In this example, we  bypass the standard "DataRegistration" API because
-the Zhuang MOP data is already registered and warped.
-
-For fiducial data, only round 1 is deconvolved. A rigid xyz transform
-consisting of all zeros is added to all tiles & rounds for the fiducial data.
-
-For readout data, all tiles and bits are deconvolved plus u-fish predicted.
+The BIL data are already locally registered and warped. This example keeps
+deconvolution and deformable registration disabled. Global registration uses
+the shared DataRegistration workflow and writes downsampled fiducial fusion
+for segmentation.
 
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import argparse
 from pathlib import Path
 
+import typer
+
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def local_register_data(root_path: Path) -> None:
@@ -23,12 +24,12 @@ def local_register_data(root_path: Path) -> None:
     Parameters
     ----------
     root_path: Path
-        path to experiment
+        path to experiment or qi2labdatastore directory
     """
     from merfish3danalysis.DataRegistration import DataRegistration
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
 
     # initialize registration class
@@ -45,7 +46,7 @@ def local_register_data(root_path: Path) -> None:
     registration_factory.register_all_tiles()
 
     # update datastore state
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
 
@@ -53,40 +54,51 @@ def local_register_data(root_path: Path) -> None:
 def global_register_data(
     root_path: Path, create_max_proj_tiff: bool | None = True
 ) -> None:
-    """Register all tiles in first round in global coordinates.
+    """Register first-round tiles and write downsampled fusion.
 
     Parameters
     ----------
     root_path: Path
-        path to experiment
+        path to experiment or qi2labdatastore directory
 
     create_max_proj_tiff: Optional[bool]
         create max projection tiff in the segmentation/cellpose directory.
         Default = True
     """
 
-    from merfish3danalysis.DataRegistration import DataRegistration
+    from merfish3danalysis.DataRegistration import (
+        DataRegistration,
+        GlobalRegistrationConfig,
+    )
 
-    datastore = qi2labDataStore(root_path / "qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
+    datastore = qi2labDataStore(datastore_path, validate=False)
     registration_factory = DataRegistration(
         datastore=datastore,
         perform_deformable_registration=False,
         global_registration=True,
+        global_registration_config=GlobalRegistrationConfig(
+            registration_binning_zyx=(1, 3, 3),
+        ),
     )
     registration_factory.global_register(
         create_max_proj_tiff=bool(create_max_proj_tiff)
     )
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    stages = parser.add_mutually_exclusive_group()
-    stages.add_argument("--local-only", action="store_true")
-    stages.add_argument("--global-only", action="store_true")
-    args = parser.parse_args()
-    root_path = args.root_path.expanduser().resolve()
-    if not args.global_only:
+@app.command()
+def main(root_path: Path, local_only: bool = False, global_only: bool = False) -> None:
+    """Run local and global Zhuang registration, or only the selected stage."""
+    if local_only and global_only:
+        raise typer.BadParameter(
+            "--local-only and --global-only are mutually exclusive."
+        )
+    root_path = root_path.expanduser().resolve()
+    if not global_only:
         local_register_data(root_path)
-    if not args.local_only:
+    if not local_only:
         global_register_data(root_path, create_max_proj_tiff=True)
+
+
+if __name__ == "__main__":
+    app()

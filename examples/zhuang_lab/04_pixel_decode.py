@@ -7,11 +7,15 @@ Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import argparse
 from pathlib import Path
+
+import typer
 
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
@@ -25,7 +29,6 @@ def _nearest_nyquist_multiple(
     nyquist_multiple: float,
 ) -> float:
     """Return the configured Nyquist multiple nearest to a measured multiple."""
-
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -83,7 +86,7 @@ def decode_pixels(
     """
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)
     merfish_bits = 22
     if minimum_pixels_per_RNA is None:
@@ -120,8 +123,12 @@ def decode_pixels(
     )
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
+@app.command()
+def main(root_path: Path) -> None:
+    """Decode the Zhuang experiment using its dataset-specific parameters."""
+    root_path = root_path.expanduser().resolve()
     decode_pixels(root_path=root_path)
+
+
+if __name__ == "__main__":
+    app()

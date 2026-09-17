@@ -9,17 +9,19 @@ Shepherd 2025/01 - rework script to accept parameters
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import typer
 from natsort import natsorted
 from psfmodels import make_psf
 from tifffile import imread
 from tqdm import tqdm
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def convert_data(
@@ -143,7 +145,7 @@ def convert_data(
     datastore.voxel_size_zyx_um = voxel_zyx_um
 
     # Update datastore state to note that calibrations are done
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
 
@@ -231,18 +233,22 @@ def convert_data(
                 psf_idx = 2
 
     # update datastore state that "corrected_data" is complete
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
+@app.command()
+def main(root_path: Path) -> None:
+    """Convert the Zhuang experiment using its channel names and codebook."""
+    root_path = root_path.expanduser().resolve()
 
     convert_data(
         root_path=root_path,
         channel_names=["alexa488", "cy5", "alexa750"],
         codebook_path=root_path / Path("additional_files") / Path("codebook.csv"),
     )
+
+
+if __name__ == "__main__":
+    app()

@@ -1,12 +1,197 @@
-"""Run the shared qi2lab Cellpose segmentation workflow for the Zhuang data.
+"""
+Run cellpose, save ROIs, reload ROIs, warp ROIs to global system, save again.
 
-The 1.5 micron axial spacing requires 2D segmentation. The shared API segments
-only the fused fiducial maximum-Z projection with ``do_3D=False``. All model,
-normalization, mask, and ROI options and defaults are the same as qi2lab-segment.
-Run this script with --help to see the shared command-line options.
+Eventually, this will be re-integrated back into the library - but it is
+helpful to see it split out for now.
+
+IMPORTANT: You must optimize the cellpose parameters on your own using the GUI,
+then fill in the dictionary at the bottom of the script.
+
+Shepherd 2025/07 - refactor for CellposeSAM
+Shepherd 2024/12 - refactor
+Shepherd 2024/11 - created script to run cellpose given determined parameters.
 """
 
-from merfish3danalysis.cli.qi2lab_microscopes.segment_fiducial import main
+from pathlib import Path
+
+import numpy as np
+import typer
+from cellpose import io, models
+from roifile import ImagejRoi, roiread, roiwrite
+
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
+from merfish3danalysis.utils.spacing import round_spacing_um
+
+app = typer.Typer(pretty_exceptions_enable=False)
+
+
+def warp_point(
+    pixel_space_point: np.ndarray,
+    spacing: np.ndarray,
+    origin: np.ndarray,
+    affine: np.ndarray,
+) -> np.ndarray:
+    """Warp point from pixel space to global space using known transforms.
+
+    Parameters
+    ----------
+    pixel_space_point : np.ndarray
+        point in the image coordinate system, zyx order
+    spacing: np.ndarray
+        pixel size in microns, zyx order
+    origin: np.ndarray
+        world coordinate origin (um), zyx order
+    affine: np.ndarray
+        4x4 affine matrix (um), zyx order
+
+    Returns
+    -------
+    registered_space_point: np.ndarray
+        point in the world coordinate system (um), zyx order
+
+    """
+
+    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
+    physical_space_point = pixel_space_point * spacing + origin
+    registered_space_point = (
+        np.array(affine) @ np.array([*list(physical_space_point), 1])
+    )[:-1]
+
+    return registered_space_point
+
+
+def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
+    """Run cellpose and save ROIs
+
+    Parameters
+    ----------
+    root_path: Path
+        path to experiment or qi2labdatastore directory
+    cellpose_parameters: dict
+        dictionary of cellpose parameters
+    """
+
+    # initialize datastore
+    datastore_path = resolve_datastore_path(root_path)
+    datastore = qi2labDataStore(datastore_path)
+
+    # load the saved downsampled projection and its fused coordinates
+    max_projection_path = (
+        datastore_path
+        / "segmentation"
+        / "cellpose"
+        / "fiducial_max_projection.ome.tiff"
+    )
+    if max_projection_path.exists():
+        fused_image_path = datastore.fused_image_path()
+        attributes = datastore.load_image_metadata(fused_image_path)
+        affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
+        origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
+        spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
+        fiducial_max_projection = io.imread_2D(str(max_projection_path))
+    else:
+        # create max projection if the TIFF has not been saved
+        fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = (
+            datastore.load_global_fiducial_image(return_future=False)
+        )
+        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
+        del fiducial_fused
+
+    # initialize cellpose model and options
+    model = models.CellposeModel(gpu=True)
+    normalize = {
+        "normalize": True,
+        "percentile": cellpose_parameters["normalization"],
+    }
+
+    # run cellpose on fiducial max projection
+    masks, _, _ = model.eval(
+        fiducial_max_projection,
+        do_3D=False,
+        diameter=cellpose_parameters["diameter"],
+        flow_threshold=cellpose_parameters["flow_threshold"],
+        cellprob_threshold=-cellpose_parameters["cellprob_threshold"],
+        niter=200,
+        normalize=normalize,
+    )
+
+    # save masks
+    downsampling_zyx = round_spacing_um(spacing_zyx_um) / round_spacing_um(
+        datastore.voxel_size_zyx_um
+    )
+    datastore.save_global_cellpose_segmentation_image(
+        masks, downsampling=downsampling_zyx.tolist()
+    )
+
+    # save pixel spaced ROIs
+    imagej_roi_path_dir = (
+        datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
+    )
+    if not (imagej_roi_path_dir.exists()):
+        imagej_roi_path_dir.mkdir()
+    imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
+    if np.any(masks):
+        io.save_rois(masks, str(imagej_roi_path))
+    else:
+        roiwrite(imagej_roi_path_dir / "pixel_spacing_rois.zip", [], mode="w")
+
+    # load pixel spaced ROIs
+    cellpose_roi_path = imagej_roi_path_dir / Path("pixel_spacing_rois.zip")
+    pixel_spacing_rois = roiread(cellpose_roi_path)
+
+    # warp ROIs into global coordinates
+    # the ROIs are in (x,y) format. So we have to (1) fake a z dimension,
+    # (2) flip xy to yx, (3) warp, (4) remove the z, (5) flip back to (x,y)
+    # When we load to check if RNA are in an ROI, need to remember to flip
+    # back to (y,x).
+    global_spacing_rois = []
+    for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
+        pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
+        padding = np.full((pixel_coordinates.shape[0], 1), 10)
+        padded_pixel_coordinates = np.hstack((padding, pixel_coordinates[:, ::-1]))
+        global_coordinates_padded = np.zeros_like(
+            padded_pixel_coordinates, dtype=np.float32
+        )
+        for pt_idx, pts in enumerate(padded_pixel_coordinates):
+            global_coordinates_padded[pt_idx, :] = warp_point(
+                pts.copy().astype(np.float32),
+                spacing_zyx_um,
+                origin_zyx_um,
+                affine_zyx_um,
+            )
+        global_coordinates = global_coordinates_padded[:, 1:]
+        roi = ImagejRoi.frompoints(
+            np.round(global_coordinates[:, ::-1], 2).astype(np.float32)
+        )
+        roi.name = "cell_" + str(cell_idx).zfill(7)
+        global_spacing_rois.append(roi)
+        del roi
+
+    # write global coordinate ROIs
+    global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
+    roiwrite(global_roi_path, global_spacing_rois, mode="w")
+
+    # update datastore state
+    datastore_state = datastore.datastore_state.copy()
+    datastore_state.update({"SegmentedCells": True})
+    datastore.datastore_state = datastore_state
+
+
+@app.command()
+def main(root_path: Path) -> None:
+    """Segment the downsampled fiducial projection with Zhuang parameters."""
+    root_path = root_path.expanduser().resolve()
+    # Zhuang parameters; tune on the downsampled fiducial projection.
+    # The original convention passes the negative of cellprob_threshold.
+    cellpose_parameters = {
+        "normalization": [0.5, 99.5],
+        "flow_threshold": 0.4,
+        "cellprob_threshold": 1.0,
+        "diameter": 15,
+    }
+    run_cellpose(root_path, cellpose_parameters)
+
 
 if __name__ == "__main__":
-    main()
+    app()

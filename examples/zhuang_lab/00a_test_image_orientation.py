@@ -1,4 +1,3 @@
-import argparse
 import json
 from pathlib import Path
 
@@ -6,11 +5,14 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import typer
 import zarr
 from tifffile import imread
 from tqdm import tqdm
 
 from merfish3danalysis.utils.spacing import round_pixel_size_um
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
@@ -187,10 +189,12 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
     plt.show()
 
 
+@app.command()
+def main(root_path: Path, n_tiles: int = 2) -> None:
+    """Display an overview of the selected Zhuang tiles."""
+    root_path = root_path.expanduser().resolve()
+    create_overview_image(root_path, n_tiles)
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    parser.add_argument("--n-tiles", type=int, default=2)
-    args = parser.parse_args()
-    root_path = args.root_path.expanduser().resolve()
-    create_overview_image(root_path, args.n_tiles)
+    app()

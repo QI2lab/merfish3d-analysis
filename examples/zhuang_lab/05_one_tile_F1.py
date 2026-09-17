@@ -7,15 +7,18 @@ Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
-import argparse
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import typer
 from scipy.spatial import cKDTree
 
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def calculate_F1_with_radius(
@@ -205,7 +208,7 @@ def decode_pixels(
     """
 
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)
     merfish_bits = 22
 
@@ -304,44 +307,30 @@ def decode_pixels(
 
     print(f"F1 score: {results['F1 Score']}")
 
-    import napari
+    from merfish3danalysis.viewer.diagnostics import show_diagnostic_images
 
-    viewer = napari.Viewer()
+    show_diagnostic_images(
+        {
+            "decoded": decoded,
+            "fiducial": fiducial_image,
+            "magnitude": mag,
+            "distance": distance,
+        },
+        [1, 1, 1],
+        points=(
+            ("MERlin", merlin_coords, "cyan", "o"),
+            ("qi2lab", qi2lab_coords, "orange", "s"),
+        ),
+        units="px",
+    )
 
-    viewer.add_image(
-        decoded,
-        # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-        # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    )
-    # viewer.add_image(
-    #     # np.max(scaled,axis=0),
-    #     # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-    #     # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    # )
-    viewer.add_image(
-        fiducial_image,
-        # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-        # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    )
-    viewer.add_image(
-        mag,
-        # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-        # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    )
-    viewer.add_image(
-        distance,
-        # scale=[1.5,datastore.voxel_size_zyx_um[1],datastore.voxel_size_zyx_um[2]],
-        # translate=(stage_zyx_um[0]+affine_xform_um[1][3],stage_zyx_um[1]+affine_xform_um[2][3])
-    )
-    viewer.add_points(merlin_coords, size=5, face_color="cyan")
-    viewer.add_points(qi2lab_coords, size=5, symbol="s", face_color="orange")
-    viewer.scale_bar.visible = True
-    viewer.scale_bar.unit = "px"
-    napari.run()
+
+@app.command()
+def main(root_path: Path) -> None:
+    """Decode and compare one Zhuang tile with MERLIN."""
+    root_path = root_path.expanduser().resolve()
+    decode_pixels(root_path=root_path)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
-    decode_pixels(root_path=root_path)
+    app()
