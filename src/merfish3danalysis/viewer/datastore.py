@@ -2,11 +2,11 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 
 @dataclass(frozen=True)
@@ -27,58 +27,11 @@ class ViewerDatastoreLoadResult:
     """Opened datastore and controller options for one path."""
 
     datastore_path: Path
-    datastore: Any
+    datastore: qi2labDataStore
     options: ViewerDatastoreOptions
 
 
-def normalize_datastore_path(path: Path) -> Path:
-    """
-    Resolve an experiment root or direct datastore path to a datastore path.
-
-    Parameters
-    ----------
-    path : Path
-        Experiment root or qi2lab datastore directory.
-
-    Returns
-    -------
-    Path
-        Resolved qi2lab datastore directory.
-    """
-    expanded = path.expanduser().resolve()
-    direct_state_path = expanded / "datastore_state.json"
-    if direct_state_path.exists():
-        return expanded
-
-    nested = expanded / "qi2labdatastore"
-    nested_state_path = nested / "datastore_state.json"
-    if nested_state_path.exists():
-        return nested
-
-    raise FileNotFoundError(
-        "Could not find qi2lab datastore. Select an experiment root containing "
-        "'qi2labdatastore' or select the datastore directory directly."
-    )
-
-
-def open_datastore(datastore_path: Path) -> Any:
-    """
-    Open a qi2lab datastore without expensive validation.
-
-    Parameters
-    ----------
-    datastore_path : Path
-        qi2lab datastore directory.
-
-    Returns
-    -------
-    Any
-        Opened qi2lab datastore.
-    """
-    return qi2labDataStore(datastore_path, validate=False)
-
-
-def component_summary(datastore: Any) -> dict[str, bool]:
+def component_summary(datastore: qi2labDataStore) -> dict[str, bool]:
     """
     Return datastore component availability from existing datastore state.
 
@@ -105,7 +58,7 @@ def component_summary(datastore: Any) -> dict[str, bool]:
     }
 
 
-def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
+def codebook_gene_bits(datastore: qi2labDataStore) -> dict[str, list[str]]:
     """
     Map codebook genes to existing datastore bit IDs.
 
@@ -138,7 +91,7 @@ def codebook_gene_bits(datastore: Any) -> dict[str, list[str]]:
     return transcript_gene_to_bits
 
 
-def viewer_datastore_options(datastore: Any) -> ViewerDatastoreOptions:
+def viewer_datastore_options(datastore: qi2labDataStore) -> ViewerDatastoreOptions:
     """
     Return datastore-derived selector options for the viewer controller.
 
@@ -177,8 +130,8 @@ def load_datastore_for_viewer(path: Path) -> ViewerDatastoreLoadResult:
     ViewerDatastoreLoadResult
         Open datastore and controller selector metadata.
     """
-    datastore_path = normalize_datastore_path(path)
-    datastore = open_datastore(datastore_path)
+    datastore_path = resolve_datastore_path(path)
+    datastore = qi2labDataStore(datastore_path, validate=False)
     return ViewerDatastoreLoadResult(
         datastore_path=datastore_path,
         datastore=datastore,

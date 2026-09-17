@@ -12,16 +12,7 @@ from scipy.spatial import cKDTree
 from tifffile import TiffFile, imread
 
 from merfish3danalysis.utils.spacing import round_spacing_um
-
-UFISH_MODEL_ALIASES = {
-    "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
-    "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
-    "simfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "smfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "deepspot": "finetune_models/v1.0.1-deepspot_model.onnx",
-    "exseq": "finetune_models/v1.0.1-ExSeq_model.onnx",
-}
-DEFAULT_UFISH_MODEL = "simfish"
+from merfish3danalysis.utils.ufish import load_ufish_model
 
 
 def parse_csv_floats(value: str | Sequence[float] | None) -> tuple[float, ...] | None:
@@ -250,56 +241,6 @@ def load_bead_channel_stack(
     return stack.astype(np.float32, copy=False), metadata
 
 
-def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str:
-    """
-    Resolve a U-FISH model alias or local path.
-
-    Parameters
-    ----------
-    model : str or pathlib.Path or None
-        Model alias or path.
-
-    Returns
-    -------
-    pathlib.Path or str
-        Local path or U-FISH weights filename.
-    """
-    if model is None:
-        model = DEFAULT_UFISH_MODEL
-    model_str = str(model).strip() or DEFAULT_UFISH_MODEL
-    model_path = Path(model_str).expanduser()
-    if model_path.exists():
-        return model_path
-    weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
-    local_path = Path.home() / ".ufish" / weights_file
-    if local_path.exists():
-        return local_path
-    return weights_file
-
-
-def _load_ufish_model(ufish: Any, model: str | Path | None) -> None:
-    """
-    Load U-FISH weights.
-
-    Parameters
-    ----------
-    ufish : Any
-        U-FISH object.
-    model : str or pathlib.Path or None
-        Model alias or path.
-
-    Returns
-    -------
-    None
-        Model weights are loaded in place.
-    """
-    weights = _resolve_ufish_weights_path(model)
-    if isinstance(weights, Path):
-        ufish.load_weights_from_path(weights)
-    else:
-        ufish.load_weights(weights_file=weights)
-
-
 def _roi_sum(
     image: np.ndarray, point_zyx: Sequence[float], radius_zyx: Sequence[int]
 ) -> float:
@@ -361,7 +302,7 @@ def detect_bead_centroids(
     from ufish.api import UFish
 
     ufish = UFish(device=f"cuda:{int(gpu_id)}")
-    _load_ufish_model(ufish, ufish_model)
+    load_ufish_model(ufish, ufish_model)
     loc, _prediction = ufish.predict(
         image_zyx.astype(np.float32, copy=False),
         axes="zyx",

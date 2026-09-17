@@ -11,7 +11,6 @@ from merfish3danalysis.viewer.models import (
     SparseOverlayPayload,
     SparsePointLayer,
 )
-from merfish3danalysis.viewer.ndv import ndv_canvas_parts
 
 
 class _LineVisualAccumulator:
@@ -418,7 +417,9 @@ class SparseVispyOverlay:
         """
         if self._array_viewer is None:
             return
-        canvas_controller, view, canvas = ndv_canvas_parts(self._array_viewer)
+        canvas_controller = self._array_viewer._canvas
+        view = canvas_controller._view
+        canvas = canvas_controller._canvas
         if canvas_controller is None or view is None:
             return
 

@@ -1,6 +1,14 @@
 """Datastore-backed cache repository for viewer display builders."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from numpy.typing import ArrayLike
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+    from merfish3danalysis.viewer.overlays import PointOverlayIndex
 
 import numpy as np
 
@@ -17,24 +25,26 @@ class ViewerDataRepository:
 
     def __init__(self) -> None:
         """Initialize an empty repository."""
-        self.datastore: Any | None = None
-        self._datastore_transcripts: Any | None = None
+        self.datastore: qi2labDataStore | None = None
+        self._datastore_transcripts: pd.DataFrame | None = None
         self._datastore_transcripts_loaded = False
-        self._datastore_transcripts_by_gene_selection: dict[tuple[str, ...], Any] = {}
-        self._proseg_transcripts: dict[str, Any | None] = {}
-        self._baysor_transcripts: Any | None = None
+        self._datastore_transcripts_by_gene_selection: dict[
+            tuple[str, ...], pd.DataFrame | None
+        ] = {}
+        self._proseg_transcripts: dict[str, pd.DataFrame | None] = {}
+        self._baysor_transcripts: pd.DataFrame | None = None
         self._baysor_transcripts_loaded = False
         self._cellpose_boundaries: Any | None = None
         self._cellpose_boundaries_loaded = False
-        self._point_indices: dict[tuple[Any, ...], Any] = {}
+        self._point_indices: dict[tuple[Any, ...], PointOverlayIndex] = {}
 
-    def set_datastore(self, datastore: Any) -> None:
+    def set_datastore(self, datastore: "qi2labDataStore") -> None:
         """
         Set the active datastore and clear cached derived data.
 
         Parameters
         ----------
-        datastore : Any
+        datastore : qi2labDataStore
             qi2lab datastore-like object.
         """
         self.datastore = datastore
@@ -48,7 +58,7 @@ class ViewerDataRepository:
         self._cellpose_boundaries_loaded = False
         self._point_indices.clear()
 
-    def require_datastore(self) -> Any:
+    def require_datastore(self) -> "qi2labDataStore":
         """
         Return the active datastore or raise a clear error.
 
@@ -66,12 +76,12 @@ class ViewerDataRepository:
         *,
         source: str,
         shape_zyx: tuple[int, int, int],
-        origin_zyx_um: Any,
-        spacing_zyx_um: Any,
+        origin_zyx_um: ArrayLike,
+        spacing_zyx_um: ArrayLike,
         tile_transform: tuple[np.ndarray, np.ndarray, np.ndarray] | None,
         proseg_run_name: str | None,
         selected_genes: tuple[str, ...],
-    ) -> Any:
+    ) -> "PointOverlayIndex":
         """
         Return a cached transcript coordinate index.
 
@@ -81,9 +91,9 @@ class ViewerDataRepository:
             Transcript source name.
         shape_zyx : tuple[int, int, int]
             Target Z, Y, X canvas shape.
-        origin_zyx_um : Any
+        origin_zyx_um : ArrayLike
             Global image origin in microns.
-        spacing_zyx_um : Any
+        spacing_zyx_um : ArrayLike
             Z, Y, X voxel spacing in microns.
         tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] or None
             Tile affine, origin, and spacing for local views.
@@ -128,7 +138,7 @@ class ViewerDataRepository:
         source: str,
         proseg_run_name: str | None,
         selected_genes: tuple[str, ...] = (),
-    ) -> Any:
+    ) -> "pd.DataFrame | None":
         """
         Load and cache the selected transcript table.
 
@@ -228,13 +238,13 @@ class ViewerDataRepository:
     def _build_transcript_index(
         *,
         source: str,
-        table: Any,
+        table: "pd.DataFrame | None",
         shape_zyx: tuple[int, int, int],
-        origin_zyx_um: Any,
-        spacing_zyx_um: Any,
+        origin_zyx_um: ArrayLike,
+        spacing_zyx_um: ArrayLike,
         tile_transform: tuple[np.ndarray, np.ndarray, np.ndarray] | None,
         selected_genes: tuple[str, ...],
-    ) -> Any:
+    ) -> "PointOverlayIndex":
         """
         Build one global or local transcript coordinate index.
 
@@ -242,13 +252,13 @@ class ViewerDataRepository:
         ----------
         source : str
             Transcript source name.
-        table : Any
+        table : pandas.DataFrame or None
             Transcript table.
         shape_zyx : tuple[int, int, int]
             Target Z, Y, X canvas shape.
-        origin_zyx_um : Any
+        origin_zyx_um : ArrayLike
             Global image origin in microns.
-        spacing_zyx_um : Any
+        spacing_zyx_um : ArrayLike
             Z, Y, X voxel spacing in microns.
         tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] or None
             Tile affine, origin, and spacing for local views.
@@ -277,13 +287,15 @@ class ViewerDataRepository:
         return local_transcript_index(table, shape_zyx, affine, origin, spacing)
 
     @staticmethod
-    def _filter_table_by_genes(table: Any, selected_genes: tuple[str, ...]) -> Any:
+    def _filter_table_by_genes(
+        table: "pd.DataFrame | None", selected_genes: tuple[str, ...]
+    ) -> "pd.DataFrame | None":
         """
         Return rows matching selected genes.
 
         Parameters
         ----------
-        table : Any
+        table : pandas.DataFrame or None
             Transcript table.
         selected_genes : tuple[str, ...]
             Selected transcript genes.
@@ -301,7 +313,7 @@ class ViewerDataRepository:
         return table[table[column].astype(str).isin(selected_genes)]
 
     @staticmethod
-    def _array_key(values: Any) -> tuple[float, ...] | None:
+    def _array_key(values: ArrayLike | None) -> tuple[float, ...] | None:
         """
         Return an immutable cache key for a numeric array.
 
