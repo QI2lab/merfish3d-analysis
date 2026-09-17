@@ -231,7 +231,7 @@ def convert_data(
         retained axial sampling.
     synthetic_chromatic_aberration : bool, default=False
         If True, apply deterministic synthetic chromatic aberration to readout
-        channels. This is intended only for simulation regression tests.
+        channels. This is intended only for simulation integration tests.
     synthetic_chromatic_aberration_scale : float, default=1.0
         Multiplier for the deterministic synthetic chromatic aberration.
     synthetic_chromatic_edge_shifts_px : tuple[float, float, float]
@@ -380,7 +380,7 @@ def convert_data(
     datastore.channel_psfs = channel_psfs
 
     # Update datastore state to note that calibrations are done
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"Calibrations": True})
     datastore.datastore_state = datastore_state
 
@@ -400,7 +400,7 @@ def convert_data(
             stage_positions = read_metadatafile(stage_position_path)
             stage_x = np.round(float(stage_positions["stage_x"]), 2)
             stage_y = np.round(float(stage_positions["stage_y"]), 2)
-            stage_z = np.round(float(stage_positions["stage_y"]), 2)
+            stage_z = np.round(float(stage_positions["stage_z"]), 2)
             temp = [stage_z, stage_y, stage_x]
             position_list.append(np.asarray(temp))
         position_list = np.asarray(position_list)
@@ -570,20 +570,13 @@ def convert_data(
     datastore._shading_maps = np.ones(
         (3, correct_shape[1], correct_shape[2]), dtype=np.float32
     )
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"Corrected": True})
     datastore.datastore_state = datastore_state
 
 
 def main() -> None:
-    """
-    Run the datastore conversion CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the datastore conversion CLI."""
     app()
 
 

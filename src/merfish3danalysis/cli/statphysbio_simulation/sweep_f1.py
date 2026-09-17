@@ -16,6 +16,7 @@ from scipy.spatial import cKDTree
 
 from merfish3danalysis.PixelDecoder import PixelDecoder, time_stamp
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 
 def calculate_F1_with_radius(
@@ -204,7 +205,7 @@ def calculate_F1(root_path: Path, gt_path: Path, search_radius: float) -> dict:
         dictionary of results for F1 score calculation
     """
     # initialize datastore
-    datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path / "sim_acquisition")
     datastore = qi2labDataStore(datastore_path)
     gene_ids, _ = datastore.load_codebook_parsed()
     decoded_spots = datastore.load_global_filtered_decoded_spots()
@@ -259,7 +260,7 @@ def decode_pixels(
     minimum_pixels: float
         The minimum pixel threshold.
     """
-    datastore_path = root_path / Path("sim_acquisition") / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path / "sim_acquisition")
     datastore = qi2labDataStore(datastore_path)
     merfish_bits = datastore.num_bits
 
@@ -381,14 +382,7 @@ def sweep_decode_params(
 
 
 def main() -> None:
-    """
-    Run the F1 sweep CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the F1 sweep CLI."""
     app()
 
 

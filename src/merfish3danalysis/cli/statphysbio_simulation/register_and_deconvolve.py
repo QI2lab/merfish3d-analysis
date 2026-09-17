@@ -13,6 +13,7 @@ from tifffile import TiffWriter
 
 from merfish3danalysis.DataRegistration import DataRegistration
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -26,12 +27,7 @@ def manage_data_registration_states(root_path: Path) -> None:
     Parameters
     ----------
     root_path : Path
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
+        Existing datastore or experiment directory containing qi2labdatastore.
     """
     local_register_data(root_path)
     global_register_data(root_path, create_max_proj_tiff=False)
@@ -46,7 +42,7 @@ def local_register_data(root_path: Path) -> None:
         path to experiment
     """
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
 
     # initialize registration class
@@ -61,7 +57,7 @@ def local_register_data(root_path: Path) -> None:
     registration_factory.register_all_tiles()
 
     # update datastore state
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
 
@@ -81,7 +77,7 @@ def global_register_data(
         Default = True
     """
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
 
     affine_zyx_px = np.array(
@@ -121,11 +117,11 @@ def global_register_data(
 
         filename = "fiducial_max_projection.ome.tiff"
         cellpose_path = (
-            datastore._datastore_path / Path("segmentation") / Path("cellpose")
+            datastore.datastore_path / Path("segmentation") / Path("cellpose")
         )
         cellpose_path.mkdir(exist_ok=True)
         filename_path = (
-            datastore._datastore_path
+            datastore.datastore_path
             / Path("segmentation")
             / Path("cellpose")
             / Path(filename)
@@ -154,21 +150,14 @@ def global_register_data(
             )
 
     # update datastore state
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"GlobalRegistered": True})
     datastore_state.update({"Fused": True})
     datastore.datastore_state = datastore_state
 
 
 def main() -> None:
-    """
-    Run the registration and deconvolution CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the registration and deconvolution CLI."""
     app()
 
 

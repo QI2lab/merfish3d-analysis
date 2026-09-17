@@ -152,14 +152,7 @@ def convert_simulation(root_path: Path) -> None:
 
 
 def main() -> None:
-    """
-    Run the simulation conversion CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the simulation conversion CLI."""
     app()
 
 
