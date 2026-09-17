@@ -1,0 +1,62 @@
+name: Unit and integration tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+      - name: Install CPU test dependencies from project declarations
+        run: |
+          uv venv
+          uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python - <<'PY'
+          import re
+          import tomllib
+          from pathlib import Path
+          project = tomllib.loads(Path("pyproject.toml").read_text())
+          required = {
+              "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
+              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely", "joblib",
+          }
+          requirements = [
+              value for value in project["project"]["dependencies"]
+              if re.split(r"[\s\[<>=;]", value, maxsplit=1)[0] in required
+          ]
+          Path("/tmp/cpu-test-requirements.txt").write_text("\n".join(requirements))
+          PY
+          uv pip install -r /tmp/cpu-test-requirements.txt pytest
+          uv pip install --no-deps -e .
+      - name: Test storage, fusion, segmentation coordinates, and shared helpers
+        run: |
+          .venv/bin/python -m pytest -q \
+            tests/test_datastore_image_io.py \
+            tests/test_datastore_public_image_io.py \
+            tests/test_datastore_validation.py \
+            tests/test_datastore_paths.py \
+            tests/test_datastore_stage_position.py \
+            tests/test_datastore_feature_predictor.py \
+            tests/test_data_registration.py \
+            tests/test_spacing_precision.py \
+            tests/test_fiducial_projection.py \
+            tests/test_fusion_compression.py \
+            tests/test_fiducial_downsampling.py \
+            tests/test_zhuang_registration.py \
+            tests/test_zhuang_segmentation.py \
+            tests/test_cellpose_rois.py \
+            tests/test_decode_helpers.py
