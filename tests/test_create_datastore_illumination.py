@@ -7,6 +7,7 @@ from merfish3danalysis.cli.qi2lab_microscopes.create_datastore import (
 )
 
 
+@pytest.mark.unit
 def test_readout_bit_ids_groups_bits_by_acquisition_channel() -> None:
     experiment_order = np.asarray(
         [
@@ -30,6 +31,7 @@ def test_readout_bit_ids_groups_bits_by_acquisition_channel() -> None:
     ]
 
 
+@pytest.mark.unit
 def test_readout_bit_ids_keeps_each_bit_once() -> None:
     experiment_order = np.asarray([[1, 1], [2, 2], [3, 1]], dtype=np.int64)
 
@@ -39,6 +41,7 @@ def test_readout_bit_ids_keeps_each_bit_once() -> None:
     ]
 
 
+@pytest.mark.unit
 def test_sample_readout_tile_bit_pairs_uses_unique_tiles_across_bits() -> None:
     pairs = _sample_readout_tile_bit_pairs(
         ["bit001", "bit003", "bit005"],
@@ -55,6 +58,7 @@ def test_sample_readout_tile_bit_pairs_uses_unique_tiles_across_bits() -> None:
     assert set(sampled_bit_ids) == {"bit001", "bit003", "bit005"}
 
 
+@pytest.mark.unit
 def test_sample_readout_tile_bit_pairs_caps_samples_at_the_number_of_tiles() -> None:
     pairs = _sample_readout_tile_bit_pairs(
         ["bit001", "bit003"],
@@ -68,6 +72,7 @@ def test_sample_readout_tile_bit_pairs_caps_samples_at_the_number_of_tiles() -> 
     assert {bit_id for _tile_idx, bit_id in pairs} == {"bit001", "bit003"}
 
 
+@pytest.mark.unit
 def test_sample_readout_tile_bit_pairs_requires_a_positive_limit() -> None:
     with pytest.raises(ValueError, match="max_images"):
         _sample_readout_tile_bit_pairs(

@@ -96,6 +96,7 @@ class _FakeUFish:
         return None, image.astype(np.float64) / 10.0
 
 
+@pytest.mark.unit
 def test_expands_consecutive_ufish_channel_arguments() -> None:
     arguments = [
         "/data/acquisition",
@@ -121,6 +122,7 @@ def test_expands_consecutive_ufish_channel_arguments() -> None:
     ]
 
 
+@pytest.mark.unit
 def test_generate_channel_psfs_uses_repository_microscope_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,6 +163,7 @@ def test_generate_channel_psfs_uses_repository_microscope_parameters(
         assert np.isclose(np.sum(psf), 1.0)
 
 
+@pytest.mark.unit
 def test_deconvolve_stack_uses_repository_rlgc_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,6 +194,7 @@ def test_deconvolve_stack_uses_repository_rlgc_defaults(
     np.testing.assert_array_equal(deconvolved, [[[0, 1, 65535]]])
 
 
+@pytest.mark.integration
 def test_list_channels_prints_metadata_names_without_processing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -206,6 +210,7 @@ def test_list_channels_prints_metadata_names_without_processing(
     assert dataset.closed
 
 
+@pytest.mark.unit
 def test_inspect_dataset_maps_summary_names_to_numeric_channels() -> None:
     dataset = _FakeDataset()
     dataset.coordinates = [
@@ -221,6 +226,7 @@ def test_inspect_dataset_maps_summary_names_to_numeric_channels() -> None:
     assert layout.channel_coordinates == (0, 1)
 
 
+@pytest.mark.unit
 def test_aliases_missing_first_stack_to_zero_suffixed_reader() -> None:
     first_reader = object()
     dataset = SimpleNamespace(
@@ -233,6 +239,7 @@ def test_aliases_missing_first_stack_to_zero_suffixed_reader() -> None:
     assert dataset._readers_by_filename["sample_NDTiffStack.tif"] is first_reader
 
 
+@pytest.mark.integration
 def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
     tmp_path: Path,
 ) -> None:
@@ -291,6 +298,7 @@ def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
     assert len(ufish.calls) == 2
 
 
+@pytest.mark.integration
 def test_process_dataset_preflights_existing_outputs(tmp_path: Path) -> None:
     dataset = _FakeDataset()
     existing_path = tmp_path / "pos0000" / "DAPI.ome.tif"
@@ -312,6 +320,7 @@ def test_process_dataset_preflights_existing_outputs(tmp_path: Path) -> None:
     assert dataset.read_calls == []
 
 
+@pytest.mark.integration
 def test_deconvolution_writes_stacks_and_supplies_ufish_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -371,6 +380,7 @@ def test_deconvolution_writes_stacks_and_supplies_ufish_input(
         assert 'PhysicalSizeZ="0.315"' in ome_metadata
 
 
+@pytest.mark.integration
 def test_negative_one_z_stop_includes_final_plane(tmp_path: Path) -> None:
     script.process_dataset(
         _FakeDataset(),
@@ -387,6 +397,7 @@ def test_negative_one_z_stop_includes_final_plane(tmp_path: Path) -> None:
     np.testing.assert_array_equal(corrected[:, 0, 0], [0, 2, 4])
 
 
+@pytest.mark.unit
 def test_process_dataset_requires_exact_metadata_channel_name(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Available channels"):
         script.process_dataset(
@@ -400,6 +411,7 @@ def test_process_dataset_requires_exact_metadata_channel_name(tmp_path: Path) ->
         )
 
 
+@pytest.mark.unit
 def test_inspect_dataset_rejects_non_singleton_time_axis() -> None:
     dataset = _FakeDataset()
     dataset.coordinates.append({"channel": "DAPI", "position": 0, "z": 0, "time": 1})
@@ -408,6 +420,7 @@ def test_inspect_dataset_rejects_non_singleton_time_axis() -> None:
         script.inspect_dataset(dataset)
 
 
+@pytest.mark.unit
 def test_camera_correction_clips_to_uint16() -> None:
     raw = np.asarray([[-1, 100, 101, 40000]], dtype=np.int32)
 

@@ -1,7 +1,7 @@
 """Legacy 2D stage positions must be exposed as ZYX throughout registration."""
 
 import json
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import Mock, sentinel
 
 import numpy as np
@@ -20,7 +20,7 @@ def stage_datastore(tmp_path):
     datastore._num_tiles = 1
     datastore._num_rounds = 2
     datastore._fiducial_root_path = tmp_path / "fiducial"
-    datastore._voxel_size_zyx_um = [1.50012, 0.107999995, 0.10831]
+    datastore._voxel_size_zyx_um = [0.50012, 0.199999995, 0.30031]
     affine = np.eye(4, dtype=np.float32)
     affine[1, 1] = -1
     affine[2, 3] = 12.5
@@ -34,6 +34,7 @@ def stage_datastore(tmp_path):
     return datastore, attributes, affine
 
 
+@pytest.mark.unit
 def test_loading_legacy_yx_preserves_lateral_coordinates_and_metadata(stage_datastore):
     datastore, attributes, affine = stage_datastore
 
@@ -46,6 +47,7 @@ def test_loading_legacy_yx_preserves_lateral_coordinates_and_metadata(stage_data
     datastore._save_entity_attributes.assert_not_called()
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "position, expected",
     [
@@ -63,31 +65,12 @@ def test_saving_stage_position_writes_three_coordinates_in_attributes_and_ome(
         / "round001"
         / "corrected_data.ome.zarr"
     )
-    image_path.mkdir(parents=True)
     metadata_path = image_path / "zarr.json"
-    metadata_path.write_text(
-        json.dumps(
-            {
-                "attributes": {
-                    "ome": {
-                        "multiscales": [
-                            {
-                                "datasets": [
-                                    {
-                                        "coordinateTransformations": [
-                                            {
-                                                "type": "translation",
-                                                "translation": [0, 0, 0],
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                }
-            }
-        )
+    datastore._save_to_zarr_array(
+        np.zeros((2, 3, 4), dtype=np.uint16),
+        image_path,
+        ome_scale=[0.5, 0.2, 0.3],
+        ome_translation=[0, 0, 0],
     )
 
     datastore.save_local_stage_position_zyx_um(position, affine, tile=0, round=0)
@@ -99,9 +82,13 @@ def test_saving_stage_position_writes_three_coordinates_in_attributes_and_ome(
     transforms = metadata["attributes"]["ome"]["multiscales"][0]["datasets"][0][
         "coordinateTransformations"
     ]
-    assert transforms[0]["translation"] == expected
+    assert (
+        next(t["translation"] for t in transforms if t["type"] == "translation")
+        == expected
+    )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "selection, expected",
     [
@@ -120,6 +107,7 @@ def test_derived_image_origins_use_three_coordinates(
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("use_stored_global_transforms", [False, True])
 @pytest.mark.parametrize(
     "position, expected_z", [([125.5, -34.25], 0), ([7.5, 125.5, -34.25], 7.5)]
@@ -127,6 +115,7 @@ def test_derived_image_origins_use_three_coordinates(
 def test_global_registration_and_fusion_load_legacy_and_3d_stage_positions(
     stage_datastore, monkeypatch, use_stored_global_transforms, position, expected_z
 ):
+    monkeypatch.setattr(Path, "exists", Mock(return_value=False))
     datastore, attributes, affine = stage_datastore
     attributes["round001"]["stage_zyx_um"] = position
     stored_transform = np.eye(4, dtype=np.float32)
@@ -141,20 +130,19 @@ def test_global_registration_and_fusion_load_legacy_and_3d_stage_positions(
     registration._verbose = 0
     read_sim = Mock(return_value=sentinel.sim)
     monkeypatch.setattr(registration_module, "_read_fiducial_sim", read_sim)
-    msi_utils = SimpleNamespace(
-        get_msim_from_sim=Mock(return_value=sentinel.msim),
-        set_affine_transform=Mock(),
-    )
+    from multiview_stitcher import msi_utils
 
-    result = registration._load_global_fiducial_msims(
-        zarr_module=sentinel.zarr,
-        msi_utils=msi_utils,
-        si_utils=sentinel.si_utils,
+    monkeypatch.setattr(
+        msi_utils, "get_msim_from_sim", Mock(return_value=sentinel.msim)
+    )
+    monkeypatch.setattr(msi_utils, "set_affine_transform", Mock())
+
+    result = registration.load_global_fiducial_views(
         use_stored_global_transforms=use_stored_global_transforms,
     )
 
     assert result == [sentinel.msim]
-    assert read_sim.call_args.kwargs["scale"] == {"z": 1.5, "y": 0.108, "x": 0.108}
+    assert read_sim.call_args.kwargs["scale"] == {"z": 0.5, "y": 0.2, "x": 0.3}
     assert read_sim.call_args.kwargs["translation"] == {
         "z": expected_z,
         "y": 125.5,
@@ -163,7 +151,8 @@ def test_global_registration_and_fusion_load_legacy_and_3d_stage_positions(
     np.testing.assert_array_equal(read_sim.call_args.kwargs["affine_zyx_px"], affine)
     if use_stored_global_transforms:
         np.testing.assert_array_equal(
-            msi_utils.set_affine_transform.call_args.args[1], stored_transform[None]
+            np.asarray(msi_utils.set_affine_transform.call_args.args[1]).squeeze(),
+            stored_transform,
         )
         assert (
             msi_utils.set_affine_transform.call_args.kwargs["transform_key"]
@@ -173,6 +162,7 @@ def test_global_registration_and_fusion_load_legacy_and_3d_stage_positions(
         msi_utils.set_affine_transform.assert_not_called()
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("position", [[], [1], [1, 2, 3, 4], [[1, 2, 3]]])
 def test_invalid_stage_shape_is_not_interpreted_as_coordinates(position):
     with pytest.raises(ValueError, match=r"two .* or three"):

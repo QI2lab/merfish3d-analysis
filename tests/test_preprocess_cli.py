@@ -8,6 +8,7 @@ import merfish3danalysis.DataRegistration as data_registration_module
 from merfish3danalysis.cli.qi2lab_microscopes import preprocess
 
 
+@pytest.mark.unit
 def test_global_fusion_only_uses_stored_transform_fusion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -33,7 +34,7 @@ def test_global_fusion_only_uses_stored_transform_fusion(
     )
     monkeypatch.setattr(
         preprocess,
-        "qi2lab_datastore_path",
+        "resolve_datastore_path",
         lambda _root_path: Path("/unused/qi2labdatastore"),
     )
     monkeypatch.setattr(
@@ -50,6 +51,7 @@ def test_global_fusion_only_uses_stored_transform_fusion(
     fuse_global_registered.assert_called_once_with(create_max_proj_tiff=True)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "selected_modes",
     [
@@ -68,6 +70,7 @@ def test_preprocessing_modes_are_mutually_exclusive(
         )
 
 
+@pytest.mark.unit
 def test_no_decon_disables_readout_deconvolution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -88,7 +91,7 @@ def test_no_decon_disables_readout_deconvolution(
     )
     monkeypatch.setattr(
         preprocess,
-        "qi2lab_datastore_path",
+        "resolve_datastore_path",
         lambda _root_path: Path("/unused/qi2labdatastore"),
     )
     datastore = Mock()
@@ -109,6 +112,7 @@ def test_no_decon_disables_readout_deconvolution(
     register_all_tiles.assert_called_once_with(process_readouts=True)
 
 
+@pytest.mark.unit
 def test_fiducial_registration_only_skips_readout_processing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -128,7 +132,7 @@ def test_fiducial_registration_only_skips_readout_processing(
     )
     monkeypatch.setattr(
         preprocess,
-        "qi2lab_datastore_path",
+        "resolve_datastore_path",
         lambda _root_path: Path("/unused/qi2labdatastore"),
     )
     datastore = Mock()

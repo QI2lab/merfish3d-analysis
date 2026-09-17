@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
 
 from merfish3danalysis.DataRegistration import DataRegistration
 
@@ -22,6 +23,7 @@ def _registration_with_transforms(
     return registration
 
 
+@pytest.mark.unit
 def test_global_transforms_available_requires_every_tile() -> None:
     identity = np.eye(4, dtype=np.float32)
     complete = _registration_with_transforms(
@@ -33,8 +35,9 @@ def test_global_transforms_available_requires_every_tile() -> None:
     assert not partial._global_transforms_available()
 
 
+@pytest.mark.unit
 def test_global_fusion_registers_when_stored_transforms_are_missing() -> None:
-    registration = _registration_with_transforms({"tile0000": None})
+    registration = _registration_with_transforms({"tile0000": None, "tile0001": None})
     registration.global_register = Mock()
 
     registration.fuse_global_registered(create_max_proj_tiff=True)

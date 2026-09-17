@@ -203,6 +203,7 @@ def _make_chromatic_barcode_table(
     return pd.DataFrame(rows).sample(frac=1, random_state=42).reset_index(drop=True)
 
 
+@pytest.mark.unit
 def test_chromatic_estimator_recovers_affine_with_distractors() -> None:
     spacing_zyx_um = np.array([0.32, 0.098, 0.098], dtype=np.float32)
     true_affine = _chromatic_affine_zyx_um()
@@ -235,6 +236,7 @@ def test_chromatic_estimator_recovers_affine_with_distractors() -> None:
     np.testing.assert_allclose(estimated_affine, true_affine, atol=0.006)
 
 
+@pytest.mark.unit
 def test_chromatic_estimator_counts_only_valid_nonblank_cross_wavelength_rows() -> None:
     spacing_zyx_um = np.array([0.32, 0.098, 0.098], dtype=np.float32)
     true_affine = _chromatic_affine_zyx_um()
@@ -309,6 +311,7 @@ def test_chromatic_estimator_counts_only_valid_nonblank_cross_wavelength_rows() 
     np.testing.assert_allclose(estimated_affine, true_affine, atol=0.02)
 
 
+@pytest.mark.unit
 def test_2d_chromatic_estimator_ignores_z_and_removes_previous_axial_correction():
     spacing = np.array([1.5, 0.108, 0.108], dtype=np.float32)
     true_affine = _chromatic_affine_zyx_um()
@@ -354,6 +357,7 @@ def test_2d_chromatic_estimator_ignores_z_and_removes_previous_axial_correction(
     np.testing.assert_array_equal(estimated[:, 0], [1, 0, 0, 0])
 
 
+@pytest.mark.unit
 def test_lateral_fit_excludes_axial_offsets_from_outlier_rejection():
     rng = np.random.default_rng(10)
     source = rng.uniform(0, 100, (50, 3))
@@ -373,6 +377,7 @@ def test_lateral_fit_excludes_axial_offsets_from_outlier_rejection():
     assert diagnostics["used_pairs"] == len(source)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("is_3d", [False, True])
 def test_centroid_support_uses_only_own_plane_in_2d(monkeypatch, is_3d):
     # Exercise centroid collection on CPU, including the production accumulator.

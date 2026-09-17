@@ -18,7 +18,7 @@ def _low_snr_shifted_fiducials() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         impulses[z, y, x] = rng.uniform(20, 100)
     signal = gaussian_filter(impulses, (1.5, 3.0, 3.0))
 
-    # Consume the lower-noise realization used while isolating this regression.
+    # Consume the lower-noise realization to preserve the seeded high-noise fixture.
     for noise_scale in (0.02, 0.05):
         fixed = signal + rng.normal(0, noise_scale, shape).astype(np.float32)
         moving = ndi_shift(
@@ -53,6 +53,7 @@ def _require_cuda() -> object:
     return cp
 
 
+@pytest.mark.unit
 def test_phase_shift_uses_maximum_overlap_alias_on_every_axis() -> None:
     from merfish3danalysis.utils.multiview_registration import (
         _maximum_overlap_phase_shift_px,
@@ -65,6 +66,7 @@ def test_phase_shift_uses_maximum_overlap_alias_on_every_axis() -> None:
     np.testing.assert_allclose(corrected, (-0.9, 0.8, -1.25), atol=1e-10)
 
 
+@pytest.mark.unit
 def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> None:
     from skimage.registration import phase_cross_correlation
 
@@ -101,6 +103,7 @@ def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> N
     np.testing.assert_allclose(recovered_yx, true_pull_shift_px[1:], atol=1.5)
 
 
+@pytest.mark.integration
 def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
     cp = _require_cuda()
     pytest.importorskip("cucim")
@@ -124,6 +127,7 @@ def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
     np.testing.assert_allclose(cp.asnumpy(tiny_overlap_shift), (15.0, 0.0, 0.0))
 
 
+@pytest.mark.integration
 def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     _require_cuda()
     pytest.importorskip("cucim")
@@ -142,6 +146,7 @@ def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     np.testing.assert_allclose(recovered_shift_zyx_px, (1.0, 0.0, 0.0), atol=1e-5)
 
 
+@pytest.mark.integration
 def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
     _require_cuda()
     pytest.importorskip("cucim")
@@ -191,6 +196,7 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
     assert np.sqrt(np.mean((warped - fixed) ** 2)) < 1e-3
 
 
+@pytest.mark.integration
 def test_register_pair_to_fixed_residual_uses_valid_lateral_overlap() -> None:
     _require_cuda()
     pytest.importorskip("cucim")

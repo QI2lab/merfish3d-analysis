@@ -3,6 +3,7 @@ import types
 from typing import ClassVar
 
 import numpy as np
+import pytest
 
 from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
 
@@ -36,6 +37,7 @@ class _NoChromaticDatastore:
         return None
 
 
+@pytest.mark.unit
 def test_warp_bit_image_to_reference_uses_identity_without_chromatic_affine(
     monkeypatch,
 ) -> None:

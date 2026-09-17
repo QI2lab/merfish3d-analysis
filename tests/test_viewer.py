@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
+import pytest
 from matplotlib import colormaps
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -49,6 +50,7 @@ from merfish3danalysis.viewer.sparse import (
 from merfish3danalysis.viewer.warping import selected_warp_label
 
 
+@pytest.mark.unit
 def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines() -> None:
     datastore = SimpleNamespace(
         load_global_cellpose_roi_zip=Mock(return_value={}),
@@ -120,6 +122,7 @@ class _FakeViewerDisplayDatastore:
         return self.boundaries
 
 
+@pytest.mark.unit
 def test_lazy_global_channel_data_supports_list_channel_indexing() -> None:
     """Lazy global image stacks support NumPy-style list channel indexing."""
 
@@ -152,6 +155,7 @@ def _wkb_polygon_xy(points_xy: np.ndarray) -> bytes:
     return bytes(output)
 
 
+@pytest.mark.unit
 def test_warp_chain_labels_and_optional_affine_composition() -> None:
     """Viewer warp-chain labels and affine toggles reflect selected components."""
 
@@ -182,6 +186,7 @@ def test_warp_chain_labels_and_optional_affine_composition() -> None:
     )
 
 
+@pytest.mark.unit
 def test_transcript_color_hex_returns_distinct_hex_colors() -> None:
     """Transcript color key values are hex colors and vary by selected value."""
 
@@ -199,6 +204,7 @@ def test_transcript_color_hex_returns_distinct_hex_colors() -> None:
     assert first_color == expected_first_color
 
 
+@pytest.mark.unit
 def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors() -> None:
     """Viewer LUT labels apply only to image-backed NDV channels."""
 
@@ -218,6 +224,7 @@ def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors() -> None:
     assert controllers[1].lut_views[0].channel_name == labels[1]
 
 
+@pytest.mark.unit
 def test_lazy_max_projection_image_presents_one_z_plane() -> None:
     """Lazy max projection reads selected YX pixels across all Z planes."""
 
@@ -273,6 +280,7 @@ def _write_proseg_run(root: Path) -> None:
         json.dump(geojson, file)
 
 
+@pytest.mark.integration
 def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
     tmp_path: Path,
 ) -> None:
@@ -292,6 +300,7 @@ def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
     assert polygons[7].shape == (3, 2)
 
 
+@pytest.mark.integration
 def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -> None:
     """Proseg transcript coordinates index in global and local coordinate frames."""
 
@@ -322,6 +331,7 @@ def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -
     assert local_index.genes_sorted.tolist() == ["GeneA"]
 
 
+@pytest.mark.integration
 def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> None:
     """Transcript coordinate indices are independent of selected genes."""
 
@@ -340,6 +350,7 @@ def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> No
     assert transcript_index.genes_sorted.tolist() == ["GeneA"]
 
 
+@pytest.mark.unit
 def test_sparse_point_data_uses_selected_gene_colors() -> None:
     """Sparse point layers return 2D and 3D marker positions for selected genes."""
 
@@ -374,6 +385,7 @@ def test_sparse_point_data_uses_selected_gene_colors() -> None:
     assert marker_size == 10.0
 
 
+@pytest.mark.unit
 def test_sparse_point_data_projects_selected_genes_across_z() -> None:
     """Sparse point layers can project selected transcript positions across Z."""
 
@@ -400,6 +412,7 @@ def test_sparse_point_data_projects_selected_genes_across_z() -> None:
     np.testing.assert_allclose(positions, np.asarray([[2.0, 4.0], [3.0, 5.0]]))
 
 
+@pytest.mark.unit
 def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
     """Sparse line layers return VisPy segment arrays in 2D and 3D."""
 
@@ -466,6 +479,7 @@ def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
     assert width == 5
 
 
+@pytest.mark.unit
 def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
     """Sparse Z-aware line layers use pre-binned 2D contours when available."""
 
@@ -501,6 +515,7 @@ def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
     np.testing.assert_array_equal(connect, np.asarray([[0, 1], [1, 2], [2, 3]]))
 
 
+@pytest.mark.unit
 def test_sparse_max_lines_use_projected_boundaries() -> None:
     """Sparse Z-aware line layers can project max boundary outlines."""
 
@@ -535,6 +550,7 @@ def test_sparse_max_lines_use_projected_boundaries() -> None:
     np.testing.assert_array_equal(connect, np.asarray([[0, 1], [1, 2], [2, 3]]))
 
 
+@pytest.mark.unit
 def test_transcript_refresh_preserves_sparse_cell_boundaries() -> None:
     """Transcript refreshes keep existing sparse boundary layers."""
 
@@ -574,6 +590,7 @@ def test_transcript_refresh_preserves_sparse_cell_boundaries() -> None:
     assert result.sparse_payload.points == ()
 
 
+@pytest.mark.unit
 def test_local_baysor_boundaries_do_not_require_proseg_run() -> None:
     """Local Baysor cell boundaries load even when no Proseg run is selected."""
 
@@ -628,6 +645,7 @@ def test_local_baysor_boundaries_do_not_require_proseg_run() -> None:
     assert [layer.label for layer in payload.lines] == ["Baysor cell boundaries"]
 
 
+@pytest.mark.unit
 def test_sparse_overlay_recreates_visuals_when_dimension_changes() -> None:
     """Sparse VisPy overlays do not reuse 2D line visuals for 3D data."""
 
@@ -685,6 +703,7 @@ def test_sparse_overlay_recreates_visuals_when_dimension_changes() -> None:
     assert overlay._array_viewer._canvas._view.camera.depth_value == 1e6
 
 
+@pytest.mark.unit
 def test_local_datastore_transcripts_index_from_global_coordinates() -> None:
     """Final datastore transcripts index locally from global coordinates."""
 
@@ -712,6 +731,7 @@ def test_local_datastore_transcripts_index_from_global_coordinates() -> None:
     assert transcript_index.genes_sorted.tolist() == ["GeneA"]
 
 
+@pytest.mark.integration
 def test_controller_enables_view_mode_after_datastore_load(tmp_path: Path) -> None:
     """Datastore loading leaves the view-mode selector usable."""
     import os
@@ -766,6 +786,7 @@ def test_controller_enables_view_mode_after_datastore_load(tmp_path: Path) -> No
         qt_app.processEvents()
 
 
+@pytest.mark.integration
 def test_controller_reenables_controls_before_showing_stack() -> None:
     """Prepared display results restore controls before NDV setup begins."""
     import os
@@ -847,6 +868,7 @@ def test_controller_reenables_controls_before_showing_stack() -> None:
         qt_app.processEvents()
 
 
+@pytest.mark.integration
 def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> None:
     """Transcript controls stay usable after NDV display setup returns."""
     import os
@@ -921,6 +943,7 @@ def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> 
         qt_app.processEvents()
 
 
+@pytest.mark.integration
 def test_controller_local_apply_updates_existing_viewer(tmp_path: Path) -> None:
     """Local selection changes enable Apply and reuse the NDV window."""
     import os

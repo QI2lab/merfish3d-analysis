@@ -2,10 +2,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pandas as pd
+import pytest
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
+@pytest.mark.unit
 def test_feature_predictor_spot_directory_creation_is_idempotent(
     tmp_path: Path,
 ) -> None:

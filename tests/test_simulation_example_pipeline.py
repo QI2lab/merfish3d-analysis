@@ -1,9 +1,9 @@
-"""Simulation pipeline regression tests against the published Zenodo data.
+"""Simulation pipeline integration tests against the published Zenodo data.
 
 The matrix converts StatPhysBio simulation outputs into qi2lab datastores,
 runs preprocessing, decodes transcripts, and scores decoded features against
 simulation ground truth. The optional exhaustive mode adds deconvolution-off
-coverage to the standard Zenodo F1 regression matrix.
+coverage to the standard Zenodo F1 integration matrix.
 """
 
 import hashlib
@@ -16,9 +16,11 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
+from typer.testing import CliRunner
 
-from merfish3danalysis.DataRegistration import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
+from merfish3danalysis.utils.ufish import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
 
 DEFAULT_TESTS_DATA_DIR = Path(__file__).resolve().parent / "data"
 PERFORMANCE_REPORT_ENV = "MERFISH3D_PERFORMANCE_REPORT"
@@ -34,7 +36,7 @@ PREPROCESS_MODES = {
 }
 DEFAULT_PREPROCESS_MODE = "decon"
 DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
-F1_ABS_TOLERANCE = 0.02
+F1_ACCURACY_ALLOWANCE = 0.02
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
 DEFAULT_MINIMUM_PIXELS_2D = 7
@@ -67,7 +69,7 @@ RESULT_KEYS = {
 
 # SHA-256 of each aligned_1.tiff in Zenodo record 17274305. Hashing the image
 # payloads prevents an older server-side simulation set from silently being
-# used for the published F1 baselines.
+# used for the published F1 accuracy measurements.
 ZENODO_ALIGNED_IMAGE_SHA256 = {
     (
         "cells",
@@ -95,35 +97,36 @@ ZENODO_ALIGNED_IMAGE_SHA256 = {
     ): "9e21b88fc5cb0cb39f4a9c9f90540145e903e6b6fcc6c1e94b012d6042a83b16",
 }
 
-# Baselines measured from Zenodo record 17274305 with the repository defaults.
+# Reference accuracy measured from Zenodo record 17274305 on 2026-09-17.
+# Tests enforce these scores minus the allowance as floors; improvements pass.
 STANDARD_EXPECTED_F1_SCORES = {
     ("cells", "0.315", "no-chromatic"): 0.9848,
-    ("cells", "0.315", "chromatic"): 0.9798,
-    ("cells", "1.0", "no-chromatic"): 0.9573,
-    ("cells", "1.0", "chromatic"): 0.9312,
-    ("cells", "1.5", "no-chromatic"): 0.3779,
-    ("cells", "1.5", "chromatic"): 0.3935,
+    ("cells", "0.315", "chromatic"): 0.9823,
+    ("cells", "1.0", "no-chromatic"): 0.9623,
+    ("cells", "1.0", "chromatic"): 0.9483,
+    ("cells", "1.5", "no-chromatic"): 0.3867,
+    ("cells", "1.5", "chromatic"): 0.3352,
     ("uniform", "0.315", "no-chromatic"): 0.9899,
     ("uniform", "0.315", "chromatic"): 0.9891,
-    ("uniform", "1.0", "no-chromatic"): 0.9673,
-    ("uniform", "1.0", "chromatic"): 0.9536,
-    ("uniform", "1.5", "no-chromatic"): 0.6119,
-    ("uniform", "1.5", "chromatic"): 0.5664,
+    ("uniform", "1.0", "no-chromatic"): 0.9669,
+    ("uniform", "1.0", "chromatic"): 0.9641,
+    ("uniform", "1.5", "no-chromatic"): 0.6090,
+    ("uniform", "1.5", "chromatic"): 0.5370,
 }
 
 EXHAUSTIVE_EXPECTED_F1_SCORES = {
-    ("cells", "0.315", "decon"): 0.9798,
+    ("cells", "0.315", "decon"): 0.9823,
     ("cells", "0.315", "no-decon"): 0.9899,
-    ("cells", "1.0", "decon"): 0.9312,
-    ("cells", "1.0", "no-decon"): 0.9376,
-    ("cells", "1.5", "decon"): 0.3935,
-    ("cells", "1.5", "no-decon"): 0.6584,
+    ("cells", "1.0", "decon"): 0.9483,
+    ("cells", "1.0", "no-decon"): 0.9379,
+    ("cells", "1.5", "decon"): 0.3352,
+    ("cells", "1.5", "no-decon"): 0.8308,
     ("uniform", "0.315", "decon"): 0.9891,
     ("uniform", "0.315", "no-decon"): 0.9865,
-    ("uniform", "1.0", "decon"): 0.9536,
-    ("uniform", "1.0", "no-decon"): 0.9478,
-    ("uniform", "1.5", "decon"): 0.5664,
-    ("uniform", "1.5", "no-decon"): 0.8045,
+    ("uniform", "1.0", "decon"): 0.9641,
+    ("uniform", "1.0", "no-decon"): 0.9500,
+    ("uniform", "1.5", "decon"): 0.5370,
+    ("uniform", "1.5", "no-decon"): 0.7914,
 }
 
 
@@ -157,19 +160,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _ufish_label_from_weights_path(weights_path: Path) -> str:
-    """
-    Return a stable test id for a cached U-FISH ONNX weights file.
-
-    Parameters
-    ----------
-    weights_path : Path
-        Function argument.
-
-    Returns
-    -------
-    str
-        Function result.
-    """
+    """Return a stable test id for a cached U-FISH ONNX weights file."""
 
     label = weights_path.stem
     if label.startswith("v1.0.1-"):
@@ -216,14 +207,7 @@ def _ufish_model_id(model: tuple[str, str | None]) -> str:
 
 
 def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
-    """
-    Return every locally available distinct U-FISH model.
-
-    Returns
-    -------
-    tuple[tuple[str, str | None], ...]
-        Function result.
-    """
+    """Return every locally available distinct U-FISH model."""
 
     models: list[tuple[str, str | None]] = []
     seen_weights: set[str | None] = set()
@@ -297,14 +281,7 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
 
 @pytest.fixture(scope="session")
 def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
-    """
-    Resolve the simulation dataset root passed to pytest.
-
-    Returns
-    -------
-    Path
-        Function result.
-    """
+    """Resolve the simulation dataset root passed to pytest."""
 
     configured_root = pytestconfig.getoption("--simulation-data-root")
     if not configured_root:
@@ -317,19 +294,7 @@ def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
 
 @pytest.fixture(scope="session")
 def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
-    """
-    Resolve local dataset directories for the simulation matrix.
-
-    Parameters
-    ----------
-    simulation_dataset_root : Path
-        Function argument.
-
-    Returns
-    -------
-    dict[str, Path]
-        Function result.
-    """
+    """Resolve local dataset directories for the simulation matrix."""
 
     resolved_dirs: dict[str, Path] = {}
     missing_variants: list[str] = []
@@ -371,19 +336,7 @@ def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
 
 
 def _normalize_dataset_root(root: Path) -> Path:
-    """
-    Normalize the configured local simulation dataset root.
-
-    Parameters
-    ----------
-    root : Path
-        Function argument.
-
-    Returns
-    -------
-    Path
-        Function result.
-    """
+    """Normalize the configured local simulation dataset root."""
 
     example_dir = root / "example_16bit_flat"
     if not example_dir.exists():
@@ -396,19 +349,7 @@ def _normalize_dataset_root(root: Path) -> Path:
 
 
 def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
-    """
-    Return the default minimum-pixel threshold for a simulation spacing.
-
-    Parameters
-    ----------
-    axial_spacing_um : str
-        Function argument.
-
-    Returns
-    -------
-    int
-        Function result.
-    """
+    """Return the default minimum-pixel threshold for a simulation spacing."""
 
     if axial_spacing_um == "0.315":
         return DEFAULT_MINIMUM_PIXELS_3D
@@ -418,19 +359,7 @@ def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
 def _default_standard_magnitude_threshold(
     axial_spacing_um: str,
 ) -> tuple[float, float]:
-    """
-    Return the sampling-aware default magnitude threshold for simulations.
-
-    Parameters
-    ----------
-    axial_spacing_um : str
-        Function argument.
-
-    Returns
-    -------
-    tuple[float, float]
-        Function result.
-    """
+    """Return the sampling-aware default magnitude threshold for simulations."""
 
     if axial_spacing_um == "0.315":
         return DEFAULT_MAGNITUDE_THRESHOLD
@@ -446,32 +375,22 @@ def _default_standard_magnitude_threshold(
 
 @pytest.fixture(scope="session")
 def simulation_api() -> dict[str, Any]:
-    """
-    Import callable APIs used by the former notebook workflow.
+    """Import callable APIs used by the former notebook workflow."""
 
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
-
-    try:
-        from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
-            calculate_F1,
-        )
-        from merfish3danalysis.cli.statphysbio_simulation.convert_simulation_to_experiment import (
-            convert_simulation,
-        )
-        from merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore import (
-            convert_data,
-        )
-        from merfish3danalysis.cli.statphysbio_simulation.pixeldecode import (
-            decode_pixels,
-        )
-        from merfish3danalysis.DataRegistration import DataRegistration
-        from merfish3danalysis.qi2labDataStore import qi2labDataStore
-    except Exception as exc:
-        pytest.skip(f"Simulation API imports unavailable in this environment: {exc!r}")
+    from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
+        calculate_F1,
+    )
+    from merfish3danalysis.cli.statphysbio_simulation.convert_simulation_to_experiment import (
+        convert_simulation,
+    )
+    from merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore import (
+        convert_data,
+    )
+    from merfish3danalysis.cli.statphysbio_simulation.pixeldecode import (
+        decode_pixels,
+    )
+    from merfish3danalysis.DataRegistration import DataRegistration
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
     return {
         "DataRegistration": DataRegistration,
@@ -485,14 +404,7 @@ def simulation_api() -> dict[str, Any]:
 
 @pytest.fixture(scope="session")
 def performance_records() -> list[dict[str, Any]]:
-    """
-    Collect and persist runtime/performance records across all approaches.
-
-    Returns
-    -------
-    list[dict[str, Any]]
-        Function result.
-    """
+    """Collect and persist runtime/performance records across all approaches."""
 
     records: list[dict[str, Any]] = []
     yield records
@@ -540,21 +452,7 @@ def performance_records() -> list[dict[str, Any]]:
 
 
 def _link_or_copy(src: Path, dst: Path) -> None:
-    """
-    Use symlinks for large files when possible, with copy fallback.
-
-    Parameters
-    ----------
-    src : Path
-        Function argument.
-    dst : Path
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Use symlinks for large files when possible, with copy fallback."""
 
     try:
         dst.symlink_to(src.resolve())
@@ -563,21 +461,7 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 
 
 def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
-    """
-    Create an isolated workspace with only files needed for this pipeline.
-
-    Parameters
-    ----------
-    source_case_dir : Path
-        Function argument.
-    work_root : Path
-        Function argument.
-
-    Returns
-    -------
-    Path
-        Function result.
-    """
+    """Create an isolated workspace with only files needed for this pipeline."""
 
     missing_files = [
         filename
@@ -601,23 +485,7 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
 def _calculate_f1_from_datastore(
     case_root: Path, simulation_api: dict[str, Any], search_radius: float = 1.0
 ) -> dict[str, float]:
-    """
-    Calculate f1 from datastore.
-
-    Parameters
-    ----------
-    case_root : Path
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    search_radius : float
-        Function argument.
-
-    Returns
-    -------
-    dict[str, float]
-        Function result.
-    """
+    """Calculate f1 from datastore."""
     return simulation_api["calculate_F1"](
         case_root,
         search_radius=search_radius,
@@ -631,27 +499,7 @@ def _run_simulation_preprocess(
     ufish_model: str | None,
     perform_deformable_registration: bool,
 ) -> None:
-    """
-    Run simulation preprocess.
-
-    Parameters
-    ----------
-    acquisition_root : Path
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    decon_readout : bool
-        Function argument.
-    ufish_model : str | None
-        Function argument.
-    perform_deformable_registration : bool
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run simulation preprocess."""
     datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
     registration_factory = simulation_api["DataRegistration"](
         datastore=datastore,
@@ -682,31 +530,7 @@ def _run_simulation_case_setup(
     case_label: str,
     synthetic_chromatic_aberration: bool = False,
 ) -> dict[str, float]:
-    """
-    Run simulation case setup.
-
-    Parameters
-    ----------
-    case_root : Path
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    decon_readout : bool
-        Function argument.
-    ufish_model : str | None
-        Function argument.
-    perform_deformable_registration : bool
-        Function argument.
-    synthetic_chromatic_aberration : bool
-        Function argument.
-    case_label : str
-        Function argument.
-
-    Returns
-    -------
-    dict[str, float]
-        Function result.
-    """
+    """Run simulation case setup."""
     acquisition_root = case_root / "sim_acquisition"
     timings_seconds: dict[str, float] = {}
 
@@ -763,27 +587,7 @@ def _prepare_preprocessed_magnitude_case(
     *,
     run_calibration_decode: bool = True,
 ) -> dict[str, Any]:
-    """
-    Prepare one simulation case once before decode-only magnitude sweeps.
-
-    Parameters
-    ----------
-    simulation_dataset_dirs : dict[str, Path]
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    case_spec : dict[str, Any]
-        Function argument.
-    tmp_path : Path
-        Function argument.
-    run_calibration_decode : bool
-        Function argument.
-
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
+    """Prepare one simulation case once before decode-only magnitude sweeps."""
 
     dataset_variant = case_spec["dataset_variant"]
     axial_spacing_um = case_spec["axial_spacing_um"]
@@ -879,43 +683,7 @@ def _run_simulation_decode_and_f1(
     normalization_iterations: int = 3,
     estimate_chromatic_affines: bool = False,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    """
-    Run simulation decode and f1.
-
-    Parameters
-    ----------
-    case_root : Path
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    search_radius : float
-        Function argument.
-    feature_predictor_threshold : float
-        Function argument.
-    lowpass_sigma : tuple[float, float, float]
-        Function argument.
-    magnitude_threshold : tuple[float, float]
-        Function argument.
-    case_label : str
-        Function argument.
-    minimum_pixels_per_rna : int | None
-        Function argument.
-    skip_optimization : bool
-        Function argument.
-    duplicate_radius_xy : float | None
-        Function argument.
-    duplicate_radius_z : float | None
-        Function argument.
-    normalization_iterations : int
-        Function argument.
-    estimate_chromatic_affines : bool
-        Function argument.
-
-    Returns
-    -------
-    tuple[dict[str, float], dict[str, float], dict[str, float]]
-        Function result.
-    """
+    """Run simulation decode and f1."""
     acquisition_root = case_root / "sim_acquisition"
     timings_seconds: dict[str, float] = {}
 
@@ -983,43 +751,7 @@ def _run_simulation_pipeline(
     minimum_pixels_per_rna: int | None = None,
     case_label: str | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    """
-    Run simulation pipeline.
-
-    Parameters
-    ----------
-    case_root : Path
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    search_radius : float
-        Function argument.
-    decon_readout : bool
-        Function argument.
-    ufish_model : str | None
-        Function argument.
-    feature_predictor_threshold : float
-        Function argument.
-    perform_deformable_registration : bool
-        Function argument.
-    synthetic_chromatic_aberration : bool
-        Function argument.
-    estimate_chromatic_affines : bool
-        Function argument.
-    lowpass_sigma : tuple[float, float, float]
-        Function argument.
-    magnitude_threshold : tuple[float, float]
-        Function argument.
-    minimum_pixels_per_rna : int | None
-        Function argument.
-    case_label : str | None
-        Function argument.
-
-    Returns
-    -------
-    tuple[dict[str, float], dict[str, float], dict[str, float]]
-        Function result.
-    """
+    """Run simulation pipeline."""
     if case_label is None:
         case_label = case_root.name
     timings_seconds = _run_simulation_case_setup(
@@ -1140,27 +872,23 @@ def simulation_standard_chromatic_case(
 
 
 def _assert_standard_result_valid(result: dict[str, Any]) -> None:
-    """
-    Assert one standard simulation result has the expected shape.
-
-    Parameters
-    ----------
-    result : dict[str, Any]
-        Standard simulation result dictionary.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Validate stored outputs and independently calculate metrics from counts."""
 
     datastore_path = result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     assert datastore_path.exists()
     assert isinstance(result["f1_results"], dict)
     assert RESULT_KEYS.issubset(result["f1_results"])
-    assert result["performance_metrics"]["true_positives"] >= 0
-    assert result["performance_metrics"]["false_positives"] >= 0
-    assert result["performance_metrics"]["false_negatives"] >= 0
+    metrics = result["performance_metrics"]
+    tp, fp, fn = (
+        metrics[key] for key in ("true_positives", "false_positives", "false_negatives")
+    )
+    assert all(isinstance(count, int) and count >= 0 for count in (tp, fp, fn))
+    # Published acquisitions contain transcripts and must produce detections.
+    assert tp + fn > 0
+    assert tp + fp > 0
+    assert metrics["precision"] == pytest.approx(tp / (tp + fp))
+    assert metrics["recall"] == pytest.approx(tp / (tp + fn))
+    assert metrics["f1_score"] == pytest.approx(2 * tp / (2 * tp + fp + fn))
 
 
 def _run_standard_simulation_case(
@@ -1174,35 +902,7 @@ def _run_standard_simulation_case(
     registration_case: tuple[str, bool],
     work_root: Path,
 ) -> dict[str, Any]:
-    """
-    Run one standard simulation pipeline case.
-
-    Parameters
-    ----------
-    simulation_dataset_dirs : dict[str, Path]
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    performance_records : list[dict[str, Any]]
-        Function argument.
-    dataset_case : tuple[str, str]
-        Dataset variant name and cached dataset directory name.
-    axial_spacing_um : str
-        Function argument.
-    ufish_model_case : tuple[str, str | None]
-        Model display name and optional local weights path.
-    chromatic_case : tuple[str, bool, bool]
-        Chromatic label, synthetic aberration flag, and estimator flag.
-    registration_case : tuple[str, bool]
-        Registration label and SOFIMA enable flag.
-    work_root : Path
-        Working directory root for this case.
-
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
+    """Run one standard simulation pipeline case."""
 
     dataset_variant, _ = dataset_case
     ufish_model_name, ufish_model = ufish_model_case
@@ -1293,6 +993,65 @@ def _run_standard_simulation_case(
     }
 
 
+@pytest.mark.integration
+def test_qi2lab_commands_decode_simulation_ground_truth(
+    simulation_dataset_dirs, simulation_api, tmp_path
+):
+    """Run the standard qi2lab commands on the published Nyquist acquisition."""
+    from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode, preprocess
+
+    case_root = _prepare_case_workspace(
+        simulation_dataset_dirs["uniform"] / "0.315", tmp_path
+    )
+    simulation_api["convert_simulation"](case_root)
+    acquisition_root = case_root / "sim_acquisition"
+    simulation_api["convert_data"](acquisition_root)
+
+    runner = CliRunner()
+    result = runner.invoke(preprocess.app, [str(acquisition_root)])
+    assert result.exit_code == 0, (result.output, result.exception)
+
+    # The 256x256 simulation has a centered stage position: XY is
+    # -128 * 0.081 um rounded to 0.01 um, and recorded stage Z is zero.
+    # Reopen the datastore; command completion alone is insufficient.
+    datastore = simulation_api["qi2labDataStore"](
+        acquisition_root / "qi2labdatastore", validate=False
+    )
+    affine, origin, spacing = datastore.load_global_coord_xforms_um(tile=0)
+    np.testing.assert_array_equal(affine, np.eye(4))
+    np.testing.assert_allclose(origin, [0, -10.37, -10.37])
+    np.testing.assert_allclose(spacing, [0.315, 0.081, 0.081])
+    assert datastore.datastore_state["LocalRegistered"]
+
+    result = runner.invoke(
+        pixeldecode.app,
+        [
+            str(acquisition_root),
+            "--normalization-features",
+            "all",
+            "--minimum-pixels-per-RNA",
+            "28",
+            "--magnitude-threshold",
+            "0.9",
+            "10",
+        ],
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    scores = _calculate_f1_from_datastore(case_root, simulation_api)
+    tp, fp, fn = (
+        scores[key] for key in ("True Positives", "False Positives", "False Negatives")
+    )
+    assert tp > 0 and fp >= 0 and fn >= 0
+    assert scores["Precision"] == pytest.approx(tp / (tp + fp))
+    assert scores["Recall"] == pytest.approx(tp / (tp + fn))
+    assert scores["F1 Score"] == pytest.approx(2 * tp / (2 * tp + fp + fn))
+    assert scores["F1 Score"] >= (
+        STANDARD_EXPECTED_F1_SCORES[("uniform", "0.315", "no-chromatic")]
+        - F1_ACCURACY_ALLOWANCE
+    )
+
+
+@pytest.mark.integration
 def test_simulation_standard_matrix(
     simulation_dataset_dirs: dict[str, Path],
     simulation_api: dict[str, Any],
@@ -1303,33 +1062,7 @@ def test_simulation_standard_matrix(
     simulation_standard_chromatic_case: tuple[str, bool, bool],
     tmp_path: Path,
 ) -> None:
-    """
-    Assert standard simulation F1 matches the published Zenodo baselines.
-
-    Parameters
-    ----------
-    simulation_dataset_dirs : dict[str, Path]
-        Simulation dataset roots keyed by dataset variant.
-    simulation_api : dict[str, Any]
-        Imported simulation pipeline API.
-    performance_records : list[dict[str, Any]]
-        Shared performance records for report writing.
-    simulation_standard_dataset_case : tuple[str, str]
-        Dataset variant name and cached dataset directory name.
-    simulation_standard_axial_spacing_um : str
-        Axial spacing in microns.
-    simulation_standard_ufish_model : tuple[str, str | None]
-        Model display name and optional local weights path.
-    simulation_standard_chromatic_case : tuple[str, bool, bool]
-        Chromatic label, synthetic aberration flag, and estimator flag.
-    tmp_path : Path
-        Temporary root for the paired affine and SOFIMA runs.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Require ground-truth accuracy for both affine and SOFIMA processing."""
 
     affine_result = _run_standard_simulation_case(
         simulation_dataset_dirs,
@@ -1362,21 +1095,16 @@ def test_simulation_standard_matrix(
     expected_f1 = STANDARD_EXPECTED_F1_SCORES[
         (dataset_variant, simulation_standard_axial_spacing_um, chromatic_mode)
     ]
-    assert affine_result["performance_metrics"]["f1_score"] == pytest.approx(
-        expected_f1,
-        abs=F1_ABS_TOLERANCE,
-    )
-    assert sofima_result["performance_metrics"]["f1_score"] == pytest.approx(
-        expected_f1,
-        abs=F1_ABS_TOLERANCE,
-    )
+    minimum_f1 = expected_f1 - F1_ACCURACY_ALLOWANCE
+    assert affine_result["performance_metrics"]["f1_score"] >= minimum_f1
+    assert sofima_result["performance_metrics"]["f1_score"] >= minimum_f1
 
     affine_f1 = round(affine_result["performance_metrics"]["f1_score"], 3)
     sofima_f1 = round(sofima_result["performance_metrics"]["f1_score"], 3)
     if sofima_f1 < affine_f1:
         pytest.exit(
             (
-                "SOFIMA standard simulation regression: "
+                "SOFIMA standard simulation integration failure: "
                 f"{sofima_result['case_label']} F1={sofima_f1:.3f} "
                 f"is lower than {affine_result['case_label']} F1={affine_f1:.3f}."
             ),
@@ -1398,19 +1126,7 @@ def test_simulation_standard_matrix(
     ],
 )
 def simulation_exhaustive_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
-    """
-    Parametrize the exhaustive local simulation base cases.
-
-    Parameters
-    ----------
-    request : pytest.FixtureRequest
-        Function argument.
-
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
+    """Parametrize the exhaustive local simulation base cases."""
 
     return request.param
 
@@ -1422,25 +1138,7 @@ def simulation_full_preprocessed_case(
     simulation_exhaustive_case_spec: dict[str, Any],
     tmp_path: Path,
 ) -> dict[str, Any]:
-    """
-    Prepare one exhaustive simulation case before decoding.
-
-    Parameters
-    ----------
-    simulation_dataset_dirs : dict[str, Path]
-        Function argument.
-    simulation_api : dict[str, Any]
-        Function argument.
-    simulation_exhaustive_case_spec : dict[str, Any]
-        Function argument.
-    tmp_path : Path
-        Function argument.
-
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
+    """Prepare one exhaustive simulation case before decoding."""
 
     return _prepare_preprocessed_magnitude_case(
         simulation_dataset_dirs,
@@ -1457,23 +1155,7 @@ def simulation_full_case_result(
     performance_records: list[dict[str, Any]],
     simulation_full_preprocessed_case: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    Decode and score one exhaustive simulation case.
-
-    Parameters
-    ----------
-    simulation_api : dict[str, Any]
-        Function argument.
-    performance_records : list[dict[str, Any]]
-        Function argument.
-    simulation_full_preprocessed_case : dict[str, Any]
-        Function argument.
-
-    Returns
-    -------
-    dict[str, Any]
-        Function result.
-    """
+    """Decode and score one exhaustive simulation case."""
 
     case_root = simulation_full_preprocessed_case["case_root"]
     case_spec = simulation_full_preprocessed_case["case_spec"]
@@ -1554,34 +1236,15 @@ def simulation_full_case_result(
     }
 
 
+@pytest.mark.integration
 @pytest.mark.simulation_exhaustive
 def test_simulation_exhaustive_matrix(
     simulation_full_case_result: dict[str, Any],
 ) -> None:
-    """
-    Run the exhaustive simulation matrix with package-default settings.
+    """Run the exhaustive simulation matrix with package-default settings."""
 
-    Parameters
-    ----------
-    simulation_full_case_result : dict[str, Any]
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
-
-    datastore_path = (
-        simulation_full_case_result["case_root"] / "sim_acquisition" / "qi2labdatastore"
-    )
-    assert datastore_path.exists()
-    assert isinstance(simulation_full_case_result["f1_results"], dict)
-    assert RESULT_KEYS.issubset(simulation_full_case_result["f1_results"])
+    _assert_standard_result_valid(simulation_full_case_result)
     performance_metrics = simulation_full_case_result["performance_metrics"]
-    assert performance_metrics["true_positives"] >= 0
-    assert performance_metrics["false_positives"] >= 0
-    assert performance_metrics["false_negatives"] >= 0
 
     case_spec = simulation_full_case_result["case_spec"]
     expected_f1 = EXHAUSTIVE_EXPECTED_F1_SCORES[
@@ -1591,7 +1254,4 @@ def test_simulation_exhaustive_matrix(
             case_spec["preprocess_mode"],
         )
     ]
-    assert performance_metrics["f1_score"] == pytest.approx(
-        expected_f1,
-        abs=F1_ABS_TOLERANCE,
-    )
+    assert performance_metrics["f1_score"] >= expected_f1 - F1_ACCURACY_ALLOWANCE

@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -30,28 +31,32 @@ def _decoder_with_codebook() -> PixelDecoder:
     return decoder
 
 
+@pytest.mark.unit
 def test_load_optimization_exclusions_file_ignores_comments_and_blank_lines(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
-    exclusions_path.write_text(
-        "# known failures\n\n GeneB \nGeneC\n",
-        encoding="utf-8",
+    monkeypatch.setattr(
+        Path, "read_text", Mock(return_value="# known failures\n\n GeneB \nGeneC\n")
     )
 
     assert _load_optimization_exclusions_file(exclusions_path) == ["GeneB", "GeneC"]
 
 
+@pytest.mark.unit
 def test_load_optimization_exclusions_file_rejects_empty_input(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
-    exclusions_path.write_text("\n# no entries\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "read_text", Mock(return_value="\n# no entries\n"))
 
     with pytest.raises(typer.BadParameter, match="contains no gene IDs"):
         _load_optimization_exclusions_file(exclusions_path)
 
 
+@pytest.mark.unit
 def test_relative_exclusions_file_resolves_inside_datastore(tmp_path: Path) -> None:
     datastore_path = tmp_path / "qi2labdatastore"
 
@@ -64,6 +69,7 @@ def test_relative_exclusions_file_resolves_inside_datastore(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.unit
 def test_absolute_exclusions_file_is_preserved(tmp_path: Path) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
 
@@ -73,13 +79,13 @@ def test_absolute_exclusions_file_is_preserved(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("mode", ["skip", "reprocess"])
 def test_cli_rejects_exclusions_when_optimization_will_not_run(
     tmp_path: Path,
     mode: str,
 ) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
-    exclusions_path.write_text("GeneB\n", encoding="utf-8")
 
     kwargs = {
         "skip_optimization": mode == "skip",
@@ -93,6 +99,7 @@ def test_cli_rejects_exclusions_when_optimization_will_not_run(
         )
 
 
+@pytest.mark.unit
 def test_resolve_exclusions_is_exact_deduplicated_and_index_stable() -> None:
     decoder = _decoder_with_codebook()
 
@@ -104,6 +111,7 @@ def test_resolve_exclusions_is_exact_deduplicated_and_index_stable() -> None:
         decoder._resolve_excluded_gene_ids(["geneb"])
 
 
+@pytest.mark.unit
 def test_resolve_exclusions_rejects_removing_entire_codebook() -> None:
     decoder = _decoder_with_codebook()
 
@@ -111,6 +119,7 @@ def test_resolve_exclusions_rejects_removing_entire_codebook() -> None:
         decoder._resolve_excluded_gene_ids(["GeneA", "GeneB", "GeneC"])
 
 
+@pytest.mark.unit
 def test_excluded_winner_becomes_background_without_index_fallback() -> None:
     decoded = np.asarray([0, 1, 2, 1, -1], dtype=np.int16)
     nearest = np.asarray([0, 1, 2, 1, 1], dtype=np.int16)
@@ -120,6 +129,7 @@ def test_excluded_winner_becomes_background_without_index_fallback() -> None:
     np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2, -1, -1]))
 
 
+@pytest.mark.unit
 def test_exclusion_indices_are_converted_for_array_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -150,6 +160,7 @@ def test_exclusion_indices_are_converted_for_array_module(
     np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2]))
 
 
+@pytest.mark.unit
 def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
     labels = np.asarray(
         [
@@ -205,6 +216,7 @@ def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
         np.testing.assert_allclose(observed_values, expected_values)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("normalization_features", ["all", "cells"])
 def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     monkeypatch: pytest.MonkeyPatch,
@@ -280,6 +292,7 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     )
 
 
+@pytest.mark.unit
 def test_run_scoped_normalization_metadata_round_trips() -> None:
     datastore = qi2labDataStore.__new__(qi2labDataStore)
     attributes: dict[str, object] = {}

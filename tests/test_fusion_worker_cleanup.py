@@ -1,4 +1,4 @@
-"""Regression coverage for standard semaphore cleanup inside Loky workers."""
+"""Unit and integration tests for standard semaphore cleanup inside Loky workers."""
 
 import os
 import subprocess
@@ -12,6 +12,7 @@ from merfish3danalysis.DataRegistration import _cleanup_fusion_worker_semaphore
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX named semaphores")
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("missing", [False, True])
 def test_semaphore_cleanup_unregisters_present_and_already_removed_names(
     monkeypatch, missing
@@ -28,6 +29,7 @@ def test_semaphore_cleanup_unregisters_present_and_already_removed_names(
     unregister.assert_called_once_with("/loky-test", "semaphore")
 
 
+@pytest.mark.unit
 def test_semaphore_cleanup_preserves_other_errors_and_tracking(monkeypatch):
     import multiprocessing.resource_tracker as tracker
     import multiprocessing.synchronize as synchronize
@@ -40,6 +42,7 @@ def test_semaphore_cleanup_preserves_other_errors_and_tracking(monkeypatch):
     unregister.assert_not_called()
 
 
+@pytest.mark.integration
 def test_loky_worker_cleanup_race_exits_without_stale_tracker_warnings():
     # A subprocess lets us check stderr after the resource trackers exit too.
     # Removing a name before finalization reproduces Python 3.12's stale-entry
