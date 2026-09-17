@@ -6,7 +6,7 @@ defaults that affect most pipelines.
 
 ## U-FISH model selection
 
-`DataRegistration` uses the `smfish` U-FISH weights when `ufish_model=None`.
+`DataRegistration` uses the `simfish` U-FISH weights when `ufish_model=None`.
 
 ```python
 from merfish3danalysis.DataRegistration import DataRegistration
@@ -14,13 +14,12 @@ from merfish3danalysis.DataRegistration import DataRegistration
 registration = DataRegistration(
     datastore=datastore,
     decon_readout=False,
-    ufish_model=None,  # uses smfish weights
+    ufish_model=None,  # uses simfish weights
 )
 ```
 
-Known aliases include `smfish`, `simfish`, `merfish`, `seqfish`, `deepspot`,
-and `exseq`. `simfish` is retained as a legacy alias for `smfish`; both resolve
-to the same U-FISH weights. A local `.onnx` or `.pth` path can also be supplied.
+Known aliases include `simfish`, `merfish`, `seqfish`, `deepspot`, and `exseq`.
+A local `.onnx` or `.pth` path can also be supplied.
 
 ## RLGC deconvolution
 

@@ -107,6 +107,13 @@ corrected data, optional deconvolved data, and feature-prediction images. Pixel
 decoding loads those arrays and applies chromatic, affine, and SOFIMA transforms
 in one sampling step.
 
+Decoding operates on the tile's local round-1 grid. Local translation,
+optional non-rigid refinement, and wavelength-dependent chromatic correction
+align the bits on that grid. After decoding, transcript coordinates are mapped
+to world coordinates using voxel spacing, recorded stage position,
+camera/stage calibration, and the fitted global affine. Zhuang uses these same
+methods; its acquisition-specific settings remain in the example.
+
 ## Global registration and fusion of first fiducial round
 
 ```mermaid
@@ -142,7 +149,12 @@ flowchart TD
 Global registration follows the multiview-stitcher registration and fusion
 workflow using the stage positions stored in the datastore as the starting
 geometry. The registration step refines global tile transforms on CPU. The
-fusion step writes directly to OME-Zarr with the CPU backend. The full global
+fusion step writes directly to OME-Zarr with the CPU backend. Fiducial fusion
+preserves Z spacing and downsamples each lateral axis by
+`round(z_spacing / lateral_spacing, 1)` for the segmentation grid. Its
+maximum-Z OME-TIFF uses the same downsampled grid. The fused spacing is saved
+and used to transform Cellpose pixel ROIs into global coordinates; mask
+metadata records the actual scale relative to the native tiles. The full global
 stage can be rerun on an existing locally registered datastore with
 `uv run qi2lab-preprocess /path/to/experiment --global-registration-only`.
 

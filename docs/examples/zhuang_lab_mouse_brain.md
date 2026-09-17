@@ -138,11 +138,13 @@ The important conversion settings are:
 
 The 1.5 µm axial spacing is about five times the approximately 0.315 µm axial
 Nyquist step for this optical configuration. Treating neighboring planes as a
-well-sampled 3D volume would therefore be misleading. **This example MUST use
-2D processing throughout**, including registration, deconvolution, segmentation,
-normalization, decoding, and chromatic estimation. Keep `microscope_type="2D"`
+well-sampled 3D volume would therefore be misleading. **Use 2D processing for
+deconvolution, segmentation, normalization, decoding, and chromatic estimation.**
+Keep `microscope_type="2D"`
 and explicitly use `decode_mode="2d"` (`--decode-mode 2d` with the CLI).
-The 1.5 µm Z spacing must still be retained for physical coordinates.
+The 1.5 µm Z spacing must still be retained for physical coordinates. Global
+tile registration uses the full Z stack to estimate axial offsets, with no
+binning in Z, as described below.
 
 The conversion also constructs channel-specific PSFs from the emission
 wavelengths, NA, refractive index, and lateral pixel size. The BIL files do not
@@ -177,37 +179,52 @@ uv run python examples/zhuang_lab/02_register_and_deconvolve.py \
 The default invocation performs both local and global stages. Use
 `--local-only` or `--global-only` when resuming one stage.
 
+The Zhuang script calls the shared `DataRegistration.global_register()` method
+with ZYX binning `(1, 3, 3)`, keeping the native axial sampling for this dataset.
+The same registration, transform storage, and fusion code serves the qi2lab
+workflow. Fusion preserves the 1.5 µm Z
+spacing and downsamples Y/X by `round(1.5 / 0.108, 1) = 13.9`, giving
+1.501 µm lateral spacing after calibration rounding. The fused fiducial
+OME-Zarr and `segmentation/cellpose/fiducial_max_projection.ome.tiff` carry
+this spacing; Cellpose uses it when transforming pixel ROIs into global
+coordinates and records the actual downsampling in the mask metadata.
+To regenerate global transforms and the fused fiducial image, run:
+
+```bash
+uv run python examples/zhuang_lab/02_register_and_deconvolve.py \
+  /path/to/zhuang-data --global-only
+```
+
 The BIL images are already aligned within a field of view, so this example
-bypasses the normal microscope-specific entry point. It deconvolves the
-fiducial and readout channels, generates U-FISH feature-predictor images, and
-then globally registers and fuses the fiducial tiles. The example disables
-deformable optical flow because it is not appropriate for this already warped
-input. Processing all 441 arrays
+bypasses the normal microscope-specific entry point. It keeps deconvolution
+disabled for both fiducial and readout channels, generates U-FISH
+feature-predictor images, and then globally registers and fuses the fiducial
+tiles. Deformable optical flow is also disabled for this already warped input.
+Processing all 441 arrays
 of shape `[40, 7, 2048, 2408]` took about eight days on the reference system.
 
 ## Tune and run Cellpose
 
-The example calls the same segmentation API as `qi2lab-segment`, with the same
-options and defaults. It uses the fused fiducial maximum-Z projection and
-explicitly runs Cellpose in 2D (`do_3D=False`), as required for this dataset:
+The standalone example contains the Cellpose inference, mask export, and pixel
+to global ROI transformation code. Tune the `cellpose_parameters` dictionary at
+the bottom of `examples/zhuang_lab/03_cellpose_segmentation.py` using the Cellpose
+GUI, then run:
 
 ```bash
 uv run python examples/zhuang_lab/03_cellpose_segmentation.py \
   /path/to/zhuang-data
 ```
 
-The shared defaults are `cpsam_v2`, normalization percentiles `(1.0, 99.0)`,
-flow threshold `0.4`, cell-probability threshold `0.0`, minimum mask size `15`,
-and no forced diameter. Thresholds are passed directly to Cellpose without
-negating the cell-probability threshold. Inspect the fused image in the Cellpose
-GUI and tune these settings using the same CLI options as `qi2lab-segment`.
-Run the example with `--help` for all options.
+The example uses normalization percentiles `[0.5, 99.5]`, flow threshold
+`0.4`, diameter `15`, and `niter=200`. It also
+preserves the original sign convention: dictionary `cellprob_threshold=1.0`
+passes `-1.0` to Cellpose. Inference runs in 2D (`do_3D=False`).
 
-The shared implementation loads the saved projection TIFF when available,
-saves masks, exports pixel and global ImageJ ROIs in parallel, and updates the
-datastore segmentation state. It also supports `--min-cell-area-um2` for small
-outline filtering and `--outlines-only` to regenerate global outlines without
-rerunning inference.
+The example loads the saved maximum-Z TIFF when available, otherwise computes
+it from the fused volume. It saves masks with the actual fused-to-native spacing
+ratio, exports pixel-space ImageJ ROIs, and uses the fused spacing, origin, and
+affine to write global ROIs. The shared `qi2lab-segment` CLI remains available
+separately with its own options and defaults.
 
 ## Decode transcripts
 

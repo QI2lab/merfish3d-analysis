@@ -22,7 +22,7 @@ To create a `qi2labDataStore`, we need to know the following metadata:
 
 Physical pixel sizes and voxel spacing are rounded to three decimal places in microns (0.001 µm). This applies when loading and saving calibration metadata and throughout registration, fusion, decoding, segmentation, and image export. Legacy spacing values are rounded on read; existing files are updated when written again. Global fusion uses the rounded native voxel spacing, and fused OME metadata records the spacing of the fused image. The shared rounding helpers are in `merfish3danalysis.utils.spacing`.
 
-Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles of the data in [napari](https://github.com/napari) and explore different orientations of the images and stage direction.
+Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles in the NDV datastore viewer and compare the image orientation with the recorded stage direction.
 
 Because there are so many different microscopes and microscope acquisition software, we rely on the user to provide the images in the correct orientation such that a positive displacement in the global stage coordinates corresponds to a positive displacement in the image and vice-versa. In the [Zhuang lab examples](examples/zhuang_lab_mouse_brain.md), we show how to determine the camera and stage orientations when the metadata is not available.
 
@@ -310,15 +310,49 @@ warped image as applying the in-memory field returned by the estimator.
 
 ## Metadata conventions
 
+- A tile's `affine_zyx_um` is its final global registration correction. Camera/stage calibration remains separate. The world mapping is `global_correction @ camera_to_stage @ [pixel_zyx * spacing_zyx_um + origin_zyx_um, 1]`. Zhuang uses the same registration and coordinate-mapping methods as the qi2lab workflow.
 - Each image directory (for example `corrected_data.ome.zarr/`, `decon_data.ome.zarr/`, `feature_predictor_data.ome.zarr/`, or `local_sofima_flow_field.ome.zarr/`) is a standalone OME-NGFF v0.5 image.
 - Local fiducial and readout images are stored in native tile coordinates. Registered fiducial/readout images are not saved as separate arrays; downstream decoding and viewer paths apply affine, chromatic, and SOFIMA transforms when aligned data are needed.
 - Readout `corrected_data.ome.zarr/` is always expected after datastore creation. Readout and fiducial `decon_data.ome.zarr/` are present only when deconvolution was run. Readout `feature_predictor_data.ome.zarr/` is expected after preprocessing and is produced from the deconvolved image when available, otherwise from the corrected image.
 - Folder-level metadata for non-image entities (for example `calibrations/`, `fiducial/*/round*/`, `readouts/*/bit*/`) is stored in `attributes.json`.
 - In OME metadata, we only write voxel scale (`scale`) and original tile position (`translation`) when available.
-- All other datastore metadata is written into `zarr.json -> extra_attributes` for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).
+- All other datastore metadata is written into `zarr.json -> attributes`, alongside `ome`, for that image (for example `bit_linker`, `round_linker`, `psf_idx`, correction flags, wavelengths, transforms).
 - For `opticalflow_xform_px`, the dense 4D displacement field is stored only in the OME-Zarr array (`0/`). OME transforms are identity (`scale=1`, `translation=0`) and metadata only stores lightweight fields such as `block_size` and `block_stride`.
 - PSFs are stored as one image per channel under `calibrations/psf_data/psf_XXX.ome.zarr/`, which allows different PSF array sizes across channels.
 
 ## DataStore API
 
 Nearly all parameters are accessible as class properties and all data has helper functions for reading and writing. The full API reference is available at [qi2labDataStore](reference/classes/qi2labDataStore.md).
+
+## Image access and coordinates
+
+Datastore images use Zarr v3 with OME-Zarr v0.5 metadata. Reads, image preparation,
+and synchronous writes go through yaozarrs. TensorStore is used directly only
+for the configured compression writer and the existing lazy/read/write-future
+interfaces. Metadata-only shape queries use yaozarrs metadata without opening a
+pixel backend. Extra attributes preserve OME metadata; local metadata updates
+write the local JSON because yaozarrs currently exposes read-only attributes.
+
+Fused fiducial images and their maximum-projection TIFFs retain the downsampled
+segmentation grid. Cellpose masks store that grid's physical spacing, and their
+`downsampling` metadata records fused spacing divided by native spacing in ZYX
+order. A two-dimensional mask carries YX OME axes and YX physical scale. ROI
+conversion uses the saved scale difference, so downsampled mask pixels map to
+the same physical coordinates as decoded transcripts.
+
+Processing entry points accept either an experiment directory containing
+`qi2labdatastore` or the datastore directory itself. Existing stores are identified
+by `datastore_state.json`; a missing input fails before creating output directories.
+Only conversion commands explicitly resolve a new datastore destination.
+
+Public image readers support three modes: `True` returns a read future, `False`
+returns a NumPy array, and `None` returns a lazy backend handle opened through
+yaozarrs. Public image writers finish pixel writes before updating associated
+metadata; `True` returns that completed write handle, while `False` and `None`
+return `None`. The private asynchronous writer can return a pending write handle.
+
+Voxel calibration requires three positive finite values in ZYX microns, including
+after rounding to stored precision. Missing optional JSON metadata returns an
+empty dictionary; malformed or non-object JSON raises an error. Invalid public
+image selections and absent images retain their `None` return convention. Write
+failures propagate and do not update completion-state caches.
