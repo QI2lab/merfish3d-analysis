@@ -142,7 +142,19 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
         command, "resolve_datastore_path", Mock(return_value=Path("/mock/store"))
     )
     monkeypatch.setattr(command.pd, "read_csv", Mock(return_value=truth))
+    to_numpy = pd.DataFrame.to_numpy
+
+    def read_only_numpy(frame, *args, **kwargs):
+        values = to_numpy(frame, *args, **kwargs)
+        values.setflags(write=False)
+        return values
+
+    monkeypatch.setattr(pd.DataFrame, "to_numpy", read_only_numpy)
+    original_spots = datastore.load_global_filtered_decoded_spots.return_value.copy()
     result = command.calculate_F1(Path("/mock"), search_radius=0.01)
+    pd.testing.assert_frame_equal(
+        datastore.load_global_filtered_decoded_spots.return_value, original_spots
+    )
     # Two exact same-gene matches, two unmatched detections, one missed truth;
     # the two truth points outside the acquired Z support are excluded.
     assert result["True Positives"] == 2

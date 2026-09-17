@@ -59,7 +59,7 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
         @ np.linalg.inv(local_to_world).T
     )[:, :3] - origin
     # Compare voxel centers; the half-plane shift follows the transformed Z axis.
-    qi2lab_coords += local_to_world[:3, 0] * spacing[0] / 2
+    qi2lab_coords = qi2lab_coords + local_to_world[:3, 0] * spacing[0] / 2
     qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
 
     # Extract coordinates and gene_ids from ground truth
