@@ -20,6 +20,8 @@ History:
 
 import multiprocessing as mp
 
+from merfish3danalysis.utils.dataio import time_stamp
+
 mp.set_start_method("spawn", force=True)
 
 import ctypes
@@ -33,7 +35,6 @@ import tempfile
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from random import sample
 from typing import Literal
@@ -345,27 +346,27 @@ def _optimize_norm_worker(
     Parameters
     ----------
     datastore_path : Path
-        Function argument.
+        Path to the existing datastore shared by the GPU workers.
     tile_indices : Sequence[int]
-        Function argument.
+        Zero-based tile indices assigned to this worker.
     gpu_id : int
-        Function argument.
+        CUDA device index used for decoding and normalization.
     merfish_bits : int
-        Function argument.
+        Number of readout bits used from the codebook.
     decode_mode : Literal['auto', '2d', '3d']
         Decode connected-component/filtering mode.
     temp_dir : Path
-        Function argument.
+        Directory for per-tile normalization Parquet outputs.
     iteration : int
-        Function argument.
+        Zero-based normalization iteration; iteration zero starts from global estimates.
     lowpass_sigma : Sequence[float]
-        Function argument.
+        Gaussian filter widths in Z, Y, X pixels.
     magnitude_threshold : Sequence[float]
-        Function argument.
+        Lower and upper accepted pixel-vector magnitudes.
     minimum_pixels : float
-        Function argument.
+        Minimum connected-component size in pixels.
     feature_predictor_threshold : float
-        Function argument.
+        Minimum U-FISH probability retained in the decoding mask.
     collect_chromatic_centroids : bool
         If True, collect per-on-bit centroid features needed for chromatic
         affine estimation.
@@ -374,11 +375,6 @@ def _optimize_norm_worker(
         iterative optimization.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
-
-    Returns
-    -------
-    None
-        Function result.
     """
     preload_cuda_libraries()
 
@@ -515,7 +511,7 @@ class PixelDecoder:
             falls back to all features. This does not spatially filter the
             final decoded output.
         """
-        self._datastore_path = Path(datastore._datastore_path)
+        self._datastore_path = Path(datastore.datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
         self._verbose = verbose
@@ -784,14 +780,7 @@ class PixelDecoder:
         return barcodes.loc[inside].copy()
 
     def _load_codebook(self) -> None:
-        """
-        Load the MERFISH codebook and derive caller geometry from it.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Load the MERFISH codebook and derive caller geometry from it."""
         self._df_codebook = self._datastore.codebook.copy()
         self._df_codebook.fillna(0, inplace=True)
         bit_columns = self._df_codebook.columns[1 : self._n_merfish_bits + 1]
@@ -928,7 +917,7 @@ class PixelDecoder:
         gpu_id: int, default = 0
             GPU identifier
         include_errors : bool, default False
-            Include single-bit errors as unique barcodes in the decoding matrix.
+            Append normalized single-bit errors to the decoding matrix.
 
         Returns
         -------
@@ -957,7 +946,9 @@ class PixelDecoder:
                 for bit_index in range(self._barcode_set.shape[1]):
                     flipped_barcodes = self._barcode_set.copy()
                     flipped_barcodes[:, bit_index] = 1 - flipped_barcodes[:, bit_index]
-                    flipped_magnitudes = cp.sqrt(cp.sum(flipped_barcodes**2, axis=1))
+                    flipped_magnitudes = cp.sqrt(
+                        cp.sum(flipped_barcodes**2, axis=1, keepdims=True)
+                    )
                     flipped_magnitudes = cp.where(
                         flipped_magnitudes == 0, 1, flipped_magnitudes
                     )
@@ -995,19 +986,15 @@ class PixelDecoder:
             Lowpass sigma applied to ``data * prediction`` before estimating
             the global background and foreground normalization vectors.
         """
+        self._global_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
             normalization_vector, background_vector = (
                 self._datastore.load_decode_normalization_vectors(
                     self._decode_run_key, "global"
                 )
             )
-            load_metadata = getattr(
-                self._datastore, "load_decode_normalization_metadata", None
-            )
-            metadata = (
-                load_metadata(self._decode_run_key, "global")
-                if callable(load_metadata)
-                else None
+            metadata = self._datastore.load_decode_normalization_metadata(
+                self._decode_run_key, "global"
             )
             if (
                 not recalculate
@@ -1015,6 +1002,21 @@ class PixelDecoder:
                 and background_vector is not None
                 and self._normalization_features_match_metadata(metadata)
             ):
+                normalization_vector = np.asarray(normalization_vector)
+                background_vector = np.asarray(background_vector)
+                if (
+                    normalization_vector.ndim != 1
+                    or background_vector.ndim != 1
+                    or normalization_vector.size < self._n_merfish_bits
+                    or background_vector.size < self._n_merfish_bits
+                    or not np.all(np.isfinite(normalization_vector))
+                    or not np.all(np.isfinite(background_vector))
+                    or np.any(normalization_vector <= 0)
+                ):
+                    raise ValueError(
+                        "Cached normalization vectors must be finite one-dimensional "
+                        "arrays covering every bit, with positive normalization values."
+                    )
                 self._global_normalization_vector = cp.asarray(normalization_vector)
                 self._global_background_vector = cp.asarray(background_vector)
                 self._global_normalization_loaded = True
@@ -1263,16 +1265,10 @@ class PixelDecoder:
         gpu_id: int, default = 0
             GPU identifier
         """
+        self._iterative_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
-            load_metadata = getattr(
-                self._datastore,
-                "load_decode_normalization_metadata",
-                None,
-            )
-            metadata = (
-                load_metadata(self._decode_run_key, "iterative")
-                if callable(load_metadata)
-                else None
+            metadata = self._datastore.load_decode_normalization_metadata(
+                self._decode_run_key, "iterative"
             )
             expected_fingerprint = (
                 metadata.get("codebook_sha256") if isinstance(metadata, dict) else None
@@ -1298,8 +1294,21 @@ class PixelDecoder:
                         "normalization_features setting. Re-run qi2lab-decode "
                         "without --skip-optimization to fit the selected features."
                     )
-                background_vector = np.nan_to_num(background_vector, 0.0)
-                normalization_vector = np.nan_to_num(normalization_vector, 1.0)
+                normalization_vector = np.asarray(normalization_vector)
+                background_vector = np.asarray(background_vector)
+                if (
+                    normalization_vector.ndim != 1
+                    or background_vector.ndim != 1
+                    or normalization_vector.size < self._n_merfish_bits
+                    or background_vector.size < self._n_merfish_bits
+                    or not np.all(np.isfinite(normalization_vector))
+                    or not np.all(np.isfinite(background_vector))
+                    or np.any(normalization_vector <= 0)
+                ):
+                    raise ValueError(
+                        "Cached normalization vectors must be finite one-dimensional "
+                        "arrays covering every bit, with positive normalization values."
+                    )
                 self._iterative_normalization_vector = cp.asarray(normalization_vector)
                 self._iterative_background_vector = cp.asarray(background_vector)
                 self._iterative_normalization_loaded = True
@@ -1371,6 +1380,11 @@ class PixelDecoder:
                     decode_mode=self._effective_decode_mode,
                     metadata=self._iterative_normalization_metadata(),
                 )
+                self._iterative_normalization_vector = (
+                    old_iterative_normalization_vector
+                )
+                self._iterative_background_vector = old_iterative_background_vector
+                self._iterative_normalization_loaded = True
                 return
 
             barcode_intensities = []
@@ -1466,15 +1480,6 @@ class PixelDecoder:
 
             self._iterative_normalization_vector = barcode_based_normalization_vector
             self._iterative_background_vector = barcode_based_background_vector
-            self._datastore.save_decode_normalization_vectors(
-                self._decode_run_key,
-                "iterative",
-                barcode_based_normalization_vector,
-                barcode_based_background_vector,
-                decode_mode=self._effective_decode_mode,
-                metadata=self._iterative_normalization_metadata(),
-            )
-
             self._iterative_normalization_loaded = True
 
             del df_barcodes_loaded_no_blanks
@@ -2747,20 +2752,20 @@ class PixelDecoder:
         Parameters
         ----------
         pixel_space_point : np.ndarray
-            Pixel space point.
+            Native Z, Y, X pixel coordinates, including any crop offset.
         spacing : np.ndarray
-            Spacing.
+            Z, Y, X voxel sizes in micrometers.
         origin : np.ndarray
-            Origin.
+            Z, Y, X image origin in micrometers, before the camera transform.
         affine : np.ndarray
-            Affine transformation matrix.
+            4x4 global physical transform, applied after the camera transform.
         camera_to_stage_affine : np.ndarray | None, optional
             Camera-to-stage affine transform from datastore stage metadata.
 
         Returns
         -------
         transformed_space_point : np.ndarray
-            Transformed physical-space point.
+            Global Z, Y, X coordinates in micrometers.
         """
         physical_space_point = pixel_space_point * spacing + origin
         if camera_to_stage_affine is not None:
@@ -3293,14 +3298,7 @@ class PixelDecoder:
             cp.get_default_pinned_memory_pool().free_all_blocks()
 
     def _save_barcodes(self) -> None:
-        """
-        Save barcodes to datastore.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Save barcodes to datastore."""
         if self._verbose > 1:
             print("save barcodes")
 
@@ -3332,7 +3330,7 @@ class PixelDecoder:
         Returns
         -------
         pd.DataFrame
-            Function result.
+            Copy of the latest per-tile barcode table, or an empty table before decoding.
         """
         if not hasattr(self, "_df_barcodes"):
             return pd.DataFrame()
@@ -3346,21 +3344,14 @@ class PixelDecoder:
         Returns
         -------
         np.ndarray
-            Function result.
+            Copy of the latest decoded ZYX label image, or an empty array before decoding.
         """
         if not hasattr(self, "_decoded_image"):
             return np.empty((0,), dtype=np.int16)
         return self._decoded_image.copy()
 
     def save_decoded_barcodes(self) -> None:
-        """
-        Save decoded barcodes from the most recent decoding/filtering step.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Save decoded barcodes from the most recent decoding/filtering step."""
         self._save_barcodes()
 
     def _prepare_normalization_state(
@@ -3376,20 +3367,15 @@ class PixelDecoder:
         Parameters
         ----------
         normalization_method : Literal['iterative', 'global', 'none'] | None
-            Function argument.
+            Normalization vectors to load; None uses the legacy use_normalization flag.
         use_normalization : bool | None
-            Function argument.
+            Legacy flag selecting iterative normalization when no method is supplied.
         gpu_id : int
-            Function argument.
+            CUDA device index used for decoding and normalization.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
             Lowpass sigma used when global normalization needs to be
             recalculated, keeping normalization preprocessing aligned with
             decoding preprocessing.
-
-        Returns
-        -------
-        None
-            Function result.
         """
         if normalization_method is None:
             normalization_method = "iterative" if use_normalization else "none"
@@ -3412,14 +3398,7 @@ class PixelDecoder:
             )
 
     def _load_all_barcodes(self) -> None:
-        """
-        Load all barcodes from datastore.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Load all barcodes from datastore."""
         if self._optimize_normalization_weights:
             decoded_dir_path = self._temp_dir
 
@@ -3488,18 +3467,13 @@ class PixelDecoder:
         Parameters
         ----------
         target_gross_misid_rate : float
-            Function argument.
+            Gross misidentification-rate target for blank-fraction filtering.
         intensity_bins : Sequence[float] | None
-            Function argument.
+            Explicit histogram edges for transcript intensity; None derives edges from the data.
         voxel_number_bins : Sequence[float] | None
-            Function argument.
+            Explicit histogram edges for connected-component voxel counts; None derives edges.
         vector_distance_bins : Sequence[float] | None
-            Function argument.
-
-        Returns
-        -------
-        None
-            Function result.
+            Explicit histogram edges for codeword distance; None derives edges.
         """
         required_columns = {"gene_id", "magnitude_mean", "area", "distance_min"}
         missing = sorted(required_columns.difference(self._df_barcodes_loaded.columns))
@@ -3549,13 +3523,13 @@ class PixelDecoder:
             diagnostics["reason"] = "no_transcripts"
         else:
             voxel_intensity_values = cp.asarray(
-                annotated["voxel_intensity"].to_numpy(dtype=np.float32, copy=False)
+                annotated["voxel_intensity"].to_numpy(dtype=np.float64, copy=False)
             )
             voxel_number_values = cp.asarray(
-                annotated["voxel_number"].to_numpy(dtype=np.float32, copy=False)
+                annotated["voxel_number"].to_numpy(dtype=np.float64, copy=False)
             )
             vector_distance_values = cp.asarray(
-                annotated["vector_distance"].to_numpy(dtype=np.float32, copy=False)
+                annotated["vector_distance"].to_numpy(dtype=np.float64, copy=False)
             )
             is_blank_values = cp.asarray(
                 annotated["is_blank"].to_numpy(dtype=bool, copy=False)
@@ -3741,12 +3715,12 @@ class PixelDecoder:
                     diagnostics["voxel_number_bins"] = voxel_number_edges
                     diagnostics["vector_distance_bins"] = vector_distance_edges
 
-                    intensity_edges_cp = cp.asarray(intensity_edges, dtype=cp.float32)
+                    intensity_edges_cp = cp.asarray(intensity_edges, dtype=cp.float64)
                     voxel_number_edges_cp = cp.asarray(
-                        voxel_number_edges, dtype=cp.float32
+                        voxel_number_edges, dtype=cp.float64
                     )
                     vector_distance_edges_cp = cp.asarray(
-                        vector_distance_edges, dtype=cp.float32
+                        vector_distance_edges, dtype=cp.float64
                     )
 
                     bin_indices = cp.column_stack(
@@ -4151,31 +4125,24 @@ class PixelDecoder:
     @staticmethod
     def _roi_to_shapely(roi):  # noqa
         """
-        Roi to shapely.
+        Convert an ImageJ ROI boundary to the cell-assignment polygon.
 
         Parameters
         ----------
         roi : Any
-            Function argument.
+            ImageJ ROI containing subpixel boundary coordinates.
 
         Returns
         -------
         Any
-            Function result.
+            Shapely polygon with the ROI coordinate columns reversed for cell assignment.
         """
         return Polygon(roi.subpixel_coordinates[:, ::-1])
 
     def _assign_cells(self) -> None:
-        """
-        Assign cells to barcodes using Cellpose ROIs.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Assign cells to barcodes using Cellpose ROIs."""
         cellpose_roi_path = (
-            self._datastore._datastore_path
+            self._datastore.datastore_path
             / Path("segmentation")
             / Path("cellpose")
             / Path("imagej_rois")
@@ -4227,7 +4194,7 @@ class PixelDecoder:
         )
 
     def _remove_duplicates_in_tile_overlap(self, radius: float = 0.75) -> None:
-        """Remove duplicates in tile overlap.
+        """Remove same-gene duplicates in tile overlap, retaining the lower distance.
 
         Parameters
         ----------
@@ -4238,6 +4205,7 @@ class PixelDecoder:
 
         coords = self._df_filtered_barcodes[["global_z", "global_y", "global_x"]].values
         tile_idxs = self._df_filtered_barcodes["tile_idx"].values
+        gene_ids = self._df_filtered_barcodes["gene_id"].values
         distance_min = self._df_filtered_barcodes["distance_min"].to_numpy(
             dtype=float, copy=False
         )
@@ -4248,7 +4216,7 @@ class PixelDecoder:
         rows_to_drop = set()
         distances = []
         for i, j in pairs:
-            if tile_idxs[i] != tile_idxs[j]:
+            if tile_idxs[i] != tile_idxs[j] and gene_ids[i] == gene_ids[j]:
                 if (distance_min[i], i) <= (distance_min[j], j):
                     rows_to_drop.add(j)
                     distances.append(distance_min[j])
@@ -4329,19 +4297,19 @@ class PixelDecoder:
         # Union-Find (Disjoint Set)
         def uf_find(parent: np.ndarray, x: int) -> int:
             """
-            Uf find.
+            Find a component representative and compress its parent path.
 
             Parameters
             ----------
             parent : np.ndarray
-                Function argument.
+                Disjoint-set parent indices, updated by path compression.
             x : int
-                Function argument.
+                Element whose representative is requested.
 
             Returns
             -------
             int
-                Function result.
+                Representative element of the connected component.
             """
             while parent[x] != x:
                 parent[x] = parent[parent[x]]
@@ -4350,23 +4318,18 @@ class PixelDecoder:
 
         def uf_union(parent: np.ndarray, rank: np.ndarray, a: int, b: int) -> None:
             """
-            Uf union.
+            Join two connected components using their tree ranks.
 
             Parameters
             ----------
             parent : np.ndarray
-                Function argument.
+                Disjoint-set parent indices, updated by path compression.
             rank : np.ndarray
-                Function argument.
+                Disjoint-set tree ranks, updated when components are joined.
             a : int
-                Function argument.
+                First element to join.
             b : int
-                Function argument.
-
-            Returns
-            -------
-            None
-                Function result.
+                Second element to join.
             """
             ra, rb = uf_find(parent, a), uf_find(parent, b)
             if ra == rb:
@@ -4455,75 +4418,22 @@ class PixelDecoder:
             self._df_barcodes_loaded = df.copy()
 
     def _display_results(self) -> None:
-        """
-        Display results using Napari.
+        """Display image, normalized pixels, labels, magnitude, and distance in NDV."""
+        from merfish3danalysis.viewer.diagnostics import show_diagnostic_images
 
-        Returns
-        -------
-        None
-            Function result.
-        """
-        import napari
-        from qtpy.QtWidgets import QApplication
-
-        def on_close_callback() -> None:
-            """
-            On close callback.
-
-            Returns
-            -------
-            None
-                Function result.
-            """
-            viewer.layers.clear()
-            gc.collect()
-
-        viewer = napari.Viewer()
-        app = QApplication.instance()
-
-        app.lastWindowClosed.connect(on_close_callback)
-
-        viewer.add_image(
-            self._image_data_lp,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="image",
+        show_diagnostic_images(
+            {
+                "image": self._image_data_lp,
+                "scaled pixels": self._scaled_pixel_images,
+                "decoded": self._decoded_image,
+                "magnitude": self._magnitude_image,
+                "distance": self._distance_image,
+            },
+            [self._axial_step, self._pixel_size, self._pixel_size],
         )
-
-        viewer.add_image(
-            self._scaled_pixel_images,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="scaled pixels",
-        )
-
-        viewer.add_image(
-            self._decoded_image,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],  # yes.
-            name="decoded",
-        )
-
-        viewer.add_image(
-            self._magnitude_image,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="magnitude",
-        )
-
-        viewer.add_image(
-            self._distance_image,
-            scale=[self._axial_step, self._pixel_size, self._pixel_size],
-            name="distance",
-        )
-
-        napari.run()
 
     def _cleanup(self) -> None:
-        """
-        Cleanup memory.
-
-        Returns
-        -------
-        None
-            Function result.
-        """
+        """Cleanup memory."""
         for gpu_id in range(self._num_gpus):
             cp.cuda.Device(gpu_id).use()
             cp.cuda.Device(gpu_id).synchronize()
@@ -4575,7 +4485,7 @@ class PixelDecoder:
     ) -> tuple[np.ndarray, ...] | None:
         """Decode one tile.
 
-        Helper function to decode one tile. Can also display results in napari or return results as np.ndarray.
+        Helper function to decode one tile. Can also display results in NDV or return results as np.ndarray.
 
         Parameters
         ----------
@@ -4584,7 +4494,7 @@ class PixelDecoder:
         gpu_id : int, default 0
             GPU ID to use for decoding.
         display_results : bool, default False
-            Display results in napari.
+            Display results in NDV.
         return_results : bool, default False
             Return results as np.ndarray
         lowpass_sigma : Sequence[float], default (3, 1, 1)
@@ -4975,16 +4885,11 @@ class PixelDecoder:
         Parameters
         ----------
         filter_method : Literal['blank_fraction', 'lr']
-            Function argument.
+            Transcript filtering method: blank_fraction or lr.
         target_gross_misid_rate : float
-            Function argument.
+            Gross misidentification-rate target for blank-fraction filtering.
         lr_fdr_target : float
-            Function argument.
-
-        Returns
-        -------
-        None
-            Function result.
+            False-discovery-rate target for logistic-regression filtering.
         """
         if filter_method == "blank_fraction":
             if lr_fdr_target != 0.05:
@@ -5017,16 +4922,11 @@ class PixelDecoder:
         Parameters
         ----------
         filter_method : Literal['blank_fraction', 'lr']
-            Function argument.
+            Transcript filtering method: blank_fraction or lr.
         target_gross_misid_rate : float
-            Function argument.
+            Gross misidentification-rate target for blank-fraction filtering.
         lr_fdr_target : float
-            Function argument.
-
-        Returns
-        -------
-        None
-            Function result.
+            False-discovery-rate target for logistic-regression filtering.
         """
         if self._verbose > 1:
             print(f"apply filter_method={filter_method}")
@@ -5121,15 +5021,3 @@ class PixelDecoder:
         self._save_barcodes()
         if self._verbose >= 1:
             print(f"Number of retained barcodes: {len(self._df_filtered_barcodes)}")
-
-
-def time_stamp() -> str:
-    """
-    Time stamp.
-
-    Returns
-    -------
-    str
-        Function result.
-    """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
