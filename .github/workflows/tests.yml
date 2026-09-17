@@ -32,7 +32,7 @@ jobs:
           project = tomllib.loads(Path("pyproject.toml").read_text())
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
-              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely", "joblib",
+              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely", "joblib", "numba",
           }
           requirements = [
               value for value in project["project"]["dependencies"]
@@ -56,6 +56,9 @@ jobs:
             tests/test_fiducial_projection.py \
             tests/test_fusion_compression.py \
             tests/test_fiducial_downsampling.py \
+            tests/test_illumination_correction.py \
+            tests/test_create_datastore_illumination.py \
+            tests/test_zhuang_conversion.py \
             tests/test_zhuang_registration.py \
             tests/test_zhuang_segmentation.py \
             tests/test_cellpose_rois.py \
