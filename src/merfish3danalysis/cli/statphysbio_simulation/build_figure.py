@@ -6,9 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import typer
+from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 from tifffile import imread
 
-from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 from merfish3danalysis.utils.spacing import round_pixel_size_um
 
 app = typer.Typer()

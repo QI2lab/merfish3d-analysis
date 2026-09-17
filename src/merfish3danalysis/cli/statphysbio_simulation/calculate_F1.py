@@ -10,10 +10,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import typer
+from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
-from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
