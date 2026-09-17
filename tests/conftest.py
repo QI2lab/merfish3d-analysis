@@ -33,6 +33,9 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers", "integration: behavior across connected components"
     )
     config.addinivalue_line(
+        "markers", "gpu: requires local GPU execution; excluded from GitHub CI"
+    )
+    config.addinivalue_line(
         "markers",
         "simulation_exhaustive: exhaustive local simulation matrix test",
     )

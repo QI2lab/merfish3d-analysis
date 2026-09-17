@@ -2935,7 +2935,13 @@ class PixelDecoder:
         z_support: int,
         minlength: int,
     ) -> tuple[object, object, object, object, object]:
-        """Accumulate centroid statistics with only one Z plane of workspace."""
+        """Accumulate intensity moments with nearest-label support along Z.
+
+        Keep each object's labeled voxels. Assign unlabeled voxels within
+        ``z_support // 2`` planes to the nearest label at the same Y/X.
+        Equal-distance conflicts between different labels remain background.
+        Workspace is limited to individual Z planes.
+        """
         array_module = cp.get_array_module(labels)
         accumulator_dtype = array_module.float64
         weight_by_label = array_module.zeros(minlength, dtype=accumulator_dtype)
@@ -2952,15 +2958,23 @@ class PixelDecoder:
         half_support = max(int(z_support) // 2, 0)
 
         for z_index in range(labels.shape[0]):
-            z_start = max(0, z_index - half_support)
-            z_stop = min(labels.shape[0], z_index + half_support + 1)
-            if z_stop - z_start == 1:
-                centroid_labels = labels[z_index]
-            else:
-                centroid_labels = array_module.max(
-                    labels[z_start:z_stop],
-                    axis=0,
+            centroid_labels = labels[z_index].copy()
+            unassigned = centroid_labels == 0
+            for distance in range(1, half_support + 1):
+                before = labels[z_index - distance] if z_index >= distance else 0
+                after = (
+                    labels[z_index + distance]
+                    if z_index + distance < labels.shape[0]
+                    else 0
                 )
+                unique = (before == 0) | (after == 0) | (before == after)
+                centroid_labels = array_module.where(
+                    unassigned & unique,
+                    array_module.maximum(before, after),
+                    centroid_labels,
+                )
+                # A conflict at the nearest distance also ends the search.
+                unassigned &= (before == 0) & (after == 0)
             intensity_plane = array_module.asarray(
                 intensity[z_index],
                 dtype=array_module.float32,
@@ -3227,7 +3241,7 @@ class PixelDecoder:
             df_barcode["tile_y"] = np.round(df_barcode["y"], 0).astype(int)
             df_barcode["tile_x"] = np.round(df_barcode["x"], 0).astype(int)
 
-            pts = df_barcode[["z", "y", "x"]].to_numpy()
+            pts = df_barcode[["z", "y", "x"]].to_numpy(copy=True)
             for pt_idx in range(pts.shape[0]):
                 pts[pt_idx, :] = self._warp_pixel(
                     pts[pt_idx, :].copy(),

@@ -994,6 +994,7 @@ def _run_standard_simulation_case(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_qi2lab_commands_decode_simulation_ground_truth(
     simulation_dataset_dirs, simulation_api, tmp_path
 ):
@@ -1052,6 +1053,7 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_simulation_standard_matrix(
     simulation_dataset_dirs: dict[str, Path],
     simulation_api: dict[str, Any],
@@ -1237,6 +1239,7 @@ def simulation_full_case_result(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.simulation_exhaustive
 def test_simulation_exhaustive_matrix(
     simulation_full_case_result: dict[str, Any],

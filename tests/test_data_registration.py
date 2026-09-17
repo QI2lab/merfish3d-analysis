@@ -7,6 +7,99 @@ import pytest
 from merfish3danalysis.DataRegistration import DataRegistration
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("psf_idx", [0, 1, 2])
+def test_fiducial_deconvolution_uses_recorded_psf(registration, monkeypatch, psf_idx):
+    import merfish3danalysis.DataRegistration as registration_module
+
+    registration.tile_id = 0
+    registration._decon_fiducial = True
+    registration._psfs = np.eye(3, dtype=np.float32).reshape(3, 1, 1, 3)
+    native = np.arange(24, dtype=np.uint16).reshape(2, 3, 4)
+    registration.datastore.load_local_corrected_image.return_value = native
+    registration.datastore.load_image_metadata.return_value = {"psf_idx": psf_idx}
+    deconvolve = Mock(return_value=native.astype(np.float32))
+    monkeypatch.setattr(
+        registration_module, "_run_chunked_rlgc_remembering_crop", deconvolve
+    )
+
+    result = registration_module._load_deconvolve_fiducial_round(
+        registration, "round001", 0, Mock()
+    )
+
+    np.testing.assert_array_equal(
+        deconvolve.call_args.kwargs["psf"], registration._psfs[psf_idx]
+    )
+    np.testing.assert_array_equal(result, native)
+    np.testing.assert_array_equal(
+        registration.datastore.save_local_deconvolved_fiducial_image.call_args.args[0],
+        native,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+def test_fiducial_deconvolution_restores_generated_point_source(tmp_path):
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            pytest.skip("requires CUDA")
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("requires CUDA")
+
+    from scipy.ndimage import convolve
+
+    from merfish3danalysis.DataRegistration import _load_deconvolve_fiducial_round
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+    from merfish3danalysis.utils.rlgc import chunked_rlgc
+
+    # A normalized anisotropic PSF conserves photons when imaging a point
+    # source. The unused identity PSF must not replace its recorded calibration.
+    z, y, x = np.indices((5, 5, 5)) - 2
+    psf = np.exp(-0.5 * ((z / 0.8) ** 2 + y**2 + (x / 1.2) ** 2))
+    psf = (psf / psf.sum()).astype(np.float32)
+    identity_psf = np.zeros_like(psf)
+    identity_psf[2, 2, 2] = 1
+    truth = np.zeros((9, 21, 25), dtype=np.float32)
+    center = (4, 10, 12)
+    truth[center] = 10000
+    native = np.rint(convolve(truth, psf, mode="constant")).astype(np.uint16)
+
+    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
+    datastore.num_tiles = 1
+    datastore.channels_in_data = ["fiducial", "readout"]
+    datastore.experiment_order = np.array([[1, 1]])
+    datastore.voxel_size_zyx_um = [0.315, 0.081, 0.081]
+    datastore.channel_psfs = np.stack([identity_psf, psf])
+    datastore.initialize_tile(0)
+    datastore.save_local_corrected_image(native, tile=0, round=0, psf_idx=1)
+    registration = DataRegistration(datastore, decon_fiducial=True, verbose=0)
+    registration.tile_id = 0
+
+    recovered = _load_deconvolve_fiducial_round(
+        registration, "round001", 0, chunked_rlgc
+    )
+
+    assert np.unravel_index(np.argmax(recovered), recovered.shape) == center
+    assert recovered[center] > 1.5 * native[center]
+    assert recovered.sum() == pytest.approx(truth.sum(), rel=0.05)
+    assert np.abs(recovered.astype(float) - truth).sum() < np.abs(native - truth).sum()
+    # The recovered photons must still explain the acquired image through the
+    # independently specified forward optical model (5% relative L1 residual).
+    forward = convolve(recovered.astype(float), psf, mode="constant")
+    assert np.abs(forward - native).sum() / native.sum() < 0.05
+    np.testing.assert_array_equal(
+        datastore.load_local_deconvolved_fiducial_image(
+            tile=0, round=0, return_future=False
+        ),
+        recovered,
+    )
+    np.testing.assert_array_equal(
+        datastore.load_local_corrected_image(tile=0, round=0, return_future=False),
+        native,
+    )
+
+
 @pytest.fixture
 def registration():
     datastore = Mock(
@@ -72,6 +165,7 @@ def test_failed_local_registration_prevents_readouts_and_global_success(registra
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_fiducial_worker_saves_physical_transform_that_restores_generated_image(
     registration, monkeypatch
 ):
@@ -154,8 +248,11 @@ def test_invalid_tile_request_never_processes_previously_selected_tile(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize("deconvolve", [False, True])
+@pytest.mark.parametrize("excitation_um", [0.55, 0.70])
 def test_readout_worker_preserves_native_pixels_and_clips_spot_rois_at_edges(
-    registration, monkeypatch
+    registration, monkeypatch, deconvolve, excitation_um
 ):
     cp = pytest.importorskip("cupy")
     try:
@@ -186,11 +283,35 @@ def test_readout_worker_preserves_native_pixels_and_clips_spot_rois_at_edges(
     registration._has_valid_deconvolved_readout_image = Mock(return_value=False)
     registration._has_valid_feature_predictor_outputs = Mock(return_value=False)
     registration.datastore.load_local_round_linker.return_value = 1
-    registration.datastore.load_local_wavelengths_um.return_value = (0.65, 0.67)
+    registration.datastore.load_local_wavelengths_um.return_value = (
+        excitation_um,
+        excitation_um + 0.03,
+    )
+    # PSF identity is acquisition metadata, independent of a wavelength cutoff.
+    registration.datastore.load_image_metadata.return_value = {"psf_idx": 1}
+    registration._psfs = np.eye(3, dtype=np.float32).reshape(3, 1, 1, 3)
+    registration._decon_readout = deconvolve
+    deconvolver = Mock(return_value=native.astype(np.float32))
+    monkeypatch.setattr(
+        registration_module, "_run_chunked_rlgc_remembering_crop", deconvolver
+    )
     registration.datastore.load_local_corrected_image.return_value = native
 
     registration_module._apply_bits_on_gpu(registration, ["bit001"], 0)
 
+    if deconvolve:
+        np.testing.assert_array_equal(
+            deconvolver.call_args.kwargs["psf"], registration._psfs[1]
+        )
+        np.testing.assert_array_equal(
+            registration.datastore.save_local_deconvolved_readout_image.call_args.args[
+                0
+            ],
+            native,
+        )
+    else:
+        deconvolver.assert_not_called()
+        registration.datastore.save_local_deconvolved_readout_image.assert_not_called()
     np.testing.assert_array_equal(predictor.predict.call_args.args[0], native)
     np.testing.assert_array_equal(
         registration.datastore.save_local_feature_predictor_image.call_args.args[0],

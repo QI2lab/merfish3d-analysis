@@ -45,8 +45,10 @@ coordinates in physical units. Mocking Cellpose inference is appropriate for
 this integration test, but mocking fusion or the coordinate conversion would
 remove the interaction it must verify.
 
-Run `uv run pytest -m unit` or `uv run pytest -m integration` to select a category.
-Run `uv run pytest` for both. Integration tests that require CUDA or the Zenodo
+Run `uv run pytest tests/test_*.py -m unit` or
+`uv run pytest tests/test_*.py -m integration` to select a category.
+Run `uv run pytest tests/test_*.py` for both. Listing test files avoids traversing
+generated simulation artifacts under `tests/data`. Tests that require CUDA or the Zenodo
 simulation data retain their existing prerequisites and options; see the
 [simulation example](examples/statphysbio_synthetic.md).
 
@@ -56,19 +58,24 @@ compression, TIFF calibration, and ROI coordinates. It reads the selected
 requirements from `pyproject.toml` and uses CPU PyTorch. Cellpose inference is
 mocked in the coordinate integration test; the image and ROI persistence is real.
 
-CUDA integration checks can be run separately with:
+Mark tests that execute on a GPU with `@pytest.mark.gpu` in addition to their
+unit or integration category. Mocked GPU operations do not require this marker.
+GPU tests run locally; GitHub CI explicitly excludes them with `-m "not gpu"`.
+The marker is an execution requirement, not a third test category.
+
+Run GPU checks locally with the full project environment and a CUDA device:
 
 ```bash
-uv run pytest tests/test_data_registration.py tests/test_multiview_registration.py \
-  tests/test_sofima_deformable_registration.py tests/test_pixel_decoder.py \
-  tests/test_pixeldecoder_coordinates.py
+uv run pytest tests/test_*.py -m gpu
 ```
 
 These checks use generated fiducials and readout volumes to verify physical
 registration shifts, readout warping, decoding thresholds, barcode centroids,
-crop offsets, and intensity sums. External image reads, model inference, and
-datastore writes are mocked. The numerical registration, warping, decoding, and
-connected-component extraction run on CUDA.
+crop offsets, and intensity sums. External image inputs and model inference are
+mocked in generated-data tests. Persistence tests write generated temporary
+files. Numerical registration, deconvolution, warping, decoding, and
+connected-component extraction run on CUDA. The point-source deconvolution
+test also checks photon conservation and forward-model reconstruction error.
 
 The published simulation F1 matrix additionally needs `--simulation-data-root`.
 A skipped data-dependent matrix is not evidence that its scientific score passed.

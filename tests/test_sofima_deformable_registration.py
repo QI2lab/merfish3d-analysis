@@ -118,6 +118,7 @@ def _save_sofima_recovery_png(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_sofima_estimator_recovers_object_model_warp_field(
     request: pytest.FixtureRequest,
 ) -> None:
@@ -428,6 +429,7 @@ def test_sofima_estimator_recovers_object_model_warp_field(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_sofima_flow_field_datastore_roundtrip_preserves_warp(tmp_path) -> None:
     cp = pytest.importorskip("cupy")
     from merfish3danalysis.qi2labDataStore import qi2labDataStore

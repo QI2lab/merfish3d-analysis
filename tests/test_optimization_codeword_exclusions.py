@@ -5,7 +5,6 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 import typer
-from scipy.ndimage import grey_dilation
 
 import merfish3danalysis.PixelDecoder as pixel_decoder_module
 from merfish3danalysis.cli.qi2lab_microscopes.pixeldecode import (
@@ -161,7 +160,8 @@ def test_exclusion_indices_are_converted_for_array_module(
 
 
 @pytest.mark.unit
-def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
+@pytest.mark.parametrize("z_support", [1, 3])
+def test_plane_wise_centroid_statistics_match_known_moments(z_support) -> None:
     labels = np.asarray(
         [
             [[0, 1, 0], [0, 0, 2]],
@@ -177,43 +177,72 @@ def test_plane_wise_centroid_statistics_match_full_volume_reference() -> None:
     observed = PixelDecoder._plane_wise_weighted_centroid_statistics(
         labels,
         intensity,
-        z_support=3,
+        z_support=z_support,
         minlength=minlength,
     )
 
-    centroid_labels = grey_dilation(labels, size=(3, 1, 1))
-    weights = np.maximum(intensity, np.float32(0))
-    z_coords = np.arange(labels.shape[0], dtype=np.float32)[:, None, None]
-    y_coords = np.arange(labels.shape[1], dtype=np.float32)[None, :, None]
-    x_coords = np.arange(labels.shape[2], dtype=np.float32)[None, None, :]
-    expected = [
-        np.bincount(
-            centroid_labels.ravel(),
-            weights=weights.ravel(),
-            minlength=minlength,
-        ),
-        np.bincount(
-            centroid_labels.ravel(),
-            weights=(weights * z_coords).ravel(),
-            minlength=minlength,
-        ),
-        np.bincount(
-            centroid_labels.ravel(),
-            weights=(weights * y_coords).ravel(),
-            minlength=minlength,
-        ),
-        np.bincount(
-            centroid_labels.ravel(),
-            weights=(weights * x_coords).ravel(),
-            minlength=minlength,
-        ),
-    ]
-    expected_peak = np.zeros(minlength, dtype=np.float32)
-    np.maximum.at(expected_peak, labels.ravel(), weights.ravel())
-    expected.append(expected_peak)
+    # Columns are background, labels 1, 2, 3; rows are summed intensity,
+    # intensity-weighted Z/Y/X moments, and peak inside the original labels.
+    # For support=3, label 1 receives intensities 2+8+14=24 and Z moment
+    # 0*2+1*8+2*14=36. Negative background contributes zero weight.
+    expected = (
+        [
+            [120, 16, 24, 10],
+            [169, 28, 36, 10],
+            [65, 0, 24, 10],
+            [119, 16, 48, 0],
+            [17, 14, 18, 10],
+        ]
+        if z_support == 1
+        else [
+            [80, 24, 36, 30],
+            [117, 36, 48, 42],
+            [33, 0, 36, 30],
+            [87, 24, 72, 0],
+            [17, 14, 18, 10],
+        ]
+    )
 
     for observed_values, expected_values in zip(observed, expected, strict=True):
         np.testing.assert_allclose(observed_values, expected_values)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("label_ids", [(1, 2), (2, 1)])
+def test_centroid_support_is_nearest_and_independent_of_label_numbers(label_ids):
+    labels = np.zeros((5, 1, 1), dtype=np.int32)
+    labels[1, 0, 0], labels[3, 0, 0] = label_ids
+    intensity = np.array([1, 2, 8, 16, 32], dtype=np.float32).reshape(5, 1, 1)
+
+    sums, z_moments, y_moments, x_moments, peaks = (
+        PixelDecoder._plane_wise_weighted_centroid_statistics(
+            labels, intensity, z_support=5, minlength=3
+        )
+    )
+
+    # Own labeled voxels cannot be stolen. Planes 0/4 belong to the nearest
+    # object; plane 2 is equidistant and must not favor either numeric label.
+    order = [0, *label_ids]
+    np.testing.assert_array_equal(sums[order], [8, 3, 48])
+    np.testing.assert_array_equal(z_moments[order], [16, 2, 176])
+    np.testing.assert_array_equal(y_moments, 0)
+    np.testing.assert_array_equal(x_moments, 0)
+    np.testing.assert_array_equal(peaks[order], [32, 2, 16])
+
+
+@pytest.mark.unit
+def test_centroid_support_does_not_resolve_a_near_tie_using_a_farther_label():
+    labels = np.array([3, 1, 0, 2, 3], dtype=np.int32).reshape(5, 1, 1)
+    intensity = np.array([0, 0, 8, 0, 0], dtype=np.float32).reshape(5, 1, 1)
+
+    sums, z_moments, *_ = PixelDecoder._plane_wise_weighted_centroid_statistics(
+        labels, intensity, z_support=5, minlength=4
+    )
+
+    # The center is tied between labels 1 and 2 one plane away. Label 3,
+    # two planes away on both sides, cannot claim those eight photons.
+    np.testing.assert_array_equal(sums, [8, 0, 0, 0])
+    np.testing.assert_array_equal(z_moments, [16, 0, 0, 0])
 
 
 @pytest.mark.unit

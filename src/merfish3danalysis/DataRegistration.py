@@ -463,11 +463,16 @@ def _load_deconvolve_fiducial_round(
     )
     start_time = timeit.default_timer()
     if dr._decon_fiducial:
+        metadata = dr._datastore.load_image_metadata(
+            dr._datastore.local_image_path(
+                dr._tile_id, "corrected_data", round=round_id
+            )
+        )
         decon = _run_chunked_rlgc_remembering_crop(
             dr=dr,
             chunked_rlgc=chunked_rlgc,
             image=raw,
-            psf=_resolve_psf(dr._psfs, 0),
+            psf=_resolve_psf(dr._psfs, metadata["psf_idx"]),
             gpu_id=gpu_id,
             release_memory=True,
         )
@@ -1029,14 +1034,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     spacing_zyx_um = dr._datastore.voxel_size_zyx_um
     for bit_id in bit_list:
         r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
-        ex_wl, _em_wl = dr._datastore.load_local_wavelengths_um(
-            tile=dr._tile_id, bit=bit_id
-        )
-        if ex_wl < 0.600:
-            psf_idx = 1
-        else:
-            psf_idx = 2
-
         decon_on_disk = dr._has_valid_deconvolved_readout_image(bit_id=bit_id)
         feature_predictor_on_disk = dr._has_valid_feature_predictor_outputs(
             bit_id=bit_id
@@ -1069,11 +1066,16 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # deconvolution
             if dr._decon_readout:
                 start_time = timeit.default_timer()
+                metadata = dr._datastore.load_image_metadata(
+                    dr._datastore.local_image_path(
+                        dr._tile_id, "corrected_data", bit=bit_id
+                    )
+                )
                 predictor_input_image = _run_chunked_rlgc_remembering_crop(
                     dr=dr,
                     chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
-                    psf=_resolve_psf(dr._psfs, psf_idx),
+                    psf=_resolve_psf(dr._psfs, metadata["psf_idx"]),
                     gpu_id=local_gpu_id,
                     release_memory=True,
                 )

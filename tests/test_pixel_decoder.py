@@ -19,6 +19,7 @@ def cuda():
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_codebook_single_bit_errors_are_normalized_per_codeword(cuda):
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._n_merfish_bits = 6
@@ -39,6 +40,7 @@ def test_codebook_single_bit_errors_are_normalized_per_codeword(cuda):
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize("normalization", ["none", "global", "iterative"])
 @pytest.mark.parametrize("filter_type", [None, "lp"])
 def test_decode_pixels_matches_known_codewords_magnitudes_and_rejections(
@@ -152,11 +154,68 @@ def test_overlap_duplicates_require_same_gene_distinct_tile_and_physical_radius(
     assert decoder._df_filtered_barcodes["detection"].tolist() == expected
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("attribute", ["_df_filtered_barcodes", "_df_barcodes_loaded"])
+def test_within_tile_duplicates_follow_physical_clusters_and_preserve_identity(
+    attribute,
+):
+    decoder = PixelDecoder.__new__(PixelDecoder)
+    table = pd.DataFrame(
+        [
+            # A transitive cluster: endpoints are farther apart than either
+            # radius, but each connects through the middle detection.
+            (0, "A", 0, 0.0, 0.0, 0.3),
+            (1, "A", 0, 0.375, 0.0625, 0.2),
+            (2, "A", 0, 0.75, 0.125, 0.1),
+            # Same plane: keep both.
+            (3, "A", 0, 0.0, 10.0, 0.2),
+            (4, "A", 0, 0.0, 10.0625, 0.1),
+            # Same coordinates but different genes or tiles: keep all.
+            (5, "A", 0, 0.0, 20.0, 0.2),
+            (6, "B", 0, 0.375, 20.0, 0.1),
+            (7, "A", 1, 0.375, 20.0, 0.1),
+            # Inclusive XY and Z bounds, with a score tie: first row wins.
+            (8, "A", 0, 0.0, 30.0, 0.2),
+            (9, "A", 0, 0.5, 30.125, 0.2),
+            # Beyond the Z or XY bound: keep all three.
+            (10, "A", 0, 0.0, 40.0, 0.3),
+            (11, "A", 0, 0.501, 40.0, 0.1),
+            (12, "A", 0, 0.25, 40.126, 0.1),
+        ],
+        columns=[
+            "detection",
+            "gene_id",
+            "tile_idx",
+            "global_z",
+            "global_x",
+            "distance_min",
+        ],
+    )
+    table["global_y"] = 7.0
+    setattr(decoder, attribute, table)
+
+    decoder._remove_duplicates_within_tile(radius_xy=0.125, radius_z=0.5)
+
+    assert getattr(decoder, attribute)["detection"].tolist() == [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        10,
+        11,
+        12,
+    ]
+
+
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize("is_3d", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
 def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
-    cuda, is_3d, empty
+    cuda, is_3d, empty, monkeypatch
 ):
     decoder = PixelDecoder.__new__(PixelDecoder)
     decoder._n_merfish_bits = 6
@@ -192,6 +251,17 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
     decoder._affine[:3, 3] = [1, 2, -3]
 
     decoder._decode_pixels(magnitude_threshold=(1, 2))
+    to_numpy = pd.DataFrame.to_numpy
+
+    def readonly_view(frame, *args, **kwargs):
+        values = to_numpy(frame, *args, **kwargs)
+        if not kwargs.get("copy", False):
+            values.setflags(write=False)
+        return values
+
+    # Pandas may expose read-only views. World mapping must own its workspace
+    # and leave the independently measured local centroids intact.
+    monkeypatch.setattr(pd.DataFrame, "to_numpy", readonly_view)
     decoder._extract_barcodes(minimum_pixels=4, maximum_pixels=8)
 
     observed = decoder.decoded_barcodes.sort_values(["gene_id", "z"])
@@ -200,6 +270,12 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
         return
     assert observed["gene_id"].tolist() == (["A", "B"] if is_3d else ["A", "A", "B"])
     np.testing.assert_array_equal(observed["area"], [8, 4] if is_3d else [4, 4, 4])
+    np.testing.assert_array_equal(
+        observed[["z", "y", "x"]],
+        [[2.5, 1.5, 2.5], [4, 5.5, 6.5]]
+        if is_3d
+        else [[2, 1.5, 2.5], [3, 1.5, 2.5], [4, 5.5, 6.5]],
+    )
     # Centroids include the two cropped source planes before applying spacing.
     expected = (
         [[12.25, -18.3, 28], [13, -19.1, 29.6]]
@@ -217,6 +293,7 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize("stored_global", [False, True])
 def test_load_bit_data_weights_then_warps_then_crops_generated_readouts(
     cuda, stored_global
@@ -343,6 +420,7 @@ def test_lr_fdr_uses_retained_counts_and_codebook_blank_fraction(threshold, expe
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize(
     "target, expected_ids", [(0.1, [0, 1]), (0.5, [0, 1, 2, 3]), (2.0, list(range(5)))]
 )
@@ -384,6 +462,7 @@ def test_blank_fraction_histogram_includes_upper_edges_and_matches_known_counts(
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize("empty", [False, True])
 def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, empty):
     from unittest.mock import Mock
@@ -437,6 +516,7 @@ def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, em
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize("use_flow", [False, True])
 @pytest.mark.parametrize("use_chromatic", [False, True])
 def test_bits_decode_in_round_one_before_world_mapping(cuda, use_flow, use_chromatic):

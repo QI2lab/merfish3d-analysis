@@ -104,6 +104,7 @@ def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> N
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
     cp = _require_cuda()
     pytest.importorskip("cucim")
@@ -128,6 +129,7 @@ def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     _require_cuda()
     pytest.importorskip("cucim")
@@ -147,6 +149,7 @@ def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
     _require_cuda()
     pytest.importorskip("cucim")
@@ -197,6 +200,7 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
 def test_register_pair_to_fixed_residual_uses_valid_lateral_overlap() -> None:
     _require_cuda()
     pytest.importorskip("cucim")

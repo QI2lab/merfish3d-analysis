@@ -44,7 +44,7 @@ jobs:
           uv pip install --no-deps -e .
       - name: Test storage, fusion, segmentation coordinates, and shared helpers
         run: |
-          .venv/bin/python -m pytest -q \
+          .venv/bin/python -m pytest -q -m "not gpu" \
             tests/test_datastore_image_io.py \
             tests/test_datastore_public_image_io.py \
             tests/test_datastore_validation.py \
