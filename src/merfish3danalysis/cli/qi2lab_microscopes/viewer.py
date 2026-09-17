@@ -23,24 +23,12 @@ def view(path: Path | None = VIEW_PATH_ARGUMENT) -> None:
     ----------
     path : Path | None
         path for this viewer operation.
-
-    Returns
-    -------
-    None
-        Computed viewer result.
     """
     Qi2labViewer(path).run()
 
 
 def main() -> None:
-    """
-    Run the viewer CLI.
-
-    Returns
-    -------
-    None
-        Computed viewer result.
-    """
+    """Run the viewer CLI."""
     app()
 
 

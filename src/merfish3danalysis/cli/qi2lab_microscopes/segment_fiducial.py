@@ -18,9 +18,9 @@ import typer
 from cellpose import io, models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
 
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.cellpose_rois import extract_pixel_rois, global_rois
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer()
@@ -114,19 +114,17 @@ def run_cellpose(
     workers = (roi_workers or min(8, available_cpus)) if roi_multiprocessing else 1
 
     # initialize datastore
-    datastore_path = qi2lab_datastore_path(root_path)
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
     print(f"Using datastore at {datastore_path}")
 
-    fused_image_path = datastore._image_store_path(
-        datastore._fused_root_path / f"fused_{datastore.fiducial_folder_name}_zyx"
-    )
+    fused_image_path = datastore.fused_image_path()
     if not fused_image_path.exists():
         raise FileNotFoundError(
             f"Globally registered fused image not found: {fused_image_path}"
         )
 
-    attributes = datastore._read_extra_attributes(fused_image_path)
+    attributes = datastore.load_image_metadata(fused_image_path)
     affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
     origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
     spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"]).astype(np.float32)
@@ -149,7 +147,7 @@ def run_cellpose(
             min_cell_area_um2,
             workers=workers,
         )
-        datastore_state = datastore.datastore_state
+        datastore_state = datastore.datastore_state.copy()
         datastore_state.update({"SegmentedCells": True})
         datastore.datastore_state = datastore_state
         return
@@ -180,7 +178,9 @@ def run_cellpose(
         fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
         fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
         del fiducial_fused
-    fiducial_max_projection = _prepare_cellpose_input_image(fiducial_max_projection)
+    fiducial_max_projection = transforms.convert_image(
+        np.asarray(fiducial_max_projection), do_3D=False
+    )
     print(
         "Prepared Cellpose input image "
         f"shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
@@ -274,7 +274,13 @@ def run_cellpose(
         f"shape={tuple(int(v) for v in masks.shape)} dtype={masks.dtype}.",
         flush=True,
     )
-    datastore.save_global_cellpose_segmentation_image(masks, downsampling=[1, 3.5, 3.5])
+    # save the scale difference between the fused grid and the original tiles
+    downsampling_zyx = round_spacing_um(spacing_zyx_um) / round_spacing_um(
+        datastore.voxel_size_zyx_um
+    )
+    datastore.save_global_cellpose_segmentation_image(
+        masks, downsampling=downsampling_zyx.tolist()
+    )
     print(
         f"Saved Cellpose mask image in {perf_counter() - step_start:.1f} s.", flush=True
     )
@@ -313,7 +319,7 @@ def run_cellpose(
     )
 
     # update datastore state
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"SegmentedCells": True})
     datastore.datastore_state = datastore_state
 
@@ -399,11 +405,6 @@ def warp_points(
         )
     )
     return (np.asarray(affine) @ homogeneous_points.T).T[:, :3]
-
-
-def _prepare_cellpose_input_image(image: np.ndarray) -> np.ndarray:
-    """Prepare image axes for 2D Cellpose evaluation without intensity scaling."""
-    return transforms.convert_image(np.asarray(image), do_3D=False)
 
 
 def main() -> None:

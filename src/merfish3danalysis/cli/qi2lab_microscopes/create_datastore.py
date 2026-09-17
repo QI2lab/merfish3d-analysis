@@ -27,7 +27,6 @@ import typer
 from tifffile import imread
 from tqdm import tqdm
 
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import (
@@ -452,9 +451,15 @@ def convert_data(
         channel_psfs.append(psf)
 
     # initialize datastore
-    datastore_path = (
-        qi2lab_datastore_path(root_path) if output_path is None else output_path
-    )
+    if output_path is None:
+        root_path = root_path.expanduser().resolve()
+        datastore_path = (
+            root_path
+            if (root_path / "datastore_state.json").is_file()
+            else root_path / "qi2labdatastore"
+        )
+    else:
+        datastore_path = output_path
     existing_store = datastore_path.exists()
     datastore = qi2labDataStore(datastore_path)
 
@@ -492,7 +497,7 @@ def convert_data(
         datastore.channel_psfs = channel_psfs
 
         # Update datastore state to note that calibrations are done
-        datastore_state = datastore.datastore_state
+        datastore_state = datastore.datastore_state.copy()
         datastore_state.update({"Calibrations": True})
         datastore.datastore_state = datastore_state
 
@@ -636,7 +641,7 @@ def convert_data(
                             bit=bit_idx,
                         )
 
-        datastore_state = datastore.datastore_state
+        datastore_state = datastore.datastore_state.copy()
         datastore_state.update({"Corrected": True})
         datastore.datastore_state = datastore_state
 

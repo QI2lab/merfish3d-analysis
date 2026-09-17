@@ -11,18 +11,17 @@ from typing import Annotated, Any
 import numpy as np
 import typer
 import xarray as xr
-import zarr
 from multiview_stitcher import fusion, misc_utils, msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.DataRegistration import (
     _direct_zarr_fusion_kwargs,
     _local_fiducial_path,
     _read_fiducial_sim,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 from merfish3danalysis.utils.decode_warping import (
     compose_decode_warp_transform_zyx_um,
     load_bit_round_transform_zyx_um,
@@ -60,10 +59,11 @@ def export_ome_tiffs(
         One tiled OME-TIFF is written for each channel.
     """
     from tifffile import TiffWriter
+    from yaozarrs import open_group
 
-    group = zarr.open_group(ome_zarr_path, mode="r")
+    group = open_group(ome_zarr_path)
     scale0_path = group.attrs["ome"]["multiscales"][0]["datasets"][0]["path"]
-    array = zarr.open_array(ome_zarr_path / scale0_path, mode="r")
+    array = group[scale0_path].to_zarr_python()
     dims = tuple(str(dim) for dim in array.metadata.dimension_names)
     axes = {dim: dims.index(dim) for dim in dims}
     shape_zyx = tuple(int(array.shape[axes[dim]]) for dim in "zyx")
@@ -252,11 +252,10 @@ def _local_readout_path(
         Deconvolved image path when present; otherwise the corrected image
         path.
     """
-    readout_root = datastore._readouts_root_path / tile_id / bit_id
-    decon_path = datastore._image_store_path(readout_root / "decon_data")
+    decon_path = datastore.local_image_path(tile_id, "decon_data", bit=bit_id)
     if decon_path.exists():
         return decon_path
-    return datastore._image_store_path(readout_root / "corrected_data")
+    return datastore.local_image_path(tile_id, "corrected_data", bit=bit_id)
 
 
 def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
@@ -302,9 +301,6 @@ def _load_tile_multichannel_msim(
     tile_id: str,
     bit_ids: list[str],
     spacing_zyx_um: dict[str, float],
-    zarr_module: Any = zarr,
-    msi_utils_module: Any = msi_utils,
-    si_utils_module: Any = si_utils,
 ) -> Any:
     """
     Build a Zarr-backed multichannel tile with per-channel world affines.
@@ -319,12 +315,6 @@ def _load_tile_multichannel_msim(
         Readout bits in desired output-channel order.
     spacing_zyx_um : dict[str, float]
         Rounded physical voxel spacing keyed by Z, Y, and X.
-    zarr_module : Any, default=zarr
-        Zarr module or compatible test double.
-    msi_utils_module : Any, default=multiview_stitcher.msi_utils
-        Multiview-stitcher multiscale-image helpers.
-    si_utils_module : Any, default=multiview_stitcher.spatial_image_utils
-        Multiview-stitcher spatial-image helpers.
 
     Returns
     -------
@@ -372,14 +362,12 @@ def _load_tile_multichannel_msim(
             translation=translation,
             affine_zyx_px=stage_camera,
             transform_key="stage_metadata",
-            zarr_module=zarr_module,
-            si_utils=si_utils_module,
         )
         channel_sims.append(channel_sim.assign_coords(c=[channel_id]))
 
-    sim = si_utils_module.concat(channel_sims, dim="c")
-    msim = msi_utils_module.get_msim_from_sim(sim, scale_factors=[])
-    stage_transform = msi_utils_module.get_transform_from_msim(
+    sim = si_utils.concat(channel_sims, dim="c")
+    msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
+    stage_transform = msi_utils.get_transform_from_msim(
         msim,
         transform_key="stage_metadata",
     )
@@ -406,7 +394,7 @@ def _load_tile_multichannel_msim(
             "x_out": stage_transform.coords["x_out"],
         },
     )
-    msi_utils_module.set_affine_transform(
+    msi_utils.set_affine_transform(
         msim,
         transform_data,
         transform_key="global_registered",
@@ -446,6 +434,11 @@ def _read_fused_metadata(
         "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
         "spacing_zyx_um": round_spacing_um(spacing).tolist(),
     }
+
+
+def _bit_number(bit_id: str) -> int:
+    """Return the numeric suffix of a stored bit identifier."""
+    return int(bit_id[3:])
 
 
 @app.command()
@@ -543,7 +536,7 @@ def fuse_all_channels(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    datastore = qi2labDataStore(qi2lab_datastore_path(root_path))
+    datastore = qi2labDataStore(resolve_datastore_path(root_path))
     stage_transform_key = "stage_metadata"
     global_transform_key = "global_registered"
     output_spacing = dict(
@@ -553,7 +546,7 @@ def fuse_all_channels(
             strict=True,
         )
     )
-    bit_ids = sorted(map(str, datastore.bit_ids), key=lambda bit: int(bit[3:]))
+    bit_ids = sorted(map(str, datastore.bit_ids), key=_bit_number)
     channels = [datastore.fiducial_folder_name, *bit_ids]
     tile_msims = [
         _load_tile_multichannel_msim(
@@ -564,9 +557,9 @@ def fuse_all_channels(
         )
         for tile_id in tqdm(datastore.tile_ids, desc="tile")
     ]
-    output_directory = datastore._fused_root_path
+    output_directory = datastore.fused_image_path().parent
     output_directory.mkdir(parents=True, exist_ok=True)
-    final_output = datastore._image_store_path(output_directory / "full_dataset")
+    final_output = datastore.fused_image_path("full_dataset")
     fusion_call_kwargs: dict[str, Any] = {}
     if output_chunksize is not None:
         fusion_call_kwargs["output_chunksize"] = output_chunksize
@@ -582,7 +575,7 @@ def fuse_all_channels(
         fused_msim,
         transform_key=global_transform_key,
     )
-    datastore._write_extra_attributes(
+    datastore.save_image_metadata(
         image_path=final_output,
         extra_attributes={
             **fused_metadata,

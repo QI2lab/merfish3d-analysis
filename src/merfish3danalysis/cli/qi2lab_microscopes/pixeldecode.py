@@ -12,12 +12,12 @@ from typing import Annotated, Literal
 
 import typer
 
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.PixelDecoder import (
     ChromaticAffineEstimationConfig,
     PixelDecoder,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -171,9 +171,9 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     if not tile_ids or not bit_ids:
         return False
 
-    entity_root = datastore._readouts_root_path / tile_ids[0] / bit_ids[0]
-    attributes = datastore._load_entity_attributes(
-        entity_root,
+    attributes = datastore.load_local_image_metadata(
+        tile_ids[0],
+        bit=bit_ids[0],
         image_names=("decon_data",),
     )
     return bool(attributes.get("deconvolution", False))
@@ -442,7 +442,7 @@ def decode_pixels(
             )
 
     # initialize datastore
-    datastore_path = qi2lab_datastore_path(root_path)
+    datastore_path = resolve_datastore_path(root_path)
     if optimization_exclusions_file is not None:
         exclusions_path = _optimization_exclusions_path(
             datastore_path,

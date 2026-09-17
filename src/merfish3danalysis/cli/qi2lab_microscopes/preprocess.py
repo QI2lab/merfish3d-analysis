@@ -13,8 +13,8 @@ from pathlib import Path
 
 import typer
 
-from merfish3danalysis.cli.qi2lab_microscopes._common import qi2lab_datastore_path
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -73,7 +73,7 @@ def local_register_data(
             "--fiducial-registration-only are mutually exclusive."
         )
     # initialize datastore
-    datastore_path = qi2lab_datastore_path(root_path)
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
     print(f"Using datastore at {datastore_path}")
 
@@ -102,7 +102,7 @@ def local_register_data(
     )
 
     # update datastore state
-    datastore_state = datastore.datastore_state
+    datastore_state = datastore.datastore_state.copy()
     datastore_state.update({"LocalRegistered": True})
     datastore.datastore_state = datastore_state
 
