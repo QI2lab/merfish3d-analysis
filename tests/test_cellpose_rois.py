@@ -14,6 +14,7 @@ from merfish3danalysis.utils.cellpose_rois import (
 )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("workers", [1, 4])
 def test_cropped_parallel_contours_match_cellpose(workers):
     masks = np.zeros((200, 200), dtype=np.uint16)
@@ -40,6 +41,7 @@ def test_cropped_parallel_contours_match_cellpose(workers):
     np.testing.assert_array_equal(masks, original_masks)
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("background", [True, False])
 def test_sparse_labels_preserve_original_ids_with_or_without_background(background):
     masks = np.full((10, 10), 2**30, dtype=np.uint32)
@@ -53,6 +55,7 @@ def test_sparse_labels_preserve_original_ids_with_or_without_background(backgrou
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("workers", [1, 4])
 def test_batched_global_transform_matches_original_coordinates_and_filter(workers):
     rng = np.random.default_rng(84)
@@ -99,6 +102,7 @@ def test_batched_global_transform_matches_original_coordinates_and_filter(worker
         np.testing.assert_array_equal(roi.coordinates(), points)
 
 
+@pytest.mark.unit
 def test_vectorized_areas_handle_orientation_closure_and_large_origins():
     square = np.array([[0, 0], [3, 0], [3, 3], [0, 3]], dtype=np.float32)
     polygons = [
@@ -113,6 +117,7 @@ def test_vectorized_areas_handle_orientation_closure_and_large_origins():
     np.testing.assert_array_equal(areas, [9, 9, 9, 9, 0])
 
 
+@pytest.mark.unit
 def test_empty_inputs_produce_no_rois():
     assert (
         extract_pixel_rois(np.zeros((10, 10), dtype=np.uint16), np.array([]), workers=4)

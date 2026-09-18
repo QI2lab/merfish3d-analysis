@@ -7,6 +7,8 @@ import numpy as np
 from cupyx.scipy.ndimage import gaussian_filter, minimum_filter
 from cupyx.scipy.special import j1
 
+from merfish3danalysis.utils.spacing import round_pixel_size_um
+
 
 def window_sum_filter(image2d: cp.ndarray, r: int) -> cp.ndarray:
     """
@@ -118,7 +120,7 @@ def psf_generator(
     """
     coords = cp.linspace(0, w - 1, w)
     X, Y = cp.meshgrid(coords, coords)
-    scale = 2 * cp.pi * na / lam * pixel_size * factor
+    scale = 2 * cp.pi * na / lam * round_pixel_size_um(pixel_size) * factor
     eps = cp.finfo(cp.float32).eps
     R = cp.sqrt(cp.minimum(X, cp.abs(X - w)) ** 2 + cp.minimum(Y, cp.abs(Y - w)) ** 2)
     psf = cp.abs(2 * j1(scale * R + eps) / (scale * R + eps)) ** 2
@@ -450,7 +452,7 @@ def dark_sectioning(
         "Ny": image.shape[1],
         "NA": na,
         "emwavelength": emwavelength,
-        "pixelsize": pixel_size,
+        "pixelsize": round_pixel_size_um(pixel_size),
         "factor": factor,
     }
     background = False

@@ -1,5 +1,6 @@
 """NDV and VisPy view layer for the datastore viewer."""
 
+import logging
 from contextlib import suppress
 from typing import Any
 
@@ -7,6 +8,7 @@ import ndv
 import numpy as np
 from qtpy import QtCore
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
     SparseOverlayPayload,
     stack_with_micron_coords,
@@ -15,9 +17,6 @@ from merfish3danalysis.viewer.ndv import (
     apply_lut_channel_labels,
     channel_cmap_for_label,
     hide_ndv_volume_button,
-    ndv_canvas_parts,
-    ndv_current_index,
-    ndv_current_index_signal,
 )
 from merfish3danalysis.viewer.sparse import SparseVispyOverlay
 
@@ -275,7 +274,7 @@ class DatastoreNdvView(QtCore.QObject):
         widget.show()
         self.viewer_windows.append(widget)
         self._sparse_overlay.attach(self.array_viewer)
-        self._hide_ndv_3d_button()
+        hide_ndv_volume_button(self.array_viewer)
         self._connect_ndv_index_signal()
 
     def _update_array_viewer(self, data: Any, labels: list[str]) -> bool:
@@ -299,10 +298,13 @@ class DatastoreNdvView(QtCore.QObject):
         try:
             self.array_viewer.data = data
             apply_lut_channel_labels(self.array_viewer, labels)
-            self._hide_ndv_3d_button()
+            hide_ndv_volume_button(self.array_viewer)
             self._connect_ndv_index_signal()
             return True
         except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not update NDV image data; rebuilding the viewer."
+            )
             return False
 
     def _display_model(self, data: Any, labels: list[str], z_size: int) -> Any | None:
@@ -351,14 +353,10 @@ class DatastoreNdvView(QtCore.QObject):
             luts=luts,
         )
 
-    def _hide_ndv_3d_button(self) -> None:
-        """Hide NDV's volume-rendering 3D toggle."""
-        hide_ndv_volume_button(self.array_viewer)
-
     def _connect_ndv_index_signal(self) -> None:
         """Refresh sparse geometry when NDV's Z slider changes."""
         self._disconnect_ndv_index_signal()
-        signal = ndv_current_index_signal(self.array_viewer)
+        signal = self.array_viewer.display_model.current_index.value_changed
         if signal is None:
             return
         signal.connect(self.refresh_sparse_overlay)
@@ -376,7 +374,7 @@ class DatastoreNdvView(QtCore.QObject):
         """Return the current NDV Z index."""
         if self.array_viewer is None:
             return 0
-        current_index = ndv_current_index(self.array_viewer)
+        current_index = self.array_viewer.display_model.current_index
         value = current_index.get("z_um")
         if isinstance(value, slice):
             value = value.start
@@ -404,7 +402,9 @@ class DatastoreNdvView(QtCore.QObject):
         self._disconnect_scale_bar()
         if self.array_viewer is None:
             return
-        canvas_controller, view, canvas = ndv_canvas_parts(self.array_viewer)
+        canvas_controller = self.array_viewer._canvas
+        view = canvas_controller._view
+        canvas = canvas_controller._canvas
         if canvas_controller is None or view is None or canvas is None:
             return
 
@@ -425,7 +425,7 @@ def _x_spacing(spacing_zyx_um: Any) -> float:
     float
         Positive X spacing in microns.
     """
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     x_spacing_um = float(spacing[2]) if spacing.size >= 3 else 1.0
     if not np.isfinite(x_spacing_um) or x_spacing_um <= 0:
         return 1.0

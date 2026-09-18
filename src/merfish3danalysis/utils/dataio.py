@@ -28,6 +28,34 @@ from numpy.typing import ArrayLike
 from tifffile import imread
 
 
+def resolve_datastore_path(path: Path | str) -> Path:
+    """Find an existing datastore from its root or its experiment directory.
+
+    Parameters
+    ----------
+    path : Path or str
+        Datastore directory or experiment directory containing qi2labdatastore.
+
+    Returns
+    -------
+    Path
+        Absolute datastore directory identified by datastore_state.json.
+
+    Raises
+    ------
+    FileNotFoundError
+        Neither the supplied directory nor its qi2labdatastore child has state
+        metadata. This function never creates directories.
+    """
+    path = Path(path).expanduser().resolve()
+    for candidate in (path, path / "qi2labdatastore"):
+        if (candidate / "datastore_state.json").is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"No qi2lab datastore found at {path} or its qi2labdatastore child."
+    )
+
+
 def read_metadatafile(fname: str | Path) -> dict:
     """Read metadata from csv file.
 

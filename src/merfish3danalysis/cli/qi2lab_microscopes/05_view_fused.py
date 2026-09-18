@@ -1,76 +1,11 @@
-"""
-View fused channels using neuroglancer.
+"""Open fused channels in the datastore NDV viewer."""
 
-Shepherd 2025/03 - created script.
-"""
+import typer
 
-import argparse
-import warnings
+from merfish3danalysis.viewer.fused import view_fused_channels as view_fused
 
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.simplefilter("ignore", category=FutureWarning)
-import multiprocessing as mp
-from pathlib import Path
-
-import napari
-from cmap import Colormap
-
-mp.set_start_method("spawn", force=True)
-
-
-def view_fused(root_path: Path) -> None:
-    """Load and view all individual channels using neuroglancer.
-
-    Parameters
-    ----------
-    root_path: Path
-        path to experiment
-    """
-    # generate 17 colormaps
-    colormaps = [
-        Colormap("cmap:white").to_napari(),
-        Colormap("cmap:magenta").to_napari(),
-        Colormap("cmap:cyan").to_napari(),
-        Colormap("cmap:red").to_napari(),
-        Colormap("cmap:yellow").to_napari(),
-        Colormap("cmasher:cosmic").to_napari(),
-        Colormap("cmasher:dusk").to_napari(),
-        Colormap("cmasher:eclipse").to_napari(),
-        Colormap("cmasher:emerald").to_napari(),
-        Colormap("chrisluts:BOP_Orange").to_napari(),
-        Colormap("cmasher:sapphire").to_napari(),
-        Colormap("chrisluts:BOP_Blue").to_napari(),
-        Colormap("cmap:magenta").to_napari(),
-        Colormap("cmap:cyan").to_napari(),
-        Colormap("cmap:red").to_napari(),
-        Colormap("cmap:yellow").to_napari(),
-        Colormap("cmasher:cosmic").to_napari(),
-    ]
-
-    # find all ome-zarr paths
-    ome_path = root_path / Path("fused")
-    omezarr_paths = sorted(ome_path.glob("*.ome.zarr"))
-
-    # populate napari viewer with all channels
-    viewer = napari.Viewer()
-    for ch_idx, omezarr_path in enumerate(omezarr_paths):
-        # use different contrast limits for fiducial vs FISH channels
-        if ch_idx == 0:
-            contrast_limits = [0, 1000]
-        else:
-            contrast_limits = [10, 500]
-        viewer.open(
-            str(omezarr_path),
-            plugin="napari-ome-zarr",
-            blending="additive",
-            colormap=colormaps[ch_idx],
-            contrast_limits=contrast_limits,
-        )
-    napari.run()
-
+app = typer.Typer(pretty_exceptions_enable=False)
+app.command()(view_fused)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
-    view_fused(root_path)
+    app()

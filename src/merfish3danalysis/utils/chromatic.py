@@ -11,15 +11,8 @@ import pandas as pd
 from scipy.spatial import cKDTree
 from tifffile import TiffFile, imread
 
-UFISH_MODEL_ALIASES = {
-    "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
-    "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
-    "simfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "smfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "deepspot": "finetune_models/v1.0.1-deepspot_model.onnx",
-    "exseq": "finetune_models/v1.0.1-ExSeq_model.onnx",
-}
-DEFAULT_UFISH_MODEL = "simfish"
+from merfish3danalysis.utils.spacing import round_spacing_um
+from merfish3danalysis.utils.ufish import load_ufish_model
 
 
 def parse_csv_floats(value: str | Sequence[float] | None) -> tuple[float, ...] | None:
@@ -123,7 +116,7 @@ def _parse_ome_metadata(
     size_x = _xml_float(pixels.attrib.get("PhysicalSizeX"))
     spacing = None
     if size_z is not None and size_y is not None and size_x is not None:
-        spacing = (float(size_z), float(size_y), float(size_x))
+        spacing = tuple(round_spacing_um((size_z, size_y, size_x)))
 
     wavelengths = []
     names = []
@@ -214,7 +207,13 @@ def load_bead_channel_stack(
             f"Expected CZYX stack after axis normalization, got {stack.shape}."
         )
 
-    spacing = tuple(float(v) for v in (voxel_size_zyx_um or ome_spacing or (1, 1, 1)))
+    spacing = tuple(
+        round_spacing_um(
+            voxel_size_zyx_um
+            if voxel_size_zyx_um is not None
+            else ome_spacing or (1, 1, 1)
+        )
+    )
     if len(spacing) != 3:
         raise ValueError("voxel_size_zyx_um must contain three values.")
 
@@ -240,56 +239,6 @@ def load_bead_channel_stack(
         "channel_names": channel_names,
     }
     return stack.astype(np.float32, copy=False), metadata
-
-
-def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str:
-    """
-    Resolve a U-FISH model alias or local path.
-
-    Parameters
-    ----------
-    model : str or pathlib.Path or None
-        Model alias or path.
-
-    Returns
-    -------
-    pathlib.Path or str
-        Local path or U-FISH weights filename.
-    """
-    if model is None:
-        model = DEFAULT_UFISH_MODEL
-    model_str = str(model).strip() or DEFAULT_UFISH_MODEL
-    model_path = Path(model_str).expanduser()
-    if model_path.exists():
-        return model_path
-    weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
-    local_path = Path.home() / ".ufish" / weights_file
-    if local_path.exists():
-        return local_path
-    return weights_file
-
-
-def _load_ufish_model(ufish: Any, model: str | Path | None) -> None:
-    """
-    Load U-FISH weights.
-
-    Parameters
-    ----------
-    ufish : Any
-        U-FISH object.
-    model : str or pathlib.Path or None
-        Model alias or path.
-
-    Returns
-    -------
-    None
-        Model weights are loaded in place.
-    """
-    weights = _resolve_ufish_weights_path(model)
-    if isinstance(weights, Path):
-        ufish.load_weights_from_path(weights)
-    else:
-        ufish.load_weights(weights_file=weights)
 
 
 def _roi_sum(
@@ -353,7 +302,7 @@ def detect_bead_centroids(
     from ufish.api import UFish
 
     ufish = UFish(device=f"cuda:{int(gpu_id)}")
-    _load_ufish_model(ufish, ufish_model)
+    load_ufish_model(ufish, ufish_model)
     loc, _prediction = ufish.predict(
         image_zyx.astype(np.float32, copy=False),
         axes="zyx",
@@ -456,7 +405,7 @@ def generate_channel_psfs(
     """
     from psfmodels import make_psf
 
-    spacing = tuple(float(v) for v in voxel_size_zyx_um)
+    spacing = tuple(round_spacing_um(voxel_size_zyx_um))
     if len(spacing) != 3:
         raise ValueError("voxel_size_zyx_um must contain three values.")
 
@@ -637,7 +586,7 @@ def estimate_chromatic_affines(
     dict[str, Any]
         Calibration metadata with one affine per channel.
     """
-    spacing = np.asarray(voxel_size_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(voxel_size_zyx_um).astype(np.float32)
     wavelengths = np.asarray(wavelengths_um, dtype=np.float32)
     reference_index = int(np.argmin(wavelengths))
     if channel_names is None:
@@ -707,7 +656,7 @@ def estimate_chromatic_affines(
         "reference_channel_index": reference_index,
         "reference_channel_name": str(channel_names[reference_index]),
         "reference_wavelength_um": float(wavelengths[reference_index]),
-        "voxel_size_zyx_um": [float(v) for v in spacing],
+        "voxel_size_zyx_um": round_spacing_um(spacing).tolist(),
         "channels": channels,
     }
 

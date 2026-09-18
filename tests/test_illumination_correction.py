@@ -15,6 +15,7 @@ class _FutureImage:
         return self._image
 
 
+@pytest.mark.unit
 def test_estimate_shading_uses_half_resolution_basic_working_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

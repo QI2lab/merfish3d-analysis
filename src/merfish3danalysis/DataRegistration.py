@@ -29,6 +29,9 @@ History:
 
 import multiprocessing as mp
 
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.ufish import load_ufish_model
+
 mp.set_start_method("spawn", force=True)
 import os
 import warnings
@@ -49,7 +52,6 @@ import timeit
 import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,16 +59,7 @@ import numpy as np
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.sofima_registration import SofimaRegistrationConfig
-
-UFISH_MODEL_ALIASES = {
-    "merfish": "finetune_models/v1.0.1-MERFISH_model.onnx",
-    "seqfish": "finetune_models/v1.0.1-seqFISH_model.onnx",
-    "simfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "smfish": "finetune_models/v1.0.1-simfish_model.onnx",
-    "deepspot": "finetune_models/v1.0.1-deepspot_model.onnx",
-    "exseq": "finetune_models/v1.0.1-ExSeq_model.onnx",
-}
-DEFAULT_UFISH_MODEL = "simfish"
+from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
 
 
 @dataclass(frozen=True)
@@ -131,6 +124,24 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
 
 
+def _cleanup_fusion_worker_semaphore(name: str) -> None:
+    """Unregister a worker semaphore even if another cleanup already removed it.
+
+    Python 3.12's SemLock cleanup skips unregistering when sem_unlink raises
+    FileNotFoundError. That leaves a stale entry in the standard resource
+    tracker, producing another missing-semaphore warning at shutdown. Only
+    ENOENT is harmless here; other unlink errors must remain visible and tracked.
+    """
+    from multiprocessing.resource_tracker import unregister
+    from multiprocessing.synchronize import sem_unlink
+
+    try:
+        sem_unlink(name)
+    except FileNotFoundError:
+        pass
+    unregister(name, "semaphore")
+
+
 def _configure_loky_fusion_worker() -> None:
     """
     Configure a spawned Loky process for long-running fusion work.
@@ -138,7 +149,8 @@ def _configure_loky_fusion_worker() -> None:
     Returns
     -------
     None
-        Loky's process-level RSS-growth recycler is disabled in place.
+        Disable Loky's process-level RSS-growth recycler and make standard
+        multiprocessing semaphore cleanup tolerate an already-removed name.
 
     Notes
     -----
@@ -148,6 +160,13 @@ def _configure_loky_fusion_worker() -> None:
     from joblib.externals.loky import process_executor
 
     process_executor._USE_PSUTIL = False
+    if os.name == "posix":
+        from multiprocessing.synchronize import SemLock
+
+        # This initializer runs in the child only. Keep Loky's own tracker and
+        # synchronization primitives unchanged; this handles stdlib locks that
+        # libraries create inside fusion workers.
+        SemLock._cleanup = staticmethod(_cleanup_fusion_worker_semaphore)
 
 
 def _direct_zarr_fusion_kwargs(
@@ -250,71 +269,6 @@ def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_id))
     return 0
-
-
-def _resolve_ufish_weights_path(model: str | Path | None) -> Path | str | None:
-    """
-    Resolve a U-FISH model alias or path without requiring U-FISH imports.
-
-    Parameters
-    ----------
-    model : str | Path | None
-        U-FISH model alias, weights filename, local path, or None to use the
-        default model.
-
-    Returns
-    -------
-    Path | str | None
-        Existing local path when one is found; otherwise a U-FISH weights file
-        name accepted by ``UFish.load_weights``.
-    """
-    if model is None:
-        model = DEFAULT_UFISH_MODEL
-
-    model_str = str(model).strip()
-    if not model_str:
-        model_str = DEFAULT_UFISH_MODEL
-
-    model_path = Path(model_str).expanduser()
-    if model_path.exists():
-        return model_path
-
-    weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
-    if weights_file is None:
-        return None
-
-    local_path = Path.home() / ".ufish" / weights_file
-    if local_path.exists():
-        return local_path
-
-    return weights_file
-
-
-def _load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
-    """
-    Load configured U-FISH weights from an alias, local path, or weights file.
-
-    Parameters
-    ----------
-    ufish : Any
-        U-FISH instance.
-    model : str | Path | None
-        U-FISH model alias, weights filename, local path, or None to use the
-        default model.
-
-    Returns
-    -------
-    None
-        The weights are loaded into ``ufish`` in place.
-    """
-    weights = _resolve_ufish_weights_path(model)
-    if weights is None:
-        raise ValueError("Resolved U-FISH weights cannot be None.")
-
-    if isinstance(weights, Path):
-        ufish.load_weights_from_path(weights)
-    else:
-        ufish.load_weights(weights_file=weights)
 
 
 def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
@@ -509,11 +463,16 @@ def _load_deconvolve_fiducial_round(
     )
     start_time = timeit.default_timer()
     if dr._decon_fiducial:
+        metadata = dr._datastore.load_image_metadata(
+            dr._datastore.local_image_path(
+                dr._tile_id, "corrected_data", round=round_id
+            )
+        )
         decon = _run_chunked_rlgc_remembering_crop(
             dr=dr,
             chunked_rlgc=chunked_rlgc,
             image=raw,
-            psf=_resolve_psf(dr._psfs, 0),
+            psf=_resolve_psf(dr._psfs, metadata["psf_idx"]),
             gpu_id=gpu_id,
             release_memory=True,
         )
@@ -801,20 +760,10 @@ def _local_fiducial_path(
         Path to ``decon_data.ome.zarr`` when present, otherwise
         ``corrected_data.ome.zarr``.
     """
-    decon_path = datastore._image_store_path(
-        datastore._fiducial_root_path
-        / Path(tile_id)
-        / Path(round_id)
-        / Path("decon_data")
-    )
+    decon_path = datastore.local_image_path(tile_id, "decon_data", round=round_id)
     if decon_path.exists():
         return decon_path
-    return datastore._image_store_path(
-        datastore._fiducial_root_path
-        / Path(tile_id)
-        / Path(round_id)
-        / Path("corrected_data")
-    )
+    return datastore.local_image_path(tile_id, "corrected_data", round=round_id)
 
 
 def _read_fiducial_sim(
@@ -823,8 +772,6 @@ def _read_fiducial_sim(
     translation: dict[str, float],
     affine_zyx_px: Any,
     transform_key: str,
-    zarr_module: Any,
-    si_utils: Any,
 ) -> Any:
     """
     Read one native fiducial OME-Zarr as a SpatialImage.
@@ -841,10 +788,6 @@ def _read_fiducial_sim(
         Camera-to-stage affine transform loaded from datastore metadata.
     transform_key : str
         Transform key used for stage metadata in the returned SpatialImage.
-    zarr_module : Any
-        Imported ``zarr`` module.
-    si_utils : Any
-        ``multiview_stitcher.spatial_image_utils`` module.
 
     Returns
     -------
@@ -852,7 +795,11 @@ def _read_fiducial_sim(
         SpatialImage with datastore stage metadata attached under
         ``stage_metadata``.
     """
-    array = zarr_module.open_array(input_path / Path("0"), mode="r")
+    import zarr
+    from multiview_stitcher import spatial_image_utils as si_utils
+    from yaozarrs import open_group
+
+    array = open_group(input_path)["0"].to_zarr_python()
     dims = _zarr_array_dims(array)
 
     metadata = array.metadata.to_dict()
@@ -862,13 +809,14 @@ def _read_fiducial_sim(
         # add singleton t/c axes without producing rank-inconsistent virtual
         # Zarr metadata. The source store and its metadata are never modified.
         metadata.pop("dimension_names")
-        array = zarr_module.Array(
-            zarr_module.AsyncArray(
+        array = zarr.Array(
+            zarr.AsyncArray(
                 metadata=metadata,
                 store_path=array.store_path,
             )
         )
 
+    scale = {axis: round_pixel_size_um(value) for axis, value in scale.items()}
     return si_utils.get_sim_from_array(
         array,
         dims=dims,
@@ -992,7 +940,6 @@ def _write_zarr_max_projection_tiff(
     array: Any,
     filename_path: Path,
     spacing_zyx_um: np.ndarray,
-    TiffWriter: Any,
     tile_shape_yx: tuple[int, int] = (1024, 1024),
 ) -> None:
     """
@@ -1006,8 +953,6 @@ def _write_zarr_max_projection_tiff(
         Destination OME-TIFF path.
     spacing_zyx_um : numpy.ndarray
         Physical voxel spacing in micrometers and Z, Y, X order.
-    TiffWriter : Any
-        ``tifffile.TiffWriter`` class or a compatible test double.
     tile_shape_yx : tuple[int, int], default=(1024, 1024)
         TIFF tile height and width.
 
@@ -1016,6 +961,8 @@ def _write_zarr_max_projection_tiff(
     None
         The projection is streamed to ``filename_path``.
     """
+    from tifffile import TiffWriter
+
     dims = _zarr_array_dims(array)
     axis = {dim: dims.index(dim) for dim in dims}
     shape_yx = (int(array.shape[axis["y"]]), int(array.shape[axis["x"]]))
@@ -1029,8 +976,8 @@ def _write_zarr_max_projection_tiff(
             dtype=array.dtype,
             tile=tile_shape_yx,
             resolution=(
-                1e4 / float(spacing_zyx_um[2]),
-                1e4 / float(spacing_zyx_um[1]),
+                1e4 / round_pixel_size_um(spacing_zyx_um[2]),
+                1e4 / round_pixel_size_um(spacing_zyx_um[1]),
             ),
             compression="zlib",
             compressionargs={"level": 8},
@@ -1040,9 +987,9 @@ def _write_zarr_max_projection_tiff(
             metadata={
                 "axes": "YX",
                 "SignificantBits": int(np.dtype(array.dtype).itemsize * 8),
-                "PhysicalSizeX": float(spacing_zyx_um[2]),
+                "PhysicalSizeX": round_pixel_size_um(spacing_zyx_um[2]),
                 "PhysicalSizeXUnit": "µm",
-                "PhysicalSizeY": float(spacing_zyx_um[1]),
+                "PhysicalSizeY": round_pixel_size_um(spacing_zyx_um[1]),
                 "PhysicalSizeYUnit": "µm",
             },
         )
@@ -1087,14 +1034,6 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     spacing_zyx_um = dr._datastore.voxel_size_zyx_um
     for bit_id in bit_list:
         r_idx = dr._datastore.load_local_round_linker(tile=dr._tile_id, bit=bit_id) - 1
-        ex_wl, _em_wl = dr._datastore.load_local_wavelengths_um(
-            tile=dr._tile_id, bit=bit_id
-        )
-        if ex_wl < 0.600:
-            psf_idx = 1
-        else:
-            psf_idx = 2
-
         decon_on_disk = dr._has_valid_deconvolved_readout_image(bit_id=bit_id)
         feature_predictor_on_disk = dr._has_valid_feature_predictor_outputs(
             bit_id=bit_id
@@ -1127,11 +1066,16 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             # deconvolution
             if dr._decon_readout:
                 start_time = timeit.default_timer()
+                metadata = dr._datastore.load_image_metadata(
+                    dr._datastore.local_image_path(
+                        dr._tile_id, "corrected_data", bit=bit_id
+                    )
+                )
                 predictor_input_image = _run_chunked_rlgc_remembering_crop(
                     dr=dr,
                     chunked_rlgc=chunked_rlgc,
                     image=corrected_image,
-                    psf=_resolve_psf(dr._psfs, psf_idx),
+                    psf=_resolve_psf(dr._psfs, metadata["psf_idx"]),
                     gpu_id=local_gpu_id,
                     release_memory=True,
                 )
@@ -1155,7 +1099,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 predictor_input_image = corrected_image
 
             ufish = UFish(device=f"cuda:{local_gpu_id}")
-            _load_ufish_model(ufish, dr._ufish_model)
+            load_ufish_model(ufish, dr._ufish_model)
             start_time = timeit.default_timer()
             feature_predictor_loc, feature_predictor_data = ufish.predict(
                 predictor_input_image, axes="zyx", blend_3d=False, batch_size=1
@@ -1212,9 +1156,9 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
                 zmin = max(0, z - rz // 2)
                 ymin = max(0, y - ry // 2)
                 xmin = max(0, x - rx // 2)
-                zmax = min(image.shape[0], zmin + rz)
-                ymax = min(image.shape[1], ymin + ry)
-                xmax = min(image.shape[2], xmin + rx)
+                zmax = min(image.shape[0], z - rz // 2 + rz)
+                ymax = min(image.shape[1], y - ry // 2 + ry)
+                xmax = min(image.shape[2], x - rx // 2 + rx)
                 roi = image[
                     int(zmin) : int(zmax), int(ymin) : int(ymax), int(xmin) : int(xmax)
                 ]
@@ -1290,8 +1234,8 @@ class DataRegistration:
         Crop size for deconvolution applied to both y and x dimensions.
     ufish_model: str or pathlib.Path or None, default None
         U-FISH model to use for feature prediction. If omitted or ``None``, use
-        the package default ``smfish`` weights. Known aliases include
-        ``smfish``, the legacy alias ``simfish``, ``merfish``, ``seqfish``,
+        the package default ``simfish`` weights. Known aliases include
+        ``simfish``, ``merfish``, ``seqfish``,
         ``deepspot``, and ``exseq``. A local ``.onnx``/``.pth`` path or
         HuggingFace weights filename can also be supplied.
     verbose : int, default 1
@@ -1411,8 +1355,8 @@ class DataRegistration:
             Tile id
         """
         if isinstance(value, int):
-            if value < 0 or value > self._datastore.num_tiles:
-                print("Set value index >=0 and <=" + str(self._datastore.num_tiles))
+            if value < 0 or value >= self._datastore.num_tiles:
+                print("Set value index >=0 and <" + str(self._datastore.num_tiles))
                 return None
             else:
                 self._tile_id = self._datastore.tile_ids[value]
@@ -1474,30 +1418,30 @@ class DataRegistration:
         bit_id: str | None = None,
     ) -> Path:
         """
-        Entity root.
+        Return the native tile/round or tile/bit image directory.
 
         Parameters
         ----------
         tile_id : str
-            Function argument.
+            Stored tile identifier; None selects the current tile.
         round_id : str | None
-            Function argument.
+            Stored fiducial round identifier.
         bit_id : str | None
-            Function argument.
+            Stored readout bit identifier.
 
         Returns
         -------
         Path
-            Function result.
+            Native tile/round or tile/bit directory containing the image stores.
         """
         if (round_id is None and bit_id is None) or (
             round_id is not None and bit_id is not None
         ):
             raise ValueError("Provide either round_id or bit_id, but not both.")
 
-        if round_id is not None:
-            return self._datastore._fiducial_root_path / Path(tile_id) / Path(round_id)
-        return self._datastore._readouts_root_path / Path(tile_id) / Path(bit_id)
+        return self._datastore.local_image_path(
+            tile_id, "corrected_data", round=round_id, bit=bit_id
+        ).parent
 
     def _has_valid_deconvolved_fiducial_image(
         self,
@@ -1510,9 +1454,9 @@ class DataRegistration:
         Parameters
         ----------
         tile_id : str | None
-            Function argument.
+            Stored tile identifier; None selects the current tile.
         round_id : str | None
-            Function argument.
+            Stored fiducial round identifier.
 
         Returns
         -------
@@ -1524,10 +1468,10 @@ class DataRegistration:
 
         tile_id = self._tile_id if tile_id is None else tile_id
         entity_root = self._entity_root(tile_id=tile_id, round_id=round_id)
-        corrected_shape = self._datastore._image_shape(
+        corrected_shape = self._datastore.image_shape(
             entity_root / Path("corrected_data")
         )
-        decon_shape = self._datastore._image_shape(entity_root / Path("decon_data"))
+        decon_shape = self._datastore.image_shape(entity_root / Path("decon_data"))
         return corrected_shape is not None and decon_shape == corrected_shape
 
     def _has_valid_deconvolved_readout_image(
@@ -1555,10 +1499,10 @@ class DataRegistration:
             raise ValueError("bit_id is required for readout images.")
 
         entity_root = self._entity_root(tile_id=tile_id, bit_id=bit_id)
-        corrected_shape = self._datastore._image_shape(
+        corrected_shape = self._datastore.image_shape(
             entity_root / Path("corrected_data")
         )
-        readout_shape = self._datastore._image_shape(entity_root / Path("decon_data"))
+        readout_shape = self._datastore.image_shape(entity_root / Path("decon_data"))
         return corrected_shape is not None and readout_shape == corrected_shape
 
     def _has_valid_feature_predictor_outputs(
@@ -1572,31 +1516,27 @@ class DataRegistration:
         Parameters
         ----------
         tile_id : str | None
-            Function argument.
+            Stored tile identifier; None selects the current tile.
         bit_id : str | None
-            Function argument.
+            Stored readout bit identifier.
 
         Returns
         -------
         bool
-            Function result.
+            True when predictor and corrected image shapes match and spot localizations exist.
         """
         tile_id = self._tile_id if tile_id is None else tile_id
         if bit_id is None:
             raise ValueError("bit_id is required for feature predictor outputs.")
 
         entity_root = self._entity_root(tile_id=tile_id, bit_id=bit_id)
-        corrected_shape = self._datastore._image_shape(
+        corrected_shape = self._datastore.image_shape(
             entity_root / Path("corrected_data")
         )
-        feature_shape = self._datastore._image_shape(
+        feature_shape = self._datastore.image_shape(
             entity_root / Path(f"{self._datastore.feature_predictor_folder_name}_data")
         )
-        spots_path = (
-            self._datastore._feature_predictor_localizations_root_path
-            / Path(tile_id)
-            / Path(bit_id + ".parquet")
-        )
+        spots_path = self._datastore.local_feature_predictor_spots_path(tile_id, bit_id)
         return (
             corrected_shape is not None
             and feature_shape == corrected_shape
@@ -1622,7 +1562,7 @@ class DataRegistration:
         Returns
         -------
         bool
-            Function result.
+            True when every requested image and local transform is already present.
         """
         if self._decon_fiducial:
             for round_id in self._round_ids:
@@ -1642,10 +1582,22 @@ class DataRegistration:
             ):
                 return False
 
+        if self._perform_deformable_registration:
+            for round_id in self._round_ids[1:]:
+                field = self._datastore.load_local_sofima_flow_field(
+                    tile=tile_id, round=round_id, return_future=None
+                )
+                if field is None or field[0] is None:
+                    return False
+
         if not process_readouts:
             return True
 
         for bit_id in self._bit_ids:
+            if self._decon_readout and not self._has_valid_deconvolved_readout_image(
+                tile_id=tile_id, bit_id=bit_id
+            ):
+                return False
             if not self._has_valid_feature_predictor_outputs(
                 tile_id=tile_id, bit_id=bit_id
             ):
@@ -1664,11 +1616,6 @@ class DataRegistration:
             Set False to recompute only the complete fiducial registration
             chain: local affine transforms, optional SOFIMA fields, global
             transforms, and global fiducial fusion.
-
-        Returns
-        -------
-        None
-            Function result.
         """
         tile_ids = list(self._datastore.tile_ids)
         start_idx = 0
@@ -1691,9 +1638,7 @@ class DataRegistration:
                         time_stamp(),
                         "All tiles already have complete preprocessing outputs.",
                     )
-                return
-
-            if start_idx > 0:
+            elif start_idx > 0:
                 if self._verbose >= 1:
                     print(
                         time_stamp(),
@@ -1718,6 +1663,8 @@ class DataRegistration:
             Tile id
         """
         self.tile_id = tile_id
+        if tile_id not in self._tile_ids and tile_id not in range(len(self._tile_ids)):
+            return
         self._generate_registrations()
         self._apply_registration_to_bits()
 
@@ -1734,39 +1681,40 @@ class DataRegistration:
             Tile identifier.
         """
         self.tile_id = tile_id
+        if tile_id not in self._tile_ids and tile_id not in range(len(self._tile_ids)):
+            return
         self._apply_registration_to_bits()
 
-    def _load_global_fiducial_msims(
+    def load_global_fiducial_views(
         self,
         *,
-        zarr_module: Any,
-        msi_utils: Any,
-        si_utils: Any,
-        use_stored_global_transforms: bool,
+        use_stored_global_transforms: bool = False,
     ) -> list[Any]:
-        """
-        Load native reference fiducials as multiscale images.
+        """Load native fiducial views with stage or stored global transforms.
 
         Parameters
         ----------
-        zarr_module : Any
-            Imported ``zarr`` module.
-        msi_utils : Any
-            ``multiview_stitcher.msi_utils`` module.
-        si_utils : Any
-            ``multiview_stitcher.spatial_image_utils`` module.
-        use_stored_global_transforms : bool
-            If True, attach stored ``global_registered`` transforms instead of
-            preparing images for a fresh global registration.
+        use_stored_global_transforms : bool, default False
+            Attach saved global transforms instead of only stage metadata.
 
         Returns
         -------
-        list[Any]
-            MultiscaleSpatialImages for global registration or fusion.
+        list
+            Multiview-stitcher images in datastore tile order. Pixels remain lazy.
         """
+        from multiview_stitcher import msi_utils, param_utils
+
         stage_transform_key = "stage_metadata"
         global_transform_key = "global_registered"
-        voxel_zyx_um = self._datastore.voxel_size_zyx_um
+        voxel_zyx_um = round_spacing_um(self._datastore.voxel_size_zyx_um)
+        if (
+            voxel_zyx_um.shape != (3,)
+            or not np.all(np.isfinite(voxel_zyx_um))
+            or np.any(voxel_zyx_um <= 0)
+        ):
+            raise ValueError(
+                "Global registration requires three positive finite voxel sizes in Z, Y, X order."
+            )
         scale = {
             "z": float(voxel_zyx_um[0]),
             "y": float(voxel_zyx_um[1]),
@@ -1803,8 +1751,6 @@ class DataRegistration:
                 translation=tile_grid_positions,
                 affine_zyx_px=affine_zyx_px,
                 transform_key=stage_transform_key,
-                zarr_module=zarr_module,
-                si_utils=si_utils,
             )
             msim = msi_utils.get_msim_from_sim(sim, scale_factors=[])
 
@@ -1819,8 +1765,11 @@ class DataRegistration:
                     )
                 msi_utils.set_affine_transform(
                     msim,
-                    np.asarray(affine_zyx_um, dtype=np.float32)[None, ...],
+                    param_utils.affine_to_xaffine(
+                        np.asarray(affine_zyx_um, dtype=np.float32)
+                    ),
                     transform_key=global_transform_key,
+                    base_transform_key=stage_transform_key,
                 )
 
             msims.append(msim)
@@ -1833,51 +1782,38 @@ class DataRegistration:
 
         return msims
 
-    def _fuse_global_registered_msims(
+    def fuse_global_fiducial_views(
         self,
-        *,
         msims: list[Any],
-        create_max_proj_tiff: bool,
-        fusion: Any,
-        misc_utils: Any,
-        msi_utils: Any,
-        si_utils: Any,
-        TiffWriter: Any,
-        zarr_module: Any,
+        *,
+        create_max_proj_tiff: bool = True,
     ) -> None:
-        """
-        Fuse globally registered fiducial views and write datastore metadata.
+        """Write registered views on the downsampled fiducial segmentation grid.
 
         Parameters
         ----------
-        msims : list[Any]
-            MultiscaleSpatialImages with ``global_registered`` transforms.
-        create_max_proj_tiff : bool
-            If True, write a fused fiducial max-projection TIFF.
-        fusion : Any
-            ``multiview_stitcher.fusion`` module.
-        misc_utils : Any
-            ``multiview_stitcher.misc_utils`` module.
-        msi_utils : Any
-            ``multiview_stitcher.msi_utils`` module.
-        si_utils : Any
-            ``multiview_stitcher.spatial_image_utils`` module.
-        TiffWriter : Any
-            ``tifffile.TiffWriter`` class.
-        zarr_module : Any
-            Imported ``zarr`` module.
-
-        Returns
-        -------
-        None
-            Fused OME-Zarr, metadata, datastore state, and optional TIFF are
-            written to disk.
+        msims : list
+            Multiview-stitcher images carrying global_registered transforms.
+        create_max_proj_tiff : bool, default True
+            Also write the maximum-Z OME-TIFF used by Cellpose.
         """
+        from multiview_stitcher import fusion, misc_utils, msi_utils
+        from multiview_stitcher import spatial_image_utils as si_utils
+        from yaozarrs import open_group
+
         global_transform_key = "global_registered"
-        output_zarr_path = self._datastore._image_store_path(
-            self._datastore._fused_root_path
-            / Path(f"fused_{self._datastore.fiducial_folder_name}_zyx")
-        )
+        output_zarr_path = self._datastore.fused_image_path()
+        # downsample Y/X toward Z spacing for segmentation and ROI coordinates
+        voxel_zyx_um = round_spacing_um(self._datastore.voxel_size_zyx_um)
+        output_spacing = {
+            "z": voxel_zyx_um[0],
+            "y": round_pixel_size_um(
+                voxel_zyx_um[1] * np.round(voxel_zyx_um[0] / voxel_zyx_um[1], 1)
+            ),
+            "x": round_pixel_size_um(
+                voxel_zyx_um[2] * np.round(voxel_zyx_um[0] / voxel_zyx_um[2], 1)
+            ),
+        }
 
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial fusion.")
@@ -1885,6 +1821,7 @@ class DataRegistration:
         fused_msim = fusion.fuse(
             images=msims,
             transform_key=global_transform_key,
+            output_spacing=output_spacing,
             output_zarr_url=str(output_zarr_path),
             **_direct_zarr_fusion_kwargs(misc_utils=misc_utils),
         )
@@ -1902,14 +1839,16 @@ class DataRegistration:
         ).data.squeeze()
         fused_scale0 = msi_utils.get_sim_from_msim(fused_msim)
         origin = si_utils.get_origin_from_sim(fused_scale0, asarray=True)
-        spacing = si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+        spacing = round_spacing_um(
+            si_utils.get_spacing_from_sim(fused_scale0, asarray=True)
+        )
 
-        qi2labDataStore._write_extra_attributes(
+        qi2labDataStore.save_image_metadata(
             image_path=output_zarr_path,
             extra_attributes={
                 "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
                 "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
-                "spacing_zyx_um": np.asarray(spacing, dtype=np.float32).tolist(),
+                "spacing_zyx_um": round_spacing_um(spacing).tolist(),
             },
             merge=True,
         )
@@ -1923,28 +1862,20 @@ class DataRegistration:
         del fused_msim
         gc.collect()
 
-        datastore_state = self._datastore.datastore_state
-        datastore_state.update({"GlobalRegistered": True, "Fused": True})
-        self._datastore.datastore_state = datastore_state
-
         if create_max_proj_tiff:
             projection_start_time = timeit.default_timer()
             cellpose_path = (
-                self._datastore._datastore_path
-                / Path("segmentation")
-                / Path("cellpose")
+                self._datastore.datastore_path / Path("segmentation") / Path("cellpose")
             )
             cellpose_path.mkdir(exist_ok=True)
             filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
-            fused_array = zarr_module.open_array(
-                output_zarr_path / Path("0"),
-                mode="r",
-            )
+            # The TIFF tile iterator requires zarr-python slicing and chunk
+            # metadata; yaozarrs opens the store and supplies that adapter.
+            fused_array = open_group(output_zarr_path)["0"].to_zarr_python()
             _write_zarr_max_projection_tiff(
                 array=fused_array,
                 filename_path=filename_path,
                 spacing_zyx_um=np.asarray(spacing, dtype=np.float32),
-                TiffWriter=TiffWriter,
             )
             del fused_array
             if self._verbose >= 1:
@@ -1953,6 +1884,10 @@ class DataRegistration:
                     "Finished fused max-projection TIFF "
                     f"elapsed_s={timeit.default_timer() - projection_start_time:.2f}",
                 )
+
+        datastore_state = self._datastore.datastore_state.copy()
+        datastore_state.update({"GlobalRegistered": True, "Fused": True})
+        self._datastore.datastore_state = datastore_state
 
         if self._verbose >= 1:
             print(
@@ -1977,37 +1912,43 @@ class DataRegistration:
         ----------
         create_max_proj_tiff : bool, default=True
             If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
-            from the full-resolution fused OME-Zarr.
+            from the downsampled fused fiducial OME-Zarr, retaining its spacing.
 
         Returns
         -------
         None
             Global transforms, fused fiducial OME-Zarr, datastore state, and
             optional max projection are written to the datastore.
+
+        Notes
+        -----
+        For one tile, save its stage origin and an identity registration
+        correction without a pairwise fit. Use ``fuse_global_registered`` to also produce its mosaic.
         """
-        import zarr
         from dask import config as dask_config
         from dask.diagnostics import ProgressBar
         from multiview_stitcher import (
-            fusion,
-            misc_utils,
             msi_utils,
+            param_utils,
             registration,
         )
         from multiview_stitcher import spatial_image_utils as si_utils
-        from tifffile import TiffWriter
 
-        if len(self._tile_ids) <= 1:
+        if not self._tile_ids:
+            raise ValueError("Global registration requires at least one tile.")
+        if len(self._tile_ids) == 1:
+            origin, _camera_to_stage = self._datastore.load_local_stage_position_zyx_um(
+                self._tile_ids[0], self._round_ids[0]
+            )
             self._datastore.save_global_coord_xforms_um(
                 affine_zyx_um=np.eye(4, dtype=np.float32),
-                origin_zyx_um=np.zeros(3, dtype=np.float32),
-                spacing_zyx_um=np.asarray(
-                    self._datastore.voxel_size_zyx_um,
-                    dtype=np.float32,
-                ),
+                origin_zyx_um=origin,
+                spacing_zyx_um=round_spacing_um(self._datastore.voxel_size_zyx_um),
                 tile=self._tile_ids[0],
             )
-            self._datastore.datastore_state = {"GlobalRegistered": True}
+            state = self._datastore.datastore_state.copy()
+            state["GlobalRegistered"] = True
+            self._datastore.datastore_state = state
             if self._verbose >= 1:
                 print(
                     time_stamp(),
@@ -2018,10 +1959,7 @@ class DataRegistration:
         if self._verbose >= 1:
             print(time_stamp(), "Starting global fiducial registration.")
 
-        msims = self._load_global_fiducial_msims(
-            zarr_module=zarr,
-            msi_utils=msi_utils,
-            si_utils=si_utils,
+        msims = self.load_global_fiducial_views(
             use_stored_global_transforms=False,
         )
 
@@ -2078,20 +2016,23 @@ class DataRegistration:
             )
 
         for tile_idx, (msim, transform) in enumerate(
-            zip(msims, global_transforms, strict=False)
+            zip(msims, global_transforms, strict=True)
         ):
-            affine = np.asarray(
-                transform.data if hasattr(transform, "data") else transform
-            )
-            affine = np.squeeze(affine)
+            affine = np.asarray(transform).squeeze()
             if registration_config.affine_round_decimals is not None:
                 affine = np.round(
                     affine,
                     int(registration_config.affine_round_decimals),
                 )
+            msi_utils.set_affine_transform(
+                msim,
+                param_utils.affine_to_xaffine(affine),
+                transform_key=global_transform_key,
+                base_transform_key=stage_transform_key,
+            )
             sim = msi_utils.get_sim_from_msim(msim)
             origin = si_utils.get_origin_from_sim(sim, asarray=True)
-            spacing = si_utils.get_spacing_from_sim(sim, asarray=True)
+            spacing = round_spacing_um(si_utils.get_spacing_from_sim(sim, asarray=True))
             self._datastore.save_global_coord_xforms_um(
                 affine_zyx_um=affine,
                 origin_zyx_um=origin,
@@ -2099,15 +2040,9 @@ class DataRegistration:
                 tile=tile_idx,
             )
 
-        self._fuse_global_registered_msims(
+        self.fuse_global_fiducial_views(
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
-            fusion=fusion,
-            misc_utils=misc_utils,
-            msi_utils=msi_utils,
-            si_utils=si_utils,
-            TiffWriter=TiffWriter,
-            zarr_module=zarr,
         )
 
         if self._verbose >= 1:
@@ -2129,7 +2064,7 @@ class DataRegistration:
         ----------
         create_max_proj_tiff : bool, default=True
             If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
-            from the full-resolution fused OME-Zarr.
+            from the downsampled fused fiducial OME-Zarr, retaining its spacing.
 
         Returns
         -------
@@ -2145,12 +2080,8 @@ class DataRegistration:
                     "registration before fusion.",
                 )
             self.global_register(create_max_proj_tiff=create_max_proj_tiff)
-            return
-
-        import zarr
-        from multiview_stitcher import fusion, misc_utils, msi_utils
-        from multiview_stitcher import spatial_image_utils as si_utils
-        from tifffile import TiffWriter
+            if len(self._tile_ids) != 1:
+                return
 
         if self._verbose >= 1:
             print(
@@ -2158,21 +2089,12 @@ class DataRegistration:
                 "Starting global fiducial fusion from stored transforms.",
             )
 
-        msims = self._load_global_fiducial_msims(
-            zarr_module=zarr,
-            msi_utils=msi_utils,
-            si_utils=si_utils,
+        msims = self.load_global_fiducial_views(
             use_stored_global_transforms=True,
         )
-        self._fuse_global_registered_msims(
+        self.fuse_global_fiducial_views(
             msims=msims,
             create_max_proj_tiff=create_max_proj_tiff,
-            fusion=fusion,
-            misc_utils=misc_utils,
-            msi_utils=msi_utils,
-            si_utils=si_utils,
-            TiffWriter=TiffWriter,
-            zarr_module=zarr,
         )
 
         if self._verbose >= 1:
@@ -2428,15 +2350,3 @@ class DataRegistration:
                 )
         if errors:
             raise RuntimeError("Readout preprocessing failed:\n" + "\n".join(errors))
-
-
-def time_stamp() -> str:
-    """
-    Return a human-readable timestamp for progress messages.
-
-    Returns
-    -------
-    str
-        Current local time formatted as ``YYYY-MM-DD HH:MM:SS``.
-    """
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

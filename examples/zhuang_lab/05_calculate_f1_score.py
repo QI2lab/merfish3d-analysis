@@ -8,14 +8,16 @@ Shepherd 2025/01 - create script.
 Codex 2026/05 - switch qi2lab input to filtered decoded features within cells.
 """
 
-import argparse
 from pathlib import Path
 from pprint import pp
 
 import numpy as np
 import pandas as pd
+import typer
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def calculate_F1_with_radius(
@@ -274,12 +276,16 @@ def calculate_F1(
     return results
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root_path", type=Path)
-    root_path = parser.parse_args().root_path.expanduser().resolve()
+@app.command()
+def main(root_path: Path) -> None:
+    """Compare Zhuang decoded spots with MERLIN using a 3 µm search radius."""
+    root_path = root_path.expanduser().resolve()
     merlin_spots_path = root_path / Path(
         r"mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv"
     )
     results = calculate_F1(root_path, merlin_spots_path, search_radius=3.0)
     pp(results)
+
+
+if __name__ == "__main__":
+    app()

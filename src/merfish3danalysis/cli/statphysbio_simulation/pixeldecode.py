@@ -11,6 +11,7 @@ import typer
 
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -66,12 +67,12 @@ def _default_simulation_magnitude_threshold(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore supplying microscope type and native ZYX voxel spacing in microns.
 
     Returns
     -------
     tuple[float, float]
-        Function result.
+        Accepted magnitude interval selected from the simulation sampling presets.
     """
     if datastore.microscope_type != "2D":
         return SIMULATION_3D_DEFAULT_MAGNITUDE_THRESHOLD
@@ -93,12 +94,12 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore containing registered readout metadata.
 
     Returns
     -------
     bool
-        Function result.
+        True if the first registered readout records deconvolution metadata.
     """
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
@@ -109,9 +110,9 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     if not tile_ids or not bit_ids:
         return False
 
-    entity_root = datastore._readouts_root_path / tile_ids[0] / bit_ids[0]
-    attributes = datastore._load_entity_attributes(
-        entity_root,
+    attributes = datastore.load_local_image_metadata(
+        tile_ids[0],
+        bit=bit_ids[0],
         image_names=("decon_data",),
     )
     return bool(attributes.get("deconvolution", False))
@@ -126,12 +127,12 @@ def _default_simulation_feature_predictor_threshold(
     Parameters
     ----------
     datastore : qi2labDataStore
-        Function argument.
+        Datastore supplying microscope type and native ZYX voxel spacing in microns.
 
     Returns
     -------
     float
-        Function result.
+        U-FISH probability cutoff selected from simulation sampling and deconvolution metadata.
     """
     if datastore.microscope_type != "2D" or not _readouts_are_deconvolved(datastore):
         return SIMULATION_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
@@ -155,17 +156,17 @@ def _validate_filter_arguments(
 
     Parameters
     ----------
-    filter_method : str
-        Function argument.
+    filter_method : {'blank_fraction', 'lr'}
+        Transcript filtering method.
     target_gross_misid_rate : float
-        Function argument.
+        Gross misidentification-rate target for blank-fraction filtering.
     lr_fdr_target : float
-        Function argument.
+        False-discovery-rate target for LR filtering.
 
     Returns
     -------
     None
-        Function result.
+        This function raises when arguments are inconsistent.
     """
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
@@ -244,7 +245,7 @@ def decode_pixels(
         is False, with identity fallback when no calibration is present.
     """
     # initialize datastore
-    datastore_path = root_path / Path(r"qi2labdatastore")
+    datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)
     merfish_bits = datastore.num_bits
 
@@ -295,14 +296,7 @@ def decode_pixels(
 
 
 def main() -> None:
-    """
-    Run the simulation pixel decoding CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the simulation pixel decoding CLI."""
     app()
 
 

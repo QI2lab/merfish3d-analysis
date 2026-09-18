@@ -12,7 +12,7 @@ You can try out the package in the cloud on simulated data using a [Google Colab
 
 ## Sample data
 
-The GPU regression workflow uses the StatPhysBio MERFISH simulations archived
+The GPU integration test workflow uses the StatPhysBio MERFISH simulations archived
 on Zenodo. Download the
 [simulation test data](https://zenodo.org/records/17274305/files/merfish3d_analysis-simulation.zip?download=1)
 or follow the complete [synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
@@ -153,8 +153,19 @@ require CUDA or GPU hardware. Configure the repository's Pages source as
 
 ## Testing
 
+The suite consists of unit tests and integration tests. Every test has exactly
+one of these markers. Run either category with:
+
+```bash
+uv run pytest -m unit
+uv run pytest -m integration
+```
+
+See the [testing guidelines](docs/contributing.md#testing) for the required
+assertions and how to classify tests.
+
 The simulation tests require an NVIDIA GPU, the extracted Zenodo sample data,
-and the default `smfish` U-FISH weights cached by U-FISH. Pass the extracted
+and the default `simfish` U-FISH weights cached by U-FISH. Pass the extracted
 dataset directory with `--simulation-data-root`. See the
 [synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
 for setup instructions.

@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from merfish3danalysis.cli.qi2lab_microscopes import segment_fiducial
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "cutoff, expected_areas", [(0, [3, 12, 27]), (12, [12, 27]), (28, [])]
 )
@@ -45,6 +46,7 @@ def test_global_outline_filter_uses_transformed_area_and_replaces_zip(
     ]
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("cutoff", [-1, np.nan, np.inf, -np.inf])
 def test_invalid_area_is_rejected_before_loading_data(cutoff):
     with pytest.raises(typer.BadParameter, match="finite and non-negative"):
@@ -56,15 +58,16 @@ def saved_segmentation(tmp_path, monkeypatch):
     datastore_path = tmp_path / "qi2labdatastore"
     roi_directory = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
     roi_directory.mkdir(parents=True)
+    (datastore_path / "datastore_state.json").write_text("{}")
     fused_path = datastore_path / "fused"
     fused_path.mkdir()
     pixel_path = roi_directory / "pixel_spacing_rois.zip"
     roiwrite(pixel_path, [ImagejRoi.frompoints([[0, 0], [2, 0], [2, 2], [0, 2]])])
     datastore = SimpleNamespace(
-        _fused_root_path=fused_path,
+        voxel_size_zyx_um=[1, 1, 1],
         fiducial_folder_name="fiducial",
-        _image_store_path=Mock(return_value=fused_path),
-        _read_extra_attributes=Mock(
+        fused_image_path=Mock(return_value=fused_path),
+        load_image_metadata=Mock(
             return_value={
                 "affine_zyx_um": np.eye(4),
                 "origin_zyx_um": np.zeros(3),
@@ -86,6 +89,7 @@ def saved_segmentation(tmp_path, monkeypatch):
     return tmp_path, pixel_path, datastore
 
 
+@pytest.mark.integration
 def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
     saved_segmentation,
 ):
@@ -115,6 +119,7 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
     datastore.save_global_cellpose_segmentation_image.assert_not_called()
 
 
+@pytest.mark.integration
 def test_outlines_only_requires_saved_pixel_rois(saved_segmentation):
     root, pixel_path, _datastore = saved_segmentation
     pixel_path.unlink()
@@ -122,6 +127,7 @@ def test_outlines_only_requires_saved_pixel_rois(saved_segmentation):
         segment_fiducial.run_cellpose(root, outlines_only=True)
 
 
+@pytest.mark.unit
 def test_outlines_only_requires_saving_outputs():
     with pytest.raises(typer.BadParameter, match="requires --save-outputs"):
         segment_fiducial.run_cellpose(
@@ -129,6 +135,7 @@ def test_outlines_only_requires_saving_outputs():
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("empty_masks", [False, True])
 def test_inference_exports_filtered_global_rois(
     saved_segmentation, monkeypatch, empty_masks
@@ -173,11 +180,13 @@ def test_inference_exports_filtered_global_rois(
     )
 
 
+@pytest.mark.unit
 def test_invalid_worker_count_is_rejected_before_loading_data():
     with pytest.raises(typer.BadParameter, match="non-negative"):
         segment_fiducial.run_cellpose(Path("/unused"), roi_workers=-1)
 
 
+@pytest.mark.integration
 def test_failed_streamed_export_preserves_existing_zip(tmp_path, monkeypatch):
     output_path = tmp_path / "global_coords_rois.zip"
     roi = ImagejRoi.frompoints([[0, 0], [1, 0], [1, 1]], name="original")

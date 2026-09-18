@@ -1,5 +1,6 @@
 """Public launcher for the datastore viewer."""
 
+import os
 from pathlib import Path
 
 
@@ -32,7 +33,7 @@ def run_viewer(initial_path: Path | None = None) -> None:
         Optional experiment root or datastore path opened at launch.
     """
     try:
-        import ndv
+        import ndv  # noqa: F401 - validate the optional GUI dependency
         from qtpy import QtWidgets
     except ImportError as exc:
         raise RuntimeError(
@@ -40,10 +41,8 @@ def run_viewer(initial_path: Path | None = None) -> None:
             "`uv sync` to install ndv and Qt support."
         ) from exc
 
-    if hasattr(ndv, "set_gui_backend"):
-        ndv.set_gui_backend("qt")
-    if hasattr(ndv, "set_canvas_backend"):
-        ndv.set_canvas_backend("vispy")
+    os.environ["NDV_GUI_FRONTEND"] = "qt"
+    os.environ["NDV_CANVAS_BACKEND"] = "vispy"
 
     from merfish3danalysis.viewer.controller import DatastoreViewerWindow
 
@@ -53,5 +52,4 @@ def run_viewer(initial_path: Path | None = None) -> None:
     qt_app.setQuitOnLastWindowClosed(True)
     window = DatastoreViewerWindow(initial_path)
     window.show()
-    exec_method = getattr(qt_app, "exec", None) or qt_app.exec_
-    exec_method()
+    qt_app.exec()

@@ -4,13 +4,13 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.colors import transcript_color_hex
 from merfish3danalysis.viewer.models import (
     SparseLineLayer,
     SparseOverlayPayload,
     SparsePointLayer,
 )
-from merfish3danalysis.viewer.ndv import ndv_canvas_parts
 
 
 class _LineVisualAccumulator:
@@ -417,7 +417,9 @@ class SparseVispyOverlay:
         """
         if self._array_viewer is None:
             return
-        canvas_controller, view, canvas = ndv_canvas_parts(self._array_viewer)
+        canvas_controller = self._array_viewer._canvas
+        view = canvas_controller._view
+        canvas = canvas_controller._canvas
         if canvas_controller is None or view is None:
             return
 
@@ -849,7 +851,7 @@ def _display_scale_zyx(spacing_zyx_um: tuple[float, float, float]) -> np.ndarray
     numpy.ndarray
         Relative Z, Y, X display scale.
     """
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     if spacing.shape != (3,) or not np.isfinite(spacing).all() or np.any(spacing <= 0):
         raise ValueError("Expected positive finite Z, Y, X voxel spacing.")
     return spacing / spacing[2]

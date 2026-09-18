@@ -4,6 +4,7 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
     DisplayContext,
     GlobalDisplayRequest,
@@ -524,5 +525,5 @@ class ViewerDisplayModel:
         tuple[float, float, float]
             Spacing as Python floats.
         """
-        spacing = np.asarray(spacing_zyx_um, dtype=float)
+        spacing = round_spacing_um(spacing_zyx_um)
         return float(spacing[0]), float(spacing[1]), float(spacing[2])

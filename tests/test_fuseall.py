@@ -1,4 +1,3 @@
-import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, sentinel
@@ -13,6 +12,7 @@ from typer.testing import CliRunner
 from merfish3danalysis.cli.qi2lab_microscopes import fuseall
 
 
+@pytest.mark.integration
 def test_multiview_fusion_applies_channel_dependent_affines() -> None:
     image = np.zeros((2, 1, 3, 6), dtype=np.uint16)
     image[0, 0, 1, 2] = 100
@@ -54,6 +54,7 @@ def test_multiview_fusion_applies_channel_dependent_affines() -> None:
     assert bit_peak == fiducial_peak
 
 
+@pytest.mark.unit
 def test_channel_global_transforms_follow_repository_conventions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -120,6 +121,7 @@ def test_channel_global_transforms_follow_repository_conventions(
     ]
 
 
+@pytest.mark.unit
 def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -139,8 +141,7 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
         tmp_path / "bit001.ome.zarr",
         tmp_path / "bit002.ome.zarr",
     ]
-    for input_path in input_paths:
-        input_path.mkdir()
+    monkeypatch.setattr(Path, "exists", lambda path: path in input_paths)
     datastore = SimpleNamespace(
         round_ids=["round001"],
         fiducial_folder_name="fiducial",
@@ -177,20 +178,18 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
     monkeypatch.setattr(fuseall, "_local_readout_path", local_readout_path)
     monkeypatch.setattr(fuseall, "_read_fiducial_sim", read_sim)
 
+    monkeypatch.setattr(fuseall.msi_utils, "get_msim_from_sim", get_msim_from_sim)
+    monkeypatch.setattr(
+        fuseall.msi_utils, "get_transform_from_msim", get_transform_from_msim
+    )
+    monkeypatch.setattr(fuseall.msi_utils, "set_affine_transform", set_affine_transform)
+    monkeypatch.setattr(fuseall.si_utils, "concat", concat)
+
     result = fuseall._load_tile_multichannel_msim(
         datastore=datastore,
         tile_id="tile0000",
         bit_ids=["bit001", "bit002"],
         spacing_zyx_um={"z": 0.32, "y": 0.098, "x": 0.098},
-        zarr_module=sentinel.zarr,
-        msi_utils_module=SimpleNamespace(
-            get_msim_from_sim=get_msim_from_sim,
-            get_transform_from_msim=get_transform_from_msim,
-            set_affine_transform=set_affine_transform,
-        ),
-        si_utils_module=SimpleNamespace(
-            concat=concat,
-        ),
     )
 
     assert result is sentinel.msim
@@ -204,7 +203,6 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
         "translation": {"z": 1.23, "y": 5.68, "x": 9.1},
         "affine_zyx_px": stage_camera,
         "transform_key": "stage_metadata",
-        "zarr_module": sentinel.zarr,
     }
     for read_call, input_path in zip(read_sim.call_args_list, input_paths, strict=True):
         assert read_call.kwargs["input_path"] == input_path
@@ -214,7 +212,6 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
             read_call.kwargs["affine_zyx_px"], expected_common["affine_zyx_px"]
         )
         assert read_call.kwargs["transform_key"] == "stage_metadata"
-        assert read_call.kwargs["zarr_module"] is sentinel.zarr
     for raw_sim, channel_id in zip(
         raw_sims, ["fiducial", "bit001", "bit002"], strict=True
     ):
@@ -239,6 +236,7 @@ def test_load_tile_multichannel_msim_opens_zarr_inputs_directly(
     assert set_call.kwargs == {"transform_key": "global_registered"}
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("write_ome_tiffs", [False, True])
 def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
     tmp_path: Path,
@@ -246,7 +244,10 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
     write_ome_tiffs: bool,
 ) -> None:
     fused_root = tmp_path / "qi2labdatastore" / "fused"
-    fused_root.mkdir(parents=True)
+    monkeypatch.setattr(Path, "mkdir", Mock())
+    monkeypatch.setattr(
+        fuseall, "resolve_datastore_path", Mock(return_value=fused_root.parent)
+    )
     datastore = SimpleNamespace(
         tile_ids=["tile0000", "tile0001"],
         bit_ids=["bit010", "bit002", "bit001"],
@@ -256,9 +257,8 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
             0.09799999999995634,
             0.098,
         ),
-        _fused_root_path=fused_root,
-        _image_store_path=fuseall.qi2labDataStore._image_store_path,
-        _write_extra_attributes=Mock(),
+        fused_image_path=Mock(return_value=fused_root / "full_dataset.ome.zarr"),
+        save_image_metadata=Mock(),
     )
     load_tile = Mock(side_effect=[sentinel.tile0, sentinel.tile1])
     fusion_options = {
@@ -330,7 +330,7 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         sentinel.fused,
         transform_key="global_registered",
     )
-    written = datastore._write_extra_attributes.call_args.kwargs
+    written = datastore.save_image_metadata.call_args.kwargs
     assert written["image_path"] == output
     assert written["extra_attributes"]["channel_names"] == channels
     assert written["extra_attributes"]["registration_provenance"] == {
@@ -351,24 +351,17 @@ def test_fuse_all_channels_writes_one_cpu_multichannel_ome_zarr(
         export_ome_tiffs.assert_not_called()
 
 
-def test_fuseall_cli_has_no_gpu_option() -> None:
-    assert "gpu_id" not in inspect.signature(fuseall.fuse_all_channels).parameters
-
-    result = CliRunner().invoke(
-        fuseall.app,
-        ["--help"],
-        env={"COLUMNS": "160"},
-        terminal_width=160,
-    )
-
-    assert result.exit_code == 0
-    assert "--gpu-id" not in result.stdout
-    assert "--output-chunk-zyx" in result.stdout
-    assert "--fusion-workers" in result.stdout
-    assert "--compression" in result.stdout
-    assert "--compression-level" in result.stdout
+@pytest.mark.unit
+def test_fuseall_rejects_gpu_option_before_loading_data(monkeypatch):
+    datastore = Mock()
+    monkeypatch.setattr(fuseall, "qi2labDataStore", datastore)
+    result = CliRunner().invoke(fuseall.app, ["/mock/experiment", "--gpu-id", "0"])
+    assert result.exit_code == 2
+    assert "No such option" in result.output
+    datastore.assert_not_called()
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "options",
     [

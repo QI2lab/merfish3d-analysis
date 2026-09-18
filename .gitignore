@@ -141,3 +141,4 @@ tests/simulation_performance.json
 tests/merfish3d_analysis-simulation.zip
 .codex/
 uv.lock
+AUDIT_PROGRESS.md

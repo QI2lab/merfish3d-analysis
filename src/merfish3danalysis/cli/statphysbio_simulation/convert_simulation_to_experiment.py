@@ -19,6 +19,7 @@ import typer
 from tifffile import imread, imwrite
 
 from merfish3danalysis.utils.dataio import read_metadatafile, write_metadata
+from merfish3danalysis.utils.spacing import round_pixel_size_um
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -40,8 +41,8 @@ def convert_simulation(root_path: Path) -> None:
     num_rounds = metadata["num_r"]
     num_ch = metadata["num_ch"]
     num_z = metadata["planes per bit"]
-    yx_pixel_um = metadata["pixel_size [micron]"]
-    z_pixel_um = metadata["axial_step_size [micron]"]
+    yx_pixel_um = round_pixel_size_um(metadata["pixel_size [micron]"])
+    z_pixel_um = round_pixel_size_um(metadata["axial_step_size [micron]"])
     gain = metadata["mean gain"]
     offset = metadata["mean offset"]
 
@@ -151,14 +152,7 @@ def convert_simulation(root_path: Path) -> None:
 
 
 def main() -> None:
-    """
-    Run the simulation conversion CLI.
-
-    Returns
-    -------
-    None
-        Function result.
-    """
+    """Run the simulation conversion CLI."""
     app()
 
 

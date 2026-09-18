@@ -37,6 +37,7 @@ def worker_dependencies(monkeypatch):
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize(
     ("visible_devices", "gpu_id", "expected_label"),
     [
@@ -98,6 +99,7 @@ def test_worker_logs_visible_gpu_but_computes_on_local_device(
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("normalization_method", ["global", "none"])
 def test_worker_does_not_load_unused_iterative_normalization(
     tmp_path, worker_dependencies, normalization_method
@@ -126,6 +128,7 @@ def test_worker_does_not_load_unused_iterative_normalization(
     )
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize("verbose", [0, 1])
 @pytest.mark.parametrize("normalization_features", ["all", "cells"])
 def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(

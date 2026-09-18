@@ -29,19 +29,19 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
     """
-    Load file1.
+    Load a decoded-transcript table from text, CSV, or Parquet.
 
     Parameters
     ----------
     path : str
-        Function argument.
+        Input table path.
     sep_override : str
-        Function argument.
+        Explicit delimiter, or an empty string to infer the text delimiter.
 
     Returns
     -------
     pd.DataFrame
-        Function result.
+        Decoded transcript table with its original columns.
     """
     p = Path(path)
     if not p.exists():
@@ -70,19 +70,19 @@ def _load_file1(path: str, sep_override: str) -> pd.DataFrame:
 
 def _load_file2_txt(path: str, sep_override: str) -> pd.DataFrame:
     """
-    Load file2 txt.
+    Load the bulk RNA-seq reference table from a text file.
 
     Parameters
     ----------
     path : str
-        Function argument.
+        Input table path.
     sep_override : str
-        Function argument.
+        Explicit delimiter, or an empty string to infer the text delimiter.
 
     Returns
     -------
     pd.DataFrame
-        Function result.
+        Bulk RNA-seq table with its original columns.
     """
     p = Path(path)
     if not p.exists():
@@ -248,17 +248,17 @@ def _counts_vs_fpkm(
 def _pearson_loglog_x_fpkm_y_counts(merged: pd.DataFrame) -> float:
     # Pearson correlation in log10 space with x=FPKM, y=counts
     """
-    Pearson loglog x fpkm y counts.
+    Correlate log10 FPKM with log10 decoded transcript counts.
 
     Parameters
     ----------
     merged : pd.DataFrame
-        Function argument.
+        Gene-matched table containing FPKM and transcript counts.
 
     Returns
     -------
     float
-        Function result.
+        Pearson correlation of log-transformed FPKM and transcript counts.
     """
     x = merged["fpkm"].to_numpy(dtype=float)
     y = merged["count"].to_numpy(dtype=float)
@@ -361,42 +361,37 @@ def main(
     Parameters
     ----------
     file1a : str
-        Function argument.
+        First file1 (.txt/.csv/.parquet).
     file2 : str
-        Function argument.
+        file2 (.txt) with gene IDs and FPKM.
     gene_col1a : str
-        Function argument.
+        Column in file1a containing gene IDs.
     gene_col2 : str
-        Function argument.
+        Column in file2 containing gene IDs.
     fpkm_col : str
-        Function argument.
+        Column in file2 containing FPKM.
     file1b : str | None
-        Function argument.
+        Optional second file1 (.txt/.csv/.parquet).
     gene_col1b : str | None
-        Function argument.
+        Column in file1b containing gene IDs (required if --file1b is set).
     plot_out : str
-        Function argument.
+        Output plot filename.
     file1a_sep : str
-        Function argument.
+        Optional delimiter for file1a (.txt/.csv). E.g., '\t' or ','.
     file1b_sep : str
-        Function argument.
+        Optional delimiter for file1b (.txt/.csv). E.g., '\t' or ','.
     file2_sep : str
-        Function argument.
+        Optional delimiter for file2 (.txt). E.g., '\t' or ','.
     min_fpkm : float
-        Function argument.
+        Minimum FPKM threshold to include (e.g., 0.1 for 10^-1). Genes with FPKM <= threshold are excluded.
     only_cell_id_positive : bool
-        Function argument.
+        If set, keep only rows with cell_id > 0 in file1a (and file1b, if provided) before counting.
     cellid_col1a : str
-        Function argument.
+        Cell ID column name in file1a (used only if --only-cell-id-positive).
     cellid_col1b : str
-        Function argument.
+        Cell ID column name in file1b (used only if --file1b and --only-cell-id-positive).
     drop_prefix : list[str]
-        Function argument.
-
-    Returns
-    -------
-    None
-        Function result.
+        Remove any genes whose name begins with this prefix (case-insensitive). May be passed multiple times. Applied after normalization.
     """
     if file1b is not None and gene_col1b is None:
         typer.secho(

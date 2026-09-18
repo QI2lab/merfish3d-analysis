@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
     ChannelStack,
     GlobalChannelStack,
@@ -328,7 +329,7 @@ def global_datastore_transcript_index(
         return _empty_point_index(shape_zyx)
 
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     coords_yx_um = datastore_transcripts[["global_y", "global_x"]].to_numpy(
         dtype=float,
         copy=False,
@@ -384,7 +385,7 @@ def _local_point_index_from_global_zyx_um(
         return _empty_point_index(shape_zyx)
     affine = np.asarray(affine_zyx_um, dtype=float)
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     lower_bound, upper_bound = _tile_global_bounds_zyx_um(
         shape_zyx,
         affine_zyx_um=affine,
@@ -498,7 +499,7 @@ def global_transcript_index(
         return _empty_point_index(shape_zyx)
 
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     coords_xyz = transcripts[["x", "y", "z"]].to_numpy(dtype=float, copy=False)
     coords_zyx = coords_xyz[:, [2, 1, 0]]
     coords_px = (coords_zyx - origin) / spacing
@@ -953,7 +954,7 @@ def global_baysor_boundary_geometry(
         Sparse Baysor boundary geometry.
     """
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     z_filter_size = (
         int(source_shape_zyx[0]) if source_shape_zyx is not None else int(shape_zyx[0])
     )
@@ -1238,7 +1239,7 @@ def local_baysor_boundary_geometry(
 
     affine = np.asarray(affine_zyx_um, dtype=float)
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     lower_bound, upper_bound = _tile_global_bounds_zyx_um(
         shape_zyx,
         affine_zyx_um=affine,
@@ -1357,7 +1358,7 @@ def local_cell_boundary_geometry(
 
     affine = np.asarray(affine_zyx_um, dtype=float)
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     polylines: list[np.ndarray] = []
     for cell_boundary in cell_boundaries.values():
         global_xy = np.asarray(cell_boundary, dtype=float)
@@ -1412,7 +1413,7 @@ def global_cell_boundary_geometry_from_source(
         return PolylineGeometry((), shape_zyx, line_thickness)
 
     origin = np.asarray(origin_zyx_um, dtype=float)
-    spacing = np.asarray(spacing_zyx_um, dtype=float)
+    spacing = round_spacing_um(spacing_zyx_um)
     polylines: list[np.ndarray] = []
     for cell_boundary in cell_boundaries.values():
         global_xy = np.asarray(cell_boundary, dtype=float)
@@ -1653,7 +1654,7 @@ def _global_coords(
         NDV coordinate arrays.
     """
     origin = np.asarray(origin_zyx_um, dtype=np.float32)
-    spacing = np.asarray(spacing_zyx_um, dtype=np.float32)
+    spacing = round_spacing_um(spacing_zyx_um).astype(np.float32)
     return {
         "c": range(1),
         "z_um": origin[0] + np.arange(shape_zyx[0], dtype=np.float32) * spacing[0],
@@ -1762,6 +1763,6 @@ def load_global_image_channels(
     return GlobalChannelStack(
         stack=ChannelStack(data=data, labels=labels),
         origin_zyx_um=np.asarray(origin_zyx_um, dtype=np.float32),
-        spacing_zyx_um=np.asarray(spacing_zyx_um, dtype=np.float32),
+        spacing_zyx_um=round_spacing_um(spacing_zyx_um).astype(np.float32),
         full_shape_zyx=full_shape_zyx,
     )
