@@ -9,6 +9,7 @@ Shepherd 2025/01 - rework script to accept parameters
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +25,7 @@ from merfish3danalysis.cli.qi2lab_microscopes.create_datastore import (
     _sample_readout_tile_bit_pairs,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.imageprocessing import estimate_shading
+from merfish3danalysis.utils.imageprocessing import estimate_shading, image_has_signal
 
 app = typer.Typer(pretty_exceptions_enable=False)
 
@@ -51,8 +52,9 @@ def convert_data(
         path to codebook. Default of `None` uses
         ``root_path / "additional_files" / "codebook.csv"``.
     max_flatfield_images: int, default 100
-        Maximum distinct tiles sampled per readout channel, as in the qi2lab
-        CLI. Fiducial estimation uses every tile from round 1. Estimated CYX
+        Target number of distinct tiles with fiducial signal, as in the qi2lab
+        CLI. Sample without replacement until enough pass or all are checked.
+        Fiducial estimation samples round 1. Estimated CYX
         flatfields are saved to ``root_path / "illuminations.ome.tif"``.
     """
 
@@ -249,19 +251,48 @@ def convert_data(
         if channel_idx == 0:
             image_kind = "round"
             image_ids = datastore.round_ids
-            sample_pairs = [(tile, image_ids[0]) for tile in range(num_tiles)]
+            candidate_tiles = (
+                np.random.default_rng(0)
+                .choice(num_tiles, size=num_tiles, replace=False)
+                .tolist()
+            )
+            sample_pairs = [(tile, image_ids[0]) for tile in candidate_tiles]
+            fiducial_tiles = []
         else:
             image_kind = "bit"
             image_ids = _readout_bit_ids(
                 experiment_order, channel_idx, list(datastore.bit_ids)
             )
             sample_pairs = _sample_readout_tile_bit_pairs(
-                image_ids, num_tiles, max_flatfield_images, rng
+                image_ids, len(fiducial_tiles), max_flatfield_images, rng
             )
-        data_camera_corrected = [
-            datastore.load_local_corrected_image(tile=tile, **{image_kind: image_id})
-            for tile, image_id in sample_pairs
-        ]
+            sample_pairs = [
+                (fiducial_tiles[tile], image_id) for tile, image_id in sample_pairs
+            ]
+        data_camera_corrected = []
+        for tile, image_id in sample_pairs:
+            image = datastore.load_local_corrected_image(
+                tile=tile, **{image_kind: image_id}
+            )
+            if channel_idx != 0 or image_has_signal(image.result()):
+                data_camera_corrected.append(image)
+                if channel_idx == 0:
+                    fiducial_tiles.append(tile)
+                if len(data_camera_corrected) == max_flatfield_images:
+                    break
+            del image
+        if not data_camera_corrected:
+            raise ValueError(
+                f"No images in channel {channel_idx} contain signal above background."
+            )
+        if channel_idx == 0 and len(data_camera_corrected) < min(
+            num_tiles, max_flatfield_images
+        ):
+            warnings.warn(
+                f"Only {len(data_camera_corrected)} images in channel {channel_idx} "
+                "contain signal; using all available signal tiles.",
+                stacklevel=2,
+            )
         illumination = estimate_shading(data_camera_corrected)
         del data_camera_corrected
         illuminations.append(illumination)

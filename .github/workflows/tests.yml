@@ -57,6 +57,7 @@ jobs:
             tests/test_fusion_compression.py \
             tests/test_fiducial_downsampling.py \
             tests/test_illumination_correction.py \
+            tests/test_signal_selection.py \
             tests/test_create_datastore_illumination.py \
             tests/test_zhuang_conversion.py \
             tests/test_zhuang_registration.py \

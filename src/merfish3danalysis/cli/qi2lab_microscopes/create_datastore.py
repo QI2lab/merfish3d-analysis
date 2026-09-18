@@ -16,6 +16,7 @@ Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 
 import gc
 import io
+import warnings
 from contextlib import redirect_stdout
 from itertools import compress
 from pathlib import Path
@@ -31,6 +32,7 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import read_metadatafile
 from merfish3danalysis.utils.imageprocessing import (
     estimate_shading,
+    image_has_signal,
     replace_hot_pixels,
 )
 from merfish3danalysis.utils.psf import (
@@ -288,8 +290,9 @@ def convert_data(
     hot_pixel_threshold : int, default=100
         Threshold passed to hot-pixel detection when estimating illuminations.
     max_flatfield_images : int, default=100
-        Maximum number of unique tile IDs sampled to estimate each readout
-        flatfield. The fiducial flatfield always uses every tile from round 1.
+        Target number of unique tiles with fiducial signal for the flatfields.
+        Sample without replacement until enough pass or all tiles are checked.
+        Fiducials use round 1; readouts are sampled across the channel's bits.
     """
     # load illuminations if requested
     # -----------------------------------
@@ -647,23 +650,44 @@ def convert_data(
 
     # Calculate and apply flatfield corrections
     if not (use_illuminations):
+        if max_flatfield_images < 1:
+            raise ValueError("max_flatfield_images must be at least 1.")
         # reload datastore
         del datastore
         datastore = qi2labDataStore(datastore_path)
 
         data_camera_corrected = []
 
-        # Calculate the fiducial correction from every tile in round 1.
+        # Estimate from a bounded sample; apply the correction to every tile.
+        candidate_tiles = (
+            np.random.default_rng(0)
+            .choice(
+                datastore.num_tiles,
+                size=datastore.num_tiles,
+                replace=False,
+            )
+            .tolist()
+        )
+        fiducial_tiles = []
         for tile_idx in tqdm(
-            range(datastore.num_tiles),
+            candidate_tiles,
             desc="fiducial flatfield data",
             leave=False,
         ):
-            data_camera_corrected.append(
-                datastore.load_local_corrected_image(
-                    tile=tile_idx,
-                    round=0,
-                )
+            image = datastore.load_local_corrected_image(tile=tile_idx, round=0)
+            if image_has_signal(image.result()):
+                data_camera_corrected.append(image)
+                fiducial_tiles.append(tile_idx)
+                if len(data_camera_corrected) == max_flatfield_images:
+                    break
+            del image
+        if not data_camera_corrected:
+            raise ValueError("No fiducial tiles contain signal above background.")
+        if len(data_camera_corrected) < min(datastore.num_tiles, max_flatfield_images):
+            warnings.warn(
+                f"Only {len(data_camera_corrected)} fiducial tiles contain signal; "
+                "using all available signal tiles.",
+                stacklevel=2,
             )
         fiducial_illumination = estimate_shading(data_camera_corrected)
         del data_camera_corrected
@@ -714,7 +738,7 @@ def convert_data(
             )
             sample_pairs = _sample_readout_tile_bit_pairs(
                 channel_bit_ids,
-                datastore.num_tiles,
+                len(fiducial_tiles),
                 max_flatfield_images,
                 rng,
             )
@@ -726,8 +750,7 @@ def convert_data(
             ):
                 data_camera_corrected.append(
                     datastore.load_local_corrected_image(
-                        tile=tile_idx,
-                        bit=bit_id,
+                        tile=fiducial_tiles[tile_idx], bit=bit_id
                     )
                 )
             readout_illumination = estimate_shading(data_camera_corrected)
