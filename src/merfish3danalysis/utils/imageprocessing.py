@@ -69,6 +69,45 @@ def replace_hot_pixels(
     return data
 
 
+def image_has_signal(
+    image: ArrayLike,
+    *,
+    mask: ArrayLike | None = None,
+    background_sigma: float = 5.0,
+    minimum_pixels: int = 9,
+) -> bool:
+    """Screen YX or ZYX data for connected signal above a robust background.
+
+    Median-filter the Z maximum projection over 3x3 pixels to suppress isolated
+    hot pixels. Require a connected region of at least ``minimum_pixels`` above
+    median + ``background_sigma`` times the MAD-based noise estimate (1.4826 MAD).
+    An optional YX mask restricts both background estimation and accepted signal.
+    This is an intensity-contrast screen, not a calibrated significance test.
+    Empty images/masks return False; invalid dimensions or nonfinite data raise.
+    """
+    from scipy.ndimage import label, median_filter
+
+    image = np.asarray(image)
+    if image.ndim not in (2, 3):
+        raise ValueError("Signal screening requires a YX or ZYX image.")
+    if image.size == 0:
+        return False
+    projection = image.max(axis=0) if image.ndim == 3 else image
+    if not np.all(np.isfinite(projection)):
+        raise ValueError("Signal screening requires finite image values.")
+    projection = median_filter(projection.astype(np.float32), size=3)
+    pixels = projection if mask is None else projection[np.asarray(mask, dtype=bool)]
+    if pixels.size == 0:
+        return False
+    background = np.median(pixels)
+    noise = 1.4826 * np.median(np.abs(pixels - background))
+    foreground = projection > background + background_sigma * noise
+    if mask is not None:
+        foreground &= np.asarray(mask, dtype=bool)
+    labels, _ = label(foreground)
+    return bool(np.any(np.bincount(labels.ravel())[1:] >= minimum_pixels))
+
+
 def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     """Estimate shading using stack of images and BaSiCPy.
 
