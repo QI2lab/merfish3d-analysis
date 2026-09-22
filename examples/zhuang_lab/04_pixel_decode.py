@@ -285,6 +285,7 @@ def _optimization_exclusions_path(datastore_path: Path, path: Path) -> Path:
         return path
     return datastore_path / path
 
+
 def decode_pixels(
     root_path: Path,
     num_gpus: int = 1,
@@ -564,7 +565,7 @@ def decode_pixels(
 def main(root_path: Path, reprocess_existing: bool = False) -> None:
     """Decode the Zhuang experiment using its dataset-specific parameters."""
     root_path = root_path.expanduser().resolve()
-    decode_pixels(root_path=root_path,reprocess_existing=reprocess_existing)
+    decode_pixels(root_path=root_path, reprocess_existing=reprocess_existing)
 
 
 if __name__ == "__main__":
