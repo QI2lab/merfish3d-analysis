@@ -9,6 +9,7 @@ Shepherd 2025/01 - rework script to accept parameters
 Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
+import json
 import warnings
 from pathlib import Path
 
@@ -52,9 +53,9 @@ def convert_data(
         path to codebook. Default of `None` uses
         ``root_path / "additional_files" / "codebook.csv"``.
     max_flatfield_images: int, default 100
-        Target number of distinct tiles with fiducial signal, as in the qi2lab
-        CLI. Sample without replacement until enough pass or all are checked.
-        Fiducial estimation samples round 1. Estimated CYX
+        Maximum number of distinct tiles randomly sampled per channel from all
+        tiles with round-1 fiducial signal, as in the qi2lab CLI. Eligible IDs
+        are saved in ``flatfield_tile_ids.json`` in the datastore. Estimated CYX
         flatfields are saved to ``root_path / "illuminations.ome.tif"``.
     """
 
@@ -251,13 +252,31 @@ def convert_data(
         if channel_idx == 0:
             image_kind = "round"
             image_ids = datastore.round_ids
-            candidate_tiles = (
-                np.random.default_rng(0)
-                .choice(num_tiles, size=num_tiles, replace=False)
-                .tolist()
-            )
-            sample_pairs = [(tile, image_ids[0]) for tile in candidate_tiles]
             fiducial_tiles = []
+            for tile in range(num_tiles):
+                image = datastore.load_local_corrected_image(
+                    tile=tile, round=image_ids[0], return_future=False
+                )
+                if image_has_signal(image):
+                    fiducial_tiles.append(tile)
+                del image
+            (datastore_path / "flatfield_tile_ids.json").write_text(
+                json.dumps([datastore.tile_ids[tile] for tile in fiducial_tiles])
+            )
+            if not fiducial_tiles:
+                raise ValueError("No fiducial tiles contain signal above background.")
+            if len(fiducial_tiles) < min(num_tiles, max_flatfield_images):
+                warnings.warn(
+                    f"Only {len(fiducial_tiles)} fiducial tiles contain signal; "
+                    "using all available signal tiles.",
+                    stacklevel=2,
+                )
+            sampled_tiles = rng.choice(
+                fiducial_tiles,
+                size=min(len(fiducial_tiles), max_flatfield_images),
+                replace=False,
+            ).tolist()
+            sample_pairs = [(tile, image_ids[0]) for tile in sampled_tiles]
         else:
             image_kind = "bit"
             image_ids = _readout_bit_ids(
@@ -269,32 +288,10 @@ def convert_data(
             sample_pairs = [
                 (fiducial_tiles[tile], image_id) for tile, image_id in sample_pairs
             ]
-        data_camera_corrected = []
-        for tile, image_id in sample_pairs:
-            image = datastore.load_local_corrected_image(
-                tile=tile, **{image_kind: image_id}
-            )
-            if channel_idx != 0 or image_has_signal(image.result()):
-                data_camera_corrected.append(image)
-                if channel_idx == 0:
-                    fiducial_tiles.append(tile)
-                if len(data_camera_corrected) == max_flatfield_images:
-                    break
-            del image
-        if not data_camera_corrected:
-            raise ValueError(
-                f"No images in channel {channel_idx} contain signal above background."
-            )
-        if channel_idx == 0 and len(data_camera_corrected) < min(
-            num_tiles, max_flatfield_images
-        ):
-            warnings.warn(
-                f"Only {len(data_camera_corrected)} images in channel {channel_idx} "
-                "contain signal; using all available signal tiles.",
-                stacklevel=2,
-            )
-        illumination = estimate_shading(data_camera_corrected)
-        del data_camera_corrected
+        illumination = estimate_shading(
+            datastore.load_local_corrected_image(tile=tile, **{image_kind: image_id})
+            for tile, image_id in sample_pairs
+        )
         illuminations.append(illumination)
 
         for image_id in tqdm(image_ids, desc=image_kind, leave=False):

@@ -1,3 +1,5 @@
+import json
+import weakref
 from concurrent.futures import Future
 from contextlib import nullcontext
 from pathlib import Path
@@ -109,6 +111,8 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
 ):
     root = Path("/mock/acquisition")
     monkeypatch.setattr(Path, "exists", Mock(return_value=True))
+    save_ids = Mock()
+    monkeypatch.setattr(Path, "write_text", save_ids)
     monkeypatch.setattr(pd, "read_csv", Mock(return_value=pd.DataFrame([[1, 1, 2]])))
     monkeypatch.setattr(
         create_datastore,
@@ -153,30 +157,33 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
         num_tiles=num_tiles,
         num_rounds=1,
         bit_ids=["bit001", "bit002"] if num_ch == 3 else [],
+        tile_ids=[f"tile{i:04d}" for i in range(num_tiles)],
     )
-    candidates = (
-        np.random.default_rng(0)
-        .choice(num_tiles, size=num_tiles, replace=False)
-        .tolist()
-    )
+    candidates = list(range(num_tiles))
     empty_tiles = set(candidates[:empty_count])
     checked = []
 
     readout_tiles = []
+    live_images = []
+    samples = []
 
     def load_image(*, tile, round=None, bit=None, return_future=True):
+        if not samples or return_future:
+            assert all(ref() is None for ref in live_images)
         assert isinstance(tile, int)
         assert (round == 0 and bit is None) or bit in datastore.bit_ids
         image = np.full((1, 32, 48), 100 + tile, dtype=np.uint16)
         if round == 0 and tile not in empty_tiles:
             image[:, 12:20, 18:26] += 1000
+        if not samples or return_future:
+            live_images.append(weakref.ref(image))
         if not return_future:
+            if not samples:
+                checked.append(tile)
             return image
         future = Future()
         future.set_result(image)
-        if round == 0:
-            checked.append(tile)
-        else:
+        if bit is not None:
             readout_tiles.append(tile)
         return future
 
@@ -184,7 +191,17 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
     monkeypatch.setattr(
         create_datastore, "qi2labDataStore", Mock(return_value=datastore)
     )
-    estimator = Mock(return_value=np.full((32, 48), 0.5, dtype=np.float32))
+
+    def estimate(images):
+        assert all(ref() is None for ref in live_images)
+        samples.append([])
+        for image in images:
+            samples[-1].append(int(image.result()[0, 0, 0]) - 100)
+            del image
+        assert all(ref() is None for ref in live_images)
+        return np.full((32, 48), 0.5, dtype=np.float32)
+
+    estimator = Mock(side_effect=estimate)
     monkeypatch.setattr(create_datastore, "estimate_shading", estimator)
 
     available = num_tiles - empty_count
@@ -204,6 +221,10 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
             noise_map_shape_yx=(4, 6),
         )
     assert len(checked) == len(set(checked))
+    assert checked == candidates
+    assert json.loads(save_ids.call_args.args[0]) == [
+        datastore.tile_ids[tile] for tile in candidates if tile not in empty_tiles
+    ]
     if not available:
         estimator.assert_not_called()
         datastore.save_local_corrected_image.assert_not_called()
@@ -211,21 +232,19 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
         return
 
     assert estimator.call_count == num_ch
-    sampled = estimator.call_args_list[0].args[0]
-    tiles = [int(image.result()[0, 0, 0]) - 100 for image in sampled]
+    tiles = samples[0]
     assert len(tiles) == expected_count
     assert not set(tiles) & empty_tiles
-    assert checked == candidates[: empty_count + expected_count]
     assert len(set(tiles)) == len(tiles)
     assert all(0 <= tile < num_tiles for tile in tiles)
-    assert set(readout_tiles) == (set(tiles) if num_ch > 1 else set())
+    assert not set(readout_tiles) & empty_tiles
     assert len(readout_tiles) == (num_ch - 1) * len(tiles)
-    for call in estimator.call_args_list:
-        assert {int(image.result()[0, 0, 0]) - 100 for image in call.args[0]} == set(
-            tiles
-        )
-    if num_tiles > 100 and not empty_count:
-        assert max(tiles) >= limit  # sample the acquisition, not just its first tiles
+    for sampled in samples:
+        assert len(sampled) == len(set(sampled)) == expected_count
+        assert set(sampled) <= set(candidates) - empty_tiles
+        if num_tiles > 100 and not empty_count:
+            # Every channel samples the eligible pool, not its first 100 IDs.
+            assert max(sampled) >= limit
     writes = datastore.save_local_corrected_image.call_args_list
     assert len(writes) == num_tiles * num_ch
     assert {call.kwargs["tile"] for call in writes} == set(range(num_tiles))

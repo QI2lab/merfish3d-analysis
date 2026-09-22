@@ -8,27 +8,53 @@ Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
 """
 
 from pathlib import Path
+from typing import Annotated, Literal
 
 import typer
 
-from merfish3danalysis.PixelDecoder import PixelDecoder
+from merfish3danalysis.PixelDecoder import (
+    ChromaticAffineEstimationConfig,
+    PixelDecoder,
+)
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 app = typer.Typer(pretty_exceptions_enable=False)
 
+QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD = (1.5, 10.0)
+QI2LAB_2D_DEFAULT_MINIMUM_PIXELS = 7
+QI2LAB_3D_DEFAULT_MINIMUM_PIXELS = 16
 QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
     5.0: 0.2,
 }
+QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST = {
+    3.0: 0.3,
+    5.0: 0.2,
+}
 QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
+QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
 def _nearest_nyquist_multiple(
     thresholds_by_multiple: dict[float, float],
     nyquist_multiple: float,
 ) -> float:
-    """Return the configured Nyquist multiple nearest to a measured multiple."""
+    """
+    Return the configured Nyquist multiple nearest to a measured multiple.
+
+    Parameters
+    ----------
+    thresholds_by_multiple : dict[float, float]
+        Threshold table keyed by Nyquist sampling multiple.
+    nyquist_multiple : float
+        Measured axial step divided by the axial Nyquist step.
+
+    Returns
+    -------
+    float
+        Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
+    """
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -39,16 +65,77 @@ def _nearest_nyquist_multiple(
     return best_multiple
 
 
-def _default_minimum_pixels() -> int:
-    """Return the required 2D workflow's minimum-pixel threshold."""
-
-    return 7
-
-
-def _default_magnitude_threshold(
+def _effective_decode_mode(
     datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"],
+) -> Literal["2d", "3d"]:
+    """
+    Resolve the decode mode used for defaults and connected components.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore used to infer microscope type when ``decode_mode`` is "auto".
+    decode_mode : {'auto', '2d', '3d'}
+        Requested decode mode.
+
+    Returns
+    -------
+    {'2d', '3d'}
+        Effective decode mode.
+    """
+    if decode_mode == "auto":
+        return "2d" if datastore.microscope_type == "2D" else "3d"
+    if decode_mode in {"2d", "3d"}:
+        return decode_mode
+    raise typer.BadParameter("decode_mode must be one of 'auto', '2d', or '3d'.")
+
+
+def _default_qi2lab_minimum_pixels(
+    datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
+) -> int:
+    """
+    Return the default minimum-pixel threshold for qi2lab decoding.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore used to infer microscope type when ``decode_mode`` is "auto".
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
+
+    Returns
+    -------
+    int
+        Default minimum-pixel threshold.
+    """
+    if _effective_decode_mode(datastore, decode_mode) == "2d":
+        return QI2LAB_2D_DEFAULT_MINIMUM_PIXELS
+    return QI2LAB_3D_DEFAULT_MINIMUM_PIXELS
+
+
+def _default_qi2lab_magnitude_threshold(
+    datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
 ) -> tuple[float, float]:
-    """Return the current qi2lab default magnitude threshold."""
+    """
+    Return the sampling-aware default magnitude threshold for qi2lab decoding.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore used to infer microscope type and axial sampling.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
+
+    Returns
+    -------
+    tuple[float, float]
+        Default magnitude threshold range.
+    """
+    if _effective_decode_mode(datastore, decode_mode) != "2d":
+        return QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD
 
     z_step_um = float(datastore.voxel_size_zyx_um[0])
     nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
@@ -56,78 +143,428 @@ def _default_magnitude_threshold(
         QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
         nyquist_multiple,
     )
-    return (QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple], 10.0)
+    lower_threshold = QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
+    return (lower_threshold, QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD[1])
 
+
+def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
+    """
+    Return whether registered readout data were saved after deconvolution.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore containing registered readout metadata.
+
+    Returns
+    -------
+    bool
+        True if the first registered readout records deconvolution metadata.
+    """
+    tile_ids = datastore.tile_ids
+    bit_ids = datastore.bit_ids
+    if tile_ids is None or bit_ids is None:
+        return False
+    tile_ids = list(tile_ids)
+    bit_ids = list(bit_ids)
+    if not tile_ids or not bit_ids:
+        return False
+
+    attributes = datastore.load_local_image_metadata(
+        tile_ids[0],
+        bit=bit_ids[0],
+        image_names=("decon_data",),
+    )
+    return bool(attributes.get("deconvolution", False))
+
+
+def _default_qi2lab_feature_predictor_threshold(
+    datastore: qi2labDataStore,
+    decode_mode: Literal["auto", "2d", "3d"] = "auto",
+) -> float:
+    """
+    Return the sampling-aware default U-FISH mask threshold.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore used to infer microscope type and axial sampling.
+    decode_mode : {'auto', '2d', '3d'}, default 'auto'
+        Decode mode used for default selection.
+
+    Returns
+    -------
+    float
+        Default feature-predictor threshold.
+    """
+    if _effective_decode_mode(
+        datastore, decode_mode
+    ) != "2d" or not _readouts_are_deconvolved(datastore):
+        return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
+
+    z_step_um = float(datastore.voxel_size_zyx_um[0])
+    nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
+    nearest_multiple = _nearest_nyquist_multiple(
+        QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
+        nyquist_multiple,
+    )
+    return QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
+
+
+def _validate_filter_arguments(
+    filter_method: Literal["blank_fraction", "lr"],
+    target_gross_misid_rate: float,
+    lr_fdr_target: float,
+) -> None:
+    """
+    Validate that the selected filter uses the matching control parameter.
+
+    Parameters
+    ----------
+    filter_method : {'blank_fraction', 'lr'}
+        Transcript filtering method.
+    target_gross_misid_rate : float
+        Gross misidentification-rate target for blank-fraction filtering.
+    lr_fdr_target : float
+        False-discovery-rate target for LR filtering.
+
+    Returns
+    -------
+    None
+        This function raises when arguments are inconsistent.
+    """
+    if filter_method == "blank_fraction":
+        if lr_fdr_target != 0.05:
+            raise typer.BadParameter(
+                "--lr-fdr-target only applies with --filter-method lr. "
+                "Use --target-gross-misid-rate with --filter-method "
+                "blank_fraction."
+            )
+        return
+
+    if filter_method == "lr":
+        if target_gross_misid_rate != 0.05:
+            raise typer.BadParameter(
+                "--target-gross-misid-rate only applies with "
+                "--filter-method blank_fraction. Use --lr-fdr-target with "
+                "--filter-method lr."
+            )
+        return
+
+    raise typer.BadParameter("filter_method must be one of 'blank_fraction' or 'lr'.")
+
+
+def _load_optimization_exclusions_file(path: Path) -> list[str]:
+    """Load one codebook gene ID per line from a UTF-8 text file."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise typer.BadParameter(
+            f"Could not read optimization exclusions file {path}: {error}",
+            param_hint="--optimization-exclusions-file",
+        ) from error
+
+    gene_ids = []
+    for line in lines:
+        value = line.strip()
+        if value and not value.startswith("#"):
+            gene_ids.append(value)
+    if not gene_ids:
+        raise typer.BadParameter(
+            "Optimization exclusions file contains no gene IDs. Provide one "
+            "codebook gene_id per line; blank lines and lines beginning with "
+            "'#' are ignored.",
+            param_hint="--optimization-exclusions-file",
+        )
+    return gene_ids
+
+
+def _optimization_exclusions_path(datastore_path: Path, path: Path) -> Path:
+    """Resolve a relative exclusions filename inside the datastore directory."""
+    if path.is_absolute():
+        return path
+    return datastore_path / path
 
 def decode_pixels(
     root_path: Path,
+    num_gpus: int = 1,
     minimum_pixels_per_RNA: int | None = None,
-    feature_predictor_threshold: float = 0.5,
+    feature_predictor_threshold: float | None = None,
     magnitude_threshold: tuple[float, float] | None = None,
+    filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
+    lr_fdr_target: float = 0.05,
+    merfish_bits: int = 22,
+    skip_optimization: bool = False,
+    optimization_exclusions_file: Path | None = None,
+    normalization_method: Literal["iterative", "global", "none"] = "iterative",
+    estimate_chromatic_affines: bool = True,
+    chromatic_min_pairs: int = 20,
+    chromatic_distance_filter_min_pairs_multiplier: int = 4,
+    chromatic_distance_filter_percentile: float = 25.0,
+    chromatic_weight_filter_min_pairs_multiplier: int = 2,
+    chromatic_weight_filter_percentile: float = 25.0,
+    chromatic_residual_threshold_um: float = 0.35,
+    chromatic_residual_threshold_z_spacing_fraction: float = 0.5,
+    chromatic_z_limit_spacing_multiplier: float = 3.5,
+    chromatic_lateral_scale_min: float = 0.85,
+    chromatic_lateral_scale_max: float = 1.05,
+    chromatic_lateral_shear_max: float = 0.08,
+    chromatic_max_iterations: int = 6,
+    chromatic_scale_regularization: float = 0.0,
+    chromatic_robust_z_mad_multiplier: float = 3.0,
+    chromatic_robust_z_mad_scale: float = 1.4826,
+    chromatic_ransac_seed: int = 1729,
+    chromatic_ransac_min_iterations: int = 64,
+    chromatic_ransac_max_iterations: int = 512,
+    chromatic_ransac_sample_size: int = 3,
+    chromatic_centroid_z_support: int = 7,
+    chromatic_centroid_weight_epsilon: float = 1e-6,
+    reprocess_existing: bool = False,
+    decode_mode: Literal["auto", "2d", "3d"] = "2d",
+    normalization_features: Annotated[
+        Literal["all", "cells"],
+        typer.Option(
+            help="Features used to fit normalization: all, or inside Cellpose masks (cells)."
+        ),
+    ] = "cells",
 ) -> None:
     """Perform pixel decoding.
 
     Parameters
     ----------
-    root_path: Path
-        path to experiment
+    root_path : Path
+        Experiment root directory.
+    num_gpus : int, default=1
+        Number of GPUs to use.
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
-        Defaults to 7 for this required 2D workflow.
-    feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.5
-    magnitude_threshold: tuple[float,float], optional
-        lower and upper magnitude threshold to accept a spot.
-        Defaults to the 2D lookup by axial sampling.
-    target_gross_misid_rate : float
-        gross barcode misidentification-rate target for blank-fraction filtering.
-        Default = .05
+        Defaults to 7 for 2D data and 16 for 3D data.
+    feature_predictor_threshold : float, optional
+        Legacy option retained for compatibility. Readout images are now
+        weighted by the feature-predictor image before lowpass filtering rather
+        than thresholded by this value.
+    magnitude_threshold : tuple[float, float], optional
+        Magnitude threshold range to accept a decoded pixel. Defaults to
+        (1.5, 10.0) for 3D data and a 2D lookup keyed by
+        axial sampling relative to the 0.315 um Nyquist reference:
+        ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
+    filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
+        downstream transcript filter. Supported values are "blank_fraction" and "lr".
+    target_gross_misid_rate : float, default=0.05
+        Gross misidentification-rate target for blank-fraction filtering.
+    lr_fdr_target : float, default=0.05
+        False discovery rate target for LR filtering.
+    merfish_bits : int | None, default=None
+        Number of bits in codebook. By default uses all bits in codebook.
+    skip_optimization : bool, default=False
+        Skip running iterative optimization.
+    optimization_exclusions_file : Path or None, default=None
+        UTF-8 text file containing one codebook ``gene_id`` per line to suppress
+        during iterative optimization. Blank lines and ``#`` comments are
+        ignored. Relative paths are resolved inside the qi2lab datastore
+        directory. This does not exclude codewords from final decoding.
+    normalization_method : {"iterative", "global", "none"}, default "iterative"
+        normalization source for pixel decoding.
+    estimate_chromatic_affines : bool, default=False
+        If True, estimate chromatic affine transforms during iterative
+        normalization. Existing datastore calibration is still used by default.
+    chromatic_min_pairs : int, default=20
+        Minimum paired transcripts required for each chromatic affine fit.
+    chromatic_distance_filter_min_pairs_multiplier : int, default=4
+        Required multiple of ``chromatic_min_pairs`` before distance filtering.
+    chromatic_distance_filter_percentile : float, default=25.0
+        Distance percentile retained for high-confidence chromatic pairs.
+    chromatic_weight_filter_min_pairs_multiplier : int, default=2
+        Required multiple of ``chromatic_min_pairs`` before weight filtering.
+    chromatic_weight_filter_percentile : float, default=25.0
+        Weight percentile used for chromatic pair filtering.
+    chromatic_residual_threshold_um : float, default=0.35
+        Minimum residual threshold in microns for robust affine fitting.
+    chromatic_residual_threshold_z_spacing_fraction : float, default=0.5
+        Z-spacing fraction used to derive the residual threshold.
+    chromatic_z_limit_spacing_multiplier : float, default=3.5
+        Z-spacing multiplier used for cumulative affine plausibility checks.
+    chromatic_lateral_scale_min : float, default=0.85
+        Minimum plausible cumulative lateral scale.
+    chromatic_lateral_scale_max : float, default=1.05
+        Maximum plausible cumulative lateral scale.
+    chromatic_lateral_shear_max : float, default=0.08
+        Maximum plausible cumulative lateral shear.
+    chromatic_max_iterations : int, default=6
+        Robust affine refit iteration count.
+    chromatic_scale_regularization : float, default=0.0
+        Lateral scale regularization toward identity.
+    chromatic_robust_z_mad_multiplier : float, default=3.0
+        MAD multiplier used for robust Z-translation filtering.
+    chromatic_robust_z_mad_scale : float, default=1.4826
+        MAD-to-sigma scale factor for robust Z filtering.
+    chromatic_ransac_seed : int, default=1729
+        Random seed for chromatic affine RANSAC sampling.
+    chromatic_ransac_min_iterations : int, default=64
+        Minimum chromatic affine RANSAC iteration count.
+    chromatic_ransac_max_iterations : int, default=512
+        Maximum chromatic affine RANSAC iteration count.
+    chromatic_ransac_sample_size : int, default=3
+        Number of paired transcripts sampled per RANSAC proposal.
+    chromatic_centroid_z_support : int, default=7
+        Z-support window for on-bit weighted centroid extraction in 3D mode.
+        2D mode always uses one plane and estimates only lateral corrections.
+    chromatic_centroid_weight_epsilon : float, default=1e-6
+        Epsilon used for weighted-centroid normalization.
+    reprocess_existing : bool, default=False
+        Reprocess existing exact-called decoded data. Legacy decoded
+        parquet files from the old caller are not supported.
+    decode_mode : {"auto", "2d", "3d"}, default "auto"
+        Decode mode. ``auto`` follows the datastore microscope type; explicit
+        values control connected-component extraction and default thresholds.
+    normalization_features : {"all", "cells"}, default "cells"
+        Use all features or only features inside Cellpose outlines to estimate
+        global and iterative normalization. With no segmentation, ``cells``
+        uses all features. This controls fitting, not the final feature export.
     """
+    optimization_excluded_gene_ids: list[str] = []
+    if optimization_exclusions_file is not None:
+        if skip_optimization:
+            raise typer.BadParameter(
+                "--optimization-exclusions-file cannot be used with "
+                "--skip-optimization.",
+                param_hint="--optimization-exclusions-file",
+            )
+        if reprocess_existing:
+            raise typer.BadParameter(
+                "--optimization-exclusions-file cannot be used with "
+                "--reprocess-existing because iterative optimization does not run.",
+                param_hint="--optimization-exclusions-file",
+            )
 
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path)
+    if optimization_exclusions_file is not None:
+        exclusions_path = _optimization_exclusions_path(
+            datastore_path,
+            optimization_exclusions_file,
+        )
+        optimization_excluded_gene_ids = _load_optimization_exclusions_file(
+            exclusions_path
+        )
     datastore = qi2labDataStore(datastore_path, validate=False)
-    merfish_bits = 22
+    _effective_decode_mode(datastore, decode_mode)
+    print(f"Using datastore at {datastore_path}")
+    print(f"Normalization features: {normalization_features}")
+    if merfish_bits is None:
+        merfish_bits = datastore.num_bits
     if minimum_pixels_per_RNA is None:
-        minimum_pixels_per_RNA = _default_minimum_pixels()
+        minimum_pixels_per_RNA = _default_qi2lab_minimum_pixels(
+            datastore,
+            decode_mode=decode_mode,
+        )
+    if feature_predictor_threshold is None:
+        feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
+            datastore,
+            decode_mode=decode_mode,
+        )
     if magnitude_threshold is None:
-        magnitude_threshold = _default_magnitude_threshold(datastore)
-
-    # initialize decodor class
+        magnitude_threshold = _default_qi2lab_magnitude_threshold(
+            datastore,
+            decode_mode=decode_mode,
+        )
+    _validate_filter_arguments(
+        filter_method=filter_method,
+        target_gross_misid_rate=target_gross_misid_rate,
+        lr_fdr_target=lr_fdr_target,
+    )
+    print(f"merfish_bits: {merfish_bits}")
+    # initialize decoder class
     decoder = PixelDecoder(
         datastore=datastore,
-        decode_mode="2d",  # Required for the 1.5 micron axial spacing.
         use_mask=False,
         merfish_bits=merfish_bits,
-        num_gpus=1,
+        num_gpus=num_gpus,
         verbose=1,
+        decode_mode=decode_mode,
+        normalization_features=normalization_features,
+        estimate_chromatic_affines=estimate_chromatic_affines,
+        chromatic_affine_config=ChromaticAffineEstimationConfig(
+            min_pairs=chromatic_min_pairs,
+            distance_filter_min_pairs_multiplier=(
+                chromatic_distance_filter_min_pairs_multiplier
+            ),
+            distance_filter_percentile=chromatic_distance_filter_percentile,
+            weight_filter_min_pairs_multiplier=(
+                chromatic_weight_filter_min_pairs_multiplier
+            ),
+            weight_filter_percentile=chromatic_weight_filter_percentile,
+            residual_threshold_um=chromatic_residual_threshold_um,
+            residual_threshold_z_spacing_fraction=(
+                chromatic_residual_threshold_z_spacing_fraction
+            ),
+            z_limit_spacing_multiplier=chromatic_z_limit_spacing_multiplier,
+            lateral_scale_min=chromatic_lateral_scale_min,
+            lateral_scale_max=chromatic_lateral_scale_max,
+            lateral_shear_max=chromatic_lateral_shear_max,
+            max_iterations=chromatic_max_iterations,
+            scale_regularization=chromatic_scale_regularization,
+            robust_z_mad_multiplier=chromatic_robust_z_mad_multiplier,
+            robust_z_mad_scale=chromatic_robust_z_mad_scale,
+            ransac_seed=chromatic_ransac_seed,
+            ransac_min_iterations=chromatic_ransac_min_iterations,
+            ransac_max_iterations=chromatic_ransac_max_iterations,
+            ransac_sample_size=chromatic_ransac_sample_size,
+            centroid_z_support=chromatic_centroid_z_support,
+            centroid_weight_epsilon=chromatic_centroid_weight_epsilon,
+        ),
     )
 
-    # optimize normalization weights through iterative decoding and update
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=10,
-        n_iterations=5,
-        minimum_pixels=minimum_pixels_per_RNA,
-        feature_predictor_threshold=feature_predictor_threshold,
-        magnitude_threshold=magnitude_threshold,
-    )
+    if optimization_excluded_gene_ids:
+        try:
+            resolved_gene_ids, _indices = decoder._resolve_excluded_gene_ids(
+                optimization_excluded_gene_ids
+            )
+        except ValueError as error:
+            raise typer.BadParameter(
+                str(error),
+                param_hint="--optimization-exclusions-file",
+            ) from error
+        optimization_excluded_gene_ids = list(resolved_gene_ids)
 
-    # decode all tiles using iterative normalization weights
-    decoder.decode_all_tiles(
-        assign_to_cells=True,
-        magnitude_threshold=magnitude_threshold,
-        minimum_pixels=minimum_pixels_per_RNA,
-        feature_predictor_threshold=feature_predictor_threshold,
-        target_gross_misid_rate=target_gross_misid_rate,
-    )
+    if not (reprocess_existing):
+        if not skip_optimization:
+            # optimize normalization weights through iterative decoding and update
+            decoder.optimize_normalization_by_decoding(
+                n_random_tiles=20,
+                n_iterations=5,
+                minimum_pixels=minimum_pixels_per_RNA,
+                feature_predictor_threshold=feature_predictor_threshold,
+                magnitude_threshold=magnitude_threshold,
+                excluded_gene_ids=optimization_excluded_gene_ids,
+            )
+
+        # decode all tiles using iterative normalization weights
+        decoder.decode_all_tiles(
+            assign_to_cells=True,
+            magnitude_threshold=magnitude_threshold,
+            minimum_pixels=minimum_pixels_per_RNA,
+            feature_predictor_threshold=feature_predictor_threshold,
+            normalization_method=normalization_method,
+            filter_method=filter_method,
+            target_gross_misid_rate=target_gross_misid_rate,
+            lr_fdr_target=lr_fdr_target,
+        )
+    else:
+        decoder.optimize_filtering(
+            assign_to_cells=True,
+            filter_method=filter_method,
+            target_gross_misid_rate=target_gross_misid_rate,
+            lr_fdr_target=lr_fdr_target,
+        )
 
 
 @app.command()
-def main(root_path: Path) -> None:
+def main(root_path: Path, reprocess_existing: bool = False) -> None:
     """Decode the Zhuang experiment using its dataset-specific parameters."""
     root_path = root_path.expanduser().resolve()
-    decode_pixels(root_path=root_path)
+    decode_pixels(root_path=root_path,reprocess_existing=reprocess_existing)
 
 
 if __name__ == "__main__":

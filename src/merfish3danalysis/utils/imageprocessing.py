@@ -14,10 +14,16 @@ History:
 import gc
 import io
 from contextlib import redirect_stdout
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numba import njit, prange
 from numpy.typing import ArrayLike
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from tensorstore import Future
 
 
 def replace_hot_pixels(
@@ -108,13 +114,14 @@ def image_has_signal(
     return bool(np.any(np.bincount(labels.ravel())[1:] >= minimum_pixels))
 
 
-def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
+def estimate_shading(images: "Iterable[Future]") -> ArrayLike:
     """Estimate shading using stack of images and BaSiCPy.
 
     Parameters
     ----------
-    images: ArrayLike
-        4D image stack [p,z,y,x]
+    images: Iterable[Future]
+        Read futures yielding ZYX images. Pass a generator to load one stack at
+        a time. Only YX maximum projections are retained for fitting.
 
     Returns
     -------
@@ -129,6 +136,7 @@ def estimate_shading(images: list[ArrayLike]) -> ArrayLike:
     maxz_images = []
     for image in images:
         maxz_images.append(cp.squeeze(cp.max(image.result(), axis=0)))
+        del image
 
     maxz_images = cp.asnumpy(maxz_images).astype(np.uint16)
     gc.collect()

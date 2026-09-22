@@ -1,7 +1,9 @@
 """Zhuang illumination correction with generated images and real persistence."""
 
+import json
 import runpy
 import sys
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -81,6 +83,9 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
 
     # Estimation is capped for every channel; all tiles are still corrected below.
     assert [len(channel) for channel in samples] == [min(max_images, 2)] * 3
+    if max_images == 1:
+        # Seeded random selection chooses the second eligible tile, not the first.
+        assert int(samples[0][0][0, 1, 0]) == 92
     for channel, values in zip(samples, [(46, 92), (46, 92), (92, 184)], strict=True):
         intensities = [int(image[0, 1, 0]) for image in channel]
         assert len(set(intensities)) == len(intensities)
@@ -88,6 +93,9 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
     assert all(image.shape == (2, 4, 3) for channel in samples for image in channel)
 
     datastore = qi2labDataStore(output, validate=False)
+    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == list(
+        datastore.tile_ids
+    )
     assert datastore.datastore_state["Corrected"] is True
     for tile in range(2):
         for kind, count in [("round", 19), ("bit", 38)]:
@@ -170,6 +178,9 @@ def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
     assert [int(images[0][0, 1, 0]) for images in samples] == [92, 92, 184]
     datastore = qi2labDataStore(output, validate=False)
     assert datastore.datastore_state["Corrected"] is True
+    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == [
+        datastore.tile_ids[1]
+    ]
     for tile in range(2):
         for kind in ("round", "bit"):
             path = datastore.local_image_path(tile, "corrected_data", **{kind: 0})
@@ -185,8 +196,44 @@ def test_zhuang_no_signal_stops_before_flatfield_fitting(
     monkeypatch.setitem(zhuang_conversion.__globals__, "image_has_signal", screen)
     monkeypatch.setitem(zhuang_conversion.__globals__, "estimate_shading", estimate)
     output = tmp_path / "qi2labdatastore"
-    with pytest.raises(ValueError, match="No images in channel 0"):
+    with pytest.raises(ValueError, match="No fiducial tiles"):
         zhuang_conversion(tmp_path, output_path=output, max_flatfield_images=1)
     assert screen.call_count == 2
     estimate.assert_not_called()
+    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == []
     assert qi2labDataStore(output, validate=False).datastore_state["Corrected"] is False
+
+
+@pytest.mark.integration
+def test_zhuang_releases_screened_and_sampled_stacks(
+    zhuang_conversion, tmp_path, monkeypatch
+):
+    load = qi2labDataStore.load_local_corrected_image
+    live_images = []
+    fits = []
+
+    def load_image(datastore, *args, **kwargs):
+        assert all(ref() is None for ref in live_images)
+        result = load(datastore, *args, **kwargs)
+        if not fits:
+            live_images.append(weakref.ref(result))
+        return result
+
+    def estimate(images):
+        assert all(ref() is None for ref in live_images)
+        fits.append([])
+        for future in images:
+            image = future.result()
+            live_images.append(weakref.ref(image))
+            fits[-1].append(image.max(axis=0))
+            del image, future
+        assert all(ref() is None for ref in live_images)
+        return np.ones((4, 3), dtype=np.float32)
+
+    monkeypatch.setattr(qi2labDataStore, "load_local_corrected_image", load_image)
+    monkeypatch.setitem(
+        zhuang_conversion.__globals__, "image_has_signal", lambda _: True
+    )
+    monkeypatch.setitem(zhuang_conversion.__globals__, "estimate_shading", estimate)
+    zhuang_conversion(tmp_path, output_path=tmp_path / "qi2labdatastore")
+    assert [len(projections) for projections in fits] == [2, 2, 2]

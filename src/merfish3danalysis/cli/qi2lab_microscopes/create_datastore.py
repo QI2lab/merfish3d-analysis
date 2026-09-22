@@ -16,6 +16,7 @@ Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 
 import gc
 import io
+import json
 import warnings
 from contextlib import redirect_stdout
 from itertools import compress
@@ -290,9 +291,10 @@ def convert_data(
     hot_pixel_threshold : int, default=100
         Threshold passed to hot-pixel detection when estimating illuminations.
     max_flatfield_images : int, default=100
-        Target number of unique tiles with fiducial signal for the flatfields.
-        Sample without replacement until enough pass or all tiles are checked.
-        Fiducials use round 1; readouts are sampled across the channel's bits.
+        Maximum number of unique tiles randomly sampled per flatfield from all
+        tiles with round-1 fiducial signal. Eligible IDs are saved in
+        ``flatfield_tile_ids.json`` in the datastore. Readouts are sampled across
+        the channel's bits.
     """
     # load illuminations if requested
     # -----------------------------------
@@ -656,41 +658,40 @@ def convert_data(
         del datastore
         datastore = qi2labDataStore(datastore_path)
 
-        data_camera_corrected = []
-
         # Estimate from a bounded sample; apply the correction to every tile.
-        candidate_tiles = (
-            np.random.default_rng(0)
-            .choice(
-                datastore.num_tiles,
-                size=datastore.num_tiles,
-                replace=False,
-            )
-            .tolist()
-        )
         fiducial_tiles = []
         for tile_idx in tqdm(
-            candidate_tiles,
+            range(datastore.num_tiles),
             desc="fiducial flatfield data",
             leave=False,
         ):
-            image = datastore.load_local_corrected_image(tile=tile_idx, round=0)
-            if image_has_signal(image.result()):
-                data_camera_corrected.append(image)
+            image = datastore.load_local_corrected_image(
+                tile=tile_idx, round=0, return_future=False
+            )
+            if image_has_signal(image):
                 fiducial_tiles.append(tile_idx)
-                if len(data_camera_corrected) == max_flatfield_images:
-                    break
             del image
-        if not data_camera_corrected:
+        (datastore_path / "flatfield_tile_ids.json").write_text(
+            json.dumps([datastore.tile_ids[tile] for tile in fiducial_tiles])
+        )
+        if not fiducial_tiles:
             raise ValueError("No fiducial tiles contain signal above background.")
-        if len(data_camera_corrected) < min(datastore.num_tiles, max_flatfield_images):
+        if len(fiducial_tiles) < min(datastore.num_tiles, max_flatfield_images):
             warnings.warn(
-                f"Only {len(data_camera_corrected)} fiducial tiles contain signal; "
+                f"Only {len(fiducial_tiles)} fiducial tiles contain signal; "
                 "using all available signal tiles.",
                 stacklevel=2,
             )
-        fiducial_illumination = estimate_shading(data_camera_corrected)
-        del data_camera_corrected
+        rng = np.random.default_rng(0)
+        sampled_tiles = rng.choice(
+            fiducial_tiles,
+            size=min(len(fiducial_tiles), max_flatfield_images),
+            replace=False,
+        ).tolist()
+        fiducial_illumination = estimate_shading(
+            datastore.load_local_corrected_image(tile=tile, round=0)
+            for tile in sampled_tiles
+        )
         gc.collect()
 
         if save_illuminations:
@@ -724,7 +725,6 @@ def convert_data(
                     round=round_idx,
                 )
 
-        rng = np.random.default_rng(0)
         datastore_bit_ids = list(datastore.bit_ids)
         for channel_idx in tqdm(
             range(1, num_ch),
@@ -742,19 +742,16 @@ def convert_data(
                 max_flatfield_images,
                 rng,
             )
-            data_camera_corrected = []
-            for tile_idx, bit_id in tqdm(
-                sample_pairs,
-                desc=f"readout {channel_idx} flatfield data",
-                leave=False,
-            ):
-                data_camera_corrected.append(
-                    datastore.load_local_corrected_image(
-                        tile=fiducial_tiles[tile_idx], bit=bit_id
-                    )
+            readout_illumination = estimate_shading(
+                datastore.load_local_corrected_image(
+                    tile=fiducial_tiles[tile_idx], bit=bit_id
                 )
-            readout_illumination = estimate_shading(data_camera_corrected)
-            del data_camera_corrected
+                for tile_idx, bit_id in tqdm(
+                    sample_pairs,
+                    desc=f"readout {channel_idx} flatfield data",
+                    leave=False,
+                )
+            )
 
             if save_illuminations:
                 illuminations[channel_idx, :] = readout_illumination

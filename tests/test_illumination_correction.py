@@ -1,5 +1,5 @@
 import sys
-from concurrent.futures import Future
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -17,10 +17,13 @@ class _FutureImage:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("lazy", [False, True])
 def test_estimate_shading_uses_half_resolution_basic_working_size(
     monkeypatch: pytest.MonkeyPatch,
+    lazy: bool,
 ) -> None:
     calls = []
+    live_images = []
 
     class _MemoryPool:
         def free_all_blocks(self) -> None:
@@ -41,6 +44,7 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
 
     class _FakeBaSiC:
         def __init__(self, **kwargs) -> None:
+            assert all(ref() is None for ref in live_images)
             calls.append(("init", kwargs))
             self.flatfield = np.ones((10, 14), dtype=np.float32)
 
@@ -64,7 +68,18 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
             np.full((10, 14), 3, dtype=np.uint16),
         ]
     )
-    shading = estimate_shading([_FutureImage(image), _FutureImage(image)])
+
+    def read_images():
+        for _ in range(2):
+            assert all(ref() is None for ref in live_images)
+            pixels = image.copy()
+            live_images.append(weakref.ref(pixels))
+            yield _FutureImage(pixels)
+            del pixels
+
+    shading = estimate_shading(
+        read_images() if lazy else [_FutureImage(image), _FutureImage(image)]
+    )
 
     assert calls[0] == (
         "init",
@@ -98,15 +113,14 @@ def test_estimate_shading_recovers_known_illumination(count, height, width):
     y, x = np.mgrid[-1 : 1 : complex(height), -1 : 1 : complex(width)]
     illumination = (1 - 0.2 * y**2 - 0.15 * x**2).astype(np.float32)
     illumination /= illumination.max()
-    images = []
-    for intensity in np.linspace(1000, 2500, count):
-        image = Future()
-        image.set_result(
+    images = (
+        _FutureImage(
             np.stack([0.5 * intensity * illumination, intensity * illumination]).astype(
                 np.uint16
             )
         )
-        images.append(image)
+        for intensity in np.linspace(1000, 2500, count)
+    )
 
     shading = estimate_shading(images)
 
