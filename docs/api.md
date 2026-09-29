@@ -255,3 +255,58 @@ The controller exposes three view modes:
 NDV displays image channels. Transcript points and cell boundaries from the
 datastore, Proseg, Cellpose, or Baysor are rendered as sparse VisPy overlays so
 changing transcript selections does not require rebuilding image arrays.
+
+## Tile Export CLI
+
+Export every corrected fiducial round and readout bit for one tile, together
+with its local decoded spots annotated using the final global spots table:
+
+```bash
+uv run qi2lab-export-tile /path/to/experiment --tile-id tile0000
+```
+
+The input can also be an existing datastore directory. The default output is
+`tile_exports/tile0000/` beside the datastore, containing:
+
+```text
+native/fiducial_round001.tif   # one TIFF per fiducial round
+native/bit001.tif             # one TIFF per readout bit
+registered/fiducial_round001.tif
+registered/bit001.tif
+decoded_spots.csv.gz
+```
+
+Only corrected images are used, even when deconvolved data exist. Native TIFFs
+preserve the source dtype. Registered TIFFs contain float32 intensities on the
+round-1 local grid, using its shape and the datastore voxel spacing. All TIFFs
+are OME-TIFF stacks with spatial axes and physical pixel sizes in microns;
+large stacks use BigTIFF. Singleton Z planes may be displayed as YX by readers.
+
+Registration reuses the decoder's stored round affine transforms, available
+SOFIMA deformation fields, and readout chromatic calibration. Round 1's
+fiducial is unchanged; round-1 bits still receive chromatic correction. Missing
+chromatic calibration uses the datastore's identity fallback. Missing SOFIMA
+fields use affine-only registration, and recorded SOFIMA identity fallbacks
+are respected. Nonidentity warps require CUDA, with device selection through
+`--gpu-id` (default `0`).
+
+The CSV preserves all local rows, coordinates, and statistics. Its boolean
+`passes_global_filter` is true exactly when the local spot occurs in the final
+global table for that tile; false includes both quality-filtered spots and
+removed duplicates. Matching uses `tile_idx`, `gene_id`, `barcode_id`, and exact
+local `z`, `y`, `x` coordinates, not DataFrame indices or proximity. Ambiguous
+keys or global spots without a local match cause an error.
+
+All non-key global columns are appended. Columns already present locally are
+copied under `global_file_<column>` so both versions survive; conflicting output
+names cause an error. Unmatched rows have empty global-derived fields. Local
+coordinates overlay the registered images; they do not generally overlay the
+native images. The exporter reads the default local and global decoding outputs,
+which must come from the same decoding run.
+
+Use `--output-dir /path/to/tile-export` to select the exact tile directory,
+`--overwrite` to replace existing export files, and `--verbose 0` to suppress
+routine progress. Output must be outside the datastore. Images are processed
+one at a time and staged alongside the destination before publication, so a
+failed load or warp does not replace an existing export. Missing corrected
+images, required affine transforms, wavelengths, or spot tables cause an error.

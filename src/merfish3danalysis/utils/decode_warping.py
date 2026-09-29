@@ -127,6 +127,7 @@ def warp_image_to_reference_frame(
     spacing_zyx_um: Sequence[float],
     loaded_flow_field: tuple[np.ndarray, Mapping[str, Any]] | None = None,
     gpu_id: int = 0,
+    reference_shape: Sequence[int] | None = None,
 ) -> np.ndarray:
     """
     Warp an image into the reference frame using affine and optional SOFIMA flow.
@@ -144,15 +145,22 @@ def warp_image_to_reference_frame(
         Optional SOFIMA flow field and metadata returned by the datastore.
     gpu_id : int, default=0
         CUDA device ID used for interpolation.
+    reference_shape : Sequence[int] or None, default=None
+        Output Z, Y, X shape. Defaults to the flow metadata shape for SOFIMA,
+        or the input image shape for affine-only warping.
 
     Returns
     -------
     numpy.ndarray
         Image sampled in the reference frame as float32.
     """
-    if loaded_flow_field is None and np.allclose(
-        transform_zyx_um,
-        np.eye(4, dtype=np.float32),
+    if (
+        (reference_shape is None or tuple(reference_shape) == image.shape)
+        and loaded_flow_field is None
+        and np.allclose(
+            transform_zyx_um,
+            np.eye(4, dtype=np.float32),
+        )
     ):
         return np.asarray(image, dtype=np.float32)
 
@@ -170,13 +178,14 @@ def warp_image_to_reference_frame(
                 sofima_flow_field_xyz_px=sofima_flow_field,
                 flow_attrs=flow_attrs,
                 gpu_id=gpu_id,
+                reference_shape=reference_shape,
             ).astype(np.float32, copy=False)
 
     return warp_array_to_reference_gpu(
         image,
         transform_zyx_um=transform_zyx_um,
         spacing_zyx_um=spacing_zyx_um,
-        reference_shape=image.shape,
+        reference_shape=image.shape if reference_shape is None else reference_shape,
         gpu_id=gpu_id,
     ).astype(np.float32, copy=False)
 
@@ -189,6 +198,7 @@ def warp_bit_image_to_reference(
     bit_id: str,
     emission_wavelength_um: float,
     gpu_id: int = 0,
+    reference_shape: Sequence[int] | None = None,
 ) -> np.ndarray:
     """
     Warp one native bit image into the round-1 local reference frame.
@@ -208,6 +218,8 @@ def warp_bit_image_to_reference(
         Emission wavelength for the bit in microns.
     gpu_id : int, default=0
         CUDA device ID used for interpolation.
+    reference_shape : Sequence[int] or None, default=None
+        Optional round-1 output Z, Y, X shape.
 
     Returns
     -------
@@ -242,6 +254,7 @@ def warp_bit_image_to_reference(
         spacing_zyx_um=spacing_zyx_um,
         loaded_flow_field=loaded_flow_field,
         gpu_id=gpu_id,
+        reference_shape=reference_shape,
     )
 
 
