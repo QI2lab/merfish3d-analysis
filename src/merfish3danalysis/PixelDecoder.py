@@ -21,6 +21,7 @@ History:
 import multiprocessing as mp
 
 from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.imageprocessing import image_has_signal
 
 mp.set_start_method("spawn", force=True)
 
@@ -4594,6 +4595,53 @@ class PixelDecoder:
                         self._decoded_image,
                     )
 
+    def _select_normalization_tiles(
+        self, count: int, tile_indices: Sequence[int] | None = None
+    ) -> list[int]:
+        """Sample tiles once each until enough contain fiducial signal or none remain.
+
+        Explicit indices restrict the candidates and preserve their order. Screen
+        the requested Z range and, when present, the round-1 cell mask. Use fewer
+        tiles with a warning if the candidates are exhausted; fail if none qualify.
+        """
+        if count < 1:
+            raise ValueError("The normalization tile count must be at least 1.")
+        all_tiles = list(range(len(self._datastore.tile_ids)))
+        candidates = (
+            list(dict.fromkeys(tile_indices))
+            if tile_indices is not None
+            else sample(all_tiles, len(all_tiles))
+        )
+        if any(tile < 0 or tile >= len(all_tiles) for tile in candidates):
+            raise ValueError("Normalization tile index is outside the datastore.")
+        target = (
+            len(candidates) if tile_indices is not None else min(count, len(candidates))
+        )
+        selected = []
+        for tile in candidates:
+            tile_id = self._datastore.tile_ids[tile]
+            image = self._datastore.load_local_fiducial_image(
+                tile=tile_id, round=0, return_future=False
+            )[self._z_slice]
+            mask = self._normalization_cell_mask_for_tile(
+                tile_id=tile_id, image_shape_zyx=image.shape
+            )
+            if image_has_signal(image, mask=mask):
+                selected.append(tile)
+            if len(selected) == target:
+                break
+        if not selected:
+            raise ValueError(
+                "No normalization tiles contain fiducial signal above background."
+            )
+        if len(selected) < target:
+            warnings.warn(
+                f"Only {len(selected)} of {target} requested normalization tiles contain signal; "
+                "using all available signal tiles.",
+                stacklevel=2,
+            )
+        return selected
+
     def optimize_normalization_by_decoding(
         self,
         n_random_tiles: int = 5,
@@ -4611,7 +4659,7 @@ class PixelDecoder:
         Parameters
         ----------
         n_random_tiles : int, default 5
-            Number of random tiles.
+            Target number of random tiles with fiducial signal above background.
         n_iterations : int, default 10
             Number of iterations.
         minimum_pixels : float, optional
@@ -4623,8 +4671,8 @@ class PixelDecoder:
         magnitude_threshold: Sequence[float], optional
             L2-norm threshold
         tile_indices : Sequence[int], optional
-            Explicit tile indices to use for normalization. If omitted, a random
-            subset of ``n_random_tiles`` is used.
+            Explicit candidate tile indices to screen for normalization. If omitted,
+            sample without replacement until ``n_random_tiles`` qualify or tiles run out.
         estimate_chromatic_affines : bool or None, optional
             If True, estimate chromatic affine transforms after each iterative
             decoding round. If None, use the instance setting supplied at
@@ -4661,7 +4709,7 @@ class PixelDecoder:
                 "assignments: " + ", ".join(blank_exclusions),
                 stacklevel=2,
             )
-        all_tiles = list(range(len(self._datastore.tile_ids)))
+        random_tiles = self._select_normalization_tiles(n_random_tiles, tile_indices)
 
         # preload global normalization once
         self._iterative_background_vector = None
@@ -4678,7 +4726,7 @@ class PixelDecoder:
         self._load_global_normalization_vectors(
             gpu_id=0,
             recalculate=True,
-            tile_indices=tile_indices,
+            tile_indices=random_tiles,
             lowpass_sigma=lowpass_sigma,
         )
         if self._decode_run_key is None:
@@ -4689,12 +4737,6 @@ class PixelDecoder:
         self._temp_dir = temp_dir
 
         # split the same set of tiles each iteration
-        if tile_indices is not None:
-            random_tiles = list(tile_indices)
-        elif len(all_tiles) > n_random_tiles:
-            random_tiles = sample(all_tiles, n_random_tiles)
-        else:
-            random_tiles = all_tiles
         chunk_size = (len(random_tiles) + self._num_gpus - 1) // self._num_gpus
 
         if self._verbose >= 1:

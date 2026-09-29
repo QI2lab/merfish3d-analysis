@@ -254,7 +254,19 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     decoder = _decoder_with_codebook()
     decoder._num_gpus = 1
     decoder._verbose = 0
-    decoder._datastore = SimpleNamespace(tile_ids=["tile000"])
+    fiducials = np.full((3, 1, 32, 48), 100, dtype=np.uint16)
+    fiducials[1:, :, 12:20, 18:26] = 1000
+    decoder._datastore = SimpleNamespace(
+        tile_ids=["tile000", "tile001", "tile002"],
+        load_local_fiducial_image=lambda *, tile, round, return_future: fiducials[
+            int(tile[-3:])
+        ],
+    )
+    decoder._z_slice = slice(None)
+    decoder._normalization_cell_mask_for_tile = lambda **kwargs: None
+    monkeypatch.setattr(
+        pixel_decoder_module, "sample", lambda values, count: list(values)
+    )
     decoder._datastore_path = Path("/unused/datastore")
     decoder._decode_run_key = None
     decoder._decode_mode = "3d"
@@ -267,7 +279,10 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     decoder._load_all_barcodes = lambda: None
     decoder._iterative_normalization_vectors = lambda gpu_id=0: None
 
+    global_calls = []
+
     def _load_global_normalization_vectors(**_kwargs) -> None:
+        global_calls.append(_kwargs)
         decoder._global_background_vector = np.ones(4, dtype=np.float32)
         decoder._global_normalization_vector = np.ones(4, dtype=np.float32)
 
@@ -307,12 +322,15 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     monkeypatch.setattr(pixel_decoder_module, "_join_gpu_workers", lambda *_args: None)
 
     decoder.optimize_normalization_by_decoding(
+        n_random_tiles=2,
         n_iterations=1,
         minimum_pixels=1,
         excluded_gene_ids=["GeneB", "GeneB"],
     )
 
     assert len(captured_args) == 1
+    assert global_calls[0]["tile_indices"] == [1, 2]
+    assert captured_args[0][1][1] == [1, 2]
     assert captured_args[0][1][-2] == ("GeneB",)
     assert captured_args[0][1][-1] == normalization_features
     assert (
