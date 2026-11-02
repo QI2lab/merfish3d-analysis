@@ -32,7 +32,8 @@ jobs:
           project = tomllib.loads(Path("pyproject.toml").read_text())
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
-              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely", "joblib", "numba",
+              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely",
+              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "fastparquet",
           }
           requirements = [
               value for value in project["project"]["dependencies"]
@@ -45,6 +46,9 @@ jobs:
       - name: Test storage, fusion, segmentation coordinates, and shared helpers
         run: |
           .venv/bin/python -m pytest -q -m "not gpu" \
+            tests/test_scene_storage.py \
+            tests/test_ndtiff_ingestion.py \
+            tests/test_process_ndtiff_positions.py \
             tests/test_datastore_image_io.py \
             tests/test_datastore_public_image_io.py \
             tests/test_datastore_validation.py \
