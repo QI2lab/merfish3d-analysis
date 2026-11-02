@@ -103,7 +103,7 @@ def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> N
     np.testing.assert_allclose(recovered_yx, true_pull_shift_px[1:], atol=1.5)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
     cp = _require_cuda()
@@ -128,7 +128,7 @@ def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
     np.testing.assert_allclose(cp.asnumpy(tiny_overlap_shift), (15.0, 0.0, 0.0))
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     _require_cuda()
@@ -148,12 +148,15 @@ def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     np.testing.assert_allclose(recovered_shift_zyx_px, (1.0, 0.0, 0.0), atol=1e-5)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
-def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
+def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract(
+    image_datastore,
+) -> None:
     _require_cuda()
     pytest.importorskip("cucim")
     from scipy.ndimage import shift as ndi_shift
+    from yaozarrs import open_group
 
     from merfish3danalysis.utils.multiview_registration import (
         register_pair_to_fixed,
@@ -189,9 +192,23 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
         atol=0.25,
     )
 
+    image_datastore.save_local_round_transform_zyx_um(transform, tile=0, round=1)
+    scene = open_group(image_datastore.datastore_path).ome_metadata(strict=True)
+    local = next(
+        t
+        for t in scene.scene.coordinateTransformations
+        if t.name == "tile0000/round002/local"
+    )
+    moving_landmark = np.array([10 * spacing_zyx_um[0], 0, 0, 1])
+    np.testing.assert_allclose(
+        np.asarray(local.affine) @ moving_landmark,
+        [8 * spacing_zyx_um[0], 0, 0],
+        atol=0.25 * spacing_zyx_um[0],
+    )
+
     warped = warp_array_to_reference_gpu(
         moving,
-        transform_zyx_um=transform,
+        transform_zyx_um=image_datastore.load_local_round_transform_zyx_um(0, 1),
         spacing_zyx_um=spacing_zyx_um,
         reference_shape=fixed.shape,
         gpu_id=0,
@@ -199,7 +216,7 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract() -> None:
     assert np.sqrt(np.mean((warped - fixed) ** 2)) < 1e-3
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 def test_register_pair_to_fixed_residual_uses_valid_lateral_overlap() -> None:
     _require_cuda()

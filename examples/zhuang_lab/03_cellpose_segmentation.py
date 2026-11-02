@@ -76,27 +76,11 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
 
-    # load the saved downsampled projection and its fused coordinates
-    max_projection_path = (
-        datastore_path
-        / "segmentation"
-        / "cellpose"
-        / "fiducial_max_projection.ome.tiff"
-    )
-    if max_projection_path.exists():
-        fused_image_path = datastore.fused_image_path()
-        attributes = datastore.load_image_metadata(fused_image_path)
-        affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
-        origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-        spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
-        fiducial_max_projection = io.imread_2D(str(max_projection_path))
-    else:
-        # create max projection if the TIFF has not been saved
-        fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = (
-            datastore.load_global_fiducial_image(return_future=False)
-        )
-        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-        del fiducial_fused
+    # Load the saved downsampled projection and its fused coordinates.
+    projection = datastore.load_global_fiducial_projection(return_future=False)
+    if projection is None:
+        raise FileNotFoundError("Fused fiducial projection Scene not found.")
+    fiducial_max_projection, affine_zyx_um, origin_zyx_um, spacing_zyx_um = projection
 
     # initialize cellpose model and options
     model = models.CellposeModel(gpu=True)
@@ -128,8 +112,7 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     imagej_roi_path_dir = (
         datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
     )
-    if not (imagej_roi_path_dir.exists()):
-        imagej_roi_path_dir.mkdir()
+    imagej_roi_path_dir.mkdir(parents=True, exist_ok=True)
     imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
     if np.any(masks):
         io.save_rois(masks, str(imagej_roi_path))

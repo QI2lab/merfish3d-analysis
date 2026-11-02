@@ -2,17 +2,15 @@
 
 import json
 import runpy
-import sys
 import weakref
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 from xml.etree import ElementTree
 
 import numpy as np
 import pandas as pd
 import pytest
-from tifffile import TiffFile
+from tifffile import TiffFile, imwrite
 from yaozarrs import open_group
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -20,11 +18,6 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 @pytest.fixture
 def zhuang_conversion(tmp_path, monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "psfmodels",
-        SimpleNamespace(make_psf=Mock(return_value=np.ones((1, 3, 3)))),
-    )
     example = runpy.run_path(
         str(
             Path(__file__).resolve().parents[1]
@@ -35,15 +28,12 @@ def zhuang_conversion(tmp_path, monkeypatch):
     codebook = pd.DataFrame(
         {"id": [1], "name": ["gene1"], **{f"RS{i}": [1] for i in range(38)}}
     )
-    monkeypatch.setattr(
-        pd,
-        "read_csv",
-        Mock(side_effect=[codebook, pd.DataFrame([[0, 1, 2], [3, 4, 5]])]),
-    )
-    monkeypatch.setattr(
-        Path,
-        "glob",
-        Mock(return_value=[tmp_path / "tile0.tif", tmp_path / "tile1.tif"]),
+    additional = tmp_path / "additional_files"
+    positions = additional / "fov_positions"
+    positions.mkdir(parents=True)
+    codebook.to_csv(additional / "codebook.csv", index=False)
+    pd.DataFrame([[0, 1, 2], [3, 4, 5]]).to_csv(
+        positions / "mouse1_sample1.txt", index=False, header=False
     )
     # Raw CZYX is transposed on conversion. After offset/gain correction,
     # channels alternate 46/92 electrons on tile 0 and 92/184 on tile 1.
@@ -54,7 +44,10 @@ def zhuang_conversion(tmp_path, monkeypatch):
     second = raw.copy()
     second[raw == 200] = 300
     second[raw == 300] = 500
-    monkeypatch.setitem(convert.__globals__, "imread", Mock(side_effect=[raw, second]))
+    images = tmp_path / "mouse1_sample1_raw"
+    images.mkdir()
+    imwrite(images / "tile0.tif", raw, photometric="minisblack")
+    imwrite(images / "tile1.tif", second, photometric="minisblack")
     # Pixel persistence is isolated from the separately tested signal detector.
     monkeypatch.setitem(
         convert.__globals__, "image_has_signal", Mock(return_value=True)
@@ -62,7 +55,7 @@ def zhuang_conversion(tmp_path, monkeypatch):
     return convert
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.parametrize("max_images", [1, 2, 100])
 def test_zhuang_illumination_corrects_and_persists_each_channel(
     zhuang_conversion, tmp_path, monkeypatch, max_images
@@ -121,9 +114,10 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
                 assert metadata["psf_idx"] == channel
                 group = open_group(path)
                 assert group.metadata.zarr_format == 3
-                multiscale = group.attrs["ome"]["multiscales"][0]
-                scale = multiscale["datasets"][0]["coordinateTransformations"][0]
-                np.testing.assert_allclose(scale["scale"], [1.5, 0.108, 0.108])
+                multiscale = group.ome_metadata(strict=True).multiscales[0]
+                np.testing.assert_allclose(
+                    multiscale.datasets[0].transform.scale, [1.5, 0.108, 0.108]
+                )
 
     with TiffFile(tmp_path / "illuminations.ome.tif") as tif:
         np.testing.assert_array_equal(tif.asarray(), flatfields)
@@ -134,7 +128,7 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
             assert pixels.attrib[f"PhysicalSize{axis}Unit"] == "µm"
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_failed_estimation_does_not_mark_conversion_complete(
     zhuang_conversion, tmp_path, monkeypatch
 ):
@@ -156,7 +150,7 @@ def test_zhuang_failed_estimation_does_not_mark_conversion_complete(
     assert datastore.datastore_state["Corrected"] is False
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
     zhuang_conversion, tmp_path, monkeypatch
 ):
@@ -187,7 +181,7 @@ def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
             assert datastore.load_image_metadata(path)["shading_correction"] is True
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_no_signal_stops_before_flatfield_fitting(
     zhuang_conversion, tmp_path, monkeypatch
 ):
@@ -204,7 +198,7 @@ def test_zhuang_no_signal_stops_before_flatfield_fitting(
     assert qi2labDataStore(output, validate=False).datastore_state["Corrected"] is False
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_releases_screened_and_sampled_stacks(
     zhuang_conversion, tmp_path, monkeypatch
 ):

@@ -1,54 +1,27 @@
 from pathlib import Path
-from unittest.mock import Mock, sentinel
+from unittest.mock import patch
 
 import pytest
 import typer
 
-import merfish3danalysis.DataRegistration as data_registration_module
 from merfish3danalysis.cli.qi2lab_microscopes import preprocess
+from merfish3danalysis.DataRegistration import DataRegistration
 
 
 @pytest.mark.unit
-def test_global_fusion_only_uses_stored_transform_fusion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fuse_global_registered = Mock()
+def test_global_fusion_only_uses_stored_transform_fusion(image_datastore):
+    with patch.object(
+        DataRegistration, "fuse_global_registered", autospec=True
+    ) as fuse:
+        preprocess.local_register_data(
+            root_path=image_datastore.datastore_path,
+            global_fusion_only=True,
+        )
 
-    class _FakeDataRegistration:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        def fuse_global_registered(self, *, create_max_proj_tiff: bool) -> None:
-            fuse_global_registered(create_max_proj_tiff=create_max_proj_tiff)
-
-        def global_register(self, *, create_max_proj_tiff: bool) -> None:
-            raise AssertionError("global registration must not run")
-
-        def register_all_tiles(self, **_kwargs) -> None:
-            raise AssertionError("local registration must not run")
-
-    monkeypatch.setattr(
-        data_registration_module,
-        "DataRegistration",
-        _FakeDataRegistration,
-    )
-    monkeypatch.setattr(
-        preprocess,
-        "resolve_datastore_path",
-        lambda _root_path: Path("/unused/qi2labdatastore"),
-    )
-    monkeypatch.setattr(
-        preprocess,
-        "qi2labDataStore",
-        lambda _datastore_path: sentinel.datastore,
-    )
-
-    preprocess.local_register_data(
-        root_path=Path("/unused/experiment"),
-        global_fusion_only=True,
-    )
-
-    fuse_global_registered.assert_called_once_with(create_max_proj_tiff=True)
+    fuse.assert_called_once()
+    registration = fuse.call_args.args[0]
+    assert registration.datastore.datastore_path == image_datastore.datastore_path
+    assert fuse.call_args.kwargs == {"create_max_proj_tiff": True}
 
 
 @pytest.mark.unit
@@ -71,81 +44,34 @@ def test_preprocessing_modes_are_mutually_exclusive(
 
 
 @pytest.mark.unit
-def test_no_decon_disables_readout_deconvolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    constructor_kwargs = {}
-    register_all_tiles = Mock()
+def test_no_decon_disables_readout_deconvolution(image_datastore):
+    with patch.object(
+        DataRegistration, "register_all_tiles", autospec=True
+    ) as register:
+        preprocess.local_register_data(
+            root_path=image_datastore.datastore_path,
+            decon=False,
+        )
 
-    class _FakeDataRegistration:
-        def __init__(self, **kwargs) -> None:
-            constructor_kwargs.update(kwargs)
-
-        def register_all_tiles(self, **kwargs) -> None:
-            register_all_tiles(**kwargs)
-
-    monkeypatch.setattr(
-        data_registration_module,
-        "DataRegistration",
-        _FakeDataRegistration,
-    )
-    monkeypatch.setattr(
-        preprocess,
-        "resolve_datastore_path",
-        lambda _root_path: Path("/unused/qi2labdatastore"),
-    )
-    datastore = Mock()
-    datastore.datastore_state = {}
-    monkeypatch.setattr(
-        preprocess,
-        "qi2labDataStore",
-        lambda _datastore_path: datastore,
-    )
-
-    preprocess.local_register_data(
-        root_path=Path("/unused/experiment"),
-        decon=False,
-    )
-
-    assert constructor_kwargs["decon_fiducial"] is True
-    assert constructor_kwargs["decon_readout"] is False
-    register_all_tiles.assert_called_once_with(process_readouts=True)
+    register.assert_called_once()
+    registration = register.call_args.args[0]
+    assert registration.datastore.datastore_path == image_datastore.datastore_path
+    assert registration._decon_fiducial is True
+    assert registration._decon_readout is False
+    assert register.call_args.kwargs == {"process_readouts": True}
 
 
 @pytest.mark.unit
-def test_fiducial_registration_only_skips_readout_processing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    register_all_tiles = Mock()
+def test_fiducial_registration_only_skips_readout_processing(image_datastore):
+    with patch.object(
+        DataRegistration, "register_all_tiles", autospec=True
+    ) as register:
+        preprocess.local_register_data(
+            root_path=image_datastore.datastore_path,
+            fiducial_registration_only=True,
+        )
 
-    class _FakeDataRegistration:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        def register_all_tiles(self, **kwargs) -> None:
-            register_all_tiles(**kwargs)
-
-    monkeypatch.setattr(
-        data_registration_module,
-        "DataRegistration",
-        _FakeDataRegistration,
-    )
-    monkeypatch.setattr(
-        preprocess,
-        "resolve_datastore_path",
-        lambda _root_path: Path("/unused/qi2labdatastore"),
-    )
-    datastore = Mock()
-    datastore.datastore_state = {}
-    monkeypatch.setattr(
-        preprocess,
-        "qi2labDataStore",
-        lambda _datastore_path: datastore,
-    )
-
-    preprocess.local_register_data(
-        root_path=Path("/unused/experiment"),
-        fiducial_registration_only=True,
-    )
-
-    register_all_tiles.assert_called_once_with(process_readouts=False)
+    register.assert_called_once()
+    registration = register.call_args.args[0]
+    assert registration.datastore.datastore_path == image_datastore.datastore_path
+    assert register.call_args.kwargs == {"process_readouts": False}

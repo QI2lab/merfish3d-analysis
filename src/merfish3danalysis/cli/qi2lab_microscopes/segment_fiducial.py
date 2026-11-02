@@ -15,7 +15,7 @@ from typing import Annotated
 
 import numpy as np
 import typer
-from cellpose import io, models, transforms
+from cellpose import models, transforms
 from roifile import ImagejRoi, roiread, roiwrite
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -118,16 +118,10 @@ def run_cellpose(
     datastore = qi2labDataStore(datastore_path)
     print(f"Using datastore at {datastore_path}")
 
-    fused_image_path = datastore.fused_image_path()
-    if not fused_image_path.exists():
-        raise FileNotFoundError(
-            f"Globally registered fused image not found: {fused_image_path}"
-        )
-
-    attributes = datastore.load_image_metadata(fused_image_path)
-    affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
-    origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-    spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"]).astype(np.float32)
+    projection = datastore.load_global_fiducial_projection(return_future=None)
+    if projection is None:
+        raise FileNotFoundError("Fused fiducial projection Scene not found.")
+    projection_array, affine_zyx_um, origin_zyx_um, spacing_zyx_um = projection
 
     imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
     cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
@@ -152,34 +146,8 @@ def run_cellpose(
         datastore.datastore_state = datastore_state
         return
 
-    max_projection_path = (
-        datastore_path
-        / "segmentation"
-        / "cellpose"
-        / "fiducial_max_projection.ome.tiff"
-    )
-    if max_projection_path.exists():
-        print(
-            f"Loading fused fiducial max projection from {max_projection_path}",
-            flush=True,
-        )
-        fiducial_max_projection = io.imread_2D(str(max_projection_path))
-    else:
-        print(
-            "Max projection TIFF not found; loading full fused Zarr to compute one. "
-            "This can be slow for large datasets.",
-            flush=True,
-        )
-        loaded = datastore.load_global_fiducial_image(return_future=False)
-        if loaded is None:
-            raise RuntimeError(
-                "Could not load globally registered fused fiducial image."
-            )
-        fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded
-        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-        del fiducial_fused
     fiducial_max_projection = transforms.convert_image(
-        np.asarray(fiducial_max_projection), do_3D=False
+        projection_array.read().result(), do_3D=False
     )
     print(
         "Prepared Cellpose input image "

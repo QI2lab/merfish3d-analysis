@@ -117,7 +117,7 @@ def _save_sofima_recovery_png(
     plt.close(fig)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 def test_sofima_estimator_recovers_object_model_warp_field(
     request: pytest.FixtureRequest,
@@ -428,11 +428,15 @@ def test_sofima_estimator_recovers_object_model_warp_field(
     assert np.max(estimated_flow_xyz[2]) >= 3.5
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
-def test_sofima_flow_field_datastore_roundtrip_preserves_warp(tmp_path) -> None:
+def test_sofima_flow_field_datastore_roundtrip_preserves_warp(
+    image_datastore,
+) -> None:
     cp = pytest.importorskip("cupy")
-    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+    from tensorstore import Future, TensorStore
+    from yaozarrs import open_group, v06
+
     from merfish3danalysis.utils.multiview_registration import (
         warp_array_to_reference_with_affine_and_sofima_flow_gpu,
     )
@@ -442,12 +446,8 @@ def test_sofima_flow_field_datastore_roundtrip_preserves_warp(tmp_path) -> None:
     except cp.cuda.runtime.CUDARuntimeError:
         pytest.skip("CUDA device is not available.")
 
-    datastore = qi2labDataStore(tmp_path / "qi2labdatastore", validate=False)
-    datastore.channels_in_data = ["fiducial", "readout"]
+    datastore = image_datastore
     datastore.voxel_size_zyx_um = (0.3, 0.1, 0.1)
-    datastore.num_tiles = 1
-    datastore.num_rounds = 2
-    datastore.experiment_order = np.asarray([[1, 1], [2, 1]], dtype=np.int64)
 
     rng = np.random.default_rng(13)
     image = rng.normal(size=(6, 11, 13)).astype(np.float32)
@@ -517,6 +517,32 @@ def test_sofima_flow_field_datastore_roundtrip_preserves_warp(tmp_path) -> None:
         loaded_attrs["map_box_size_xyz_px"],
         map_box_size_xyz_px,
     )
+    lazy, _ = datastore.load_local_sofima_flow_field(
+        tile=0, round=1, return_future=None
+    )
+    assert isinstance(lazy, TensorStore)
+    np.testing.assert_array_equal(
+        lazy[:, 1:, :, 1:].read().result(), flow_field_xyz_px[:, 1:, :, 1:]
+    )
+    future, _ = datastore.load_local_sofima_flow_field(
+        tile=0, round=1, return_future=True
+    )
+    assert isinstance(future, Future)
+    np.testing.assert_array_equal(future.result(), flow_field_xyz_px)
+
+    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+    transform = next(
+        t
+        for t in scene.scene.coordinateTransformations
+        if t.name == "tile0000/round002/deformable"
+    )
+    assert isinstance(transform, v06.DisplacementsTransformation)
+    systems = {system.name: system for system in scene.scene.coordinateSystems}
+    assert [axis.name for axis in systems[transform.output.name].axes] == list("xyz")
+    stored = open_group(datastore.datastore_path)[transform.path]
+    model = stored.ome_metadata(strict=True)
+    array = stored[model.multiscales[0].datasets[0].path].to_tensorstore()
+    np.testing.assert_array_equal(array.read().result(), flow_field_xyz_px)
 
     reloaded_warp = warp_array_to_reference_with_affine_and_sofima_flow_gpu(
         image,

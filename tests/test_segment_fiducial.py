@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 from merfish3danalysis.cli.qi2lab_microscopes import segment_fiducial
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "cutoff, expected_areas", [(0, [3, 12, 27]), (12, [12, 27]), (28, [])]
 )
@@ -54,39 +54,26 @@ def test_invalid_area_is_rejected_before_loading_data(cutoff):
 
 
 @pytest.fixture
-def saved_segmentation(tmp_path, monkeypatch):
-    datastore_path = tmp_path / "qi2labdatastore"
+def saved_segmentation(image_datastore, monkeypatch):
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [1, 1, 1]
+    datastore.save_global_fiducial_projection(
+        np.ones((20, 20), dtype=np.uint16), np.eye(4), np.zeros(3), np.ones(3)
+    )
+    labels = np.zeros((20, 20), dtype=np.uint16)
+    labels[:3, :3] = 1
+    datastore.save_global_cellpose_segmentation_image(labels, downsampling=[1, 1, 1])
+    datastore_path = datastore.datastore_path
     roi_directory = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
-    roi_directory.mkdir(parents=True)
-    (datastore_path / "datastore_state.json").write_text("{}")
-    fused_path = datastore_path / "fused"
-    fused_path.mkdir()
+    roi_directory.mkdir(parents=True, exist_ok=True)
     pixel_path = roi_directory / "pixel_spacing_rois.zip"
     roiwrite(pixel_path, [ImagejRoi.frompoints([[0, 0], [2, 0], [2, 2], [0, 2]])])
-    datastore = SimpleNamespace(
-        voxel_size_zyx_um=[1, 1, 1],
-        fiducial_folder_name="fiducial",
-        fused_image_path=Mock(return_value=fused_path),
-        load_image_metadata=Mock(
-            return_value={
-                "affine_zyx_um": np.eye(4),
-                "origin_zyx_um": np.zeros(3),
-                "spacing_zyx_um": np.ones(3),
-            }
-        ),
-        load_global_fiducial_image=Mock(
-            side_effect=AssertionError("must not load fused image")
-        ),
-        save_global_cellpose_segmentation_image=Mock(),
-        datastore_state={},
-    )
-    monkeypatch.setattr(segment_fiducial, "qi2labDataStore", lambda _path: datastore)
     monkeypatch.setattr(
         segment_fiducial.models,
         "CellposeModel",
         Mock(side_effect=AssertionError("must not run inference")),
     )
-    return tmp_path, pixel_path, datastore
+    return datastore_path.parent, pixel_path, datastore
 
 
 @pytest.mark.integration
@@ -95,6 +82,7 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
 ):
     root, pixel_path, datastore = saved_segmentation
     original_pixel_rois = pixel_path.read_bytes()
+    original_labels = datastore.load_global_cellpose_segmentation_image(False)
     runner = CliRunner()
     for cutoff, expected_count in [(5, 0), (0, 1), (4, 1)]:
         result = runner.invoke(
@@ -115,11 +103,14 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
         )
         assert pixel_path.read_bytes() == original_pixel_rois
 
-    assert datastore.datastore_state["SegmentedCells"] is True
-    datastore.save_global_cellpose_segmentation_image.assert_not_called()
+    reopened = segment_fiducial.qi2labDataStore(datastore.datastore_path)
+    assert reopened.datastore_state["SegmentedCells"] is True
+    np.testing.assert_array_equal(
+        reopened.load_global_cellpose_segmentation_image(False), original_labels
+    )
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_outlines_only_requires_saved_pixel_rois(saved_segmentation):
     root, pixel_path, _datastore = saved_segmentation
     pixel_path.unlink()
@@ -135,7 +126,7 @@ def test_outlines_only_requires_saving_outputs():
         )
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.parametrize("empty_masks", [False, True])
 def test_inference_exports_filtered_global_rois(
     saved_segmentation, monkeypatch, empty_masks
@@ -150,11 +141,6 @@ def test_inference_exports_filtered_global_rois(
     )
     monkeypatch.setattr(
         segment_fiducial.models, "CellposeModel", Mock(return_value=model)
-    )
-    projection_path = pixel_path.parent.parent / "fiducial_max_projection.ome.tiff"
-    projection_path.touch()
-    monkeypatch.setattr(
-        segment_fiducial.io, "imread_2D", lambda _path: np.ones((20, 20))
     )
     monkeypatch.setattr(
         segment_fiducial,
@@ -176,7 +162,7 @@ def test_inference_exports_filtered_global_rois(
         [] if empty_masks else [16]
     )
     np.testing.assert_array_equal(
-        datastore.save_global_cellpose_segmentation_image.call_args.args[0], masks
+        datastore.load_global_cellpose_segmentation_image(False), masks
     )
 
 
@@ -186,7 +172,7 @@ def test_invalid_worker_count_is_rejected_before_loading_data():
         segment_fiducial.run_cellpose(Path("/unused"), roi_workers=-1)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_failed_streamed_export_preserves_existing_zip(tmp_path, monkeypatch):
     output_path = tmp_path / "global_coords_rois.zip"
     roi = ImagejRoi.frompoints([[0, 0], [1, 0], [1, 1]], name="original")
