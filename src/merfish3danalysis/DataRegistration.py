@@ -233,59 +233,6 @@ def _direct_zarr_fusion_kwargs(
     }
 
 
-def _create_fusion_array(
-    path: Path,
-    shape: tuple[int, ...],
-    dtype: Any,
-    chunks: tuple[int, ...],
-    *,
-    shards: tuple[int, ...] | None,
-    overwrite: bool,
-    compression: str,
-    dimension_names: list[str] | None,
-    compression_level: int = 1,
-) -> Any:
-    """Preserve fusion's bitshuffle codec settings, which yaozarrs cannot set."""
-    import tensorstore as ts
-
-    if shards is not None:
-        raise ValueError("Fusion does not support sharded arrays.")
-    if compression == "zstd":
-        codec = {"name": "zstd", "configuration": {"level": compression_level}}
-    elif compression in ("blosc-zstd", "blosc-lz4"):
-        codec = {
-            "name": "blosc",
-            "configuration": {
-                "cname": compression.removeprefix("blosc-"),
-                "clevel": compression_level,
-                "shuffle": "bitshuffle",
-                "typesize": np.dtype(dtype).itemsize,
-            },
-        }
-    else:
-        raise ValueError(f"Unsupported fusion compression: {compression!r}.")
-    domain: dict[str, Any] = {"shape": list(shape)}
-    if dimension_names:
-        domain["labels"] = dimension_names
-    return ts.open(
-        {
-            "driver": "zarr3",
-            "kvstore": {"driver": "file", "path": str(path)},
-            "schema": {
-                "dtype": np.dtype(dtype).name,
-                "domain": domain,
-                "chunk_layout": {"chunk": {"shape": list(chunks)}},
-                "codec": {
-                    "driver": "zarr3",
-                    "codecs": [codec],
-                },
-            },
-            "create": True,
-            "delete_existing": overwrite,
-        }
-    ).result()
-
-
 def _fuse_views_to_scene(
     datastore: qi2labDataStore,
     msims: list[Any],
@@ -300,13 +247,11 @@ def _fuse_views_to_scene(
     verbose: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Fuse directly into a Scene because MVS cannot write v0.6 metadata."""
-    from functools import partial
-
-    import tensorstore as ts
     from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
     from multiview_stitcher import spatial_image_utils as si_utils
     from yaozarrs import DimSpec, v06
     from yaozarrs.write.v06 import prepare_image
+    from zarr.codecs import BloscCodec, BytesCodec, ZstdCodec
 
     global_transform_key = "global_registered"
     sims = [msi_utils.get_sim_from_msim(msim) for msim in msims]
@@ -370,12 +315,77 @@ def _fuse_views_to_scene(
         datastore.prepare_global_fused_image(fusion_type)
     )
     dtype = np.dtype(sims[0].dtype)
-    _, arrays = prepare_image(
+    if compression == "zstd":
+        codec = ZstdCodec(level=compression_level)
+    else:
+        codec = BloscCodec(
+            cname=compression.removeprefix("blosc-"),
+            clevel=compression_level,
+            shuffle="bitshuffle",
+            typesize=dtype.itemsize,
+        )
+    creation_kwargs = {
+        "zarr_format": 3,
+        "codecs": [BytesCodec(), codec],
+        "dimension_names": dims,
+    }
+    previous_level: Any = None
+
+    def write_mvs_level(
+        path: Path,
+        shape: tuple[int, ...],
+        dtype: Any,
+        chunks: tuple[int, ...],
+        *,
+        shards: tuple[int, ...] | None,
+        overwrite: bool,
+        compression: str,
+        dimension_names: list[str] | None,
+    ) -> Any:
+        """Let MVS write pixels while yaozarrs creates v0.6 metadata."""
+        nonlocal previous_level
+        if shards is not None:
+            raise ValueError("MVS fusion output must not be sharded.")
+        level = int(path.name)
+        if level == 0:
+            task = fusion.prepare_block_fusion(
+                str(path),
+                {
+                    "images": sims,
+                    "transform_key": global_transform_key,
+                    "output_stack_properties": grid,
+                    "output_chunksize": output_chunks,
+                    "backend": "numpy",
+                },
+                zarr_array_creation_kwargs=creation_kwargs,
+                verbose=verbose,
+            )
+            for batch in misc_utils.ndindex_batches(
+                task["nblocks"], batch_options["n_batch"]
+            ):
+                batch_options["batch_func"](
+                    task["func"], batch, **batch_options["batch_func_kwargs"]
+                )
+        previous_level = ngff_utils.write_and_return_downsampled_sim(
+            previous_level,
+            dims=dims,
+            output_zarr_array_url=str(path),
+            chunksizes=list(chunks),
+            downscale_factors_per_spatial_dim=relative_factors[level],
+            overwrite=overwrite,
+            zarr_array_creation_kwargs=creation_kwargs,
+            res_level=level,
+            show_progressbar=verbose,
+            **batch_options,
+        )
+        return previous_level
+
+    prepare_image(
         output_zarr_path,
         image,
         [(shape, dtype) for shape in shapes],
         chunks=chunks,
-        writer=partial(_create_fusion_array, compression_level=compression_level),
+        writer=write_mvs_level,
         compression=compression,
         extra_attributes={
             **(extra_attributes or {}),
@@ -384,40 +394,6 @@ def _fuse_views_to_scene(
             "spacing_zyx_um": spacing.tolist(),
         },
     )
-    options = batch_options
-    task = fusion.prepare_block_fusion(
-        str(output_zarr_path / datasets[0].path),
-        {
-            "images": sims,
-            "transform_key": global_transform_key,
-            "output_stack_properties": grid,
-            "output_chunksize": output_chunks,
-            "backend": "numpy",
-        },
-        create_output=False,
-        verbose=verbose,
-    )
-    for batch in misc_utils.ndindex_batches(task["nblocks"], options["n_batch"]):
-        options["batch_func"](task["func"], batch, **options["batch_func_kwargs"])
-
-    for level in range(1, len(shapes)):
-        previous = arrays[datasets[level - 1].path]
-        factors = [1] * len(nonspatial_dims) + [
-            int(relative_factors[level][dim]) for dim in spatial_dims
-        ]
-        # Integer MVS pyramid means truncate; TensorStore's native integer
-        # means round, so calculate in float and cast back after averaging.
-        source = (
-            ts.cast(previous, ts.float64)
-            if np.issubdtype(dtype, np.integer)
-            else previous
-        )
-        reduced = ts.downsample(source, factors, method="mean")
-        if np.issubdtype(dtype, np.integer):
-            reduced = ts.cast(reduced, ts.dtype(dtype))
-        trimmed = reduced[tuple(slice(0, size) for size in shapes[level])]
-        arrays[datasets[level].path].write(trimmed).result()
-
     datastore.publish_global_fused_image(
         fusion_type, image, revision, expected_revision
     )

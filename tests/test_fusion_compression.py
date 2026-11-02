@@ -66,6 +66,9 @@ def test_multichannel_fusion_pyramid_preserves_pixels_and_codec(
     assert len(datasets) == 2
     full = group[datasets[0].path].to_tensorstore().read().result()
     reduced = group[datasets[1].path].to_tensorstore().read().result()
+    np.testing.assert_allclose(
+        full[0, 0, :, 2:-2, 2:-2], pixels[:, 2:-2, 2:-2], atol=1
+    )
     trimmed = full[..., : reduced.shape[-1] * 2]
     expected = trimmed.reshape(*trimmed.shape[:-1], reduced.shape[-1], 2).mean(axis=-1)
     np.testing.assert_array_equal(reduced, expected.astype(full.dtype))
@@ -82,6 +85,7 @@ def test_multichannel_fusion_pyramid_preserves_pixels_and_codec(
         if compression == "zstd":
             assert compressor["name"] == "zstd"
             assert compressor["configuration"]["level"] == level
+            assert compressor["configuration"]["checksum"] is False
         else:
             assert compressor["name"] == "blosc"
             assert compressor["configuration"]["cname"] == compression.removeprefix(
@@ -89,3 +93,18 @@ def test_multichannel_fusion_pyramid_preserves_pixels_and_codec(
             )
             assert compressor["configuration"]["clevel"] == level
             assert compressor["configuration"]["shuffle"] == "bitshuffle"
+            assert compressor["configuration"]["typesize"] == full.dtype.itemsize
+            assert compressor["configuration"]["blocksize"] == 0
+
+    if workers > 1:
+        fuse_all_channels(
+            datastore.datastore_path,
+            output_chunk_zyx="3,16,64",
+            fusion_workers=1,
+            compression=compression,
+            compression_level=level,
+        )
+        serial = open_group(datastore.fused_image_path("full_dataset"))
+        for dataset, parallel_pixels in zip(datasets, (full, reduced), strict=True):
+            serial_pixels = serial[dataset.path].to_tensorstore().read().result()
+            np.testing.assert_array_equal(parallel_pixels, serial_pixels)
