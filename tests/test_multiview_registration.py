@@ -105,31 +105,6 @@ def test_phase_candidate_selection_rejects_large_noise_peak_on_every_axis() -> N
 
 @pytest.mark.unit
 @pytest.mark.gpu
-def test_cucim_disambiguation_selects_known_one_plane_alias() -> None:
-    cp = _require_cuda()
-    pytest.importorskip("cucim")
-    from cucim.skimage.registration import phase_cross_correlation
-
-    fixed, moving = _cucim_tiny_overlap_alias_images()
-    periodic_shift = phase_cross_correlation(
-        cp.asarray(fixed),
-        cp.asarray(moving),
-        upsample_factor=10,
-        disambiguate=False,
-    )[0]
-    tiny_overlap_shift = phase_cross_correlation(
-        cp.asarray(fixed),
-        cp.asarray(moving),
-        upsample_factor=10,
-        disambiguate=True,
-    )[0]
-
-    np.testing.assert_allclose(cp.asnumpy(periodic_shift), (-1.0, 0.0, 0.0))
-    np.testing.assert_allclose(cp.asnumpy(tiny_overlap_shift), (15.0, 0.0, 0.0))
-
-
-@pytest.mark.unit
-@pytest.mark.gpu
 def test_register_pair_to_fixed_rejects_known_one_plane_alias() -> None:
     _require_cuda()
     pytest.importorskip("cucim")

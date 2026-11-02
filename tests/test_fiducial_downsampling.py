@@ -173,12 +173,17 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "camera_angle_deg", [0, 5], ids=["axis-aligned", "rotated-camera"]
+    ("camera_angle_deg", "register_rounds"),
+    [
+        pytest.param(0, False, id="axis-aligned"),
+        pytest.param(5, False, id="rotated-camera"),
+        pytest.param(5, True, marks=pytest.mark.gpu, id="rotated-camera-multiround"),
+    ],
 )
 def test_two_tile_registration_fuses_directly_to_zarr(
-    image_datastore, camera_angle_deg
+    image_datastore, camera_angle_deg, register_rounds
 ):
-    from scipy.ndimage import gaussian_filter
+    from scipy.ndimage import gaussian_filter, map_coordinates, shift
     from yaozarrs import open_group, v06
 
     volume = gaussian_filter(
@@ -187,6 +192,8 @@ def test_two_tile_registration_fuses_directly_to_zarr(
     # Distinct fluorescent beads in the reference tile make the camera's
     # rotation observable in the fused pixels, independently of its metadata.
     beads = [(12, 80, 40), (24, 120, 50)]
+    if register_rounds:
+        beads.append((18, 100, 235))
     for z, y, x in beads:
         volume[z - 2 : z + 3, y - 2 : y + 3, x - 2 : x + 3] = 1
     angle = np.deg2rad(camera_angle_deg)
@@ -204,15 +211,54 @@ def test_two_tile_registration_fuses_directly_to_zarr(
         image[:, :4, :] = image[:, -4:, :] = 0
         image[:, :, :4] = image[:, :, -4:] = 0
         image_datastore.save_local_corrected_image(image, tile=tile, round=0)
-        image_datastore.save_local_deconvolved_fiducial_image(image, tile=tile, round=0)
+        if not register_rounds:
+            image_datastore.save_local_deconvolved_fiducial_image(
+                image, tile=tile, round=0
+            )
         image_datastore.save_local_stage_position_zyx_um(
             [10, 20, stage_x], camera, tile=tile, round=0
         )
+        if register_rounds:
+            image_datastore.save_local_stage_position_zyx_um(
+                [10, 20, stage_x], camera, tile=tile, round=1
+            )
+            # A later round has a measured bulk shift and a small smooth local
+            # distortion; its sparse readout spots undergo the same motion.
+            spots = np.zeros(image.shape, dtype=np.float32)
+            for bead_z, bead_y, bead_x in beads:
+                local_z, local_x = bead_z - z_start, bead_x - x_start
+                if (
+                    4 <= local_z < image.shape[0] - 4
+                    and 4 <= local_x < image.shape[2] - 4
+                ):
+                    spots[local_z, bead_y, local_x] = 60000
+            spots = gaussian_filter(spots, sigma=(1, 1, 1))
+            z, y, x = np.indices(image.shape, dtype=np.float32)
+            x += 1.5 * np.sin(2 * np.pi * y / image.shape[1])
+            for reference, selection in ((image, {"round": 1}), (spots, {"bit": 1})):
+                translated = shift(
+                    reference.astype(np.float32),
+                    shift=(1, 2, -2),
+                    order=1,
+                    mode="constant",
+                    cval=0,
+                )
+                moving = (
+                    map_coordinates(
+                        translated, (z, y, x), order=1, mode="constant", cval=0
+                    )
+                    .clip(0, 65535)
+                    .astype(np.uint16)
+                )
+                image_datastore.save_local_corrected_image(
+                    moving, tile=tile, **selection
+                )
     scene_group = open_group(image_datastore.datastore_path).validate(strict=True)
     scene = scene_group.ome_metadata(strict=True)
     assert isinstance(scene, v06.Scene)
     for tile in range(2):
-        path = image_datastore.local_image_path(tile, "decon_data", round=0)
+        image_name = "corrected_data" if register_rounds else "decon_data"
+        path = image_datastore.local_image_path(tile, image_name, round=0)
         assert isinstance(open_group(path).ome_metadata(strict=True), v06.Image)
         relative_path = str(path.relative_to(image_datastore.datastore_path))
         assert any(
@@ -229,6 +275,8 @@ def test_two_tile_registration_fuses_directly_to_zarr(
         ),
     )
 
+    if register_rounds:
+        registration.register_all_tiles(process_readouts=False)
     registration.global_register(create_max_proj_tiff=True)
 
     affine, _, _ = image_datastore.load_global_coord_xforms_um(tile=1)
@@ -239,6 +287,128 @@ def test_two_tile_registration_fuses_directly_to_zarr(
     scene = (
         open_group(image_datastore.datastore_path).validate(strict=True).ome_metadata()
     )
+    if register_rounds:
+        from merfish3danalysis.utils.decode_warping import (
+            warp_bit_image_to_reference,
+            warp_image_to_reference_frame,
+        )
+
+        reopened = qi2labDataStore(image_datastore.datastore_path, validate=False)
+        scene_group = open_group(reopened.datastore_path).validate(strict=True)
+        transforms = {
+            transform.name: transform
+            for transform in scene_group.ome_metadata().scene.coordinateTransformations
+        }
+        statuses = scene_group.attrs["qi2lab"]["transform_status"]
+        for tile, (z_start, x_start, _) in enumerate(
+            [(0, 0, 30.0), (3, 96, 30.0 + 84 * 0.4)]
+        ):
+            tile_id = reopened.tile_ids[tile]
+            stage = transforms[f"{tile_id}/round001/stage"]
+            camera_transform = transforms[f"{tile_id}/round001/camera"]
+            moving_stage = transforms[f"{tile_id}/round002/stage"]
+            moving_camera = transforms[f"{tile_id}/round002/camera"]
+            global_transform = transforms[f"{tile_id}/global"]
+            decoder_spacing = transforms[f"{tile_id}/decoder_spacing"]
+            decoder_origin = transforms[f"{tile_id}/decoder_origin"]
+            reference_local = transforms[f"{tile_id}/round001/local"]
+            local = transforms[f"{tile_id}/round002/local"]
+            chromatic = transforms[f"{tile_id}/round002/bit002/chromatic"]
+            deformation = transforms[f"{tile_id}/round002/deformable"]
+            to_pixels = transforms[f"{tile_id}/round002/deformable/to_pixels"]
+            to_physical = transforms[f"{tile_id}/round002/deformable/to_physical"]
+            assert isinstance(deformation, v06.DisplacementsTransformation)
+            assert isinstance(chromatic, v06.IdentityTransformation)
+            assert chromatic.output == local.input
+            assert stage.output == camera_transform.input
+            assert camera_transform.output == global_transform.input
+            assert moving_stage.input == local.input
+            assert moving_stage.output == moving_camera.input
+            assert decoder_spacing.output == decoder_origin.input
+            assert decoder_origin.output == camera_transform.input
+            assert stage.input == to_pixels.input
+            assert to_pixels.output == deformation.input
+            assert deformation.output == to_physical.input
+            assert to_physical.output == local.output
+            for name in (
+                stage.name,
+                camera_transform.name,
+                moving_stage.name,
+                moving_camera.name,
+                global_transform.name,
+                decoder_spacing.name,
+                decoder_origin.name,
+                reference_local.name,
+                local.name,
+                deformation.name,
+            ):
+                assert statuses[name] == "calculated"
+            assert statuses[chromatic.name] == "pending"
+            np.testing.assert_allclose(reference_local.affine, np.eye(4)[:3])
+            np.testing.assert_allclose(moving_camera.affine, camera[:3])
+            global_affine, global_origin, global_spacing = (
+                reopened.load_global_coord_xforms_um(tile)
+            )
+            np.testing.assert_allclose(global_transform.affine, global_affine[:3])
+            np.testing.assert_allclose(decoder_origin.translation, global_origin)
+            np.testing.assert_allclose(decoder_spacing.scale, global_spacing)
+            local_transform = reopened.load_local_round_transform_zyx_um(tile, 1)
+            for actual, expected, tolerance in zip(
+                local_transform[:3, 3], [0.4, 0.4, -0.8], [0.3, 0.2, 0.2], strict=True
+            ):
+                assert actual == pytest.approx(expected, abs=tolerance)
+            np.testing.assert_allclose(local.affine, np.linalg.inv(local_transform)[:3])
+            flow, flow_metadata = reopened.load_local_sofima_flow_field(
+                tile=tile, round=1, return_future=False
+            )
+            assert flow.shape[0] == 3
+            assert flow_metadata["valid_flow_vectors"] > 0
+            fixed = reopened.load_local_corrected_image(
+                tile=tile, round=0, return_future=False
+            )
+            moving = reopened.load_local_corrected_image(
+                tile=tile, round=1, return_future=False
+            )
+            warp_options = {
+                "transform_zyx_um": local_transform,
+                "spacing_zyx_um": reopened.voxel_size_zyx_um,
+                "reference_shape": fixed.shape,
+            }
+            affine_only = warp_image_to_reference_frame(moving, **warp_options)
+            with_flow = warp_image_to_reference_frame(
+                moving, loaded_flow_field=(flow, flow_metadata), **warp_options
+            )
+            # Ignore acquisition edges lost during the simulated displacement.
+            interior = np.s_[6:-6, 10:-10, 10:-10]
+            affine_error = np.mean((affine_only[interior] - fixed[interior]) ** 2)
+            flow_error = np.mean((with_flow[interior] - fixed[interior]) ** 2)
+            assert flow_error < 0.75 * affine_error, (tile_id, affine_error, flow_error)
+            readout = reopened.load_local_corrected_image(
+                tile=tile, bit=1, return_future=False
+            )
+            aligned = warp_bit_image_to_reference(
+                readout,
+                datastore=reopened,
+                tile=tile,
+                bit_id="bit002",
+                emission_wavelength_um=0.67,
+            )
+            for bead_z, bead_y, bead_x in beads:
+                local_z, local_x = bead_z - z_start, bead_x - x_start
+                if (
+                    4 <= local_z < aligned.shape[0] - 4
+                    and 4 <= local_x < aligned.shape[2] - 4
+                ):
+                    neighborhood = aligned[
+                        local_z - 3 : local_z + 4,
+                        bead_y - 3 : bead_y + 4,
+                        local_x - 3 : local_x + 4,
+                    ]
+                    peak = np.array(
+                        np.unravel_index(np.argmax(neighborhood), neighborhood.shape)
+                    )
+                    assert np.linalg.norm(peak - 3) <= 2
+                    assert neighborhood.max() > 1000
     image_path = str(
         image_datastore.fused_image_path().relative_to(image_datastore.datastore_path)
     )

@@ -507,7 +507,7 @@ def test_iterative_normalization_saves_and_keeps_memory_consistent(
     assert decoder._iterative_normalization_loaded
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.gpu
 @pytest.mark.parametrize("use_flow", [False, True])
 @pytest.mark.parametrize("use_chromatic", [False, True])
@@ -592,19 +592,20 @@ def test_bits_decode_in_round_one_before_world_mapping(
     decoder = PixelDecoder(
         datastore, merfish_bits=6, num_gpus=1, verbose=0, decode_mode="3d"
     )
-    decoder._tile_idx = 0
-    decoder._filter_type = None
-    decoder._pixel_assignment_threshold = 0.5
-    decoder._transcript_distance_threshold = 0.5
-
-    decoder._load_bit_data()
-    np.testing.assert_array_equal(decoder._image_data, reference)
-    decoder._decode_pixels(magnitude_threshold=(1, 2))
+    image_data, _, _, _, decoded_image = decoder.decode_one_tile(
+        tile_idx=0,
+        gpu_id=0,
+        return_results=True,
+        lowpass_sigma=None,
+        magnitude_threshold=(1, 2),
+        minimum_pixels=8,
+        normalization_method="none",
+    )
+    np.testing.assert_array_equal(image_data, reference)
     expected_labels = np.full(shape, -1, dtype=np.int16)
     expected_labels[2:4, 3:5, 12:14] = 0
     expected_labels[4:6, 7:9, 20:22] = 1
-    np.testing.assert_array_equal(decoder._decoded_image, expected_labels)
-    decoder._extract_barcodes(minimum_pixels=8, maximum_pixels=8)
+    np.testing.assert_array_equal(decoded_image, expected_labels)
 
     spots = decoder.decoded_barcodes.sort_values("gene_id")
     assert spots["gene_id"].tolist() == ["A", "B"]

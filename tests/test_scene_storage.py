@@ -483,3 +483,44 @@ def test_sofima_field_uses_xyz_pixels_and_patch_centered_lattice(image_datastore
     np.testing.assert_array_equal(metadata["map_stride_zyx_px"], [2, 2, 4])
     np.testing.assert_array_equal(metadata["map_box_start_xyz_px"], [2, 1, 1])
     assert metadata["reference_shape_zyx_px"] == [8, 10, 12]
+
+    # Reprocessing replaces the field and its lattice together while a reader
+    # that opened the previous field continues to see its original data.
+    previous, _ = image_datastore.load_local_sofima_flow_field(
+        tile=0, round=1, return_future=None
+    )
+    replacement = -flow
+    image_datastore.save_local_sofima_flow_field(
+        replacement,
+        tile=0,
+        round=1,
+        reference_round=0,
+        map_stride_zyx_px=(1, 3, 2),
+        map_box_start_xyz_px=(4, 3, 2),
+        map_box_size_xyz_px=(4, 6, 1),
+        reference_shape_zyx_px=(8, 10, 12),
+        moving_shape_zyx_px=(8, 10, 12),
+    )
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = qi2labDataStore(path, validate=False)
+    updated, metadata = datastore.load_local_sofima_flow_field(
+        tile=0, round=1, return_future=False
+    )
+    np.testing.assert_array_equal(updated, replacement)
+    np.testing.assert_array_equal(metadata["map_stride_zyx_px"], [1, 3, 2])
+    np.testing.assert_array_equal(metadata["map_box_start_xyz_px"], [4, 3, 2])
+    np.testing.assert_array_equal(previous.read().result(), flow)
+
+    scene = open_group(path).validate(strict=True).ome_metadata(strict=True)
+    updated_deformation = next(
+        transform
+        for transform in scene.scene.coordinateTransformations
+        if transform.name == original.name
+    )
+    assert updated_deformation.path != deformation.path
+    transforms = {t.name: t for t in scene.scene.coordinateTransformations}
+    assert transforms[f"{original.name}/to_pixels"].output == updated_deformation.input
+    assert (
+        updated_deformation.output == transforms[f"{original.name}/to_physical"].input
+    )

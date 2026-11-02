@@ -263,7 +263,8 @@ def test_chromatic_calibration_tracks_each_tile_and_late_wavelengths(image_datas
     np.testing.assert_allclose(
         reopened.load_chromatic_affine_transform_zyx_um(wavelength_um=0.67), affine
     )
-    scene = open_group(reopened.datastore_path).validate(strict=True).ome_metadata()
+    group = open_group(reopened.datastore_path).validate(strict=True)
+    scene = group.ome_metadata()
     transforms = {t.name: t for t in scene.scene.coordinateTransformations}
     late = transforms["tile0001/round001/bit001/chromatic"]
     assert isinstance(late, v06.AffineTransformation)
@@ -272,6 +273,30 @@ def test_chromatic_calibration_tracks_each_tile_and_late_wavelengths(image_datas
     assert isinstance(changed, (v06.IdentityTransformation, v06.AffineTransformation))
     if isinstance(changed, v06.AffineTransformation):
         np.testing.assert_allclose(changed.affine, np.eye(4)[:3])
+
+    # Every acquisition readout must retain the wavelength-specific correction
+    # after the Scene is reopened, including tiles and rounds not changed above.
+    for tile in reopened.tile_ids:
+        for bit in reopened.bit_ids:
+            round_index = reopened.load_local_round_linker(tile=tile, bit=bit) - 1
+            round_id = reopened.round_ids[round_index]
+            emission = reopened.load_local_wavelengths_um(tile=tile, bit=bit)[1]
+            transform = transforms[f"{tile}/{round_id}/{bit}/chromatic"]
+            assert transform.input.name == f"{tile}/{round_id}/{bit}/native"
+            assert transform.output.name == f"{tile}/{round_id}/moving"
+            assert group.attrs["qi2lab"]["transform_status"][transform.name] == (
+                "calculated"
+            )
+            expected = affine if emission == 0.67 else np.eye(4)
+            assert isinstance(
+                transform, (v06.IdentityTransformation, v06.AffineTransformation)
+            )
+            actual = (
+                np.eye(4)[:3]
+                if isinstance(transform, v06.IdentityTransformation)
+                else transform.affine
+            )
+            np.testing.assert_allclose(actual, expected[:3])
 
 
 @pytest.mark.unit
