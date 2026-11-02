@@ -8,6 +8,7 @@ import pandas as pd
 import typer
 from tifffile import imread
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 from merfish3danalysis.utils.spacing import round_pixel_size_um
 
@@ -91,14 +92,15 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
         codebook = pd.read_csv(top_path / Path(str(z)) / Path("codebook.csv"))
         codebook_genes = codebook["gene_id"].to_numpy()
 
-        decoded_spots = pd.read_parquet(
-            top_path
-            / Path(str(z))
-            / Path("sim_acquisition")
-            / Path("qi2labdatastore")
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.parquet")
-        )
+        datastore_path = top_path / str(z) / "sim_acquisition" / "qi2labdatastore"
+        if not datastore_path.exists():
+            raise FileNotFoundError(f"Datastore not found: {datastore_path}")
+        datastore = qi2labDataStore(datastore_path, validate=False)
+        decoded_spots = datastore.load_global_filtered_decoded_spots()
+        if decoded_spots is None:
+            raise FileNotFoundError(
+                f"Filtered decoded spots not found: {datastore_path}"
+            )
         qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy()
         qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
         gt_coords = gt_spots[["Z", "X", "Y"]].to_numpy()

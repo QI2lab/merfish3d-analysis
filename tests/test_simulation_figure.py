@@ -7,6 +7,7 @@ import pytest
 from tifffile import imwrite
 
 from merfish3danalysis.cli.statphysbio_simulation.build_figure import build_figure
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
 @pytest.mark.integration
@@ -29,18 +30,17 @@ def test_simulation_figure_projects_each_spacing_on_the_common_physical_grid(
             root / "GT_spots.csv", index=False
         )
         pd.DataFrame({"gene_id": ["A"]}).to_csv(root / "codebook.csv", index=False)
-        decoded_dir = (
-            acquisition / "qi2labdatastore/all_tiles_filtered_decoded_features"
+        datastore = qi2labDataStore(acquisition / "qi2labdatastore")
+        datastore.save_global_filtered_decoded_spots(
+            pd.DataFrame(
+                {
+                    "global_z": [0.0],
+                    "global_y": [0.15],
+                    "global_x": [0.25],
+                    "gene_id": ["A"],
+                }
+            )
         )
-        decoded_dir.mkdir(parents=True)
-        pd.DataFrame(
-            {
-                "global_z": [0.0],
-                "global_y": [0.15],
-                "global_x": [0.25],
-                "gene_id": ["A"],
-            }
-        ).to_parquet(decoded_dir / "decoded_features.parquet")
     monkeypatch.setattr(plt, "show", lambda: None)
     try:
         build_figure(tmp_path, "simulation")
