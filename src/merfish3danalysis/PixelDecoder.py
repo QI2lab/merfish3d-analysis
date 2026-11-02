@@ -125,7 +125,10 @@ from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
+from merfish3danalysis.utils.decode_warping import (
+    optimizer_calibration_is_applicable,
+    warp_bit_image_to_reference,
+)
 from merfish3danalysis.utils.spacing import round_spacing_um
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
@@ -1559,7 +1562,7 @@ class PixelDecoder:
         }
         previous_chromatic_affines = {}
         previous_calibration = self._datastore.load_chromatic_affine_transforms_zyx_um()
-        if isinstance(previous_calibration, dict):
+        if optimizer_calibration_is_applicable(previous_calibration):
             for channel in previous_calibration.get("channels", {}).values():
                 if not isinstance(channel, dict):
                     continue
@@ -1866,6 +1869,9 @@ class PixelDecoder:
         None
             Identity channel transforms are written to datastore metadata.
         """
+        existing = self._datastore.load_chromatic_affine_transforms_zyx_um()
+        if optimizer_calibration_is_applicable(existing):
+            return
         bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
         reference_tile = self._datastore.tile_ids[0]
         wavelengths = []

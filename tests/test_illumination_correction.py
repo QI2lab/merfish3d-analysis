@@ -1,19 +1,12 @@
 import sys
 import weakref
+from concurrent.futures import Future
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from merfish3danalysis.utils.imageprocessing import estimate_shading
-
-
-class _FutureImage:
-    def __init__(self, image: np.ndarray) -> None:
-        self._image = image
-
-    def result(self) -> np.ndarray:
-        return self._image
 
 
 @pytest.mark.unit
@@ -74,12 +67,17 @@ def test_estimate_shading_uses_half_resolution_basic_working_size(
             assert all(ref() is None for ref in live_images)
             pixels = image.copy()
             live_images.append(weakref.ref(pixels))
-            yield _FutureImage(pixels)
-            del pixels
+            future = Future()
+            future.set_result(pixels)
+            yield future
+            del future, pixels
 
-    shading = estimate_shading(
-        read_images() if lazy else [_FutureImage(image), _FutureImage(image)]
-    )
+    images = read_images()
+    if not lazy:
+        images = [Future(), Future()]
+        for future in images:
+            future.set_result(image)
+    shading = estimate_shading(images)
 
     assert calls[0] == (
         "init",
@@ -113,16 +111,18 @@ def test_estimate_shading_recovers_known_illumination(count, height, width):
     y, x = np.mgrid[-1 : 1 : complex(height), -1 : 1 : complex(width)]
     illumination = (1 - 0.2 * y**2 - 0.15 * x**2).astype(np.float32)
     illumination /= illumination.max()
-    images = (
-        _FutureImage(
-            np.stack([0.5 * intensity * illumination, intensity * illumination]).astype(
-                np.uint16
-            )
-        )
-        for intensity in np.linspace(1000, 2500, count)
-    )
 
-    shading = estimate_shading(images)
+    def images():
+        for intensity in np.linspace(1000, 2500, count):
+            future = Future()
+            future.set_result(
+                np.stack(
+                    [0.5 * intensity * illumination, intensity * illumination]
+                ).astype(np.uint16)
+            )
+            yield future
+
+    shading = estimate_shading(images())
 
     assert shading.shape == (height, width)
     assert shading.dtype == np.float32

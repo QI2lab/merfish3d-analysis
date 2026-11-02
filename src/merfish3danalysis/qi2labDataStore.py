@@ -19,15 +19,18 @@ from collections.abc import Collection, Mapping, Sequence
 from concurrent.futures import TimeoutError
 from itertools import product
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from yaozarrs import open_group, v05
-from yaozarrs.write.v05 import write_image
+from yaozarrs import DimSpec, open_group, v06
+from yaozarrs.write.v06 import write_image
 
-from merfish3danalysis.utils.spacing import round_ome_spatial_scales, round_spacing_um
+from merfish3danalysis.utils.spacing import (
+    round_pixel_size_um,
+    round_spacing_um,
+)
 
 if TYPE_CHECKING:
     from tensorstore import Future, TensorStore, WriteFutures
@@ -45,6 +48,11 @@ class qi2labDataStore:
         zarr readability checks and load only metadata/path structure.
 
     """
+
+    _FUSED_SCENE_SELECTIONS: ClassVar[dict[str, str]] = {
+        "fiducial": "fused/fiducial",
+        "all_channels": "fused/full_dataset",
+    }
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
         """
@@ -68,6 +76,12 @@ class qi2labDataStore:
         """Experiment datastore directory."""
         return self._datastore_path
 
+    def fiducial_projection_path(self) -> Path:
+        """Return the sibling Scene containing the fiducial projection and labels."""
+        return self._datastore_path.with_name(
+            f"{self._datastore_path.name}_fiducial_projection.ome.zarr"
+        )
+
     def fused_image_path(self, image_name: str | None = None) -> Path:
         """Return the OME-Zarr path for a fused image.
 
@@ -81,9 +95,63 @@ class qi2labDataStore:
         Path
             Fused image directory, without opening or creating it.
         """
+        products = open_group(self._datastore_path).attrs["qi2lab"]["products"]
+        selection = "fused/fiducial" if image_name is None else f"fused/{image_name}"
+        if selection in products:
+            return self._datastore_path / products[selection]["path"]
         if image_name is None:
             image_name = f"fused_{self.fiducial_folder_name}_zyx"
         return self._image_store_path(self._fused_root_path / image_name)
+
+    def prepare_global_fused_image(
+        self, fusion_type: str
+    ) -> tuple[Path, str, str | None]:
+        """Stage an MVS fusion and capture the revision needed for safe publication.
+
+        MVS writes blocks directly, so the Scene must reference the output only
+        after all blocks are complete. Concurrent writers use unique image paths.
+        """
+        from uuid import uuid4
+
+        try:
+            selection = self._FUSED_SCENE_SELECTIONS[fusion_type]
+        except KeyError as exc:
+            raise ValueError(
+                "fusion_type must be 'fiducial' or 'all_channels'."
+            ) from exc
+        products = open_group(self._datastore_path).attrs["qi2lab"]["products"]
+        previous = products.get(selection)
+        revision = uuid4().hex
+        return (
+            self._datastore_path / f"image_{revision}.ome.zarr",
+            revision,
+            None if previous is None else previous["revision"],
+        )
+
+    def publish_global_fused_image(
+        self,
+        fusion_type: str,
+        image: v06.Image,
+        revision: str,
+        expected_revision: str | None,
+    ) -> None:
+        """Publish completed MVS blocks atomically; yaozarrs cannot resume a Scene writer."""
+        from merfish3danalysis.storage.ome import publish_completed_image
+
+        try:
+            selection = self._FUSED_SCENE_SELECTIONS[fusion_type]
+        except KeyError as exc:
+            raise ValueError(
+                "fusion_type must be 'fiducial' or 'all_channels'."
+            ) from exc
+        publish_completed_image(
+            self._datastore_path,
+            selection,
+            "world",
+            image,
+            revision,
+            expected_revision=expected_revision,
+        )
 
     def local_image_path(
         self,
@@ -125,10 +193,37 @@ class qi2labDataStore:
         entity_id = ids[selection] if isinstance(selection, int) else selection
         if entity_id not in ids:
             raise ValueError(f"Invalid round or bit: {selection}")
+        state = open_group(self._datastore_path).attrs.get("qi2lab", {})
+        product = state.get("products", {}).get(f"{tile_id}/{entity_id}/{image_name}")
+        if product is not None:
+            return self._datastore_path / product["path"]
         root = (
             self._fiducial_root_path if round is not None else self._readouts_root_path
         )
         return self._image_store_path(root / tile_id / entity_id / image_name)
+
+    def load_local_fusion_image(
+        self,
+        tile: int | str,
+        *,
+        round: int | str | None = None,
+        bit: int | str | None = None,
+    ) -> Any:
+        """Return the native Zarr handle required by MVS direct-Zarr fusion.
+
+        Deconvolved pixels take precedence when present, matching global
+        registration and fusion's existing input selection. Other datastore
+        array access uses TensorStore.
+        """
+        for image_name in ("decon_data", "corrected_data"):
+            path = self.local_image_path(tile, image_name, round=round, bit=bit)
+            if path.exists():
+                group = open_group(path)
+                image = group.ome_metadata(strict=True)
+                return group[image.multiscales[0].datasets[0].path].to_zarr_python()
+        raise FileNotFoundError(
+            f"Missing fusion input for tile={tile} round={round} bit={bit}."
+        )
 
     def local_feature_predictor_spots_path(self, tile: str, bit: str) -> Path:
         """Return the localization table path for a tile and readout identifier."""
@@ -165,8 +260,17 @@ class qi2labDataStore:
         dict[str, Any]
             Merged image metadata, with sidecar values taking precedence.
         """
-        path = self.local_image_path(tile, "corrected_data", round=round, bit=bit)
-        return self._load_entity_attributes(path.parent, image_names=image_names)
+        self.local_image_path(tile, "corrected_data", round=round, bit=bit)
+        tile_id = self._tile_ids[tile] if isinstance(tile, int) else tile
+        if round is not None:
+            entity_id = self._round_ids[round] if isinstance(round, int) else round
+            root = self._fiducial_root_path
+        else:
+            entity_id = self._bit_ids[bit] if isinstance(bit, int) else bit
+            root = self._readouts_root_path
+        return self._load_entity_attributes(
+            root / tile_id / entity_id, image_names=image_names
+        )
 
     @property
     def datastore_state(self) -> dict | None:
@@ -276,16 +380,18 @@ class qi2labDataStore:
         Returns
         -------
         None
-            Metadata are written to ``calibrations/attributes.json``.
+            Calibration and applicable transforms are stored in the Scene.
         """
         calibration = dict(calibration)
         if "voxel_size_zyx_um" in calibration:
             calibration["voxel_size_zyx_um"] = round_spacing_um(
                 calibration["voxel_size_zyx_um"]
             ).tolist()
-        self._set_calibration_attribute(
-            "chromatic_affine_transforms_zyx_um",
-            calibration,
+        from merfish3danalysis.storage.ome import update_chromatic_metadata
+
+        update_chromatic_metadata(
+            self._datastore_path,
+            calibration=self._to_json_compatible(calibration),
         )
 
     def load_chromatic_affine_transforms_zyx_um(self) -> dict[str, Any]:
@@ -299,10 +405,10 @@ class qi2labDataStore:
             chromatic calibration is present.
         """
         try:
-            attributes = self._load_calibrations_attributes()
+            attributes = open_group(self._datastore_path).attrs.get("qi2lab", {})
         except (FileNotFoundError, json.JSONDecodeError, ValueError):
             return {}
-        calibration = attributes.get("chromatic_affine_transforms_zyx_um", {})
+        calibration = attributes.get("chromatic_calibration", {})
         if isinstance(calibration, dict):
             if "voxel_size_zyx_um" in calibration:
                 calibration["voxel_size_zyx_um"] = round_spacing_um(
@@ -336,36 +442,15 @@ class qi2labDataStore:
             4x4 affine matrix in physical Z, Y, X microns. Identity is returned
             if the calibration or requested channel is absent.
         """
-        calibration = self.load_chromatic_affine_transforms_zyx_um()
-        channels = calibration.get("channels", {})
-        if not isinstance(channels, Mapping):
-            return np.eye(4, dtype=np.float32)
+        from merfish3danalysis.utils.decode_warping import select_chromatic_affine
 
-        candidates = []
-        if channel_name is not None:
-            channel = channels.get(str(channel_name))
-            if isinstance(channel, Mapping):
-                candidates.append(channel)
-        if channel_index is not None:
-            for channel in channels.values():
-                if isinstance(channel, Mapping) and int(
-                    channel.get("channel_index", -1)
-                ) == int(channel_index):
-                    candidates.append(channel)
-        if wavelength_um is not None:
-            wavelength = float(wavelength_um)
-            for channel in channels.values():
-                if not isinstance(channel, Mapping):
-                    continue
-                stored = channel.get("wavelength_um")
-                if stored is not None and np.isclose(float(stored), wavelength):
-                    candidates.append(channel)
-
-        for channel in candidates:
-            affine = channel.get("affine_zyx_um")
-            if affine is not None:
-                return np.asarray(affine, dtype=np.float32)
-        return np.eye(4, dtype=np.float32)
+        affine = select_chromatic_affine(
+            self.load_chromatic_affine_transforms_zyx_um(),
+            channel_name=channel_name,
+            channel_index=channel_index,
+            wavelength_um=wavelength_um,
+        )
+        return np.eye(4, dtype=np.float32) if affine is None else affine
 
     @staticmethod
     def _strict_id_sort_key(name: str, prefix: str, width: int) -> int:
@@ -699,6 +784,10 @@ class qi2labDataStore:
         noise_map : ArrayLike
             Camera noise image.
         """
+        if not hasattr(self, "_noise_map"):
+            path = self._image_store_path(self._calibrations_zarr_path / "noise_map")
+            if path.exists():
+                self._noise_map = self._load_from_zarr_array(path, return_future=False)
         return getattr(self, "_noise_map", None)
 
     @noise_map.setter
@@ -712,7 +801,21 @@ class qi2labDataStore:
         """
         current_local_zarr_path = str(self._calibrations_zarr_path / Path("noise_map"))
 
-        self._save_to_zarr_array(value, current_local_zarr_path, return_future=False)
+        self._save_to_zarr_array(
+            value,
+            current_local_zarr_path,
+            return_future=False,
+            axes="cyx" if np.ndim(value) == 3 else "yx",
+            extra_attributes={
+                "calibration_type": "camera_noise",
+                "channel_indices": list(range(np.shape(value)[0]))
+                if np.ndim(value) == 3
+                else None,
+            },
+        )
+        self._set_calibration_attribute(
+            "noise_map_path", "calibrations/noise_map.ome.zarr"
+        )
         self._noise_map = value
 
     @property
@@ -724,6 +827,12 @@ class qi2labDataStore:
         channel_shading_maps : ArrayLike
             Channel shading images.
         """
+        if not hasattr(self, "_shading_maps"):
+            path = self._image_store_path(self._calibrations_zarr_path / "shading_maps")
+            if path.exists():
+                self._shading_maps = self._load_from_zarr_array(
+                    path, return_future=False
+                )
         return getattr(self, "_shading_maps", None)
 
     @channel_shading_maps.setter
@@ -756,7 +865,17 @@ class qi2labDataStore:
         )
 
         self._save_to_zarr_array(
-            shading_maps, current_local_zarr_path, return_future=False
+            shading_maps,
+            current_local_zarr_path,
+            return_future=False,
+            axes="cyx",
+            extra_attributes={
+                "calibration_type": "channel_shading",
+                "channel_indices": list(range(shading_maps.shape[0])),
+            },
+        )
+        self._set_calibration_attribute(
+            "shading_maps_path", "calibrations/shading_maps.ome.zarr"
         )
         self._shading_maps = shading_maps
 
@@ -770,6 +889,24 @@ class qi2labDataStore:
             Channel point spread functions (PSF).
         """
         psfs = getattr(self, "_psfs", None)
+        if psfs is None and hasattr(self, "_calibrations_zarr_path"):
+            try:
+                manifest = self._load_calibrations_attributes().get("psf_manifest", {})
+                psf_root = self._calibrations_zarr_path / "psf_data"
+                if manifest:
+                    psfs = [
+                        np.asarray(
+                            self._load_from_zarr_array(
+                                self._image_store_path(psf_root / manifest[key]["id"]),
+                                return_future=False,
+                            ),
+                            dtype=np.float32,
+                        )
+                        for key in sorted(manifest, key=int)
+                    ]
+                    self._psfs = psfs
+            except (OSError, ValueError, KeyError):
+                print("Calibration psfs missing.")
         if psfs is None:
             return None
         if isinstance(psfs, list):
@@ -813,7 +950,12 @@ class qi2labDataStore:
         for psf_idx, psf_array in enumerate(psf_list):
             psf_id = f"psf_{psf_idx:03d}"
             current_psf_path = psf_root_path / Path(psf_id)
-            self._save_to_zarr_array(psf_array, current_psf_path, return_future=False)
+            self._save_to_zarr_array(
+                psf_array,
+                current_psf_path,
+                return_future=False,
+                extra_attributes={"calibration_type": "psf", "psf_idx": psf_idx},
+            )
             psf_manifest[str(psf_idx)] = {
                 "id": psf_id,
                 "shape_zyx": list(psf_array.shape),
@@ -914,6 +1056,8 @@ class qi2labDataStore:
 
         if data is None:
             return None
+        if isinstance(data, pd.DataFrame):
+            data = data.to_numpy().tolist()
         num_columns = len(data[0]) if data else 0
         columns = ["gene_id"] + [f"bit{i:02d}" for i in range(1, num_columns)]
 
@@ -1403,7 +1547,10 @@ class qi2labDataStore:
 
         Create directory structure and initialize datastore state.
         """
-        self._datastore_path.mkdir(parents=True)
+        from merfish3danalysis.storage.ome import initialize_scene
+
+        self._datastore_path.parent.mkdir(parents=True, exist_ok=True)
+        initialize_scene(self._datastore_path)
         self._calibrations_zarr_path = self._datastore_path / Path(r"calibrations")
         self._calibrations_zarr_path.mkdir()
         self._save_to_json({}, self._calibrations_attributes_path())
@@ -1444,119 +1591,6 @@ class qi2labDataStore:
         }
 
         self._save_to_json(self._datastore_state, self._datastore_state_json_path)
-
-    @staticmethod
-    def _create_array_tensorstore_qi2lab(
-        path: Path,
-        shape: tuple[int, ...],
-        dtype: Any,
-        chunks: tuple[int, ...],
-        *,
-        shards: tuple[int, ...] | None,
-        dimension_names: list[str] | None,
-        overwrite: bool,
-        compression: str,
-    ) -> Any:
-        """
-        Create a Zarr v3 array for the yaozarrs image writer.
-
-        yaozarrs accepts a custom array creator but does not expose compression
-        level or shuffle settings. This TensorStore adapter preserves the
-        datastore's Blosc level 5 and bitshuffle settings; yaozarrs handles
-        the OME group, axes, and image metadata.
-
-        Parameters
-        ----------
-        path : Path
-            Destination zarr array path.
-        shape : tuple[int, ...]
-            Array shape.
-        dtype : Any
-            Array dtype.
-        chunks : tuple[int, ...]
-            Chunk shape.
-        shards : tuple[int, ...] | None
-            Optional shard shape.
-        dimension_names : list[str] | None
-            Optional dimension names for metadata.
-        overwrite : bool
-            Whether to replace an existing array.
-        compression : str
-            Compression preset name.
-
-        Returns
-        -------
-        Any
-            Open tensorstore array handle.
-        """
-        import tensorstore as ts
-
-        if compression == "blosc-zstd":
-            chunk_codecs = [
-                {
-                    "name": "blosc",
-                    "configuration": {
-                        "cname": "zstd",
-                        "clevel": 5,
-                        "shuffle": "bitshuffle",
-                    },
-                }
-            ]
-        elif compression == "blosc-lz4":
-            chunk_codecs = [
-                {
-                    "name": "blosc",
-                    "configuration": {
-                        "cname": "lz4",
-                        "clevel": 5,
-                        "shuffle": "bitshuffle",
-                    },
-                }
-            ]
-        elif compression == "zstd":
-            chunk_codecs = [{"name": "zstd", "configuration": {"level": 3}}]
-        elif compression == "none":
-            chunk_codecs = []
-        else:
-            raise ValueError(f"Unknown compression: {compression}")
-
-        codecs = chunk_codecs
-        chunk_layout: dict[str, Any] = {"chunk": {"shape": list(chunks)}}
-        if shards is not None:
-            codecs = [
-                {
-                    "name": "sharding_indexed",
-                    "configuration": {
-                        "chunk_shape": list(chunks),
-                        "codecs": chunk_codecs,
-                    },
-                }
-            ]
-            chunk_layout = {"write_chunk": {"shape": list(shards)}}
-
-        domain: dict[str, Any] = {"shape": list(shape)}
-        if dimension_names:
-            domain["labels"] = dimension_names
-
-        try:
-            dtype_str = dtype.name
-        except AttributeError:
-            dtype_str = str(dtype)
-
-        return ts.open(
-            {
-                "driver": "zarr3",
-                "kvstore": {"driver": "file", "path": str(path)},
-                "schema": {
-                    "dtype": dtype_str,
-                    "domain": domain,
-                    "chunk_layout": chunk_layout,
-                    "codec": {"driver": "zarr3", "codecs": codecs},
-                },
-                "create": True,
-                "delete_existing": overwrite,
-            }
-        ).result()
 
     @staticmethod
     def _normalize_transform(
@@ -1678,34 +1712,6 @@ class qi2labDataStore:
         return list(array.shape)
 
     @staticmethod
-    def _build_axes(v05: Any, ndim: int) -> list[Any]:
-        """
-        Build NGFF axes models for a given dimensionality.
-
-        Parameters
-        ----------
-        v05 : Any
-            yaozarrs NGFF model namespace.
-        ndim : int
-            Number of array dimensions.
-
-        Returns
-        -------
-        list[Any]
-            NGFF axis models ordered to match array dimensions.
-        """
-        axis_names = ["t", "c", "z", "y", "x"][-ndim:]
-        axes: list[Any] = []
-        for axis_name in axis_names:
-            if axis_name in {"z", "y", "x"}:
-                axes.append(v05.SpaceAxis(name=axis_name, unit="micrometer"))
-            elif axis_name == "c":
-                axes.append(v05.ChannelAxis(name="c"))
-            else:
-                axes.append(v05.TimeAxis(name="t", unit="second"))
-        return axes
-
-    @staticmethod
     def _entity_attributes_path(entity_root_path: Path | str) -> Path:
         """
         Path to per-entity metadata sidecar.
@@ -1774,55 +1780,6 @@ class qi2labDataStore:
         return attrs
 
     @staticmethod
-    def save_image_metadata(
-        image_path: Path | str,
-        extra_attributes: Mapping[str, Any],
-        merge: bool = True,
-    ) -> None:
-        """
-        Write image-level extra attributes for externally-created OME-Zarr stores.
-
-        Parameters
-        ----------
-        image_path : Path | str
-            Image group path. Both the directory path and the corresponding
-            OME-Zarr store path are accepted.
-        extra_attributes : Mapping[str, Any]
-            Attribute updates to write at the image root.
-        merge : bool, default=True
-            If True, merge updates into existing attributes. If False, replace
-            the existing image-level attributes with ``extra_attributes``.
-
-        Returns
-        -------
-        None
-            Attributes are written to the Zarr v3 ``zarr.json``. The OME
-            metadata is preserved when replacing extra attributes.
-        """
-        image_root = qi2labDataStore._image_store_path(image_path)
-        payload = {
-            str(k): qi2labDataStore._to_json_compatible(v)
-            for k, v in dict(extra_attributes).items()
-        }
-
-        for key in ("spacing_zyx_um", "voxel_size_zyx_um"):
-            if key in payload:
-                payload[key] = round_spacing_um(payload[key]).tolist()
-
-        group = open_group(image_root)
-        metadata = group.metadata.model_dump(mode="json", exclude_none=True)
-        if metadata["zarr_format"] != 3:
-            raise ValueError("Datastore images must use OME-Zarr on Zarr v3.")
-        existing = dict(group.attrs)
-        attributes = existing if merge else {"ome": existing["ome"]}
-        attributes.update(payload)
-        round_ome_spatial_scales(attributes)
-        metadata["attributes"] = attributes
-        # yaozarrs exposes attributes read-only. Updating metadata for an
-        # externally fused image requires replacing the local Zarr v3 JSON.
-        qi2labDataStore._save_to_json(metadata, image_root / "zarr.json")
-
-    @staticmethod
     def _to_json_compatible(value: Any) -> Any:
         """
         Convert numpy/scalar containers to JSON-compatible values.
@@ -1872,7 +1829,8 @@ class qi2labDataStore:
 
         try:
             group = open_group(str(path))
-            array_0 = group["0"]
+            dataset = group.ome_metadata(strict=True).multiscales[0].datasets[0]
+            array_0 = group[dataset.path]
             shape = array_0.metadata.shape
             return tuple(int(dim) for dim in shape)
         except (FileNotFoundError, KeyError):
@@ -1905,16 +1863,37 @@ class qi2labDataStore:
             "corrected_data",
             "decon_data",
             f"{self.feature_predictor_folder_name}_data",
-            "opticalflow_xform_px",
         )
         candidate_names = image_names if image_names is not None else default_images
         for image_name in candidate_names:
-            image_path = self._image_store_path(entity_root / Path(image_name))
+            if entity_root.parent.parent == self._fiducial_root_path:
+                image_path = self.local_image_path(
+                    entity_root.parent.name, image_name, round=entity_root.name
+                )
+            elif entity_root.parent.parent == self._readouts_root_path:
+                image_path = self.local_image_path(
+                    entity_root.parent.name, image_name, bit=entity_root.name
+                )
+            else:
+                image_path = self._image_store_path(entity_root / image_name)
             if not image_path.exists():
                 continue
             merged.update(self.load_image_metadata(image_path))
 
         merged.update(self._load_from_json(self._entity_attributes_path(entity_root)))
+
+        if entity_root.parent.parent == self._readouts_root_path:
+            state = open_group(self._datastore_path).attrs.get("qi2lab", {})
+            wavelengths = state.get("readout_wavelengths_um", {}).get(
+                f"{entity_root.parent.name}/{entity_root.name}"
+            )
+            if wavelengths is not None:
+                merged.update(excitation_um=wavelengths[0], emission_um=wavelengths[1])
+            linked_round = state.get("round_links", {}).get(
+                f"{entity_root.parent.name}/{entity_root.name}"
+            )
+            if linked_round is not None:
+                merged["round_linker"] = self._round_ids.index(linked_round) + 1
 
         return merged
 
@@ -1951,48 +1930,6 @@ class qi2labDataStore:
         sidecar_attrs.update(payload)
         self._save_to_json(sidecar_attrs, sidecar_path)
 
-    def _update_image_translation_transform(
-        self,
-        image_root: Path,
-        stage_zyx_um: Sequence[float],
-    ) -> None:
-        """
-        Update an existing OME-Zarr image translation transform.
-
-        Parameters
-        ----------
-        image_root : Path
-            Image root path, without or with the ``.ome.zarr`` suffix.
-        stage_zyx_um : Sequence[float]
-            Physical Z, Y, X translation to write into the image metadata.
-
-        Returns
-        -------
-        None
-            The image metadata is updated in place when it already exists.
-        """
-        image_path = self._image_store_path(image_root)
-        metadata_path = image_path / Path("zarr.json")
-        if not metadata_path.exists():
-            return
-
-        metadata = open_group(image_path).metadata.model_dump(
-            mode="json", exclude_none=True
-        )
-
-        transforms = (
-            metadata.get("attributes", {})
-            .get("ome", {})
-            .get("multiscales", [{}])[0]
-            .get("datasets", [{}])[0]
-            .get("coordinateTransformations", [])
-        )
-        for transform in transforms:
-            if transform.get("type") == "translation":
-                transform["translation"] = [float(v) for v in stage_zyx_um]
-                self._save_to_json(metadata, metadata_path)
-                return
-
     @staticmethod
     def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
         """Return ZYX stage coordinates, padding legacy YX positions with Z=0."""
@@ -2005,80 +1942,6 @@ class qi2labDataStore:
                 f"coordinates; got shape {stage.shape}."
             )
         return stage
-
-    def _resolve_original_tile_position_zyx_um(
-        self,
-        tile_id: str,
-        round_id: str | None = None,
-        bit_id: str | None = None,
-    ) -> list[float] | None:
-        """
-        Resolve original tile stage position used for OME translation.
-
-        Parameters
-        ----------
-        tile_id : str
-            Tile identifier.
-        round_id : str | None
-            Optional fiducial round identifier.
-        bit_id : str | None
-            Optional readout bit identifier.
-
-        Returns
-        -------
-        list[float] | None
-            Original stage position in Z, Y, X microns, if available.
-        """
-        if round_id is not None:
-            fiducial_entity = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            attrs = self._load_entity_attributes(fiducial_entity)
-            stage = attrs.get("stage_zyx_um")
-            if stage is not None:
-                return self._normalize_stage_position_zyx_um(stage).tolist()
-
-        if bit_id is not None:
-            round_linker = self.load_local_round_linker(tile=tile_id, bit=bit_id)
-            if round_linker is not None and int(round_linker) > 0:
-                linked_round_id = self._round_ids[int(round_linker) - 1]
-                fiducial_entity = (
-                    self._fiducial_root_path / Path(tile_id) / Path(linked_round_id)
-                )
-                attrs = self._load_entity_attributes(fiducial_entity)
-                stage = attrs.get("stage_zyx_um")
-                if stage is not None:
-                    return self._normalize_stage_position_zyx_um(stage).tolist()
-
-        if getattr(self, "_round_ids", None):
-            fiducial_entity = (
-                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
-            )
-            attrs = self._load_entity_attributes(fiducial_entity)
-            stage = attrs.get("stage_zyx_um")
-            if stage is not None:
-                return self._normalize_stage_position_zyx_um(stage).tolist()
-        return None
-
-    def _resolve_reference_tile_position_zyx_um(
-        self, tile_id: str
-    ) -> list[float] | None:
-        """
-        Resolve the first-round reference stage position for derived outputs.
-
-        Parameters
-        ----------
-        tile_id : str
-            Tile identifier.
-
-        Returns
-        -------
-        list[float] or None
-            First fiducial round stage position in Z, Y, X microns.
-        """
-        if not getattr(self, "_round_ids", None):
-            return None
-        return self._resolve_original_tile_position_zyx_um(
-            tile_id=tile_id, round_id=self._round_ids[0]
-        )
 
     def _validate_core_image_shape(
         self,
@@ -2113,7 +1976,17 @@ class qi2labDataStore:
         for candidate_name in required_names:
             if candidate_name == image_name:
                 continue
-            candidate_shape = self.image_shape(entity_root / Path(candidate_name))
+            if entity_root.parent.parent == self._fiducial_root_path:
+                candidate_path = self.local_image_path(
+                    entity_root.parent.name, candidate_name, round=entity_root.name
+                )
+            elif entity_root.parent.parent == self._readouts_root_path:
+                candidate_path = self.local_image_path(
+                    entity_root.parent.name, candidate_name, bit=entity_root.name
+                )
+            else:
+                candidate_path = entity_root / candidate_name
+            candidate_shape = self.image_shape(candidate_path)
             if candidate_shape is None:
                 continue
             if tuple(candidate_shape) != shape:
@@ -2208,7 +2081,8 @@ class qi2labDataStore:
             raise FileNotFoundError(image_path)
 
         group = open_group(str(image_path))
-        _ = group["0"]
+        dataset = group.ome_metadata(strict=True).multiscales[0].datasets[0]
+        _ = group[dataset.path]
 
     @staticmethod
     def _load_from_zarr_array(
@@ -2232,7 +2106,8 @@ class qi2labDataStore:
         """
         image_path = qi2labDataStore._image_store_path(image_path)
         group = open_group(str(image_path))
-        current_array = group["0"].to_tensorstore()
+        dataset = group.ome_metadata(strict=True).multiscales[0].datasets[0]
+        current_array = group[dataset.path].to_tensorstore()
 
         if return_future is None:
             return current_array
@@ -2249,8 +2124,13 @@ class qi2labDataStore:
         ome_scale: Sequence[float] | None = None,
         ome_translation: Sequence[float] | None = None,
         extra_attributes: Mapping[str, Any] | None = None,
+        axes: str | None = None,
+        scene_path: Path | None = None,
+        scene_selection: str | None = None,
+        scene_frame: str | None = None,
+        scene_affine: ArrayLike | None = None,
     ) -> "WriteFutures | None":
-        """Save image data as OME-Zarr v0.5 using yaozarrs tensorstore writer.
+        """Save image data using yaozarrs and its TensorStore backend.
 
         Parameters
         ----------
@@ -2266,9 +2146,15 @@ class qi2labDataStore:
             Image origin in microns, in image-axis order or ZYX order.
         extra_attributes : Mapping or None
             Additional image metadata.
+        axes : str or None
+            Array axes when the default spatial layout does not apply.
         return_future : bool or None
             Return the write-completion handle (True), or wait for the write
             to finish and return None (False or None).
+        scene_path, scene_selection, scene_frame : Path or str or None
+            Publish a native image in the Scene, when all three are supplied.
+        scene_affine : ArrayLike or None
+            Optional physical ZYX affine from the image to its Scene frame.
 
         Returns
         -------
@@ -2299,29 +2185,105 @@ class qi2labDataStore:
             ome_translation, image_array.ndim, 0.0
         )
 
-        axes = qi2labDataStore._build_axes(v05, image_array.ndim)
-        scale[-3:] = round_spacing_um(scale[-3:]).tolist()
-        transforms = [
-            v05.ScaleTransformation(scale=scale),
-            v05.TranslationTransformation(translation=translation),
-        ]
-        datasets = [v05.Dataset(path="0", coordinateTransformations=transforms)]
-        multiscales = [v05.Multiscale(axes=axes, datasets=datasets)]
+        if scene_path is not None:
+            from merfish3danalysis.storage.ome import publish_image
 
-        image_metadata = v05.Image(multiscales=multiscales)
+            if not scene_selection or not scene_frame:
+                raise ValueError("A Scene image needs a selection and a frame.")
+            axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
+            if len(axis_names) != image_array.ndim:
+                raise ValueError(
+                    "The number of axes must match the array dimensionality."
+                )
+            model = v06.Image(
+                multiscales=[
+                    v06.Multiscale.from_dims(
+                        [
+                            DimSpec(
+                                name=axis,
+                                size=size,
+                                scale=round_pixel_size_um(step)
+                                if axis in "zyx"
+                                else step,
+                                translation=offset,
+                                unit="micrometer"
+                                if axis in "zyx"
+                                else ("second" if axis == "t" else None),
+                            )
+                            for axis, size, step, offset in zip(
+                                axis_names,
+                                image_array.shape,
+                                scale,
+                                translation,
+                                strict=True,
+                            )
+                        ]
+                    )
+                ]
+            )
+            products = open_group(scene_path).attrs["qi2lab"]["products"]
+            previous = products.get(scene_selection)
+            published = publish_image(
+                scene_path,
+                scene_selection,
+                scene_frame,
+                model,
+                image_array,
+                expected_revision=None if previous is None else previous["revision"],
+                chunks=chunks,
+                extra_attributes=extra_attributes,
+                return_write_future=bool(return_future),
+                affine_zyx_um=scene_affine,
+                missing_z_origin_um=(
+                    float(ome_translation[-3])
+                    if image_array.ndim == 2
+                    and ome_translation is not None
+                    and len(ome_translation) >= 3
+                    else 0
+                ),
+            )
+            return published[1] if return_future else None
+
+        axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
+        if len(axis_names) != image_array.ndim:
+            raise ValueError("The number of axes must match the array dimensionality.")
+        image_metadata = v06.Image(
+            multiscales=[
+                v06.Multiscale.from_dims(
+                    [
+                        DimSpec(
+                            name=axis,
+                            size=size,
+                            scale=round_pixel_size_um(step) if axis in "zyx" else step,
+                            translation=offset,
+                            unit="micrometer"
+                            if axis in "zyx"
+                            else ("second" if axis == "t" else None),
+                        )
+                        for axis, size, step, offset in zip(
+                            axis_names,
+                            image_array.shape,
+                            scale,
+                            translation,
+                            strict=True,
+                        )
+                    ]
+                )
+            ]
+        )
 
         chunk_spec = tuple(int(c) for c in chunks)
         write_options = {
             "extra_attributes": qi2labDataStore._to_json_compatible(extra_attributes)
             if extra_attributes
             else None,
-            "writer": qi2labDataStore._create_array_tensorstore_qi2lab,
+            "writer": "tensorstore",
             "overwrite": True,
             "chunks": chunk_spec,
             "compression": "blosc-zstd",
         }
         if return_future:
-            from yaozarrs.write.v05 import prepare_image
+            from yaozarrs.write.v06 import prepare_image
 
             # yaozarrs creates the complete OME-Zarr v3 structure. Its write_image
             # API is synchronous; writing the prepared array is necessary to
@@ -2332,7 +2294,9 @@ class qi2labDataStore:
                 datasets=(image_array.shape, image_array.dtype),
                 **write_options,
             )
-            return arrays["0"].write(image_array)
+            return arrays[image_metadata.multiscales[0].datasets[0].path].write(
+                image_array
+            )
         write_image(
             dest=str(image_path),
             image=image_metadata,
@@ -2486,48 +2450,7 @@ class qi2labDataStore:
                 ]
 
             if validate:
-                psf_root_path = self._calibrations_zarr_path / Path("psf_data")
-                try:
-                    if psf_root_path.exists():
-
-                        def psf_sort_key(path: Path) -> int:
-                            """
-                            Return the numeric PSF directory index.
-
-                            Parameters
-                            ----------
-                            path : Path
-                                PSF directory path.
-
-                            Returns
-                            -------
-                            int
-                                PSF directory index.
-                            """
-                            return int(path.name[len("psf_") : len("psf_") + 3])
-
-                        psf_dirs = sorted(
-                            [
-                                entry
-                                for entry in psf_root_path.iterdir()
-                                if entry.is_dir()
-                                and re.fullmatch(r"psf_\d{3}\.ome\.zarr", entry.name)
-                            ],
-                            key=psf_sort_key,
-                        )
-                    else:
-                        psf_dirs = []
-
-                    if len(psf_dirs) > 0:
-                        psf_list = []
-                        for psf_dir in psf_dirs:
-                            psf_array = self._load_from_zarr_array(
-                                psf_dir, return_future=False
-                            )
-                            psf_list.append(np.asarray(psf_array, dtype=np.float32))
-                        self._psfs = psf_list
-                except (OSError, ValueError):
-                    print("Calibration psfs missing.")
+                _ = self.channel_psfs
 
         # validate fiducial and readout bits data
         if self._datastore_state["Corrected"] and validate:
@@ -2570,7 +2493,6 @@ class qi2labDataStore:
                 attributes = self._load_entity_attributes(entity_root)
 
                 keys_to_check = [
-                    "stage_zyx_um",
                     "excitation_um",
                     "emission_um",
                     # "exposure_ms",
@@ -2581,11 +2503,15 @@ class qi2labDataStore:
                     if key not in attributes.keys():
                         print(tile_id, round_id, key)
                         raise KeyError("Corrected fiducial attributes incomplete")
+                if self.load_local_stage_position_zyx_um(tile_id, round_id) is None:
+                    raise KeyError("Corrected fiducial stage transforms incomplete")
                 if "bit_linker" not in attributes:
                     print(tile_id, round_id, "bit_linker")
                     raise KeyError("Corrected fiducial attributes incomplete")
 
-                current_local_zarr_path = str(entity_root / Path("corrected_data"))
+                current_local_zarr_path = self.local_image_path(
+                    tile_id, "corrected_data", round=round_id
+                )
 
                 try:
                     self._check_for_zarr_array(current_local_zarr_path)
@@ -2609,7 +2535,9 @@ class qi2labDataStore:
                 if "round_linker" not in attributes:
                     raise KeyError("Corrected readout attributes incomplete")
 
-                current_local_zarr_path = str(entity_root / Path("corrected_data"))
+                current_local_zarr_path = self.local_image_path(
+                    tile_id, "corrected_data", bit=bit_id
+                )
 
                 try:
                     self._check_for_zarr_array(current_local_zarr_path)
@@ -2620,31 +2548,21 @@ class qi2labDataStore:
         # check and validate local transform and preprocessing data
         if self._datastore_state["LocalRegistered"] and validate:
             for tile_id, round_id in product(self._tile_ids, self._round_ids):
-                entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
                 if round_id != self._round_ids[0]:
-                    attributes = self._load_entity_attributes(entity_root)
+                    if (
+                        self.load_local_round_transform_zyx_um(tile_id, round_id)
+                        is None
+                    ):
+                        raise KeyError(
+                            f"{round_id, tile_id} local round transform missing"
+                        )
 
-                    keys_to_check = ["local_round_transform_zyx_um"]
-
-                    for key in keys_to_check:
-                        if key not in attributes.keys():
-                            raise KeyError(
-                                f"{round_id, tile_id} local round transform missing"
-                            )
-
-                    current_local_zarr_path = str(
-                        entity_root / Path("opticalflow_xform_px")
-                    )
-
-                    try:
-                        self._check_for_zarr_array(current_local_zarr_path)
-                    except (OSError, ValueError):
-                        # print(tile_id, round_id)
-                        # print("Optical flow registration data missing.")
-                        pass
-
-                corrected_shape = self.image_shape(entity_root / Path("corrected_data"))
-                decon_shape = self.image_shape(entity_root / Path("decon_data"))
+                corrected_shape = self.image_shape(
+                    self.local_image_path(tile_id, "corrected_data", round=round_id)
+                )
+                decon_shape = self.image_shape(
+                    self.local_image_path(tile_id, "decon_data", round=round_id)
+                )
                 if (
                     corrected_shape is not None
                     and decon_shape is not None
@@ -2656,9 +2574,8 @@ class qi2labDataStore:
                     )
 
             for tile_id, bit_id in product(self._tile_ids, self._bit_ids):
-                entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
-                current_local_zarr_path = str(
-                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
+                current_local_zarr_path = self.local_image_path(
+                    tile_id, f"{self.feature_predictor_folder_name}_data", bit=bit_id
                 )
 
                 try:
@@ -2666,11 +2583,13 @@ class qi2labDataStore:
                 except (OSError, ValueError):
                     print(tile_id, bit_id)
                     print("feature_predictor prediction missing.")
-                corrected_shape = self.image_shape(entity_root / Path("corrected_data"))
-                decon_shape = self.image_shape(entity_root / Path("decon_data"))
-                feature_shape = self.image_shape(
-                    entity_root / Path(f"{self.feature_predictor_folder_name}_data")
+                corrected_shape = self.image_shape(
+                    self.local_image_path(tile_id, "corrected_data", bit=bit_id)
                 )
+                decon_shape = self.image_shape(
+                    self.local_image_path(tile_id, "decon_data", bit=bit_id)
+                )
+                feature_shape = self.image_shape(current_local_zarr_path)
                 shapes = [
                     shape
                     for shape in (corrected_shape, decon_shape, feature_shape)
@@ -2699,22 +2618,13 @@ class qi2labDataStore:
         # check and validate global registered data
         if self._datastore_state["GlobalRegistered"] and validate:
             for tile_id in self._tile_ids:
-                entity_root = (
-                    self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
-                )
-                attributes = self._load_entity_attributes(entity_root)
-
-                keys_to_check = ["affine_zyx_um", "origin_zyx_um", "spacing_zyx_um"]
-
-                for key in keys_to_check:
-                    if key not in attributes.keys():
-                        raise KeyError("Global registration missing")
+                coordinates = self.load_global_coord_xforms_um(tile_id)
+                if coordinates is None or any(value is None for value in coordinates):
+                    raise KeyError("Global registration missing")
 
         # check and validate fused
         if self._datastore_state["Fused"] and validate:
-            fused_image_path = self._fused_root_path / Path(
-                f"fused_{self.fiducial_folder_name}_zyx"
-            )
+            fused_image_path = self.fused_image_path()
             attributes = self.load_image_metadata(fused_image_path)
 
             keys_to_check = ["affine_zyx_um", "origin_zyx_um", "spacing_zyx_um"]
@@ -2727,21 +2637,15 @@ class qi2labDataStore:
 
             try:
                 self._check_for_zarr_array(current_local_zarr_path)
-            except (OSError, ValueError):
-                print("Fused data missing.")
+            except (OSError, ValueError) as exc:
+                raise FileNotFoundError("Fused data missing.") from exc
+            if self.load_global_fiducial_projection(return_future=None) is None:
+                raise FileNotFoundError("Fiducial projection missing.")
 
         # check and validate cellpose segmentation
         if self._datastore_state["SegmentedCells"] and validate:
-            current_local_zarr_path = str(
-                self._segmentation_root_path
-                / Path("cellpose")
-                / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
-            )
-
-            try:
-                self._check_for_zarr_array(current_local_zarr_path)
-            except (OSError, ValueError):
-                print("Cellpose data missing.")
+            if self.load_global_cellpose_segmentation_image(return_future=None) is None:
+                raise FileNotFoundError("Cellpose labels missing.")
 
             cell_outlines_path = (
                 self._segmentation_root_path
@@ -2784,17 +2688,11 @@ class qi2labDataStore:
             Codebook matrix.
         """
         try:
-            data = getattr(self, "_codebook", None)
-
-            if data is None:
+            codebook_df = self.codebook
+            if codebook_df is None:
                 return None
-            num_columns = len(data[0]) if data else 0
-            columns = ["gene_id"] + [f"bit{i:02d}" for i in range(1, num_columns)]
-            codebook_df = pd.DataFrame(data, columns=columns)
-
             gene_ids = codebook_df.iloc[:, 0].tolist()
             codebook_matrix = codebook_df.iloc[:, 1:].to_numpy().astype(int)
-            del data, codebook_df
             return gene_ids, codebook_matrix
         except (KeyError, ValueError, TypeError):
             print("Error parsing codebook.")
@@ -2834,6 +2732,34 @@ class qi2labDataStore:
         else:
             print("'tile' must be integer index or string identifier")
             return None
+
+        if not getattr(self, "_scene_acquisition_initialized", False):
+            from merfish3danalysis.storage.ome import (
+                ConcurrentSceneUpdateError,
+                publish_acquisition_scene,
+            )
+
+            bits_by_round = {
+                round_id: [self._bit_ids[int(bit) - 1] for bit in row[1:] if bit > 0]
+                for round_id, row in zip(
+                    self._round_ids, self._experiment_order.to_numpy(), strict=True
+                )
+            }
+            state = open_group(self._datastore_path).attrs["qi2lab"]
+            if not state.get("tile_ids"):
+                try:
+                    publish_acquisition_scene(
+                        self._datastore_path, self._tile_ids, bits_by_round
+                    )
+                except ConcurrentSceneUpdateError:
+                    pass
+                state = open_group(self._datastore_path).attrs["qi2lab"]
+            if (
+                state["tile_ids"] != self._tile_ids
+                or state["bits_by_round"] != bits_by_round
+            ):
+                raise ValueError("Datastore acquisition does not match the Scene.")
+            self._scene_acquisition_initialized = True
 
         try:
             fiducial_tile_path = self._fiducial_root_path / Path(tile_id)
@@ -3126,15 +3052,99 @@ class qi2labDataStore:
             return None
 
         try:
-            entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
-            self._save_entity_attributes(
-                entity_root_path=entity_root,
-                updates={"round_linker": int(round_linker)},
-            )
+            round_index = int(round_linker) - 1
+            if not 0 <= round_index < len(self._round_ids):
+                raise ValueError("Invalid linked round.")
         except (TypeError, ValueError):
             print(tile_id, bit_id)
             print("Error writing round linker attribute.")
             return None
+        from merfish3danalysis.storage._scene_update import update_scene
+
+        target_round = self._round_ids[round_index]
+        target_native = f"{tile_id}/{target_round}/{bit_id}/native"
+        target_chromatic = f"{tile_id}/{target_round}/{bit_id}/chromatic"
+
+        def update(
+            scene: v06.Scene, attributes: dict[str, Any]
+        ) -> tuple[v06.Scene, dict[str, Any]]:
+            """Move the bit's image and chromatic links in one Scene update."""
+            state = dict(attributes["qi2lab"])
+            transforms = list(scene.scene.coordinateTransformations)
+            chromatic = next(
+                t
+                for t in transforms
+                if t.name
+                and t.name.startswith(f"{tile_id}/")
+                and t.name.endswith(f"/{bit_id}/chromatic")
+            )
+            old_native = chromatic.input.name
+            old_name = chromatic.name
+            if old_name == target_chromatic:
+                return scene, attributes
+            systems = [
+                system.model_copy(update={"name": target_native})
+                if system.name == old_native
+                else system
+                for system in scene.scene.coordinateSystems
+            ]
+            new_transforms = []
+            for transform in transforms:
+                if transform.name == old_name:
+                    transform = transform.model_copy(
+                        update={
+                            "name": target_chromatic,
+                            "input": v06.CoordinateSystemRef(name=target_native),
+                            "output": v06.CoordinateSystemRef(
+                                name=f"{tile_id}/{target_round}/moving"
+                            ),
+                        }
+                    )
+                elif (
+                    transform.output.name == old_native
+                    and transform.output.path is None
+                ):
+                    transform = transform.model_copy(
+                        update={"output": v06.CoordinateSystemRef(name=target_native)}
+                    )
+                new_transforms.append(transform)
+            for key in (
+                "transform_status",
+                "transform_versions",
+                "transform_provenance",
+            ):
+                values = dict(state.get(key, {}))
+                if old_name in values:
+                    values[target_chromatic] = values.pop(old_name)
+                    if key == "transform_versions":
+                        values[target_chromatic] += 1
+                state[key] = values
+            products = {
+                name: {**product, "frame": target_native}
+                if product.get("frame") == old_native
+                else product
+                for name, product in state["products"].items()
+            }
+            links = dict(state.get("round_links", {}))
+            links[f"{tile_id}/{bit_id}"] = target_round
+            state.update(
+                products=products,
+                round_links=links,
+                generation=int(state["generation"]) + 1,
+            )
+            attributes["qi2lab"] = state
+            return scene.model_copy(
+                update={
+                    "scene": scene.scene.model_copy(
+                        update={
+                            "coordinateSystems": systems,
+                            "coordinateTransformations": new_transforms,
+                        }
+                    )
+                }
+            ), attributes
+
+        update_scene(self._datastore_path, update)
 
     def load_local_stage_position_zyx_um(
         self,
@@ -3190,22 +3200,24 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            attributes = self._load_entity_attributes(entity_root)
-            stage_zyx_um = attributes.get("stage_zyx_um")
-            affine_zyx_px = attributes.get("affine_zyx_px")
-            if stage_zyx_um is None or affine_zyx_px is None:
-                print(tile_id, round_id)
-                print("Stage position attribute not found.")
-                return None
-            return self._normalize_stage_position_zyx_um(stage_zyx_um), np.asarray(
-                affine_zyx_px, dtype=np.float32
-            )
-        except (TypeError, ValueError):
-            print(tile_id, round_id)
-            print("Stage position attribute not found.")
+        group = open_group(self._datastore_path)
+        scene = group.ome_metadata(strict=True)
+        names = [f"{tile_id}/{round_id}/stage", f"{tile_id}/{round_id}/camera"]
+        statuses = group.attrs["qi2lab"]["transform_status"]
+        if any(statuses.get(name) != "calculated" for name in names):
             return None
+        transforms = {
+            transform.name: transform
+            for transform in scene.scene.coordinateTransformations
+        }
+        stage, camera = (transforms[name] for name in names)
+        if not isinstance(stage, v06.TranslationTransformation) or not isinstance(
+            camera, v06.AffineTransformation
+        ):
+            raise ValueError("Stage and camera transforms have unexpected NGFF types.")
+        affine = np.eye(4, dtype=np.float32)
+        affine[:3] = np.asarray(camera.affine, dtype=np.float32)
+        return np.asarray(stage.translation, dtype=np.float32), affine
 
     def save_local_stage_position_zyx_um(
         self,
@@ -3260,25 +3272,51 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            stage_zyx_um = self._normalize_stage_position_zyx_um(stage_zyx_um)
-            self._save_entity_attributes(
-                entity_root_path=entity_root,
-                updates={
-                    "stage_zyx_um": stage_zyx_um.tolist(),
-                    "affine_zyx_px": np.asarray(
-                        affine_zyx_px, dtype=np.float32
-                    ).tolist(),
-                },
+        from merfish3danalysis.storage.ome import publish_transforms
+
+        stage_zyx_um = self._normalize_stage_position_zyx_um(stage_zyx_um)
+        camera = np.asarray(affine_zyx_px, dtype=np.float32)
+        if (
+            camera.shape != (4, 4)
+            or not np.isfinite(stage_zyx_um).all()
+            or not np.isfinite(camera).all()
+            or not np.array_equal(camera[3], [0, 0, 0, 1])
+        ):
+            raise ValueError(
+                "Stage coordinates and the 4x4 camera affine must be valid."
             )
-            self._update_image_translation_transform(
-                entity_root / Path("corrected_data"), stage_zyx_um
-            )
-        except (TypeError, ValueError):
-            print(tile_id, round_id)
-            print("Error writing stage position attribute.")
-            return None
+        group = open_group(self._datastore_path)
+        scene = group.ome_metadata(strict=True)
+        names = [f"{tile_id}/{round_id}/stage", f"{tile_id}/{round_id}/camera"]
+        transforms = {
+            transform.name: transform
+            for transform in scene.scene.coordinateTransformations
+        }
+        expected = [transforms[name] for name in names]
+        replacements = [
+            v06.TranslationTransformation(
+                name=names[0],
+                input=expected[0].input,
+                output=expected[0].output,
+                translation=stage_zyx_um.tolist(),
+            ),
+            v06.AffineTransformation(
+                name=names[1],
+                input=expected[1].input,
+                output=expected[1].output,
+                affine=camera[:3].tolist(),
+            ),
+        ]
+        state = group.attrs["qi2lab"]
+        publish_transforms(
+            self._datastore_path,
+            expected,
+            replacements,
+            expected_statuses={name: state["transform_status"][name] for name in names},
+            expected_revisions={
+                name: state["transform_versions"][name] for name in names
+            },
+        )
 
     def load_local_wavelengths_um(
         self,
@@ -3358,6 +3396,12 @@ class qi2labDataStore:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
 
         try:
+            if bit is not None:
+                state = open_group(self._datastore_path).attrs.get("qi2lab", {})
+                values = state.get("readout_wavelengths_um", {})[
+                    f"{tile_id}/{local_id}"
+                ]
+                return (values[0], values[1])
             attributes = self._load_entity_attributes(entity_root)
             ex_wavelength_um = attributes["excitation_um"]
             em_wavelength_um = attributes["emission_um"]
@@ -3447,6 +3491,18 @@ class qi2labDataStore:
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
 
         try:
+            if bit is not None:
+                from merfish3danalysis.storage.ome import update_chromatic_metadata
+
+                update_chromatic_metadata(
+                    self._datastore_path,
+                    wavelength=(
+                        tile_id,
+                        local_id,
+                        (float(wavelengths_um[0]), float(wavelengths_um[1])),
+                    ),
+                )
+                return None
             self._save_entity_attributes(
                 entity_root_path=entity_root,
                 updates={
@@ -3520,12 +3576,6 @@ class qi2labDataStore:
             else:
                 print("'bit' must be integer index or string identifier")
                 return None
-            current_local_zarr_path = str(
-                self._readouts_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("corrected_data")
-            )
         else:
             if isinstance(round, int):
                 if round < 0 or round >= len(self._round_ids):
@@ -3542,14 +3592,13 @@ class qi2labDataStore:
             else:
                 print("'round' must be integer index or string identifier")
                 return None
-            current_local_zarr_path = str(
-                self._fiducial_root_path
-                / Path(tile_id)
-                / Path(local_id)
-                / Path("corrected_data")
-            )
 
-        image_path = self._image_store_path(current_local_zarr_path)
+        image_path = self.local_image_path(
+            tile_id,
+            "corrected_data",
+            bit=local_id if bit is not None else None,
+            round=local_id if round is not None else None,
+        )
         if not image_path.exists():
             print("Corrected image not found.")
             return None
@@ -3640,10 +3689,10 @@ class qi2labDataStore:
                 print("'bit' must be integer index or string identifier")
                 return None
             entity_root = self._readouts_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("corrected_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            round_id = self._round_ids[
+                self.load_local_round_linker(tile_id, local_id) - 1
+            ]
+            frame = f"{tile_id}/{round_id}/{local_id}/native"
         else:
             if isinstance(round, int):
                 if round < 0 or round >= len(self._round_ids):
@@ -3661,9 +3710,10 @@ class qi2labDataStore:
                 print("'round' must be integer index or string identifier")
                 return None
             entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
-            current_local_zarr_path = entity_root / Path("corrected_data")
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, round_id=local_id
+            frame = (
+                f"{tile_id}/reference"
+                if local_id == self._round_ids[0]
+                else f"{tile_id}/{local_id}/moving"
             )
 
         try:
@@ -3679,153 +3729,22 @@ class qi2labDataStore:
                     "psf_idx": int(psf_idx),
                 }
             )
+            selection = f"{tile_id}/{local_id}/corrected_data"
             write_future = self._save_to_zarr_array(
                 image,
-                current_local_zarr_path,
+                entity_root / "corrected_data",
                 return_future,
                 ome_scale=self.voxel_size_zyx_um,
-                ome_translation=stage_position,
                 extra_attributes=attributes,
-            )
-            if write_future is not None:
-                write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=attributes
+                scene_path=self._datastore_path,
+                scene_selection=selection,
+                scene_frame=frame,
             )
             return write_future
         except (OSError, TimeoutError, ValueError) as e:
             print(e)
             print("Error saving corrected image.")
             raise
-
-    def load_local_rigid_xform_xyz_px(
-        self,
-        tile: int | str,
-        round: int | str,
-    ) -> ArrayLike | None:
-        """Load calculated rigid registration transform for one round and tile.
-
-        Parameters
-        ----------
-        tile : int or str
-            Tile index or tile id.
-        round : int or str
-            Round index or round id.
-
-        Returns
-        -------
-        rigid_xform_xyz_px : ArrayLike or None
-            Local rigid registration transform for one round and tile.
-        """
-        if isinstance(tile, int):
-            if tile < 0 or tile >= self._num_tiles:
-                print("Set tile index >=0 and <" + str(self._num_tiles))
-                return None
-            else:
-                tile_id = self._tile_ids[tile]
-        elif isinstance(tile, str):
-            if tile not in self._tile_ids:
-                print("set valid tiled id")
-                return None
-            else:
-                tile_id = tile
-        else:
-            print("'tile' must be integer index or string identifier")
-            return None
-
-        if isinstance(round, int):
-            if round < 0 or round >= len(self._round_ids):
-                print("Set round index >=0 and <" + str(self._num_rounds))
-                return None
-            else:
-                round_id = self._round_ids[round]
-        elif isinstance(round, str):
-            if round not in self._round_ids:
-                print("Set valid round id")
-                return None
-            else:
-                round_id = round
-        else:
-            print("'round' must be integer index or string identifier")
-            return None
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            attributes = self._load_entity_attributes(entity_root)
-            rigid_xform_xyz_px = np.asarray(
-                attributes["rigid_xform_xyz_px"], dtype=np.float32
-            )
-            return rigid_xform_xyz_px
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            print(tile_id, round_id)
-            print("Rigid transform mapping back to first round not found.")
-            return None
-
-    def save_local_rigid_xform_xyz_px(
-        self,
-        rigid_xform_xyz_px: ArrayLike,
-        tile: int | str,
-        round: int | str,
-    ) -> ArrayLike | None:
-        """Save calculated rigid registration transform for one round and tile.
-
-        Parameters
-        ----------
-        rigid_xform_xyz_px : ArrayLike
-            Local rigid registration transform for one round and tile.
-        tile : int or str
-            Tile index or tile id.
-        round : int or str
-            Round index or round id.
-
-        Returns
-        -------
-        rigid_xform_xyz_px : ArrayLike or None
-            Local rigid registration transform for one round and tile.
-        """
-        if isinstance(tile, int):
-            if tile < 0 or tile >= self._num_tiles:
-                print("Set tile index >=0 and <" + str(self._num_tiles))
-                return None
-            else:
-                tile_id = self._tile_ids[tile]
-        elif isinstance(tile, str):
-            if tile not in self._tile_ids:
-                print("set valid tiled id")
-                return None
-            else:
-                tile_id = tile
-        else:
-            print("'tile' must be integer index or string identifier")
-            return None
-
-        if isinstance(round, int):
-            if round < 0 or round >= len(self._round_ids):
-                print("Set round index >=0 and <" + str(self._num_rounds))
-                return None
-            else:
-                round_id = self._round_ids[round]
-        elif isinstance(round, str):
-            if round not in self._round_ids:
-                print("Set valid round id")
-                return None
-            else:
-                round_id = round
-        else:
-            print("'round' must be integer index or string identifier")
-            return None
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            self._save_entity_attributes(
-                entity_root_path=entity_root,
-                updates={
-                    "rigid_xform_xyz_px": np.asarray(
-                        rigid_xform_xyz_px, dtype=np.float32
-                    ).tolist()
-                },
-            )
-        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
-            print("Error writing rigid transform attribute.")
-            return None
 
     def load_local_round_transform_zyx_um(
         self,
@@ -3877,16 +3796,22 @@ class qi2labDataStore:
         else:
             print("'round' must be integer index or string identifier")
             return None
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            attributes = self._load_entity_attributes(entity_root)
-            return np.asarray(
-                attributes["local_round_transform_zyx_um"], dtype=np.float32
-            )
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            print(tile_id, round_id)
-            print("Local round transform mapping back to first round not found.")
+        group = open_group(self._datastore_path)
+        name = f"{tile_id}/{round_id}/local"
+        if group.attrs["qi2lab"]["transform_status"][name] != "calculated":
             return None
+        transform = next(
+            t
+            for t in group.ome_metadata(strict=True).scene.coordinateTransformations
+            if t.name == name
+        )
+        if isinstance(transform, v06.IdentityTransformation):
+            return np.eye(4, dtype=np.float32)
+        if not isinstance(transform, v06.AffineTransformation):
+            raise ValueError("Local registration has an unexpected NGFF type.")
+        forward = np.eye(4, dtype=np.float32)
+        forward[:3] = np.asarray(transform.affine, dtype=np.float32)
+        return np.linalg.inv(forward)
 
     def save_local_round_transform_zyx_um(
         self,
@@ -3911,8 +3836,7 @@ class qi2labDataStore:
         Returns
         -------
         None
-            The transform is stored in the entity attributes for the requested
-            fiducial tile and round.
+            The moving-to-reference affine is stored in the Scene.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -3941,192 +3865,37 @@ class qi2labDataStore:
         else:
             print("'round' must be integer index or string identifier")
             return None
-        try:
-            entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-            self._save_entity_attributes(
-                entity_root_path=entity_root,
-                updates={
-                    "local_round_transform_zyx_um": np.asarray(
-                        transform_zyx_um, dtype=np.float32
-                    ).tolist()
-                },
-            )
-        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
-            print("Error writing local round transform attribute.")
-            return None
+        from merfish3danalysis.storage.ome import publish_transform
 
-    def load_coord_of_xform_px(
-        self,
-        tile: int | str | None,
-        round: int | str | None,
-        return_future: bool | None = True,
-    ) -> "tuple[np.ndarray | Future | TensorStore, np.ndarray, np.ndarray] | None":
-        """Local fiducial optical flow matrix for one round and tile.
-
-        Parameters
-        ----------
-        tile : int or str or None
-            Tile index or tile id.
-        round : int or str or None
-            Round index or round id.
-        return_future : bool or None
-            True returns a read future, False returns a NumPy array, and None
-            returns a sliceable TensorStore handle opened through yaozarrs.
-
-        Returns
-        -------
-        of_xform_px : numpy.ndarray or tensorstore.Future or tensorstore.TensorStore
-            Local fiducial optical flow matrix for one round and tile.
-        block_size : numpy.ndarray
-            Block size used for the pixel warp.
-        block_stride : numpy.ndarray
-            Block stride used for the pixel warp.
-
-        Returns None when the image or required metadata is unavailable.
-        """
-        if isinstance(tile, int):
-            if tile < 0 or tile >= self._num_tiles:
-                print("Set tile index >=0 and <" + str(self._num_tiles))
-                return None
-            else:
-                tile_id = self._tile_ids[tile]
-        elif isinstance(tile, str):
-            if tile not in self._tile_ids:
-                print("set valid tiled id")
-                return None
-            else:
-                tile_id = tile
-        else:
-            print("'tile' must be integer index or string identifier")
-            return None
-
-        if isinstance(round, int):
-            if round < 0 or round >= len(self._round_ids):
-                print("Set round index >=0 and <" + str(self._num_rounds))
-                return None
-            else:
-                round_id = self._round_ids[round]
-        elif isinstance(round, str):
-            if round not in self._round_ids:
-                print("Set valid round id")
-                return None
-            else:
-                round_id = round
-        else:
-            print("'round' must be integer index or string identifier")
-            return None
-
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-        current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
-
-        image_path = self._image_store_path(current_local_zarr_path)
-        if not image_path.exists():
-            print("Optical flow transform mapping back to first round not found.")
-            return None
-
-        try:
-            of_xform_px = self._load_from_zarr_array(image_path, return_future)
-            attributes = self._load_entity_attributes(
-                entity_root, image_names=("opticalflow_xform_px",)
-            )
-            block_size = np.asarray(attributes["block_size"], dtype=np.float32)
-            block_stride = np.asarray(attributes["block_stride"], dtype=np.float32)
-
-            return (of_xform_px, block_size, block_stride)
-        except (OSError, ValueError, KeyError) as e:
-            print(e)
-            print("Error loading optical flow transform.")
-            return None
-
-    def save_coord_of_xform_px(
-        self,
-        of_xform_px: ArrayLike,
-        tile: int | str,
-        block_size: Sequence[float],
-        block_stride: Sequence[float],
-        round: int | str,
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
-        """Save fiducial optical flow matrix for one round and tile.
-
-        Parameters
-        ----------
-        of_xform_px : ArrayLike
-            Local fiducial optical flow matrix for one round and tile.
-        tile : int or str
-            Tile index or tile id.
-        block_size : Sequence[float]
-            Block size for pixel warp
-        block_stride: Sequence[float]
-            Block stride for pixel warp
-        round : int or str
-            Round index or round id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
-
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
-        """
-        if isinstance(tile, int):
-            if tile < 0 or tile >= self._num_tiles:
-                print("Set tile index >=0 and <" + str(self._num_tiles))
-                return None
-            else:
-                tile_id = self._tile_ids[tile]
-        elif isinstance(tile, str):
-            if tile not in self._tile_ids:
-                print("set valid tiled id")
-                return None
-            else:
-                tile_id = tile
-        else:
-            print("'tile' must be integer index or string identifier")
-            return None
-
-        if isinstance(round, int):
-            if round < 0 or round >= len(self._round_ids):
-                print("Set round index >=0 and <" + str(self._num_rounds))
-                return None
-            else:
-                local_id = self._round_ids[round]
-        elif isinstance(round, str):
-            if round not in self._round_ids:
-                print("Set valid round id")
-                return None
-            else:
-                local_id = round
-        else:
-            print("'round' must be integer index or string identifier")
-            return None
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(local_id)
-        current_local_zarr_path = entity_root / Path("opticalflow_xform_px")
-
-        try:
-            opticalflow_attrs = {
-                "block_size": np.asarray(block_size, dtype=np.float32).tolist(),
-                "block_stride": np.asarray(block_stride, dtype=np.float32).tolist(),
-            }
-            # Optical flow is a dense pixel-space field, so we do not encode
-            # physical voxel scale or stage translation transforms here.
-            write_future = self._save_to_zarr_array(
-                of_xform_px,
-                current_local_zarr_path,
-                return_future,
-                extra_attributes=opticalflow_attrs,
-            )
-            if write_future is not None:
-                write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=opticalflow_attrs
-            )
-            return write_future
-        except (OSError, TimeoutError):
-            print("Error saving optical flow transform.")
-            raise
+        matrix = np.asarray(transform_zyx_um, dtype=np.float32)
+        if (
+            matrix.shape != (4, 4)
+            or not np.isfinite(matrix).all()
+            or not np.array_equal(matrix[3], [0, 0, 0, 1])
+            or abs(np.linalg.det(matrix[:3, :3])) < 1e-12
+        ):
+            raise ValueError("Local registration must be an invertible 4x4 affine.")
+        group = open_group(self._datastore_path)
+        name = f"{tile_id}/{round_id}/local"
+        previous = next(
+            t
+            for t in group.ome_metadata(strict=True).scene.coordinateTransformations
+            if t.name == name
+        )
+        replacement = v06.AffineTransformation(
+            name=name,
+            input=previous.input,
+            output=previous.output,
+            affine=np.linalg.inv(matrix)[:3].tolist(),
+        )
+        state = group.attrs["qi2lab"]
+        publish_transform(
+            self._datastore_path,
+            previous,
+            replacement,
+            expected_status=state["transform_status"][name],
+            expected_revision=state["transform_versions"][name],
+        )
 
     def load_local_sofima_flow_field(
         self,
@@ -4186,21 +3955,14 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        image_name = "local_sofima_flow_field"
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-        current_local_zarr_path = entity_root / Path(image_name)
-        image_path = self._image_store_path(current_local_zarr_path)
-        if not image_path.exists():
-            print("SOFIMA flow field not found.")
-            return None
+        from merfish3danalysis.storage.ome import load_sofima_field
 
         try:
-            sofima_flow_field = self._load_from_zarr_array(image_path, return_future)
-            attributes = self._load_entity_attributes(
-                entity_root,
-                image_names=(image_name,),
+            return load_sofima_field(
+                self._datastore_path,
+                f"{tile_id}/{round_id}/deformable",
+                return_future=return_future,
             )
-            return sofima_flow_field, attributes
         except (OSError, ValueError, KeyError) as e:
             print(e)
             print("Error loading SOFIMA flow field.")
@@ -4312,10 +4074,11 @@ class qi2labDataStore:
         else:
             print("'reference_round' must be integer index or string identifier")
             return None
+        if reference_round_id != self._round_ids[0]:
+            print("SOFIMA reference round must be the first round")
+            return None
 
         image_name = "local_sofima_flow_field"
-        entity_root = self._fiducial_root_path / Path(tile_id) / Path(round_id)
-        current_local_zarr_path = entity_root / Path(image_name)
         attributes = {
             "registration_backend": "sofima",
             "initial_registration_source": "stored_local_affine_transform",
@@ -4330,12 +4093,6 @@ class qi2labDataStore:
             "flow_representation": "sofima_relative_coordinate_map",
             "flow_channel_order": "xyz",
             "flow_spatial_order": "zyx",
-            "map_stride_zyx_px": np.asarray(
-                map_stride_zyx_px, dtype=np.float32
-            ).tolist(),
-            "map_box_start_xyz_px": np.asarray(
-                map_box_start_xyz_px, dtype=np.float32
-            ).tolist(),
             "map_box_size_xyz_px": np.asarray(
                 map_box_size_xyz_px, dtype=np.float32
             ).tolist(),
@@ -4352,19 +4109,28 @@ class qi2labDataStore:
             attributes["valid_flow_vectors"] = int(valid_flow_vectors)
 
         try:
-            write_future = self._save_to_zarr_array(
-                np.asarray(sofima_flow_field_xyz_px, dtype=np.float32),
-                current_local_zarr_path,
-                return_future,
-                ome_scale=self.voxel_size_zyx_um,
+            from merfish3danalysis.storage.ome import publish_sofima_field
+
+            group = open_group(self._datastore_path)
+            name = f"{tile_id}/{round_id}/deformable"
+            previous = next(
+                t
+                for t in group.ome_metadata(strict=True).scene.coordinateTransformations
+                if t.name == name
+            )
+            state = group.attrs["qi2lab"]
+            return publish_sofima_field(
+                self._datastore_path,
+                previous,
+                sofima_flow_field_xyz_px,
+                spacing_zyx_um=self.voxel_size_zyx_um,
+                stride_zyx_px=map_stride_zyx_px,
+                start_xyz_px=map_box_start_xyz_px,
+                expected_status=state["transform_status"][name],
+                expected_revision=state["transform_versions"][name],
                 extra_attributes=attributes,
+                return_write_future=bool(return_future),
             )
-            if write_future is not None:
-                write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=attributes
-            )
-            return write_future
         except (OSError, TimeoutError):
             print("Error saving SOFIMA flow field.")
             raise
@@ -4424,8 +4190,7 @@ class qi2labDataStore:
             print("'round' must be integer index or string identifier")
             return None
 
-        decon_path = self._fiducial_root_path / tile_id / round_id / Path("decon_data")
-        image_path = self._image_store_path(decon_path)
+        image_path = self.local_image_path(tile_id, "decon_data", round=round_id)
         if not image_path.exists():
             return None
 
@@ -4536,7 +4301,11 @@ class qi2labDataStore:
 
         entity_root = self._fiducial_root_path / tile_id / round_id
         decon_path = entity_root / Path("decon_data")
-        stage_position = self._resolve_reference_tile_position_zyx_um(tile_id)
+        frame = (
+            f"{tile_id}/reference"
+            if round_id == self._round_ids[0]
+            else f"{tile_id}/{round_id}/moving"
+        )
 
         try:
             self._validate_core_image_shape(
@@ -4551,14 +4320,13 @@ class qi2labDataStore:
                 decon_path,
                 return_future,
                 ome_scale=self.voxel_size_zyx_um,
-                ome_translation=stage_position,
                 extra_attributes=attributes,
+                scene_path=self._datastore_path,
+                scene_selection=f"{tile_id}/{round_id}/decon_data",
+                scene_frame=frame,
             )
             if write_future is not None:
                 write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=attributes
-            )
             return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved fiducial image.")
@@ -4619,10 +4387,7 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        readout_path = (
-            self._readouts_root_path / Path(tile_id) / Path(bit_id) / Path("decon_data")
-        )
-        image_path = self._image_store_path(readout_path)
+        image_path = self.local_image_path(tile_id, "decon_data", bit=bit_id)
         if not image_path.exists():
             return None
 
@@ -4733,10 +4498,7 @@ class qi2labDataStore:
 
         entity_root = self._readouts_root_path / Path(tile_id) / Path(bit_id)
         readout_path = entity_root / Path("decon_data")
-        stage_position = self._resolve_original_tile_position_zyx_um(
-            tile_id=tile_id,
-            bit_id=bit_id,
-        )
+        round_id = self._round_ids[self.load_local_round_linker(tile_id, bit_id) - 1]
 
         try:
             self._validate_core_image_shape(
@@ -4751,14 +4513,13 @@ class qi2labDataStore:
                 readout_path,
                 return_future,
                 ome_scale=self.voxel_size_zyx_um,
-                ome_translation=stage_position,
                 extra_attributes=attributes,
+                scene_path=self._datastore_path,
+                scene_selection=f"{tile_id}/{bit_id}/decon_data",
+                scene_frame=f"{tile_id}/{round_id}/{bit_id}/native",
             )
             if write_future is not None:
                 write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=attributes
-            )
             return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved readout image.")
@@ -4819,14 +4580,9 @@ class qi2labDataStore:
             print("'bit' must be integer index or string identifier")
             return None
 
-        current_local_zarr_path = str(
-            self._readouts_root_path
-            / Path(tile_id)
-            / Path(bit_id)
-            / Path(f"{self.feature_predictor_folder_name}_data")
+        image_path = self.local_image_path(
+            tile_id, f"{self.feature_predictor_folder_name}_data", bit=bit_id
         )
-
-        image_path = self._image_store_path(current_local_zarr_path)
         if not image_path.exists():
             print("feature_predictor prediction image not found.")
             return None
@@ -4910,23 +4666,22 @@ class qi2labDataStore:
                 image_name=f"{self.feature_predictor_folder_name}_data",
                 image=feature_predictor_image,
             )
-            stage_position = self._resolve_original_tile_position_zyx_um(
-                tile_id=tile_id, bit_id=local_id
-            )
+            round_id = self._round_ids[
+                self.load_local_round_linker(tile_id, local_id) - 1
+            ]
             attributes = self._load_entity_attributes(entity_root)
             write_future = self._save_to_zarr_array(
                 feature_predictor_image,
                 current_local_zarr_path,
                 return_future,
                 ome_scale=self.voxel_size_zyx_um,
-                ome_translation=stage_position,
                 extra_attributes=attributes,
+                scene_path=self._datastore_path,
+                scene_selection=f"{tile_id}/{local_id}/{self.feature_predictor_folder_name}_data",
+                scene_frame=f"{tile_id}/{round_id}/{local_id}/native",
             )
             if write_future is not None:
                 write_future.result()
-            self._save_entity_attributes(
-                entity_root_path=entity_root, updates=attributes
-            )
             return write_future
         except (OSError, ValueError) as e:
             print(e)
@@ -5100,19 +4855,35 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
-            )
-            attributes = self._load_entity_attributes(entity_root)
-            affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
-            origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-            spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
-            return (affine_zyx_um, origin_zyx_um, spacing_zyx_um)
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            print(tile_id, self._round_ids[0])
-            print("Global coordinate transforms not found")
+        group = open_group(self._datastore_path)
+        names = [
+            f"{tile_id}/global",
+            f"{tile_id}/decoder_origin",
+            f"{tile_id}/decoder_spacing",
+        ]
+        statuses = group.attrs["qi2lab"]["transform_status"]
+        if any(statuses.get(name) != "calculated" for name in names):
             return None, None, None
+        transforms = {
+            transform.name: transform
+            for transform in group.ome_metadata(
+                strict=True
+            ).scene.coordinateTransformations
+        }
+        affine, origin, spacing = (transforms[name] for name in names)
+        if not (
+            isinstance(affine, v06.AffineTransformation)
+            and isinstance(origin, v06.TranslationTransformation)
+            and isinstance(spacing, v06.ScaleTransformation)
+        ):
+            raise ValueError("Global coordinate transforms have unexpected NGFF types.")
+        matrix = np.eye(4, dtype=np.float32)
+        matrix[:3] = np.asarray(affine.affine, dtype=np.float32)
+        return (
+            matrix,
+            np.asarray(origin.translation, dtype=np.float32),
+            round_spacing_um(spacing.scale),
+        )
 
     def save_global_coord_xforms_um(
         self,
@@ -5151,25 +4922,210 @@ class qi2labDataStore:
             print("'tile' must be integer index or string identifier")
             return None
 
-        try:
-            entity_root = (
-                self._fiducial_root_path / Path(tile_id) / Path(self._round_ids[0])
+        from merfish3danalysis.storage.ome import publish_transforms
+
+        matrix = np.asarray(affine_zyx_um, dtype=np.float32)
+        origin = np.asarray(origin_zyx_um, dtype=np.float32)
+        spacing = round_spacing_um(spacing_zyx_um)
+        if (
+            matrix.shape != (4, 4)
+            or origin.shape != (3,)
+            or spacing.shape != (3,)
+            or not np.isfinite(matrix).all()
+            or not np.isfinite(origin).all()
+            or not np.isfinite(spacing).all()
+            or np.any(spacing <= 0)
+            or not np.array_equal(matrix[3], [0, 0, 0, 1])
+        ):
+            raise ValueError("Global affine, origin, and spacing must be valid.")
+        group = open_group(self._datastore_path)
+        scene = group.ome_metadata(strict=True)
+        names = [
+            f"{tile_id}/global",
+            f"{tile_id}/decoder_origin",
+            f"{tile_id}/decoder_spacing",
+        ]
+        transforms = {t.name: t for t in scene.scene.coordinateTransformations}
+        expected = [transforms[name] for name in names]
+        replacements = [
+            v06.AffineTransformation(
+                name=names[0],
+                input=expected[0].input,
+                output=expected[0].output,
+                affine=matrix[:3].tolist(),
+            ),
+            v06.TranslationTransformation(
+                name=names[1],
+                input=expected[1].input,
+                output=expected[1].output,
+                translation=origin.tolist(),
+            ),
+            v06.ScaleTransformation(
+                name=names[2],
+                input=expected[2].input,
+                output=expected[2].output,
+                scale=spacing.tolist(),
+            ),
+        ]
+        state = group.attrs["qi2lab"]
+        publish_transforms(
+            self._datastore_path,
+            expected,
+            replacements,
+            expected_statuses={name: state["transform_status"][name] for name in names},
+            expected_revisions={
+                name: state["transform_versions"][name] for name in names
+            },
+        )
+
+    def save_global_fiducial_projection(
+        self,
+        projection: ArrayLike,
+        affine_zyx_um: ArrayLike,
+        origin_zyx_um: ArrayLike,
+        spacing_zyx_um: ArrayLike,
+        return_future: bool | None = False,
+    ) -> "WriteFutures | None":
+        """Publish the fused YX projection in its own NGFF 0.6 Scene.
+
+        The projection has no measured Z. Its world link uses the existing ROI
+        convention of pixel Z=10; the original 3D grid remains available for
+        the library's ROI calculations.
+        """
+        import os
+        from tempfile import TemporaryDirectory
+
+        from merfish3danalysis.storage._scene_update import _scene_lock
+        from merfish3danalysis.storage.ome import initialize_scene, publish_image
+
+        pixels = np.asarray(projection)
+        affine = np.asarray(affine_zyx_um, dtype=np.float32)
+        origin = np.asarray(origin_zyx_um, dtype=np.float32)
+        spacing = round_spacing_um(spacing_zyx_um)
+        if (
+            pixels.ndim != 2
+            or affine.shape != (4, 4)
+            or origin.shape != (3,)
+            or spacing.shape != (3,)
+        ):
+            raise ValueError(
+                "Projection must be YX with a 3D affine, origin and spacing."
             )
-            self._save_entity_attributes(
-                entity_root_path=entity_root,
-                updates={
-                    "affine_zyx_um": np.asarray(
-                        affine_zyx_um, dtype=np.float32
-                    ).tolist(),
-                    "origin_zyx_um": np.asarray(
-                        origin_zyx_um, dtype=np.float32
-                    ).tolist(),
-                    "spacing_zyx_um": round_spacing_um(spacing_zyx_um).tolist(),
-                },
+        if (
+            not np.isfinite(affine).all()
+            or not np.isfinite(origin).all()
+            or not np.isfinite(spacing).all()
+            or np.any(spacing <= 0)
+        ):
+            raise ValueError(
+                "Projection coordinates must be finite with positive spacing."
             )
-        except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError) as e:
-            print(e)
-            print("Could not save global coordinate transforms.")
+        image = v06.Image(
+            multiscales=[
+                v06.Multiscale.from_dims(
+                    [
+                        DimSpec(
+                            name=axis,
+                            size=size,
+                            unit="micrometer",
+                            scale=float(step),
+                            translation=float(start),
+                        )
+                        for axis, size, step, start in zip(
+                            "yx", pixels.shape, spacing[1:], origin[1:], strict=True
+                        )
+                    ]
+                )
+            ]
+        )
+        attrs = {
+            "affine_zyx_um": affine.tolist(),
+            "origin_zyx_um": origin.tolist(),
+            "spacing_zyx_um": spacing.tolist(),
+        }
+        path = self.fiducial_projection_path()
+
+        def publish(dest: Path, expected_revision: str | None) -> Any:
+            return publish_image(
+                dest,
+                "projection/fiducial",
+                "world",
+                image,
+                pixels,
+                expected_revision=expected_revision,
+                extra_attributes=attrs,
+                return_write_future=bool(return_future),
+                affine_zyx_um=affine,
+                missing_z_origin_um=float(origin[0] + 10 * spacing[0]),
+            )
+
+        if not path.exists():
+            with TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as temp:
+                candidate = Path(temp) / path.name
+                initialize_scene(candidate)
+                published = publish(candidate, None)
+                open_group(candidate).validate(strict=True)
+                with _scene_lock(path.resolve()):
+                    if path.exists():
+                        raise FileExistsError(
+                            "Projection Scene was created by another worker."
+                        )
+                    os.rename(candidate, path)
+        else:
+            products = open_group(path).attrs["qi2lab"]["products"]
+            previous = products.get("projection/fiducial")
+            published = publish(
+                path, None if previous is None else previous["revision"]
+            )
+        return published[1] if return_future else None
+
+    def load_global_fiducial_projection(
+        self, return_future: bool | None = True
+    ) -> "tuple[np.ndarray | Future | TensorStore, np.ndarray, np.ndarray, np.ndarray] | None":
+        """Read the projection and its original fused 3D ROI coordinate metadata."""
+        path = self.fiducial_projection_path()
+        if not path.exists():
+            return None
+        scene = open_group(path)
+        product = scene.attrs["qi2lab"]["products"].get("projection/fiducial")
+        if product is None:
+            return None
+        image_path = path / product["path"]
+        attrs = self.load_image_metadata(image_path)
+        return (
+            self._load_from_zarr_array(image_path, return_future),
+            np.asarray(attrs["affine_zyx_um"], dtype=np.float32),
+            np.asarray(attrs["origin_zyx_um"], dtype=np.float32),
+            round_spacing_um(attrs["spacing_zyx_um"]),
+        )
+
+    def load_global_fused_image(
+        self,
+        fusion_type: str = "fiducial",
+        return_future: bool | None = True,
+    ) -> "tuple[np.ndarray | Future | TensorStore, dict[str, Any]] | None":
+        """Load a library-produced fused image and its metadata through the datastore.
+
+        ``return_future=None`` provides a lazy TensorStore for consumers such as
+        the fused viewer and TIFF export. ``all_channels`` selects the fusion
+        workflow output or the product written by the existing image setter.
+        """
+        if fusion_type == "fiducial":
+            paths = [self.fused_image_path()]
+        elif fusion_type == "all_channels":
+            paths = [
+                self.fused_image_path("full_dataset"),
+                self.fused_image_path("fused_all_channels_zyx"),
+            ]
+        else:
+            raise ValueError("fusion_type must be 'fiducial' or 'all_channels'.")
+        image_path = next((path for path in paths if path.exists()), None)
+        if image_path is None:
+            return None
+        return (
+            self._load_from_zarr_array(image_path, return_future),
+            self.load_image_metadata(image_path),
+        )
 
     def load_global_fiducial_image(
         self,
@@ -5194,18 +5150,12 @@ class qi2labDataStore:
         spacing_zyx_um : ArrayLike or None
             Global spacing registration transform for fused image.
         """
-        current_local_zarr_path = self._fused_root_path / Path(
-            f"fused_{self.fiducial_folder_name}_zyx"
-        )
-
-        image_path = self._image_store_path(current_local_zarr_path)
-        if not image_path.exists():
-            print("Globally registered, fused image not found.")
-            return None
-
         try:
-            fused_image = self._load_from_zarr_array(image_path, return_future)
-            attributes = self.load_image_metadata(image_path)
+            product = self.load_global_fused_image(return_future=return_future)
+            if product is None:
+                print("Globally registered, fused image not found.")
+                return None
+            fused_image, attributes = product
             affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
             origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
             spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
@@ -5268,8 +5218,17 @@ class qi2labDataStore:
                 current_local_zarr_path,
                 return_future,
                 ome_scale=metadata_attrs["spacing_zyx_um"],
+                ome_translation=metadata_attrs["origin_zyx_um"],
                 extra_attributes=metadata_attrs,
                 chunks=self._fused_image_chunks(fused_array),
+                scene_path=self._datastore_path,
+                scene_selection=(
+                    "fused/fiducial"
+                    if fusion_type == "fiducial"
+                    else "fused/fused_all_channels_zyx"
+                ),
+                scene_frame="world",
+                scene_affine=affine_zyx_um,
             )
             if write_future is not None:
                 write_future.result()
@@ -5722,21 +5681,21 @@ class qi2labDataStore:
         fused_image : numpy.ndarray or tensorstore.Future or tensorstore.TensorStore or None
             Cellpose max projection, downsampled segmentation image.
         """
-        current_local_zarr_path = (
-            self._segmentation_root_path
-            / Path("cellpose")
-            / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
-        )
-
-        image_path = self._image_store_path(current_local_zarr_path)
-        if not image_path.exists():
-            print("Cellpose prediction on global fused image not found.")
+        path = self.fiducial_projection_path()
+        if not path.exists():
             return None
-
         try:
-            fused_image = self._load_from_zarr_array(image_path, return_future)
-            return fused_image
-        except (OSError, ValueError):
+            scene = open_group(path)
+            product = scene.attrs["qi2lab"]["products"]["projection/fiducial"]
+            labels_path = path / product["path"] / "labels"
+            if not labels_path.exists():
+                return None
+            labels = open_group(labels_path).ome_metadata(strict=True).labels
+            name = next((item for item in labels if item.startswith("cellpose_")), None)
+            if name is None:
+                return None
+            return self._load_from_zarr_array(labels_path / name, return_future)
+        except (OSError, ValueError, KeyError):
             print("Error loading Cellpose image.")
             return None
 
@@ -5770,12 +5729,6 @@ class qi2labDataStore:
             Completed pixel-write handle when return_future is True; otherwise
             None.
         """
-        current_local_zarr_path = (
-            self._segmentation_root_path
-            / Path("cellpose")
-            / Path(f"masks_{self.fiducial_folder_name}_iso_zyx")
-        )
-
         downsampling = np.asarray(downsampling, dtype=np.float64)
         if (
             downsampling.shape != (3,)
@@ -5785,20 +5738,20 @@ class qi2labDataStore:
             raise ValueError(
                 "Downsampling must contain three positive finite Z, Y, X factors."
             )
-        spacing = round_spacing_um(self.voxel_size_zyx_um) * downsampling
-        attributes = {"downsampling": downsampling.tolist()}
-
-        try:
-            write_future = self._save_to_zarr_array(
-                cellpose_image,
-                current_local_zarr_path,
-                return_future,
-                ome_scale=round_spacing_um(spacing).tolist(),
-                extra_attributes=attributes,
+        projection = self.load_global_fiducial_projection(return_future=None)
+        if projection is None:
+            raise ValueError(
+                "A fused fiducial projection is required before saving labels."
             )
-            if write_future is not None:
-                write_future.result()
-            return write_future
-        except (OSError, TimeoutError):
-            print("Error saving Cellpose image.")
-            raise
+        _, _, _, spacing = projection
+        if not np.allclose(
+            round_spacing_um(self.voxel_size_zyx_um) * downsampling, spacing
+        ):
+            raise ValueError("Label downsampling must match the projection grid.")
+        from merfish3danalysis.storage.ome import publish_projection_labels
+
+        return publish_projection_labels(
+            self.fiducial_projection_path(),
+            cellpose_image,
+            return_write_future=bool(return_future),
+        )

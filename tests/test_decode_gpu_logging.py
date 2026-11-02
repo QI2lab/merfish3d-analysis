@@ -3,6 +3,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
+import numpy as np
 import pytest
 
 import merfish3danalysis.PixelDecoder as pixel_decoder_module
@@ -11,7 +12,7 @@ from merfish3danalysis.PixelDecoder import PixelDecoder
 
 @pytest.fixture
 def worker_dependencies(monkeypatch):
-    """Replace GPU and datastore operations while running the real worker loop."""
+    """Observe GPU selection while running workers against the real datastore."""
     device = Mock()
     cupy = SimpleNamespace(
         cuda=SimpleNamespace(
@@ -22,17 +23,32 @@ def worker_dependencies(monkeypatch):
         get_default_pinned_memory_pool=Mock(),
     )
     torch = SimpleNamespace(cuda=SimpleNamespace(set_device=Mock()))
-    local_decoder = Mock(spec=PixelDecoder)
-    decoder_factory = Mock(return_value=local_decoder)
+    methods = SimpleNamespace(
+        **{
+            name: Mock()
+            for name in (
+                "_load_global_normalization_vectors",
+                "_load_iterative_normalization_vectors",
+                "decode_one_tile",
+                "_save_barcodes",
+                "_cleanup",
+            )
+        }
+    )
+    for name, mock in vars(methods).items():
+        monkeypatch.setattr(PixelDecoder, name, mock)
+    monkeypatch.setattr(
+        PixelDecoder, "_normalize_codebook", Mock(return_value=np.full((1, 4), 0.5))
+    )
+    decoder_factory = Mock(wraps=PixelDecoder)
     monkeypatch.setitem(sys.modules, "cupy", cupy)
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setattr(pixel_decoder_module, "preload_cuda_libraries", Mock())
-    monkeypatch.setattr(pixel_decoder_module, "qi2labDataStore", Mock())
     monkeypatch.setattr(pixel_decoder_module, "PixelDecoder", decoder_factory)
     return SimpleNamespace(
         device=device,
         set_device=torch.cuda.set_device,
-        decoder=local_decoder,
+        decoder=methods,
         decoder_factory=decoder_factory,
     )
 
@@ -51,7 +67,7 @@ def worker_dependencies(monkeypatch):
 def test_worker_logs_visible_gpu_but_computes_on_local_device(
     monkeypatch,
     capsys,
-    tmp_path,
+    image_datastore,
     worker_dependencies,
     visible_devices,
     gpu_id,
@@ -63,8 +79,8 @@ def test_worker_logs_visible_gpu_but_computes_on_local_device(
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible_devices)
 
     pixel_decoder_module.decode_tiles_worker(
-        datastore_path=tmp_path,
-        tile_indices=[7],
+        datastore_path=image_datastore.datastore_path,
+        tile_indices=[1],
         gpu_id=gpu_id,
         merfish_bits=4,
         verbose=1,
@@ -78,9 +94,9 @@ def test_worker_logs_visible_gpu_but_computes_on_local_device(
 
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 2
-    assert f"GPU {expected_label}: starting tile 1 of 1 (tile index: 7)." in lines[0]
+    assert f"GPU {expected_label}: starting tile 1 of 1 (tile index: 1)." in lines[0]
     assert (
-        f"GPU {expected_label}: decoded and saved tile 1 of 1 (tile index: 7)."
+        f"GPU {expected_label}: decoded and saved tile 1 of 1 (tile index: 1)."
         in lines[1]
     )
     worker_dependencies.device.assert_called_once_with(gpu_id)
@@ -102,10 +118,10 @@ def test_worker_logs_visible_gpu_but_computes_on_local_device(
 @pytest.mark.unit
 @pytest.mark.parametrize("normalization_method", ["global", "none"])
 def test_worker_does_not_load_unused_iterative_normalization(
-    tmp_path, worker_dependencies, normalization_method
+    image_datastore, worker_dependencies, normalization_method
 ):
     pixel_decoder_module.decode_tiles_worker(
-        datastore_path=tmp_path,
+        datastore_path=image_datastore.datastore_path,
         tile_indices=[0],
         gpu_id=0,
         merfish_bits=4,
@@ -132,7 +148,12 @@ def test_worker_does_not_load_unused_iterative_normalization(
 @pytest.mark.parametrize("verbose", [0, 1])
 @pytest.mark.parametrize("normalization_features", ["all", "cells"])
 def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
-    monkeypatch, capsys, tmp_path, worker_dependencies, verbose, normalization_features
+    monkeypatch,
+    capsys,
+    image_datastore,
+    worker_dependencies,
+    verbose,
+    normalization_features,
 ):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     started_masks = []
@@ -154,15 +175,14 @@ def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
             assert self.exitcode == 0
 
     monkeypatch.setattr(pixel_decoder_module.mp, "Process", InlineProcess)
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._num_gpus = 2
-    decoder._datastore = SimpleNamespace(tile_ids=["tile000", "tile001"])
-    decoder._datastore_path = tmp_path
-    decoder._n_merfish_bits = 4
-    decoder._verbose = verbose
-    decoder._decode_mode = "3d"
-    decoder._is_3D = True
-    decoder._normalization_features = normalization_features
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=4,
+        num_gpus=2,
+        verbose=verbose,
+        decode_mode="3d",
+        normalization_features=normalization_features,
+    )
     decoder._df_barcodes_loaded = []
     for method in (
         "_load_all_barcodes",

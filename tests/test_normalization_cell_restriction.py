@@ -1,37 +1,36 @@
-from contextlib import nullcontext
+import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
 import pytest
-from shapely.geometry import Polygon
+from roifile import ImagejRoi, roiwrite
 from typer.testing import CliRunner
 
-import merfish3danalysis.PixelDecoder as pixel_decoder_module
 from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode
 from merfish3danalysis.PixelDecoder import PixelDecoder
 
 
 @pytest.mark.unit
-def test_cell_mask_rasterizes_global_segmentation_into_tile_pixels() -> None:
-    datastore = SimpleNamespace(
-        load_global_cellpose_roi_zip=Mock(
-            return_value={
-                1: np.asarray(((1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)))
-            }
-        ),
-        load_global_cellpose_outlines=Mock(return_value=None),
-        load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(3), np.eye(4))),
-        load_global_coord_xforms_um=Mock(
-            return_value=(np.eye(4), np.zeros(3), np.ones(3))
-        ),
-        voxel_size_zyx_um=np.ones(3),
+@pytest.mark.gpu
+@pytest.mark.parametrize("reflected", [False, True])
+def test_cell_mask_rasterizes_global_segmentation_into_tile_pixels(
+    image_datastore, reflected
+) -> None:
+    datastore = image_datastore
+    camera = np.diag([1, -1 if reflected else 1, 1, 1])
+    datastore.save_local_stage_position_zyx_um(np.zeros(3), camera, tile=0, round=0)
+    datastore.save_global_coord_xforms_um(np.eye(4), np.zeros(3), np.ones(3), tile=0)
+    roi_path = (
+        datastore.datastore_path
+        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
     )
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._datastore = datastore
-    decoder._z_range = [0, None]
+    roi_path.parent.mkdir(parents=True, exist_ok=True)
+    sign = -1 if reflected else 1
+    roi = ImagejRoi.frompoints([[1, sign], [3, sign], [3, 3 * sign], [1, 3 * sign]])
+    roiwrite(roi_path, [roi], mode="w")
+    decoder = PixelDecoder(datastore, merfish_bits=4, num_gpus=0, verbose=0)
 
     mask = decoder._normalization_cell_mask_for_tile(
         tile_id="tile0000",
@@ -41,7 +40,6 @@ def test_cell_mask_rasterizes_global_segmentation_into_tile_pixels() -> None:
     expected = np.zeros((6, 6), dtype=bool)
     expected[1:4, 1:4] = True
     np.testing.assert_array_equal(mask, expected)
-    datastore.load_global_cellpose_roi_zip.assert_called_once_with()
 
 
 @pytest.mark.unit
@@ -61,21 +59,30 @@ def test_global_normalization_pixel_selection_excludes_noncell_voxels() -> None:
 
 
 @pytest.mark.unit
-def test_present_empty_segmentation_does_not_fall_back_to_all_pixels() -> None:
-    datastore = SimpleNamespace(
-        load_global_cellpose_roi_zip=Mock(return_value={}),
-        load_global_cellpose_outlines=Mock(
-            side_effect=AssertionError("must not restore outlines from legacy JSON")
-        ),
-        load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(2), np.eye(4))),
-        load_global_coord_xforms_um=Mock(
-            return_value=(np.eye(4), np.zeros(2), np.ones(3))
-        ),
-        voxel_size_zyx_um=np.ones(3),
+@pytest.mark.gpu
+def test_present_empty_segmentation_does_not_fall_back_to_all_pixels(
+    image_datastore,
+) -> None:
+    roi_path = (
+        image_datastore.datastore_path
+        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
     )
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._datastore = datastore
-    decoder._z_range = [0, None]
+    roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(roi_path, [], mode="w")
+    (roi_path.parent.parent / "cell_outlines.json").write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "properties": {"cell_id": 1},
+                        "geometry": {"coordinates": [[[0, 0], [2, 0], [2, 2], [0, 0]]]},
+                    }
+                ]
+            }
+        )
+    )
+    assert image_datastore.load_global_cellpose_outlines()
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
 
     mask = decoder._normalization_cell_mask_for_tile(
         tile_id="tile0000",
@@ -86,7 +93,8 @@ def test_present_empty_segmentation_does_not_fall_back_to_all_pixels() -> None:
     assert not mask.any()
 
 
-@pytest.mark.integration
+@pytest.mark.unit
+@pytest.mark.gpu
 @pytest.mark.parametrize(
     "features, expected",
     [
@@ -96,6 +104,7 @@ def test_present_empty_segmentation_does_not_fall_back_to_all_pixels() -> None:
 )
 def test_iterative_normalization_selects_requested_features(
     tmp_path: Path,
+    image_datastore,
     features: str,
     expected: list[str],
 ) -> None:
@@ -118,14 +127,23 @@ def test_iterative_normalization_selects_requested_features(
     first_tile.to_parquet(tmp_path / "tile000_temp_decoded.parquet")
     second_tile.to_parquet(tmp_path / "tile001_temp_decoded.parquet")
 
-    decoder = PixelDecoder.__new__(PixelDecoder)
+    roi_path = (
+        image_datastore.datastore_path
+        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
+    )
+    roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(
+        roi_path, [ImagejRoi.frompoints([[0, 0], [4, 0], [4, 4], [0, 4]])], mode="w"
+    )
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=4,
+        num_gpus=0,
+        verbose=0,
+        normalization_features=features,
+    )
     decoder._optimize_normalization_weights = True
     decoder._temp_dir = tmp_path
-    decoder._verbose = 0
-    decoder._normalization_features = features
-    decoder._normalization_cell_polygons = [
-        Polygon(((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)))
-    ]
 
     decoder._load_all_barcodes()
 
@@ -133,16 +151,22 @@ def test_iterative_normalization_selects_requested_features(
 
 
 @pytest.mark.unit
-def test_all_features_bypasses_mask_loading_and_selects_all_voxels():
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._normalization_features = "all"
-    decoder._datastore = SimpleNamespace(
-        load_global_cellpose_roi_zip=Mock(
-            side_effect=AssertionError("must not read masks")
-        ),
-        load_global_cellpose_outlines=Mock(
-            side_effect=AssertionError("must not read masks")
-        ),
+@pytest.mark.gpu
+def test_all_features_bypasses_mask_loading_and_selects_all_voxels(image_datastore):
+    roi_path = (
+        image_datastore.datastore_path
+        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
+    )
+    roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(
+        roi_path, [ImagejRoi.frompoints([[0, 0], [1, 0], [1, 1], [0, 1]])], mode="w"
+    )
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=4,
+        num_gpus=0,
+        verbose=0,
+        normalization_features="all",
     )
     mask = decoder._normalization_cell_mask_for_tile(
         tile_id="tile0000", image_shape_zyx=(2, 3, 3)
@@ -155,14 +179,9 @@ def test_all_features_bypasses_mask_loading_and_selects_all_voxels():
 
 
 @pytest.mark.unit
-def test_cells_without_segmentation_uses_all_features(tmp_path):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._normalization_features = "cells"
-    decoder._datastore = SimpleNamespace(
-        _segmentation_root_path=tmp_path,
-        load_global_cellpose_roi_zip=Mock(return_value=None),
-        load_global_cellpose_outlines=Mock(return_value=None),
-    )
+@pytest.mark.gpu
+def test_cells_without_segmentation_uses_all_features(image_datastore):
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
     assert (
         decoder._normalization_cell_mask_for_tile(
             tile_id="tile0000", image_shape_zyx=(2, 3, 3)
@@ -174,62 +193,46 @@ def test_cells_without_segmentation_uses_all_features(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.gpu
 @pytest.mark.parametrize("features", [None, "cells", "all"])
-def test_cli_passes_normalization_feature_selection(monkeypatch, tmp_path, features):
-    monkeypatch.setattr(
-        pixeldecode, "resolve_datastore_path", Mock(return_value=tmp_path)
-    )
-    datastore = SimpleNamespace(microscope_type="3D", num_bits=4)
-    decoder = Mock(spec=PixelDecoder)
-    factory = Mock(return_value=decoder)
-    monkeypatch.setattr(pixeldecode, "qi2labDataStore", Mock(return_value=datastore))
+def test_cli_passes_normalization_feature_selection(
+    monkeypatch, image_datastore, features
+):
+    factory = Mock(wraps=PixelDecoder)
+    optimize = Mock()
+    decode = Mock()
+    monkeypatch.setattr(PixelDecoder, "optimize_normalization_by_decoding", optimize)
+    monkeypatch.setattr(PixelDecoder, "decode_all_tiles", decode)
     monkeypatch.setattr(pixeldecode, "PixelDecoder", factory)
-    args = [str(tmp_path)]
+    args = [str(image_datastore.datastore_path)]
     if features is not None:
         args.extend(["--normalization-features", features])
     result = CliRunner().invoke(pixeldecode.app, args)
     assert result.exit_code == 0, result.output
     assert factory.call_args.kwargs["normalization_features"] == (features or "cells")
-    decoder.optimize_normalization_by_decoding.assert_called_once()
-    decoder.decode_all_tiles.assert_called_once()
+    optimize.assert_called_once()
+    decode.assert_called_once()
 
 
 @pytest.mark.unit
-def test_cli_rejects_unknown_normalization_features(monkeypatch, tmp_path):
-    datastore_factory = Mock()
-    monkeypatch.setattr(pixeldecode, "qi2labDataStore", datastore_factory)
+def test_cli_rejects_unknown_normalization_features(tmp_path):
+    datastore_path = tmp_path / "datastore"
     result = CliRunner().invoke(
-        pixeldecode.app, [str(tmp_path), "--normalization-features", "invalid"]
+        pixeldecode.app, [str(datastore_path), "--normalization-features", "invalid"]
     )
     assert result.exit_code == 2
-    datastore_factory.assert_not_called()
+    assert not datastore_path.exists()
 
 
 @pytest.fixture
-def normalization_cache(monkeypatch):
-    pool = SimpleNamespace(free_all_blocks=lambda: None)
-    fake_cp = SimpleNamespace(
-        asarray=np.asarray,
-        cuda=SimpleNamespace(
-            Device=lambda _id: nullcontext(),
-            Stream=SimpleNamespace(null=SimpleNamespace(synchronize=lambda: None)),
-        ),
-        get_default_memory_pool=lambda: pool,
-        get_default_pinned_memory_pool=lambda: pool,
-    )
-    monkeypatch.setattr(pixel_decoder_module, "cp", fake_cp)
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._decode_run_key = None
-    decoder._n_merfish_bits = 4
-    decoder._datastore = SimpleNamespace(
-        load_decode_normalization_vectors=Mock(return_value=(np.ones(4), np.zeros(4))),
-        load_decode_normalization_metadata=Mock(),
-    )
+def normalization_cache(image_datastore):
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
     decoder._global_normalization_vectors = Mock()
     return decoder
 
 
 @pytest.mark.unit
+@pytest.mark.gpu
 @pytest.mark.parametrize(
     "features, cached_features, matches",
     [
@@ -246,17 +249,21 @@ def test_normalization_cache_respects_feature_selection(
 ):
     decoder = normalization_cache
     decoder._normalization_features = features
-    decoder._datastore.load_decode_normalization_metadata.return_value = (
+    metadata = (
         {"normalization_features": cached_features}
         if cached_features is not None
         else None
     )
+    for kind in ("global", "iterative"):
+        decoder._datastore.save_decode_normalization_vectors(
+            None, kind, np.ones(4), np.zeros(4), metadata=metadata
+        )
     decoder._load_global_normalization_vectors()
     assert decoder._global_normalization_vectors.called is not matches
     if matches:
         decoder._load_iterative_normalization_vectors()
         np.testing.assert_array_equal(
-            decoder._iterative_normalization_vector, np.ones(4)
+            decoder._iterative_normalization_vector.get(), np.ones(4)
         )
     else:
         with pytest.raises(ValueError, match="without --skip-optimization"):
@@ -264,31 +271,7 @@ def test_normalization_cache_respects_feature_selection(
 
 
 @pytest.mark.unit
-def test_cell_mask_applies_saved_camera_reflection_once():
-    camera = np.diag([1, -1, 1, 1])
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._z_range = [0, None]
-    decoder._normalization_cell_segmentation_present = True
-    decoder._load_normalization_cell_polygons = Mock(
-        return_value=[Polygon([(1, -1), (3, -1), (3, -3), (1, -3)])]
-    )
-    decoder._datastore = SimpleNamespace(
-        load_local_stage_position_zyx_um=Mock(return_value=(np.zeros(3), camera)),
-        load_global_coord_xforms_um=Mock(
-            return_value=(np.eye(4), np.zeros(3), np.ones(3))
-        ),
-    )
-
-    observed = decoder._normalization_cell_mask_for_tile(
-        tile_id="tile0000", image_shape_zyx=(3, 5, 5)
-    )
-
-    expected = np.zeros((5, 5), dtype=bool)
-    expected[1:4, 1:4] = True
-    np.testing.assert_array_equal(observed, expected)
-
-
-@pytest.mark.unit
+@pytest.mark.gpu
 @pytest.mark.parametrize("kind", ["global", "iterative"])
 @pytest.mark.parametrize(
     "norm, background",
@@ -307,12 +290,12 @@ def test_invalid_cached_normalization_cannot_remain_loaded(
 ):
     decoder = normalization_cache
     decoder._n_merfish_bits = 4
-    decoder._datastore.load_decode_normalization_metadata.return_value = {
-        "normalization_features": "cells"
-    }
-    decoder._datastore.load_decode_normalization_vectors.return_value = (
+    decoder._datastore.save_decode_normalization_vectors(
+        None,
+        kind,
         np.asarray(norm),
         np.asarray(background),
+        metadata={"normalization_features": "cells"},
     )
     setattr(decoder, f"_{kind}_normalization_loaded", True)
 

@@ -18,14 +18,15 @@ def cuda():
     return cp
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
-def test_codebook_single_bit_errors_are_normalized_per_codeword(cuda):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._n_merfish_bits = 6
-    decoder._codebook_matrix = np.array(
-        [[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1], [0, 0, 1, 1, 1, 1]]
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+def test_codebook_single_bit_errors_are_normalized_per_codeword(cuda, image_datastore):
+    image_datastore.codebook = pd.DataFrame(
+        [["A", 1, 1, 1, 1, 0, 0], ["B", 1, 1, 0, 0, 1, 1], ["C", 0, 0, 1, 1, 1, 1]],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
     )
+    decoder = PixelDecoder(image_datastore, merfish_bits=6, num_gpus=1, verbose=0)
     # Each original has four on bits. Flipping one bit leaves three or five.
     expected = (decoder._codebook_matrix / 2).tolist()
     for bit in range(6):
@@ -39,24 +40,23 @@ def test_codebook_single_bit_errors_are_normalized_per_codeword(cuda):
     np.testing.assert_allclose(np.linalg.norm(observed, axis=1), 1, atol=1e-7)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("normalization", ["none", "global", "iterative"])
 @pytest.mark.parametrize("filter_type", [None, "lp"])
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
 def test_decode_pixels_matches_known_codewords_magnitudes_and_rejections(
-    cuda, normalization, filter_type
+    cuda, image_datastore, normalization, filter_type
 ):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._n_merfish_bits = 6
-    decoder._verbose = 0
+    image_datastore.codebook = pd.DataFrame(
+        [["A", 1, 1, 1, 1, 0, 0], ["B", 1, 1, 0, 0, 1, 1], ["C", 0, 0, 1, 1, 1, 1]],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
+    )
+    decoder = PixelDecoder(
+        image_datastore, merfish_bits=6, num_gpus=1, verbose=0, excluded_gene_ids=["C"]
+    )
     decoder._filter_type = filter_type
     decoder._pixel_assignment_threshold = 0.5
-    decoder._excluded_codeword_indices = (2,)
-    decoder._codebook_matrix = np.array(
-        [[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1], [0, 0, 1, 1, 1, 1]],
-        dtype=np.float32,
-    )
-    decoder._decoding_matrix = decoder._normalize_codebook()
     a, b, c = decoder._codebook_matrix
     traces = np.stack(
         [
@@ -132,10 +132,9 @@ def test_decode_pixels_matches_known_codewords_magnitudes_and_rejections(
     ],
 )
 def test_overlap_duplicates_require_same_gene_distinct_tile_and_physical_radius(
-    second_gene, second_tile, second_xyz, scores, expected
+    image_datastore, second_gene, second_tile, second_xyz, scores, expected
 ):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._verbose = 0
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
     # A 3-4-5 triangle reaches the inclusive 0.5-micrometer radius.
     decoder._df_filtered_barcodes = pd.DataFrame(
         {
@@ -157,9 +156,10 @@ def test_overlap_duplicates_require_same_gene_distinct_tile_and_physical_radius(
 @pytest.mark.unit
 @pytest.mark.parametrize("attribute", ["_df_filtered_barcodes", "_df_barcodes_loaded"])
 def test_within_tile_duplicates_follow_physical_clusters_and_preserve_identity(
+    image_datastore,
     attribute,
 ):
-    decoder = PixelDecoder.__new__(PixelDecoder)
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
     table = pd.DataFrame(
         [
             # A transitive cluster: endpoints are farther apart than either
@@ -210,20 +210,26 @@ def test_within_tile_duplicates_follow_physical_clusters_and_preserve_identity(
     ]
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("is_3d", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
 def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
-    cuda, is_3d, empty, monkeypatch
+    cuda, image_datastore, is_3d, empty
 ):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._n_merfish_bits = 6
-    decoder._gene_ids = ["A", "B"]
-    decoder._codebook_matrix = np.array(
-        [[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1]], dtype=np.float32
+    image_datastore.codebook = pd.DataFrame(
+        [["A", 1, 1, 1, 1, 0, 0], ["B", 1, 1, 0, 0, 1, 1]],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
     )
-    decoder._decoding_matrix = decoder._normalize_codebook()
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=6,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d" if is_3d else "2d",
+        z_range=[2, 5],
+    )
     decoder._image_data = np.zeros((6, 3, 8, 10), dtype=np.float32)
     if not empty:
         decoder._image_data[:, :2, 1:3, 2:4] = (
@@ -232,18 +238,10 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
         decoder._image_data[:, 2:, 5:7, 6:8] = (
             decoder._codebook_matrix[1, :, None, None, None] * 0.5
         )
-    decoder._verbose = 0
     decoder._filter_type = None
-    decoder._global_normalization_loaded = False
-    decoder._iterative_normalization_loaded = False
-    decoder._excluded_codeword_indices = ()
     decoder._pixel_assignment_threshold = 0.5
     decoder._transcript_distance_threshold = 0.5
-    decoder._optimize_normalization_weights = False
-    decoder._is_3D = is_3d
     decoder._tile_idx = 0
-    decoder._z_crop = True
-    decoder._z_range = (2, 5)
     decoder._spacing = np.array([0.5, 0.2, 0.4])
     decoder._origin = np.array([10, 20, 30])
     decoder._camera_to_stage_affine = np.diag([1, -1, 1, 1])
@@ -251,17 +249,6 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
     decoder._affine[:3, 3] = [1, 2, -3]
 
     decoder._decode_pixels(magnitude_threshold=(1, 2))
-    to_numpy = pd.DataFrame.to_numpy
-
-    def readonly_view(frame, *args, **kwargs):
-        values = to_numpy(frame, *args, **kwargs)
-        if not kwargs.get("copy", False):
-            values.setflags(write=False)
-        return values
-
-    # Pandas may expose read-only views. World mapping must own its workspace
-    # and leave the independently measured local centroids intact.
-    monkeypatch.setattr(pd.DataFrame, "to_numpy", readonly_view)
     decoder._extract_barcodes(minimum_pixels=4, maximum_pixels=8)
 
     observed = decoder.decoded_barcodes.sort_values(["gene_id", "z"])
@@ -292,59 +279,53 @@ def test_decode_and_extract_generated_transcripts_with_physical_coordinates(
     np.testing.assert_allclose(observed["distance_min"], 0, atol=1e-7)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("stored_global", [False, True])
 def test_load_bit_data_weights_then_warps_then_crops_generated_readouts(
-    cuda, stored_global
+    cuda, image_datastore, stored_global
 ):
-    from unittest.mock import Mock
-
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._verbose = 0
-    decoder._n_merfish_bits = 2
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=4,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d",
+        z_range=[1, 4],
+    )
     decoder._tile_idx = 0
-    decoder._z_slice = slice(1, 4)
-    decoder._decode_mode = "3d"
-    decoder._is_3D = True
+    decoder._decode_run_key = "current"
     native = np.arange(6 * 8 * 12, dtype=np.float32).reshape(6, 8, 12)
     prediction = np.broadcast_to(
         np.arange(1, 9, dtype=np.float32)[None, :, None] / 8, native.shape
     )
-    datastore = Mock(
-        bit_ids=["bit001", "bit002"],
-        round_ids=["round001", "round002"],
-        voxel_size_zyx_um=[0.5, 0.25, 0.25],
-    )
-    datastore.load_local_readout_image.side_effect = [
-        Mock(result=Mock(return_value=native)),
-        Mock(result=Mock(return_value=native * 2)),
-    ]
-    datastore.load_local_feature_predictor_image.return_value.result.return_value = (
-        prediction
-    )
-    datastore.load_local_wavelengths_um.return_value = (0.65, 0.67)
-    datastore.load_local_round_linker.return_value = 2
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [0.5, 0.25, 0.25]
+    for bit, image in enumerate((native, native * 2, native, native * 2)):
+        datastore.save_local_corrected_image(image, tile=0, bit=bit)
+        datastore.save_local_feature_predictor_image(prediction, tile=0, bit=bit)
+        datastore.save_local_round_linker(2, tile=0, bit=bit)
     round_transform = np.eye(4)
     round_transform[:3, 3] = [0.5, 0.25, 0.5]
-    datastore.load_local_round_transform_zyx_um.return_value = round_transform
+    datastore.save_local_round_transform_zyx_um(round_transform, tile=0, round=1)
     chromatic = np.diag([1, -1, 1, 1]).astype(float)
     chromatic[:3, 3] = [0, 2, -0.25]
-    datastore.load_chromatic_affine_transform_zyx_um.return_value = chromatic
-    datastore.load_local_sofima_flow_field.return_value = None
-    datastore.load_local_stage_position_zyx_um.return_value = (
-        [10, 20, 30],
-        np.diag([1, -1, 1, 1]),
+    datastore.save_chromatic_affine_transforms_zyx_um(
+        {
+            "estimator": "decoded_rna_on_bit_weighted_centroid_yx_affine_graph",
+            "decode_run_key": "previous",
+            "channels": {"red": {"wavelength_um": 0.67, "affine_zyx_um": chromatic}},
+        }
+    )
+    datastore.save_local_stage_position_zyx_um(
+        [10, 20, 30], np.diag([1, -1, 1, 1]), tile=0, round=0
     )
     global_affine = np.eye(4)
     global_affine[:3, 3] = [1, 2, 3]
-    datastore.load_global_coord_xforms_um.return_value = (
-        (global_affine, [10, 20, 30], [0.5, 0.25, 0.25])
-        if stored_global
-        else (None, None, None)
-    )
-    decoder._datastore = datastore
-
+    if stored_global:
+        datastore.save_global_coord_xforms_um(
+            global_affine, [10, 20, 30], [0.5, 0.25, 0.25], tile=0
+        )
     decoder._load_bit_data()
 
     # Inverse chromatic after round pull: native Z=z+1, Y=7-y, X=x+3.
@@ -369,23 +350,22 @@ def test_load_bit_data_weights_then_warps_then_crops_generated_readouts(
 
 
 @pytest.mark.unit
-def test_codebook_thresholds_follow_four_on_bit_geometry():
-    from unittest.mock import Mock
-
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._n_merfish_bits = 6
-    decoder._datastore = Mock(
-        codebook=pd.DataFrame(
-            [
-                ["A", 1, 1, 1, 1, 0, 0],
-                ["Blank1", 1, 1, 0, 0, 1, 1],
-                ["single", 1, 0, 0, 0, 0, 0],
-            ],
-            columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
-        )
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+def test_codebook_thresholds_follow_four_on_bit_geometry(image_datastore):
+    image_datastore.codebook = pd.DataFrame(
+        [
+            ["A", 1, 1, 1, 1, 0, 0],
+            ["Blank1", 1, 1, 0, 0, 1, 1],
+            ["single", 1, 0, 0, 0, 0, 0],
+        ],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
     )
-
-    decoder._load_codebook()
+    genes, matrix = image_datastore.load_codebook_parsed()
+    assert genes == ["A", "Blank1", "single"]
+    np.testing.assert_array_equal(
+        matrix, [[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1], [1, 0, 0, 0, 0, 0]]
+    )
+    decoder = PixelDecoder(image_datastore, merfish_bits=6, num_gpus=0, verbose=0)
 
     assert decoder._gene_ids == ["A", "Blank1"]
     assert decoder._blank_count == 1
@@ -419,18 +399,19 @@ def test_lr_fdr_uses_retained_counts_and_codebook_blank_fraction(threshold, expe
     assert observed == pytest.approx(expected)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize(
     "target, expected_ids", [(0.1, [0, 1]), (0.5, [0, 1, 2, 3]), (2.0, list(range(5)))]
 )
 def test_blank_fraction_histogram_includes_upper_edges_and_matches_known_counts(
-    cuda, target, expected_ids
+    cuda, image_datastore, target, expected_ids
 ):
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._verbose = 0
-    decoder._blank_count = 1
-    decoder._barcode_count = 2
+    image_datastore.codebook = pd.DataFrame(
+        [["A", 1, 1, 1, 1], ["Blank1", 1, 1, 1, 1]],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4"],
+    )
+    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=1, verbose=0)
     decoder._df_barcodes_loaded = pd.DataFrame(
         {
             "detection": range(5),
@@ -461,21 +442,32 @@ def test_blank_fraction_histogram_includes_upper_edges_and_matches_known_counts(
     assert decoder._df_filtered_barcodes["detection"].tolist() == expected_ids
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("empty", [False, True])
-def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, empty):
-    from unittest.mock import Mock
-
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._verbose = 0
-    decoder._n_merfish_bits = 6
-    decoder._decode_run_key = None
-    decoder._effective_decode_mode = "3d"
-    decoder._normalization_features = "all"
-    decoder._optimization_excluded_gene_ids = ()
-    decoder._gene_ids = ["A", "B"]
-    decoder._codebook_matrix = np.array([[1, 1, 1, 1, 0, 0], [0, 0, 1, 1, 1, 1]])
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+def test_iterative_normalization_saves_and_keeps_memory_consistent(
+    cuda, image_datastore, empty
+):
+    image_datastore.codebook = pd.DataFrame(
+        {
+            "gene_id": ["A", "B"],
+            **{
+                f"bit{index + 1:02}": values
+                for index, values in enumerate(
+                    [[1, 0], [1, 0], [1, 1], [1, 1], [0, 1], [0, 1]]
+                )
+            },
+        }
+    )
+    decoder = PixelDecoder(
+        image_datastore,
+        merfish_bits=6,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d",
+        normalization_features="all",
+    )
     decoder._iterative_background_vector = None
     decoder._iterative_normalization_vector = None
     decoder._global_background_vector = cuda.asarray(
@@ -485,7 +477,6 @@ def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, em
         [10, 20, 30, 40, 50, 60], dtype=cuda.float32
     )
     decoder._iterative_normalization_loaded = False
-    decoder._datastore = Mock()
     decoder._df_barcodes_loaded = pd.DataFrame(
         [
             ["A", 1, 2, 3, 4, 20, 30, 40, 50, 5, 6],
@@ -499,13 +490,14 @@ def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, em
 
     decoder._iterative_normalization_vectors()
 
-    decoder._datastore.save_decode_normalization_vectors.assert_called_once()
-    saved = decoder._datastore.save_decode_normalization_vectors.call_args.args
+    normalization, background = image_datastore.load_decode_normalization_vectors(
+        None, "iterative"
+    )
     # Per-bit on/off medians, with no off-bit samples for bits 3 and 4.
     expected_norm = [10, 20, 30, 40, 50, 60] if empty else [20, 30, 50, 60, 80, 90]
     expected_background = [1, 2, 3, 4, 5, 6] if empty else [1, 2, 0, 0, 5, 6]
-    np.testing.assert_array_equal(saved[2], expected_norm)
-    np.testing.assert_array_equal(saved[3], expected_background)
+    np.testing.assert_array_equal(normalization, expected_norm)
+    np.testing.assert_array_equal(background, expected_background)
     np.testing.assert_array_equal(
         cuda.asnumpy(decoder._iterative_normalization_vector), expected_norm
     )
@@ -515,29 +507,26 @@ def test_iterative_normalization_saves_once_and_keeps_memory_consistent(cuda, em
     assert decoder._iterative_normalization_loaded
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("use_flow", [False, True])
 @pytest.mark.parametrize("use_chromatic", [False, True])
-def test_bits_decode_in_round_one_before_world_mapping(cuda, use_flow, use_chromatic):
-    from concurrent.futures import Future
-    from unittest.mock import Mock
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+def test_bits_decode_in_round_one_before_world_mapping(
+    cuda, image_datastore, use_flow, use_chromatic
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._n_merfish_bits = 6
-    decoder._gene_ids = ["A", "B"]
-    decoder._codebook_matrix = np.array(
-        [[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1]], dtype=np.float32
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [0.5, 0.25, 0.25]
+    codebook = np.array([[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1]], dtype=np.float32)
+    datastore.codebook = pd.DataFrame(
+        {"gene_id": ["A", "B"], **{f"bit{i + 1:02}": codebook[:, i] for i in range(6)}}
     )
-    decoder._decoding_matrix = decoder._normalize_codebook()
     shape = (8, 12, 32)
     reference = np.zeros((6, *shape), dtype=np.float32)
-    reference[:, 2:4, 3:5, 12:14] = (
-        decoder._codebook_matrix[0, :, None, None, None] * 0.75
-    )
-    reference[:, 4:6, 7:9, 20:22] = (
-        decoder._codebook_matrix[1, :, None, None, None] * 0.75
-    )
+    reference[:, 2:4, 3:5, 12:14] = codebook[0, :, None, None, None] * 0.75
+    reference[:, 4:6, 7:9, 20:22] = codebook[1, :, None, None, None] * 0.75
     # A row-dependent X displacement is a non-rigid local refinement.
     flow = np.zeros((3, *shape), dtype=np.float32)
     flow[0, :, 6:, :] = 1
@@ -546,7 +535,6 @@ def test_bits_decode_in_round_one_before_world_mapping(cuda, use_flow, use_chrom
     chromatic = np.eye(4)
     chromatic[2, 1] = 1  # forward wavelength correction: X <- X + Y
     chromatic[2, 3] = 0.25
-    reads = []
     for bit in range(6):
         native = np.zeros(shape, dtype=np.float32)
         if bit == 0:
@@ -560,62 +548,52 @@ def test_bits_decode_in_round_one_before_world_mapping(cuda, use_flow, use_chrom
                 if use_chromatic and bit >= 3:
                     native_x -= y + 2
                 native[z + 1, y + 1, native_x] = reference[bit, z, y, x]
-        future = Future()
-        future.set_result(native)
-        reads.append(future)
-    prediction = Future()
-    prediction.set_result(np.ones(shape, dtype=np.float32))
-    datastore = Mock(
-        bit_ids=[f"bit{i:03d}" for i in range(1, 7)],
-        round_ids=["round001", "round002"],
-        voxel_size_zyx_um=[0.5, 0.25, 0.25],
-    )
-    datastore.load_local_readout_image.side_effect = reads
-    datastore.load_local_feature_predictor_image.return_value = prediction
-    datastore.load_local_round_linker.side_effect = [1, 2, 2, 2, 2, 2]
-    datastore.load_local_round_transform_zyx_um.return_value = round_transform
-    datastore.load_local_wavelengths_um.side_effect = [(0.5, 0.6)] * 3 + [
-        (0.6, 0.7)
-    ] * 3
-    datastore.load_chromatic_affine_transform_zyx_um.side_effect = [np.eye(4)] * 3 + [
-        chromatic if use_chromatic else np.eye(4)
-    ] * 3
-    datastore.load_local_sofima_flow_field.return_value = (
-        (
-            flow,
-            {
-                "sofima_status": "ok",
-                "map_stride_zyx_px": [1, 1, 1],
-                "map_box_start_xyz_px": [0, 0, 0],
-                "reference_shape_zyx_px": shape,
-            },
+        datastore.save_local_round_linker(1 if bit == 0 else 2, tile=0, bit=bit)
+        datastore.save_local_wavelengths_um(
+            (0.5, 0.6) if bit < 3 else (0.6, 0.7), tile=0, bit=bit
         )
-        if use_flow
-        else None
-    )
-    datastore.load_local_stage_position_zyx_um.return_value = (
-        [10, 20, 30],
-        np.diag([1, -1, 1, 1]),
+        datastore.save_local_corrected_image(native, tile=0, bit=bit)
+        datastore.save_local_feature_predictor_image(
+            np.ones(shape, dtype=np.float32), tile=0, bit=bit
+        )
+    datastore.save_local_round_transform_zyx_um(round_transform, tile=0, round=1)
+    if use_chromatic:
+        datastore.save_chromatic_affine_transforms_zyx_um(
+            {
+                "estimator": "decoded_rna_on_bit_weighted_centroid_yx_affine_graph",
+                "reference_wavelength_um": 0.6,
+                "channels": {
+                    "reference": {"wavelength_um": 0.6, "affine_zyx_um": np.eye(4)},
+                    "readout": {"wavelength_um": 0.7, "affine_zyx_um": chromatic},
+                },
+            }
+        )
+    if use_flow:
+        datastore.save_local_sofima_flow_field(
+            flow,
+            tile=0,
+            round=1,
+            reference_round=0,
+            map_stride_zyx_px=(1, 1, 1),
+            map_box_start_xyz_px=(0, 0, 0),
+            map_box_size_xyz_px=shape[::-1],
+            reference_shape_zyx_px=shape,
+            moving_shape_zyx_px=shape,
+            sofima_status="ok",
+        )
+    datastore.save_local_stage_position_zyx_um(
+        [10, 20, 30], np.diag([1, -1, 1, 1]), tile=0, round=0
     )
     global_affine = np.array([[1, 0, 0, 1], [0, 0, -1, 2], [0, 1, 0, 3], [0, 0, 0, 1]])
-    datastore.load_global_coord_xforms_um.return_value = (
-        global_affine,
-        [10, 20, 30],
-        [0.5, 0.25, 0.25],
+    datastore.save_global_coord_xforms_um(
+        global_affine, [10, 20, 30], [0.5, 0.25, 0.25], tile=0
     )
-    decoder._datastore = datastore
-    decoder._verbose = 0
+    datastore = qi2labDataStore(datastore.datastore_path, validate=False)
+    decoder = PixelDecoder(
+        datastore, merfish_bits=6, num_gpus=1, verbose=0, decode_mode="3d"
+    )
     decoder._tile_idx = 0
-    decoder._z_slice = slice(None)
-    decoder._z_range = [0, None]
-    decoder._z_crop = False
-    decoder._decode_mode = "3d"
-    decoder._is_3D = True
     decoder._filter_type = None
-    decoder._global_normalization_loaded = False
-    decoder._iterative_normalization_loaded = False
-    decoder._optimize_normalization_weights = False
-    decoder._excluded_codeword_indices = ()
     decoder._pixel_assignment_threshold = 0.5
     decoder._transcript_distance_threshold = 0.5
 

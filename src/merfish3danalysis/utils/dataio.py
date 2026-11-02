@@ -4,12 +4,6 @@ Data I/O functions for qi2lab 3D MERFISH.
 This module provides utilities for reading and writing data in various formats
 used by qi2lab 3D MERFISH datasets.
 
-History:
----------
-- **2024/12**: Refactored repo structure.
-- **2024/12**: Updated docstrings.
-- **2024/07**: Removed native NDTiff reading package; integrated tifffile/zarr.
-               Reduced dask dependencies.
 """
 
 import csv
@@ -19,13 +13,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import scipy.io as sio
 import scipy.sparse as sparse
-import zarr
 from numpy.typing import ArrayLike
-from tifffile import imread
 
 
 def resolve_datastore_path(path: Path | str) -> Path:
@@ -131,38 +122,6 @@ def write_metadata(data_dict: dict, save_path: str | Path) -> None:
         path for file
     """
     pd.DataFrame([data_dict]).to_csv(save_path)
-
-
-def return_data_zarr(
-    dataset_path: Path | str, ch_idx: int, ch_idx_offset: int | None = 0
-) -> ArrayLike:
-    """Return NDTIFF data as a numpy array via tiffile.
-
-    Parameters
-    ----------
-    dataset_path: Dataset
-        pycromanager dataset object
-    ch_idx: int
-        channel index in ZarrTiffStore file
-    ch_idx_offset: int
-        channel index offset for unused phase channels
-
-    Returns
-    -------
-    data: ArrayLike
-        data stack
-    """
-    ndtiff_zarr_store = imread(dataset_path, mode="r+", aszarr=True)
-    ndtiff_zarr = zarr.open(ndtiff_zarr_store, mode="r+")
-    first_dim = str(ndtiff_zarr.attrs["_ARRAY_DIMENSIONS"][0])
-
-    if first_dim == "C":
-        data = np.asarray(ndtiff_zarr[ch_idx - ch_idx_offset, :], dtype=np.uint16)
-    else:
-        data = np.asarray(ndtiff_zarr[:, ch_idx - ch_idx_offset, :], dtype=np.uint16)
-    del ndtiff_zarr_store, ndtiff_zarr
-
-    return np.squeeze(data)
 
 
 def time_stamp() -> str:
