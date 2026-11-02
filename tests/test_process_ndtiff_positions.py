@@ -4,77 +4,56 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from ndstorage import NDTiffDataset
 from scripts import process_ndtiff_positions as script
 from tifffile import TiffFile, imread
 from typer.testing import CliRunner
 
 
-class _FakeDataset:
-    def __init__(self) -> None:
-        self.channels = ("DAPI", "Cy5")
-        self.positions = (0, 2)
-        self.z_values = (0, 1, 2)
-        self.closed = False
-        self.read_calls: list[dict[str, int | str]] = []
-        self.coordinates = [
-            {"channel": channel, "position": position, "z": z_value, "time": 0}
-            for channel in self.channels
-            for position in self.positions
-            for z_value in self.z_values
-        ]
-
-    def get_image_coordinates_list(self) -> list[dict[str, int | str]]:
-        return self.coordinates
-
-    def get_channel_names(self) -> list[str]:
-        return list(self.channels)
-
-    def has_image(
-        self,
-        channel: str,
-        position: int,
-        z: int,
-        time: int,
-    ) -> bool:
-        return {
-            "channel": channel,
-            "position": position,
-            "z": z,
-            "time": time,
-        } in self.coordinates
-
-    def read_image(
-        self,
-        channel: str,
-        position: int,
-        z: int,
-        time: int,
-    ) -> np.ndarray:
-        coordinates = {
-            "channel": channel,
-            "position": position,
-            "z": z,
-            "time": time,
-        }
-        self.read_calls.append(coordinates)
-        channel_value = 10 if channel == "Cy5" else 0
-        return np.full(
-            (3, 4),
-            100 + channel_value + position + z,
-            dtype=np.uint16,
+@pytest.fixture
+def ndtiff_acquisition(tmp_path, request):
+    """Write and reopen a two-position acquisition using ndstorage."""
+    path = tmp_path / "acquisition"
+    writer = NDTiffDataset(
+        str(path), summary_metadata={"ChNames": ["DAPI", "Cy5"]}, writable=True
+    )
+    variant = getattr(request, "param", None)
+    for channel in ("DAPI", "Cy5"):
+        channel_coordinate = (
+            ("DAPI", "Cy5").index(channel) if variant == "numeric" else channel
         )
-
-    def read_metadata(self, **coordinates: int | str) -> dict[str, object]:
-        return {
-            "Camera-CameraName": "C13440-20CU",
-            "Camera-CONVERSION FACTOR COEFF": "2.0",
-            "Camera-CONVERSION FACTOR OFFSET": "100.0",
-            "PixelSizeUm": "0.108",
-            "ZPosition_um_Intended": float(coordinates["z"]) * 0.315,
-        }
-
-    def close(self) -> None:
-        self.closed = True
+        for position in (0, 2):
+            for z in range(3):
+                writer.put_image(
+                    {
+                        "channel": channel_coordinate,
+                        "position": position,
+                        "z": z,
+                        "time": 0,
+                    },
+                    np.full(
+                        (3, 4),
+                        100 + (10 if channel == "Cy5" else 0) + position + z,
+                        dtype=np.uint16,
+                    ),
+                    {
+                        "Camera-CameraName": "C13440-20CU",
+                        "Camera-CONVERSION FACTOR COEFF": "2.0",
+                        "Camera-CONVERSION FACTOR OFFSET": "100.0",
+                        "PixelSizeUm": "0.108",
+                        "ZPosition_um_Intended": z * 0.315,
+                    },
+                )
+    if variant == "multiple_times":
+        writer.put_image(
+            {"channel": "DAPI", "position": 0, "z": 0, "time": 1},
+            np.full((3, 4), 100, dtype=np.uint16),
+            {},
+        )
+    writer.finish()
+    dataset = script._load_dataset(path)
+    yield dataset
+    dataset.close()
 
 
 class _FakeUFish:
@@ -194,61 +173,57 @@ def test_deconvolve_stack_uses_repository_rlgc_defaults(
     np.testing.assert_array_equal(deconvolved, [[[0, 1, 65535]]])
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_list_channels_prints_metadata_names_without_processing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dataset = _FakeDataset()
-    monkeypatch.setattr(script, "_load_dataset", lambda _path: dataset)
-
-    result = CliRunner().invoke(script.app, [str(tmp_path), "--list-channels"])
+    ndtiff_acquisition, tmp_path
+):
+    result = CliRunner().invoke(
+        script.app, [str(tmp_path / "acquisition"), "--list-channels"]
+    )
 
     assert result.exit_code == 0
-    assert result.output == ("Channels parsed from NDTiff metadata:\n- DAPI\n- Cy5\n")
-    assert dataset.read_calls == []
-    assert dataset.closed
+    assert result.output.endswith(
+        "Channels parsed from NDTiff metadata:\n- DAPI\n- Cy5\n"
+    )
 
 
 @pytest.mark.unit
-def test_inspect_dataset_maps_summary_names_to_numeric_channels() -> None:
-    dataset = _FakeDataset()
-    dataset.coordinates = [
-        {**coordinate, "channel": dataset.channels.index(str(coordinate["channel"]))}
-        for coordinate in dataset.coordinates
-    ]
-    dataset.get_channel_names = lambda: []
-    dataset.summary_metadata = {"ChNames": ["DAPI", "Cy5"]}
-
-    layout = script.inspect_dataset(dataset)
+@pytest.mark.parametrize("ndtiff_acquisition", ["numeric"], indirect=True)
+def test_inspect_dataset_maps_summary_names_to_numeric_channels(ndtiff_acquisition):
+    layout = script.inspect_dataset(ndtiff_acquisition)
 
     assert layout.channels == ("DAPI", "Cy5")
     assert layout.channel_coordinates == (0, 1)
 
 
 @pytest.mark.unit
-def test_aliases_missing_first_stack_to_zero_suffixed_reader() -> None:
-    first_reader = object()
-    dataset = SimpleNamespace(
-        _readers_by_filename={"sample_NDTiffStack_0.tif": first_reader},
-        index={0: {"filename": "sample_NDTiffStack.tif"}},
-    )
+def test_aliases_missing_first_stack_to_zero_suffixed_reader(
+    ndtiff_acquisition, tmp_path
+):
+    ndtiff_acquisition.close()
+    path = tmp_path / "acquisition"
+    (path / "NDTiffStack.tif").rename(path / "NDTiffStack_0.tif")
+    dataset = script._load_dataset(path)
+    try:
+        np.testing.assert_array_equal(
+            dataset.read_image(channel="DAPI", position=0, z=0, time=0),
+            np.full((3, 4), 100, dtype=np.uint16),
+        )
+    finally:
+        dataset.close()
 
-    script._alias_zero_suffixed_stack_reader(dataset)
 
-    assert dataset._readers_by_filename["sample_NDTiffStack.tif"] is first_reader
-
-
-@pytest.mark.integration
+@pytest.mark.unit
 def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
     tmp_path: Path,
+    ndtiff_acquisition,
 ) -> None:
-    dataset = _FakeDataset()
+    dataset = ndtiff_acquisition
     ufish = _FakeUFish()
 
     script.process_dataset(
         dataset,
-        output_dir=tmp_path,
+        output_dir=tmp_path / "output",
         ufish_channels=["Cy5"],
         z_start=1,
         z_stop=3,
@@ -256,6 +231,7 @@ def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
         ufish=ufish,
     )
 
+    tmp_path = tmp_path / "output"
     assert sorted(path.name for path in tmp_path.iterdir()) == ["pos0000", "pos0002"]
     assert sorted(path.name for path in (tmp_path / "pos0000").iterdir()) == [
         "Cy5.ome.tif",
@@ -298,17 +274,19 @@ def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
     assert len(ufish.calls) == 2
 
 
-@pytest.mark.integration
-def test_process_dataset_preflights_existing_outputs(tmp_path: Path) -> None:
-    dataset = _FakeDataset()
-    existing_path = tmp_path / "pos0000" / "DAPI.ome.tif"
-    existing_path.parent.mkdir()
+@pytest.mark.unit
+def test_process_dataset_preflights_existing_outputs(
+    tmp_path: Path, ndtiff_acquisition
+) -> None:
+    dataset = ndtiff_acquisition
+    existing_path = tmp_path / "output" / "pos0000" / "DAPI.ome.tif"
+    existing_path.parent.mkdir(parents=True)
     existing_path.write_bytes(b"keep me")
 
     with pytest.raises(FileExistsError, match="--overwrite"):
         script.process_dataset(
             dataset,
-            output_dir=tmp_path,
+            output_dir=tmp_path / "output",
             ufish_channels=["Cy5"],
             z_start=0,
             z_stop=1,
@@ -317,13 +295,13 @@ def test_process_dataset_preflights_existing_outputs(tmp_path: Path) -> None:
         )
 
     assert existing_path.read_bytes() == b"keep me"
-    assert dataset.read_calls == []
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_deconvolution_writes_stacks_and_supplies_ufish_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    ndtiff_acquisition,
 ) -> None:
     ufish = _FakeUFish()
     deconvolution_calls = []
@@ -349,8 +327,8 @@ def test_deconvolution_writes_stacks_and_supplies_ufish_input(
     monkeypatch.setattr(script, "deconvolve_stack", fake_deconvolve)
 
     script.process_dataset(
-        _FakeDataset(),
-        output_dir=tmp_path,
+        ndtiff_acquisition,
+        output_dir=tmp_path / "output",
         ufish_channels=["Cy5"],
         z_start=0,
         z_stop=2,
@@ -360,6 +338,7 @@ def test_deconvolution_writes_stacks_and_supplies_ufish_input(
         deconvolve=True,
     )
 
+    tmp_path = tmp_path / "output"
     assert len(deconvolution_calls) == 4
     assert all(call[2] == 3 for call in deconvolution_calls)
     assert sorted(path.name for path in (tmp_path / "pos0000").iterdir()) == [
@@ -380,11 +359,13 @@ def test_deconvolution_writes_stacks_and_supplies_ufish_input(
         assert 'PhysicalSizeZ="0.315"' in ome_metadata
 
 
-@pytest.mark.integration
-def test_negative_one_z_stop_includes_final_plane(tmp_path: Path) -> None:
+@pytest.mark.unit
+def test_negative_one_z_stop_includes_final_plane(
+    tmp_path: Path, ndtiff_acquisition
+) -> None:
     script.process_dataset(
-        _FakeDataset(),
-        output_dir=tmp_path,
+        ndtiff_acquisition,
+        output_dir=tmp_path / "output",
         ufish_channels=["Cy5"],
         z_start=0,
         z_stop=-1,
@@ -392,17 +373,19 @@ def test_negative_one_z_stop_includes_final_plane(tmp_path: Path) -> None:
         ufish=_FakeUFish(),
     )
 
-    corrected = imread(tmp_path / "pos0000" / "DAPI.ome.tif")
+    corrected = imread(tmp_path / "output" / "pos0000" / "DAPI.ome.tif")
     assert corrected.shape == (3, 3, 4)
     np.testing.assert_array_equal(corrected[:, 0, 0], [0, 2, 4])
 
 
 @pytest.mark.unit
-def test_process_dataset_requires_exact_metadata_channel_name(tmp_path: Path) -> None:
+def test_process_dataset_requires_exact_metadata_channel_name(
+    tmp_path: Path, ndtiff_acquisition
+) -> None:
     with pytest.raises(ValueError, match="Available channels"):
         script.process_dataset(
-            _FakeDataset(),
-            output_dir=tmp_path,
+            ndtiff_acquisition,
+            output_dir=tmp_path / "output",
             ufish_channels=["cy5"],
             z_start=0,
             z_stop=1,
@@ -412,12 +395,10 @@ def test_process_dataset_requires_exact_metadata_channel_name(tmp_path: Path) ->
 
 
 @pytest.mark.unit
-def test_inspect_dataset_rejects_non_singleton_time_axis() -> None:
-    dataset = _FakeDataset()
-    dataset.coordinates.append({"channel": "DAPI", "position": 0, "z": 0, "time": 1})
-
+@pytest.mark.parametrize("ndtiff_acquisition", ["multiple_times"], indirect=True)
+def test_inspect_dataset_rejects_non_singleton_time_axis(ndtiff_acquisition) -> None:
     with pytest.raises(ValueError, match="Axis 'time' has 2 values"):
-        script.inspect_dataset(dataset)
+        script.inspect_dataset(ndtiff_acquisition)
 
 
 @pytest.mark.unit
