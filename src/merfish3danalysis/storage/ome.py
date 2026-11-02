@@ -656,6 +656,7 @@ def publish_image(
     *,
     expected_revision: str | None = None,
     chunks: Sequence[int] | None = None,
+    shards: Sequence[int] | None = None,
     extra_attributes: Mapping[str, Any] | None = None,
     return_write_future: bool = False,
     affine_zyx_um: Any | None = None,
@@ -675,6 +676,7 @@ def publish_image(
     options = {
         "writer": "tensorstore",
         "chunks": tuple(chunks) if chunks is not None else "auto",
+        "shards": tuple(shards) if shards is not None else None,
         "extra_attributes": dict(extra_attributes) if extra_attributes else None,
     }
     if return_write_future:

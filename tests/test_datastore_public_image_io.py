@@ -95,6 +95,7 @@ def test_calibration_images_written_before_tiles_reopen_with_channel_order(tmp_p
 
 @pytest.mark.unit
 @pytest.mark.parametrize("shape", [(2, 3, 4), (3, 4)])
+@pytest.mark.parametrize("sharded", [False, True])
 @pytest.mark.parametrize(
     "writer, image_name, selection, expected_frame",
     [
@@ -137,7 +138,7 @@ def test_calibration_images_written_before_tiles_reopen_with_channel_order(tmp_p
     ],
 )
 def test_native_images_are_published_in_the_acquisition_scene(
-    image_datastore, writer, image_name, selection, expected_frame, shape
+    image_datastore, writer, image_name, selection, expected_frame, shape, sharded
 ):
     from yaozarrs import v06
 
@@ -148,12 +149,23 @@ def test_native_images_are_published_in_the_acquisition_scene(
         [10, 20, 30], np.diag([1, -1, 1, 1]), tile=0, round=0
     )
     pixels = np.arange(np.prod(shape), dtype=np.uint16).reshape(shape)
-    getattr(datastore, writer)(pixels, tile=0, **selection)
+    options = (
+        {"chunks": (1, 2, 2)[-len(shape) :], "shards": (2, 4, 4)[-len(shape) :]}
+        if sharded
+        else {}
+    )
+    completion = getattr(datastore, writer)(
+        pixels, tile=0, return_future=sharded, **selection, **options
+    )
+    if sharded:
+        assert isinstance(completion, WriteFutures)
+        assert completion.result() is None
 
     reopened = qi2labDataStore(datastore.datastore_path, validate=False)
     path = reopened.local_image_path(0, image_name, **selection)
     scene = open_group(reopened.datastore_path).validate(strict=True)
-    image = open_group(path).ome_metadata(strict=True)
+    image_group = open_group(path)
+    image = image_group.ome_metadata(strict=True)
     assert isinstance(scene.ome_metadata(strict=True), v06.Scene)
     assert isinstance(image, v06.Image)
     relative_path = str(path.relative_to(reopened.datastore_path))
@@ -180,6 +192,20 @@ def test_native_images_are_published_in_the_acquisition_scene(
     lazy = reader(tile=0, return_future=None, **selection)
     assert isinstance(lazy, TensorStore)
     np.testing.assert_array_equal(lazy[..., 1:].read().result(), pixels[..., 1:])
+    if sharded:
+        dataset = image.multiscales[0].datasets[0].path
+        metadata = image_group[dataset].metadata.model_dump(mode="json")
+        shard_codec = next(
+            c for c in metadata["codecs"] if c["name"] == "sharding_indexed"
+        )
+        assert tuple(shard_codec["configuration"]["chunk_shape"]) == options["chunks"]
+        compressor = next(
+            c for c in shard_codec["configuration"]["codecs"] if c["name"] == "blosc"
+        )
+        assert compressor["configuration"]["cname"] == "zstd"
+        assert compressor["configuration"]["clevel"] == 3
+        assert compressor["configuration"]["shuffle"] == "shuffle"
+        assert sum(p.is_file() for p in (path / dataset / "c").rglob("*")) == 1
 
 
 @pytest.mark.unit

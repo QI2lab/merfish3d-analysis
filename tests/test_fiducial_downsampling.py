@@ -173,15 +173,30 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("camera_angle_deg", "register_rounds"),
+    ("camera_angle_deg", "register_rounds", "sharded"),
     [
-        pytest.param(0, False, id="axis-aligned"),
-        pytest.param(5, False, id="rotated-camera"),
-        pytest.param(5, True, marks=pytest.mark.gpu, id="rotated-camera-multiround"),
+        pytest.param(0, False, False, id="axis-aligned"),
+        pytest.param(5, False, False, id="rotated-camera"),
+        pytest.param(
+            5, True, False, marks=pytest.mark.gpu, id="rotated-camera-multiround"
+        ),
+        pytest.param(
+            5,
+            True,
+            True,
+            marks=pytest.mark.gpu,
+            id="sharded-rotated-camera-multiround",
+        ),
+        pytest.param(
+            0,
+            False,
+            True,
+            id="sharded-axis-aligned",
+        ),
     ],
 )
 def test_two_tile_registration_fuses_directly_to_zarr(
-    image_datastore, camera_angle_deg, register_rounds
+    image_datastore, camera_angle_deg, register_rounds, sharded
 ):
     from scipy.ndimage import gaussian_filter, map_coordinates, shift
     from yaozarrs import open_group, v06
@@ -210,10 +225,11 @@ def test_two_tile_registration_fuses_directly_to_zarr(
         ).astype(np.uint16)
         image[:, :4, :] = image[:, -4:, :] = 0
         image[:, :, :4] = image[:, :, -4:] = 0
-        image_datastore.save_local_corrected_image(image, tile=tile, round=0)
+        storage = {"chunks": (8, 64, 64), "shards": (48, 192, 192)} if sharded else {}
+        image_datastore.save_local_corrected_image(image, tile=tile, round=0, **storage)
         if not register_rounds:
             image_datastore.save_local_deconvolved_fiducial_image(
-                image, tile=tile, round=0
+                image, tile=tile, round=0, **storage
             )
         image_datastore.save_local_stage_position_zyx_um(
             [10, 20, stage_x], camera, tile=tile, round=0
@@ -251,7 +267,7 @@ def test_two_tile_registration_fuses_directly_to_zarr(
                     .astype(np.uint16)
                 )
                 image_datastore.save_local_corrected_image(
-                    moving, tile=tile, **selection
+                    moving, tile=tile, **selection, **storage
                 )
     scene_group = open_group(image_datastore.datastore_path).validate(strict=True)
     scene = scene_group.ome_metadata(strict=True)

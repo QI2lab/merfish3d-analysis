@@ -7,7 +7,10 @@ from merfish3danalysis.cli.qi2lab_microscopes import fuseall
 
 
 @pytest.mark.integration
-def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(image_datastore):
+@pytest.mark.parametrize("sharded", [False, True], ids=["unsharded", "sharded"])
+def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(
+    image_datastore, sharded
+):
     from yaozarrs import open_group, v06
 
     from merfish3danalysis.DataRegistration import (
@@ -17,6 +20,7 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(image_dat
     from merfish3danalysis.viewer.fused import load_fused_channels
 
     datastore = image_datastore
+    storage = {"chunks": (3, 5, 7), "shards": (6, 15, 21)} if sharded else {}
     for tile in range(2):
         stage = [2, 4, tile * 3.2]
         camera = np.diag([1, -1, 1, 1])
@@ -35,15 +39,43 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(image_dat
             )
         image = np.zeros((4, 12, 16), dtype=np.uint16)
         image[2, 5, 5] = 30000 if tile == 0 else 15000
-        datastore.save_local_corrected_image(image, tile=tile, round=0)
-        datastore.save_local_deconvolved_fiducial_image(image // 2, tile=tile, round=0)
+        datastore.save_local_corrected_image(image, tile=tile, round=0, **storage)
+        datastore.save_local_deconvolved_fiducial_image(
+            image // 2, tile=tile, round=0, **storage
+        )
         for bit in range(4):
             readout = np.roll(image, 1, axis=2) if bit in (1, 3) else image
-            datastore.save_local_corrected_image(readout, tile=tile, bit=bit)
+            bit_storage = storage if bit % 2 == 0 else {}
+            datastore.save_local_corrected_image(
+                readout, tile=tile, bit=bit, **bit_storage
+            )
             if bit == 0:
                 datastore.save_local_deconvolved_readout_image(
                     readout * 2, tile=tile, bit=bit
                 )
+    if sharded:
+        msim = fuseall._load_tile_multichannel_msim(
+            datastore=datastore,
+            tile_id=datastore.tile_ids[0],
+            bit_ids=datastore.bit_ids,
+            spacing_zyx_um=dict(zip("zyx", datastore.voxel_size_zyx_um, strict=True)),
+        )
+        sim = fuseall.msi_utils.get_sim_from_msim(msim)
+        assert fuseall.si_utils.is_xarray_zarr_backed(sim)
+        roi = (slice(1, 4), slice(3, 11), slice(5, 16))
+        expected = [
+            datastore.load_local_deconvolved_fiducial_image(0, 0, return_future=None),
+            datastore.load_local_deconvolved_readout_image(0, 0, return_future=None),
+            *[
+                datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+                for bit in range(1, 4)
+            ],
+        ]
+        for channel, source in enumerate(expected):
+            np.testing.assert_array_equal(
+                sim.isel(t=0, c=channel, z=roi[0], y=roi[1], x=roi[2]).values,
+                source[roi].read().result(),
+            )
     registration = DataRegistration(
         datastore,
         decon_fiducial=False,
@@ -57,7 +89,7 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(image_dat
         datastore.datastore_path,
         write_ome_tiffs=True,
         output_chunk_zyx="4,12,16",
-        fusion_workers=1,
+        fusion_workers=2 if sharded else 1,
         compression="blosc-lz4",
         compression_level=2,
     )

@@ -285,6 +285,19 @@ def _load_tile_multichannel_msim(
         datastore.load_local_fusion_image(tile_id, round=reference_round),
         *[datastore.load_local_fusion_image(tile_id, bit=bit_id) for bit_id in bit_ids],
     ]
+    from merfish3danalysis.storage.mvs import shared_mvs_chunks
+
+    chunks = shared_mvs_chunks(channel_arrays)
+    if chunks is not None:
+        channel_arrays = [
+            datastore.load_local_fusion_image(
+                tile_id, round=reference_round, chunks=chunks
+            ),
+            *[
+                datastore.load_local_fusion_image(tile_id, bit=bit_id, chunks=chunks)
+                for bit_id in bit_ids
+            ],
+        ]
     translation = dict(
         zip(
             "zyx",

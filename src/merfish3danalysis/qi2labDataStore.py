@@ -208,19 +208,23 @@ class qi2labDataStore:
         *,
         round: int | str | None = None,
         bit: int | str | None = None,
+        chunks: Sequence[int] | None = None,
     ) -> Any:
         """Return the native Zarr handle required by MVS direct-Zarr fusion.
 
         Deconvolved pixels take precedence when present, matching global
         registration and fusion's existing input selection. Other datastore
-        array access uses TensorStore.
+        array access uses TensorStore. ``chunks`` requests a compatible lazy
+        chunk view when mixing products with different storage layouts.
         """
         for image_name in ("decon_data", "corrected_data"):
             path = self.local_image_path(tile, image_name, round=round, bit=bit)
             if path.exists():
+                from merfish3danalysis.storage.mvs import mvs_array
+
                 group = open_group(path)
                 image = group.ome_metadata(strict=True)
-                return group[image.multiscales[0].datasets[0].path].to_zarr_python()
+                return mvs_array(group[image.multiscales[0].datasets[0].path], chunks)
         raise FileNotFoundError(
             f"Missing fusion input for tile={tile} round={round} bit={bit}."
         )
@@ -2121,6 +2125,7 @@ class qi2labDataStore:
         return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
+        shards: Sequence[int] | None = None,
         ome_scale: Sequence[float] | None = None,
         ome_translation: Sequence[float] | None = None,
         extra_attributes: Mapping[str, Any] | None = None,
@@ -2140,6 +2145,8 @@ class qi2labDataStore:
             Image store path.
         chunks : Sequence[int] or None
             Storage chunk shape. None selects the datastore default.
+        shards : Sequence[int] or None
+            Storage shard shape, passed to yaozarrs; None disables sharding.
         ome_scale : Sequence[float] or None
             Pixel spacing in microns, in image-axis order or ZYX order.
         ome_translation : Sequence[float] or None
@@ -2231,6 +2238,7 @@ class qi2labDataStore:
                 image_array,
                 expected_revision=None if previous is None else previous["revision"],
                 chunks=chunks,
+                shards=shards,
                 extra_attributes=extra_attributes,
                 return_write_future=bool(return_future),
                 affine_zyx_um=scene_affine,
@@ -2280,6 +2288,7 @@ class qi2labDataStore:
             "writer": "tensorstore",
             "overwrite": True,
             "chunks": chunk_spec,
+            "shards": tuple(shards) if shards is not None else None,
             "compression": "blosc-zstd",
         }
         if return_future:
@@ -3621,6 +3630,9 @@ class qi2labDataStore:
         round: int | str | None = None,
         bit: int | str | None = None,
         return_future: bool | None = False,
+        *,
+        chunks: Sequence[int] | None = None,
+        shards: Sequence[int] | None = None,
     ) -> "WriteFutures | None":
         """Save gain and offset corrected image.
 
@@ -3645,6 +3657,9 @@ class qi2labDataStore:
         return_future : bool or None
             Return the completed TensorStore write handle when True. Writes
             finish before associated metadata is reported as saved.
+        chunks, shards : Sequence[int] or None
+            Inner chunk and shard shapes passed to yaozarrs. None selects the
+            default chunks and disables sharding, respectively.
 
         Returns
         -------
@@ -3734,6 +3749,8 @@ class qi2labDataStore:
                 image,
                 entity_root / "corrected_data",
                 return_future,
+                chunks=chunks,
+                shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
                 extra_attributes=attributes,
                 scene_path=self._datastore_path,
@@ -4246,6 +4263,9 @@ class qi2labDataStore:
         tile: int | str,
         round: int | str,
         return_future: bool | None = False,
+        *,
+        chunks: Sequence[int] | None = None,
+        shards: Sequence[int] | None = None,
     ) -> "WriteFutures | None":
         """
         Save a native-frame deconvolved fiducial image.
@@ -4264,6 +4284,9 @@ class qi2labDataStore:
         return_future : bool or None
             Return the completed TensorStore write handle when True. Writes
             finish before associated metadata is reported as saved.
+        chunks, shards : Sequence[int] or None
+            Inner chunk and shard shapes passed to yaozarrs. None selects the
+            default chunks and disables sharding, respectively.
 
         Returns
         -------
@@ -4319,6 +4342,8 @@ class qi2labDataStore:
                 image,
                 decon_path,
                 return_future,
+                chunks=chunks,
+                shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
                 extra_attributes=attributes,
                 scene_path=self._datastore_path,
@@ -4443,6 +4468,9 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
         return_future: bool | None = False,
+        *,
+        chunks: Sequence[int] | None = None,
+        shards: Sequence[int] | None = None,
     ) -> "WriteFutures | None":
         """
         Save a native-frame deconvolved readout bit image.
@@ -4461,6 +4489,9 @@ class qi2labDataStore:
         return_future : bool or None
             Return the completed TensorStore write handle when True. Writes
             finish before associated metadata is reported as saved.
+        chunks, shards : Sequence[int] or None
+            Inner chunk and shard shapes passed to yaozarrs. None selects the
+            default chunks and disables sharding, respectively.
 
         Returns
         -------
@@ -4512,6 +4543,8 @@ class qi2labDataStore:
                 image,
                 readout_path,
                 return_future,
+                chunks=chunks,
+                shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
                 extra_attributes=attributes,
                 scene_path=self._datastore_path,
@@ -4603,6 +4636,9 @@ class qi2labDataStore:
         tile: int | str,
         bit: int | str,
         return_future: bool | None = False,
+        *,
+        chunks: Sequence[int] | None = None,
+        shards: Sequence[int] | None = None,
     ) -> "WriteFutures | None":
         """Save feature_predictor prediction image.
 
@@ -4617,6 +4653,9 @@ class qi2labDataStore:
         return_future : bool or None
             Return the completed TensorStore write handle when True. Writes
             finish before associated metadata is reported as saved.
+        chunks, shards : Sequence[int] or None
+            Inner chunk and shard shapes passed to yaozarrs. None selects the
+            default chunks and disables sharding, respectively.
 
         Returns
         -------
@@ -4674,6 +4713,8 @@ class qi2labDataStore:
                 feature_predictor_image,
                 current_local_zarr_path,
                 return_future,
+                chunks=chunks,
+                shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
                 extra_attributes=attributes,
                 scene_path=self._datastore_path,
