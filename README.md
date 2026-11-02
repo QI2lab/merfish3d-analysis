@@ -70,7 +70,7 @@ CPU registration and CPU direct-to-Zarr fusion.
 ## Fuse all channels
 
 After local and global registration, fuse the first-round fiducial and codebook
-bits into `qi2labdatastore/fused/full_dataset.ome.zarr`:
+bits into a multichannel image in the datastore Scene:
 
 ```bash
 uv run qi2lab-fuseall /path/to/experiment \
@@ -87,9 +87,11 @@ speed depend on the data. `zstd` is also available. Levels 1 through 9 are
 accepted; compression cannot be disabled. Changing compression preserves the
 pixel values produced by fusion.
 
-The output is OME-Zarr v0.5, with the fiducial first and then bits in numeric
-codebook order. The command uses stored chromatic, local-round, stage and global
-transforms; SOFIMA is omitted. See the [fusion workflow](https://qi2lab.github.io/merfish3d-analysis/workflow/#fuse-all-channels)
+The output is an OME-NGFF v0.6 image, with the fiducial first and then bits in
+numeric codebook order. Its path is available through
+`datastore.fused_image_path("full_dataset")`. The command uses stored local-round, stage and global transforms;
+chromatic correction is applied during decoding and SOFIMA is omitted from fusion.
+See the [fusion workflow](https://qi2lab.github.io/merfish3d-analysis/workflow/#fuse-all-channels)
 for resource settings and restart behavior.
 
 ## View a qi2lab datastore
@@ -111,8 +113,8 @@ uv run viewer /path/to/experiment/qi2labdatastore
 
 The viewer only reads existing datastore contents. It uses NDV for Zarr-backed
 image channels and VisPy for sparse transcript and cell-boundary overlays. It
-can inspect local native tiles, local tiles warped with selected chromatic,
-stage/round affine, and SOFIMA components, and global fused views. Transcript
+can inspect local native tiles, local tiles warped with selected stage/round affine
+and SOFIMA components, and global fused views. Transcript
 sources are mutually exclusive: datastore transcripts, Proseg transcripts, or
 Baysor transcripts. Cell boundaries can be shown from Cellpose, Proseg, or
 Baysor when those outputs are present.

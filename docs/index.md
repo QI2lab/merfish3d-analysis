@@ -16,7 +16,7 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
 
 - Decode both 2D and 3D iterative barcoded experiments that use a codebook. Our focus on 3D MERFISH, but this library can be extended to any iterative imaging and barcoded RNA imaging approach.
 - [Datastore](datastore.md) optimized for large-scale imaging data.
-    - Read and write OME-NGFF v0.5 images through yaozarrs and TensorStore.
+    - Read and write OME-NGFF v0.6 Scenes through yaozarrs and TensorStore.
 - Processing capabilities for widefield, standard light-sheet, and skewed light-sheet data.
 - Rigid, affine, and deformable local tile registration.
     - GPU-accelerated affine registration, SOFIMA residual flow-field

@@ -184,10 +184,10 @@ with ZYX binning `(1, 3, 3)`, keeping the native axial sampling for this dataset
 The same registration, transform storage, and fusion code serves the qi2lab
 workflow. Fusion preserves the 1.5 µm Z
 spacing and downsamples Y/X by `round(1.5 / 0.108, 1) = 13.9`, giving
-1.501 µm lateral spacing after calibration rounding. The fused fiducial
-OME-Zarr and `segmentation/cellpose/fiducial_max_projection.ome.tiff` carry
-this spacing; Cellpose uses it when transforming pixel ROIs into global
-coordinates and records the actual downsampling in the mask metadata.
+1.501 µm lateral spacing after calibration rounding. The fused fiducial image
+and its sibling projection Scene carry this spacing. Cellpose uses the stored
+fused grid to transform pixel ROIs into global coordinates, and its labels share
+the projection's grid.
 To regenerate global transforms and the fused fiducial image, run:
 
 ```bash
@@ -220,11 +220,11 @@ The example uses normalization percentiles `[0.5, 99.5]`, flow threshold
 preserves the original sign convention: dictionary `cellprob_threshold=1.0`
 passes `-1.0` to Cellpose. Inference runs in 2D (`do_3D=False`).
 
-The example loads the saved maximum-Z TIFF when available, otherwise computes
-it from the fused volume. It saves masks with the actual fused-to-native spacing
-ratio, exports pixel-space ImageJ ROIs, and uses the fused spacing, origin, and
-affine to write global ROIs. The shared `qi2lab-segment` CLI remains available
-separately with its own options and defaults.
+The example loads the maximum-Z projection from its sibling Scene and saves
+the Cellpose masks as labels associated with that image. It exports pixel-space
+ImageJ ROIs and uses the fused spacing, origin, and affine to write global ROIs.
+The shared `qi2lab-segment` CLI remains available separately with its own options
+and defaults.
 
 ## Decode transcripts
 

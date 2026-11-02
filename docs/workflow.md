@@ -152,16 +152,17 @@ geometry. The registration step refines global tile transforms on CPU. The
 fusion step writes directly to OME-Zarr with the CPU backend. Fiducial fusion
 preserves Z spacing and downsamples each lateral axis by
 `round(z_spacing / lateral_spacing, 1)` for the segmentation grid. Its
-maximum-Z OME-TIFF uses the same downsampled grid. The fused spacing is saved
-and used to transform Cellpose pixel ROIs into global coordinates; mask
-metadata records the actual scale relative to the native tiles. The full global
+maximum-Z projection is stored in a separate sibling OME-NGFF Scene, with an
+optional TIFF on the same grid. Cellpose labels are associated with the Scene's
+projection image. The fused spacing is used to transform Cellpose pixel ROIs into
+global coordinates. The full global
 stage can be rerun on an existing locally registered datastore with
 `uv run qi2lab-preprocess /path/to/experiment --global-registration-only`.
 
 ## Fuse all channels
 
 Once local and global registrations are complete, create one multichannel
-OME-Zarr v0.5:
+OME-NGFF v0.6 image in the datastore Scene:
 
 ```bash
 uv run qi2lab-fuseall /path/to/experiment \
@@ -171,12 +172,14 @@ uv run qi2lab-fuseall /path/to/experiment \
   --compression-level 1
 ```
 
-The output is `qi2labdatastore/fused/full_dataset.ome.zarr`. Channel 0 is the
-first-round fiducial; remaining channels are the codebook bits in numeric order.
-MVS composes the stored chromatic correction, local-round affine, stage-camera
-affine, stage position and global refinement while sampling native images.
+The output image is available through `datastore.fused_image_path("full_dataset")`.
+Channel 0 is the first-round fiducial; remaining channels are the codebook bits
+in numeric order.
+MVS composes the stored local-round affine, stage-camera affine, stage position
+and global refinement while sampling native images. Chromatic correction is
+applied during decoding.
 SOFIMA fields are ignored. `--write-ome-tiffs` additionally exports one
-full-resolution OME-TIFF per channel beside the OME-Zarr.
+full-resolution OME-TIFF per channel under `qi2labdatastore/fused/`.
 
 Both this command and `DataRegistration.py` use the same CPU fusion options.
 The shared default codec is lossless Blosc-Zstd with bitshuffle at level 1.
@@ -194,10 +197,10 @@ with substantial RAM; choose resources for the machine running the command.
 Progress updates after each batch of four times the worker count, and pyramid
 creation follows full-resolution fusion.
 
-Rerunning the command replaces the existing `full_dataset.ome.zarr`; it does not
-resume a partial fusion. Stop any existing fusion process before rerunning with
-different compression settings. Registration metadata and source images are
-reused, so preprocessing does not need to be repeated.
+Rerunning the command publishes a new fused image revision; it does not resume a
+partial fusion. Stop any existing fusion process before rerunning with different
+compression settings. Registration metadata and source images are reused, so
+preprocessing does not need to be repeated.
 
 ## Pixel decoding
 
@@ -247,9 +250,8 @@ subsequent decode-time warping.
 The read-only `viewer` command opens a Qt controller that can spawn NDV windows
 for local and global datastore views. NDV displays Zarr-backed image channels.
 Transcript points and cell boundaries from datastore decoding, Cellpose, Proseg,
-or Baysor are rendered as sparse VisPy overlays. Local warped views use the same
-stored chromatic, affine, and SOFIMA metadata as decoding, with independent
-controls for each transform component.
+or Baysor are rendered as sparse VisPy overlays. Local warped views use the stored
+round affine and SOFIMA metadata, with independent controls for each component.
 
 ## 3D segmentation based on decoded RNA
 

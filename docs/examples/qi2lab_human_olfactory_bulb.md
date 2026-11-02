@@ -133,5 +133,5 @@ uv run viewer /path/to/data
 ```
 
 Use local native mode to inspect stored tile images, local warped mode to test
-chromatic, affine, and SOFIMA transform overlays, and global fused mode to view
+affine and SOFIMA transform overlays, and global fused mode to view
 the fused Zarr with datastore, Proseg, Baysor, or Cellpose overlays when present.

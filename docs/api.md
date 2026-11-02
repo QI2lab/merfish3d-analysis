@@ -247,8 +247,8 @@ uv run viewer /path/to/experiment
 The controller exposes three view modes:
 
 - `Local native` shows stored local images without alignment claims.
-- `Local warped` applies user-selected chromatic, stage/round affine, and
-  SOFIMA transform components before display.
+- `Local warped` applies user-selected stage/round affine and SOFIMA transform
+  components before display.
 - `Global fused` opens the fused Zarr image lazily and overlays selected sparse
   data.
 
@@ -282,11 +282,10 @@ round-1 local grid, using its shape and the datastore voxel spacing. All TIFFs
 are OME-TIFF stacks with spatial axes and physical pixel sizes in microns;
 large stacks use BigTIFF. Singleton Z planes may be displayed as YX by readers.
 
-Registration reuses the decoder's stored round affine transforms, available
-SOFIMA deformation fields, and readout chromatic calibration. Round 1's
-fiducial is unchanged; round-1 bits still receive chromatic correction. Missing
-chromatic calibration uses the datastore's identity fallback. Missing SOFIMA
-fields use affine-only registration, and recorded SOFIMA identity fallbacks
+Registration reuses the stored round affine transforms and available SOFIMA
+deformation fields. Round 1's fiducial and readout bits remain unchanged.
+Chromatic correction is applied during decoding. Missing SOFIMA fields use
+affine-only registration, and recorded SOFIMA identity fallbacks
 are respected. Nonidentity warps require CUDA, with device selection through
 `--gpu-id` (default `0`).
 

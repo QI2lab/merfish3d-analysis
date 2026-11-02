@@ -9,20 +9,21 @@ regression, or API test categories, suites, or names.
 
 - Mark unit tests with `@pytest.mark.unit`. Exercise an isolated component's
   behavior using known inputs and independently specified expected results.
-  Mock file reads, writes and external inputs. Do not initialize real datastores
-  in unit-test fixtures.
+  Use public library and upstream APIs for setup and inspection where possible;
+  mock a boundary only when needed to isolate the behavior being tested.
 - Mark integration tests with `@pytest.mark.integration`. Exercise connected
-  components and assert the values passed across their boundaries or the
-  resulting outputs. Use real implementations for the interaction being tested;
-  mock external inputs. Generate images, metadata, masks and spot tables locally;
-  use temporary directories for persistence tests that write and reopen them.
-  The explicitly requested published-data matrix is optional and requires
-  `--simulation-data-root`; default tests do not access it.
+  workflows through their real producers and consumers, and assert resulting
+  pixels, coordinates and other outputs. Reuse fixtures and public operations to
+  create deterministic inputs and persisted stores, and reopen them where relevant.
+  The published-data matrix requires `--simulation-data-root`; the exhaustive
+  matrix is selected with `--run-simulation-exhaustive`. Missing prerequisites
+  must be reported when claiming a full run.
 
 Every test must have exactly one category; pytest rejects unclassified tests,
 those with both markers, and smoke/regression/API category markers. Keep tests in `tests/test_*.py` files.
-The `simulation_exhaustive` marker controls an optional integration-test matrix,
-and is not a separate test category.
+The `simulation_exhaustive` marker identifies the opt-in integration-test matrix
+and is not a separate test category. GitHub CI excludes GPU-marked tests; local
+GPU tests remain available and are run for relevant changes.
 
 Tests must assert the intended scientific and workflow behavior. Successful
 imports, process startup, or completion alone do not establish correctness.
@@ -39,11 +40,10 @@ commands. Zhuang tests cover its import and example-specific parameters; they
 do not define core processing behavior.
 
 For example, fiducial fusion unit tests must assert the required downsampled
-output spacing. Integration tests must connect fusion, the saved maximum
-projection and its OME calibration, segmentation downsampling metadata, and ROI
-coordinates in physical units. Mocking Cellpose inference is appropriate for
-this integration test, but mocking fusion or the coordinate conversion would
-remove the interaction it must verify.
+output spacing. Full integration tests connect registration and direct fusion,
+the saved maximum projection and its OME calibration, real Cellpose inference,
+label persistence, and ROI coordinates in physical units. Focused tests with
+mocked inference are unit tests; they do not replace the full workflow.
 
 Run `uv run pytest tests/test_*.py -m unit` or
 `uv run pytest tests/test_*.py -m integration` to select a category.
@@ -55,8 +55,8 @@ simulation data retain their existing prerequisites and options; see the
 The CPU CI job executes both categories against real Zarr v3 OME-Zarr stores,
 including pixel round trips, write completion, mask scale metadata, fusion
 compression, TIFF calibration, and ROI coordinates. It reads the selected
-requirements from `pyproject.toml` and uses CPU PyTorch. Cellpose inference is
-mocked in the coordinate integration test; the image and ROI persistence is real.
+requirements from `pyproject.toml` and uses CPU PyTorch. GPU tests, including
+real Cellpose inference, run locally and are excluded from GitHub CI.
 
 Mark tests that execute on a GPU with `@pytest.mark.gpu` in addition to their
 unit or integration category. Mocked GPU operations do not require this marker.
