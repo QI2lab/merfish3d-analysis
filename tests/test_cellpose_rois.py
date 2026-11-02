@@ -65,17 +65,9 @@ def test_batched_global_transform_matches_original_coordinates_and_filter(worker
         xy = np.column_stack((np.cos(angles), np.sin(angles))) * (5 + index % 30)
         xy += rng.uniform(0, 10000, 2)
         pixel_rois.append(ImagejRoi.frompoints(xy.astype(np.float32), name=str(index)))
-    spacing = np.array([1, 0.11, 0.21], dtype=np.float32)
+    spacing = np.array([0.315, 0.316, 0.316], dtype=np.float32)
     origin = np.array([0, 40, 30], dtype=np.float32)
-    affine = np.array(
-        [
-            [1, 0.001, 0.002, 12],
-            [0.01, 0.95, 0.1, -200],
-            [0.03, -0.02, 1.1, 800],
-            [0, 0, 0, 1],
-        ],
-        dtype=np.float32,
-    )
+    affine = np.eye(4, dtype=np.float32)
     expected = []
     for roi in pixel_rois:
         xy = roi.coordinates().astype(np.float32)

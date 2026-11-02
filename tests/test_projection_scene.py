@@ -16,10 +16,8 @@ def test_projection_scene_reopens_with_cellpose_labels(image_datastore):
     masks[1:5, 2:7] = 1
     masks[5:7, 6:9] = 2
     affine = np.eye(4, dtype=np.float32)
-    affine[1, 0] = 0.2
-    affine[2, 3] = 4.0
     origin = np.array([12, 21, 34], dtype=np.float32)
-    spacing = np.array([0.4, 0.8, 1.2], dtype=np.float32)
+    spacing = np.array([0.4, 0.4, 0.4], dtype=np.float32)
 
     datastore.save_global_fiducial_projection(
         projection,

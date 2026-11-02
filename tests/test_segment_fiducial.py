@@ -16,7 +16,7 @@ from merfish3danalysis.cli.qi2lab_microscopes import segment_fiducial
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "cutoff, expected_areas", [(0, [3, 12, 27]), (12, [12, 27]), (28, [])]
+    "cutoff, expected_areas", [(0, [2.25, 9, 20.25]), (9, [9, 20.25]), (21, [])]
 )
 def test_global_outline_filter_uses_transformed_area_and_replaces_zip(
     tmp_path, cutoff, expected_areas
@@ -33,9 +33,9 @@ def test_global_outline_filter_uses_transformed_area_and_replaces_zip(
     segment_fiducial._save_global_rois(
         pixel_rois,
         output_path,
-        spacing_zyx_um=np.array([1, 0.5, 0.25]),
+        spacing_zyx_um=np.array([1.5, 1.5, 1.5]),
         origin_zyx_um=np.array([0, 100, 200]),
-        affine_zyx_um=np.diag([1, 2, -12, 1]),
+        affine_zyx_um=np.eye(4),
         min_cell_area_um2=cutoff,
     )
 

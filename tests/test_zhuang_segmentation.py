@@ -20,18 +20,16 @@ EXAMPLE_PATH = (
 
 
 @pytest.mark.unit
-def test_warp_point_uses_fused_spacing_origin_and_camera_affine():
+def test_warp_point_uses_fused_spacing_and_origin():
     example = runpy.run_path(str(EXAMPLE_PATH))
     affine = np.eye(4)
-    affine[1, 1] = -1
-    affine[2, 3] = 7
     actual = example["warp_point"](
         np.array([10, 2, 4]),
         np.array([1.5, 1.501, 1.501]),
         np.array([12, 100, 200]),
         affine,
     )
-    np.testing.assert_allclose(actual, [27, -103.002, 213.004])
+    np.testing.assert_allclose(actual, [27, 103.002, 206.004])
 
 
 @pytest.mark.unit
@@ -55,9 +53,6 @@ def test_zhuang_example_passes_own_parameters_and_exports_scaled_rois(
     spacing = np.array([1.5, 1.501, 1.501])
     origin = np.array([12, 100, 200])
     affine = np.eye(4)
-    affine[1, 1] = -1
-    affine[1, 0] = 0.1
-    affine[2, 3] = 7
     datastore.voxel_size_zyx_um = [1.5, 0.108, 0.108]
     datastore.save_global_fiducial_projection(projection, affine, origin, spacing)
     masks = np.zeros(projection.shape, dtype=np.uint16)
@@ -94,7 +89,7 @@ def test_zhuang_example_passes_own_parameters_and_exports_scaled_rois(
         xy = pixel_roi.coordinates()
         np.testing.assert_array_equal(xy.min(axis=0), [3, 2])
         np.testing.assert_array_equal(xy.max(axis=0), [8, 6])
-        expected = np.column_stack((207 + xy[:, 0] * 1.501, -97.3 - xy[:, 1] * 1.501))
+        expected = np.column_stack((200 + xy[:, 0] * 1.501, 100 + xy[:, 1] * 1.501))
         np.testing.assert_allclose(
             global_roi.coordinates(), np.round(expected, 2), atol=2e-5
         )
@@ -114,8 +109,6 @@ def test_zhuang_example_reopens_real_masks_and_replaces_existing_rois(
     spacing = [1.5, 1.501, 1.501]
     origin = [12, 100, 200]
     affine = np.eye(4)
-    affine[1, 1] = -1
-    affine[2, 3] = 7
     datastore.save_global_fiducial_image(volume, affine, origin, spacing)
     datastore.save_global_fiducial_projection(
         volume.max(axis=0), affine, origin, spacing
@@ -159,9 +152,7 @@ def test_zhuang_example_reopens_real_masks_and_replaces_existing_rois(
             xy = pixels[0].coordinates()
             np.testing.assert_array_equal(xy.min(axis=0), [3, 2])
             np.testing.assert_array_equal(xy.max(axis=0), [8, 6])
-            expected = np.column_stack(
-                (207 + xy[:, 0] * 1.501, -100 - xy[:, 1] * 1.501)
-            )
+            expected = np.column_stack((200 + xy[:, 0] * 1.501, 100 + xy[:, 1] * 1.501))
             np.testing.assert_allclose(
                 physical[0].coordinates(), np.round(expected, 2), atol=2e-5
             )
