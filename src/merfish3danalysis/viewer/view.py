@@ -18,7 +18,7 @@ from merfish3danalysis.viewer.ndv import (
     channel_cmap_for_label,
     hide_ndv_volume_button,
 )
-from merfish3danalysis.viewer.sparse import SparseVispyOverlay
+from merfish3danalysis.viewer.sparse import SparseVispyOverlay, _display_scale_zyx
 
 
 class _ScaleBar:
@@ -142,11 +142,13 @@ class DatastoreNdvView(QtCore.QObject):
         """
         data = stack_with_micron_coords(stack, spacing_zyx_um, origin_zyx_um)
         self.channel_labels = list(stack.labels)
-        if reuse_window and self._update_array_viewer(data, self.channel_labels):
+        if reuse_window and self._update_array_viewer(
+            data, self.channel_labels, spacing_zyx_um
+        ):
             self._enable_scale_bar(spacing_zyx_um)
             return
         self.close()
-        self._reset_array_viewer(data, self.channel_labels)
+        self._reset_array_viewer(data, self.channel_labels, spacing_zyx_um)
         apply_lut_channel_labels(self.array_viewer, self.channel_labels)
         self._enable_scale_bar(spacing_zyx_um)
 
@@ -232,7 +234,9 @@ class DatastoreNdvView(QtCore.QObject):
             return False
         return super().eventFilter(watched, event)
 
-    def _reset_array_viewer(self, data: Any, labels: list[str]) -> None:
+    def _reset_array_viewer(
+        self, data: Any, labels: list[str], spacing_zyx_um: Any
+    ) -> None:
         """
         Replace NDV's viewer to avoid stale axis/channel state.
 
@@ -242,11 +246,22 @@ class DatastoreNdvView(QtCore.QObject):
             NDV-compatible image data.
         labels : list[str]
             Channel labels.
+        spacing_zyx_um : ArrayLike
+            Z, Y, X voxel spacing used by the image and sparse overlays.
         """
         z_size = (
             int(data.sizes["z_um"]) if hasattr(data, "sizes") else int(data.shape[1])
         )
         display_model = self._display_model(data, labels, z_size)
+        scales = dict(
+            zip(
+                ("z_um", "y_um", "x_um"),
+                _display_scale_zyx(spacing_zyx_um),
+                strict=True,
+            )
+        )
+        if display_model is not None:
+            display_model.scales.update(scales)
         self.array_viewer = ndv.ArrayViewer(
             data,
             display_model=display_model,
@@ -258,6 +273,7 @@ class DatastoreNdvView(QtCore.QObject):
                     "channel_mode": "composite",
                     "visible_axes": ("y_um", "x_um"),
                     "current_index": {"z_um": z_size // 2},
+                    "scales": scales,
                 }
             ),
         )
@@ -277,7 +293,9 @@ class DatastoreNdvView(QtCore.QObject):
         hide_ndv_volume_button(self.array_viewer)
         self._connect_ndv_index_signal()
 
-    def _update_array_viewer(self, data: Any, labels: list[str]) -> bool:
+    def _update_array_viewer(
+        self, data: Any, labels: list[str], spacing_zyx_um: Any
+    ) -> bool:
         """
         Update the current NDV ArrayViewer data.
 
@@ -287,6 +305,8 @@ class DatastoreNdvView(QtCore.QObject):
             NDV-compatible image data.
         labels : list[str]
             Channel labels.
+        spacing_zyx_um : ArrayLike
+            Z, Y, X voxel spacing used by the image and sparse overlays.
 
         Returns
         -------
@@ -297,6 +317,15 @@ class DatastoreNdvView(QtCore.QObject):
             return False
         try:
             self.array_viewer.data = data
+            self.array_viewer.display_model.scales.update(
+                dict(
+                    zip(
+                        ("z_um", "y_um", "x_um"),
+                        _display_scale_zyx(spacing_zyx_um),
+                        strict=True,
+                    )
+                )
+            )
             apply_lut_channel_labels(self.array_viewer, labels)
             hide_ndv_volume_button(self.array_viewer)
             self._connect_ndv_index_signal()

@@ -2,7 +2,6 @@
 
 from collections.abc import Mapping, Sequence
 
-import dask.array as da
 import numpy as np
 import xarray as xr
 
@@ -10,7 +9,7 @@ import xarray as xr
 def diagnostic_channel_data(
     images: Mapping[str, np.ndarray], spacing_zyx: Sequence[float]
 ) -> xr.DataArray:
-    """Build a lazy CZYX stack with spatial coordinates for diagnostic images.
+    """Build a CZYX stack with spatial coordinates for diagnostic images.
 
     Leading image dimensions are flattened into labeled channels. All images
     must share the same trailing ZYX shape. Spacing is in microns, or unity
@@ -23,7 +22,7 @@ def diagnostic_channel_data(
     labels = []
     shape = None
     for name, image in images.items():
-        array = da.asarray(image)
+        array = np.asarray(image)
         if array.ndim < 2:
             raise ValueError("Diagnostic images must have at least two dimensions.")
         if array.ndim == 2:
@@ -41,7 +40,7 @@ def diagnostic_channel_data(
     if not channels:
         raise ValueError("Provide at least one diagnostic image.")
     return xr.DataArray(
-        da.concatenate(channels),
+        np.concatenate(channels),
         dims=("c", "z", "y", "x"),
         coords={
             "c": labels,

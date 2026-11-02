@@ -2,72 +2,78 @@
 
 from pathlib import Path
 
-import dask.array as da
 import numpy as np
-import xarray as xr
-from yaozarrs import open_group
+import tensorstore as ts
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
+from merfish3danalysis.viewer.models import LazyGlobalChannelData
 
 
-def load_fused_channels(root_path: Path) -> list[xr.DataArray]:
+def load_fused_channels(root_path: Path) -> list[LazyGlobalChannelData]:
     """Open every fused store lazily with its saved axes and physical coordinates.
 
     Stores sharing a spatial grid are combined into one channel stack. Different
     grids remain separate so that viewing never resamples saved scientific data.
     """
     datastore_path = resolve_datastore_path(root_path)
+    datastore = qi2labDataStore(datastore_path, validate=False)
     stacks = []
-    for path in sorted((datastore_path / "fused").glob("*.ome.zarr")):
-        group = open_group(path)
-        multiscale = group.attrs["ome"]["multiscales"][0]
-        dataset = multiscale["datasets"][0]
-        dims = [axis["name"] for axis in multiscale["axes"]]
-        array = da.from_zarr(group[dataset["path"]].to_zarr_python())
-        scale = np.ones(array.ndim)
-        translation = np.zeros(array.ndim)
-        for transform in dataset.get("coordinateTransformations", []) + multiscale.get(
-            "coordinateTransformations", []
-        ):
-            if transform["type"] == "scale":
-                factor = np.asarray(transform["scale"])
-                scale *= factor
-                translation *= factor
-            elif transform["type"] == "translation":
-                translation += np.asarray(transform["translation"])
-        data = xr.DataArray(
-            array,
-            dims=dims,
-            coords={
-                dim: np.arange(size) * scale[index] + translation[index]
-                for index, (dim, size) in enumerate(zip(dims, array.shape, strict=True))
-            },
+    for fusion_type in ("fiducial", "all_channels"):
+        product = datastore.load_global_fused_image(fusion_type, return_future=None)
+        if product is None:
+            continue
+        array, metadata = product
+        # Library fusion outputs are TCZYX; the datastore setter also accepts ZYX.
+        if array.ndim == 5:
+            array = array[0]
+        elif array.ndim == 3:
+            array = ts.stack([array], axis=0)
+        array = array[ts.d[:].label[["c", "z", "y", "x"]]]
+        origin = metadata["origin_zyx_um"]
+        spacing = metadata["spacing_zyx_um"]
+        channel_names = metadata.get("channel_names", [])
+        image_name = (
+            f"fused_{datastore.fiducial_folder_name}_zyx"
+            if fusion_type == "fiducial"
+            else "full_dataset"
+            if channel_names
+            else "fused_all_channels_zyx"
         )
-        if "t" in data.dims and data.sizes["t"] == 1:
-            data = data.isel(t=0, drop=True)
-        if "c" not in data.dims:
-            data = data.expand_dims(c=[0])
-        channel_names = group.attrs.get("channel_names", [])
         labels = [
-            f"{path.name.removesuffix('.ome.zarr')}: {channel_names[index] if index < len(channel_names) else index}"
-            for index in range(data.sizes["c"])
+            f"{image_name}: {channel_names[index] if index < len(channel_names) else index}"
+            for index in range(array.shape[0])
         ]
-        data = data.assign_coords(c=labels)
-        for index, stack in enumerate(stacks):
-            if set(data.dims) == set(stack.dims) and all(
-                data.coords[dim].equals(stack.coords[dim])
-                for dim in data.dims
-                if dim != "c"
-            ):
-                stacks[index] = xr.concat([stack, data], dim="c", join="exact")
+        coords = {
+            "c": labels,
+            **{
+                dim: origin[index] + np.arange(array.shape[index + 1]) * spacing[index]
+                for index, dim in enumerate("zyx")
+            },
+        }
+        for index, (stack, stack_coords) in enumerate(stacks):
+            if all(np.array_equal(coords[dim], stack_coords[dim]) for dim in "zyx"):
+                dtype = np.result_type(stack.dtype.numpy_dtype, array.dtype.numpy_dtype)
+                combined = ts.concat(
+                    [ts.cast(stack, dtype), ts.cast(array, dtype)], axis=0
+                )
+                coords["c"] = [*stack_coords["c"], *labels]
+                stacks[index] = (combined, coords)
                 break
         else:
-            stacks.append(data)
+            stacks.append((array, coords))
     if not stacks:
         raise FileNotFoundError(
             f"No fused OME-Zarr images in {datastore_path / 'fused'}"
         )
-    return stacks
+    return [
+        LazyGlobalChannelData(
+            fused_zyx=array[0],
+            image_channels=tuple(array[index] for index in range(1, array.shape[0])),
+            coords=coords,
+        )
+        for array, coords in stacks
+    ]
 
 
 def view_fused_channels(root_path: Path) -> None:
@@ -107,7 +113,7 @@ def view_fused_channels(root_path: Path) -> None:
     ]
     viewers = []
     for data in stacks:
-        labels = list(data.coords["c"].values)
+        labels = list(data.coords["c"])
         luts = {
             index: LUTModel(
                 cmap=colors[index % len(colors)],

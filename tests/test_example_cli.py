@@ -4,6 +4,7 @@ import runpy
 from pathlib import Path
 from unittest.mock import Mock, call
 
+import numpy as np
 import pytest
 import typer
 from typer.testing import CliRunner
@@ -43,17 +44,13 @@ def test_filter_control_must_match_selected_method(command, method, gross, fdr):
 
 @pytest.mark.unit
 @pytest.mark.parametrize("command", [qi2lab_decode, simulation_decode])
-@pytest.mark.parametrize(
-    "attributes, expected",
-    [({"deconvolution": True}, True), ({"deconvolution": False}, False), ({}, False)],
-)
-def test_readout_deconvolution_uses_stored_flag(command, attributes, expected):
-    datastore = Mock(tile_ids=["tile0000"], bit_ids=["bit001"])
-    datastore.load_local_image_metadata.return_value = attributes
-    assert command._readouts_are_deconvolved(datastore) is expected
-    datastore.load_local_image_metadata.assert_called_once_with(
-        "tile0000", bit="bit001", image_names=("decon_data",)
-    )
+@pytest.mark.parametrize("deconvolved", [False, True])
+def test_readout_deconvolution_uses_stored_flag(command, deconvolved, image_datastore):
+    image = np.ones((4, 8, 8), dtype=np.uint16)
+    image_datastore.save_local_corrected_image(image, tile=0, bit=0)
+    if deconvolved:
+        image_datastore.save_local_deconvolved_readout_image(image, tile=0, bit=0)
+    assert command._readouts_are_deconvolved(image_datastore) is deconvolved
 
 
 @pytest.mark.unit
@@ -69,7 +66,8 @@ def test_readout_deconvolution_uses_stored_flag(command, attributes, expected):
         ),
         ("01_convert_to_qi2lab.py", "convert_data", [], None),
         ("03_cellpose_segmentation.py", "run_cellpose", [], None),
-        ("04_pixel_decode.py", "decode_pixels", [], None),
+        ("04_pixel_decode.py", "decode_pixels", [], False),
+        ("04_pixel_decode.py", "decode_pixels", ["--reprocess-existing"], True),
         ("05_one_tile_F1.py", "decode_pixels", [], None),
         ("05_calculate_f1_score.py", "calculate_F1", [], None),
     ],
@@ -111,6 +109,8 @@ def test_zhuang_cli_preserves_arguments_and_defaults(
             / "mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv",
             search_radius=3.0,
         )
+    elif filename == "04_pixel_decode.py":
+        process.assert_called_once_with(root_path=root, reprocess_existing=expected)
     else:
         process.assert_called_once_with(root_path=root)
 

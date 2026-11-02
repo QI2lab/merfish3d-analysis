@@ -113,35 +113,6 @@ def selected_warp_label(tile: str, local_id: str, options: WarpChainOptions) -> 
     return f"{tile}:{local_id} {mode}"
 
 
-def _load_bit_emission_wavelength_um(
-    datastore: Any,
-    *,
-    tile: str,
-    bit_id: str,
-) -> float:
-    """
-    Load the emission wavelength for one bit.
-
-    Parameters
-    ----------
-    datastore : Any
-        qi2lab datastore-like object.
-    tile : str
-        Tile identifier.
-    bit_id : str
-        Readout bit identifier.
-
-    Returns
-    -------
-    float
-        Emission wavelength in microns.
-    """
-    wavelengths = datastore.load_local_wavelengths_um(tile=tile, bit=bit_id)
-    if wavelengths is None:
-        raise RuntimeError(f"Missing wavelength metadata for tile={tile} bit={bit_id}.")
-    return float(wavelengths[1])
-
-
 def _native_after_warp_failure(
     image: np.ndarray,
     *,
@@ -243,20 +214,10 @@ def _prepare_bit_warp(
     round_transform_zyx_um = (
         stored_round_transform_zyx_um if options.stage_affine else None
     )
-    chromatic_transform_zyx_um = None
-    if options.chromatic:
-        emission_wavelength_um = _load_bit_emission_wavelength_um(
-            datastore,
-            tile=tile,
-            bit_id=bit_id,
-        )
-        chromatic_transform_zyx_um = datastore.load_chromatic_affine_transform_zyx_um(
-            wavelength_um=emission_wavelength_um,
-        )
     return _PreparedWarp(
         transform_zyx_um=compose_optional_warp_transform_zyx_um(
             round_transform_zyx_um=round_transform_zyx_um,
-            chromatic_transform_zyx_um=chromatic_transform_zyx_um,
+            chromatic_transform_zyx_um=None,
         ),
         loaded_flow_field=_load_sofima_flow_field(
             datastore,
@@ -497,7 +458,7 @@ def _warp_fiducial_for_viewer(
     round_id : str
         Fiducial round identifier.
     options : WarpChainOptions
-        Selected transform-chain components. Chromatic is ignored.
+        Selected transform-chain components.
     gpu_id : int
         CUDA device ID.
     warnings : list[str]

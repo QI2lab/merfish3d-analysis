@@ -1735,7 +1735,7 @@ def load_global_image_channels(
     loaded_fiducial = datastore.load_global_fiducial_image(return_future=None)
     if loaded_fiducial is None:
         raise ValueError("No fused global polyDT image was available to display.")
-    fused_zyx, _affine_zyx_um, origin_zyx_um, spacing_zyx_um = loaded_fiducial
+    fused_zyx, _, origin_zyx_um, spacing_zyx_um = loaded_fiducial
     fused_zyx = _squeeze_leading_singleton_axes(fused_zyx, 3)
     full_shape_zyx = tuple(int(value) for value in fused_zyx.shape)
     base = _global_base_image(
