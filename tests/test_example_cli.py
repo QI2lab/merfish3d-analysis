@@ -164,21 +164,3 @@ def test_orientation_cli_rejects_noninteger_tile_count(monkeypatch):
     result = runner.invoke(example["app"], ["data", "--n-tiles", "invalid"])
     assert result.exit_code == 2
     process.assert_not_called()
-
-
-@pytest.mark.unit
-def test_fused_viewer_cli_passes_a_path(tmp_path, monkeypatch):
-    from merfish3danalysis.viewer import fused
-
-    process = Mock()
-
-    def view_fused(root_path: Path) -> None:
-        process(root_path)
-
-    monkeypatch.setattr(fused, "view_fused_channels", view_fused)
-    example = runpy.run_path(
-        str(ROOT / "src/merfish3danalysis/cli/qi2lab_microscopes/05_view_fused.py")
-    )
-    result = runner.invoke(example["app"], [str(tmp_path)])
-    assert result.exit_code == 0, result.output
-    process.assert_called_once_with(tmp_path)

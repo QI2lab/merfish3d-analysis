@@ -482,16 +482,6 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
     return case_root
 
 
-def _calculate_f1_from_datastore(
-    case_root: Path, simulation_api: dict[str, Any], search_radius: float = 1.0
-) -> dict[str, float]:
-    """Calculate f1 from datastore."""
-    return simulation_api["calculate_F1"](
-        case_root,
-        search_radius=search_radius,
-    )
-
-
 def _run_simulation_preprocess(
     acquisition_root: Path,
     simulation_api: dict[str, Any],
@@ -709,7 +699,7 @@ def _run_simulation_decode_and_f1(
 
     start = time.perf_counter()
     print(f"[{case_label}] calculate_f1: start", flush=True)
-    f1_results = _calculate_f1_from_datastore(case_root, simulation_api, search_radius)
+    f1_results = simulation_api["calculate_F1"](case_root, search_radius=search_radius)
     timings_seconds["calculate_f1"] = time.perf_counter() - start
     print(
         f"[{case_label}] calculate_f1: done ({timings_seconds['calculate_f1']:.2f}s) -> {f1_results}",
@@ -1038,7 +1028,7 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         ],
     )
     assert result.exit_code == 0, (result.output, result.exception)
-    scores = _calculate_f1_from_datastore(case_root, simulation_api)
+    scores = simulation_api["calculate_F1"](case_root, search_radius=1.0)
     tp, fp, fn = (
         scores[key] for key in ("True Positives", "False Positives", "False Negatives")
     )
