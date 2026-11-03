@@ -1600,7 +1600,9 @@ class PixelDecoder:
                 ]
                 if not all(col in barcode_table.columns for col in center_cols):
                     continue
-                centers = barcode_table[center_cols].to_numpy(dtype=np.float64)
+                centers = barcode_table[center_cols].to_numpy(
+                    dtype=np.float64, copy=not self._is_3D
+                )
                 if not self._is_3D:
                     centers[:, 0] = 0.0
                 intensity_col = f"bit{bit:02d}_intensity_sum"

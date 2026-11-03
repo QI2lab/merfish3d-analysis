@@ -2412,7 +2412,7 @@ class qi2labDataStore:
         parquet_path : Path or str
             Path to parquet file.
         """
-        df.to_parquet(parquet_path, engine="fastparquet", index=False)
+        df.to_parquet(parquet_path, engine="pyarrow", index=False)
 
     @staticmethod
     def _save_to_csv_gz(df: pd.DataFrame, csv_gz_path: Path | str) -> None:

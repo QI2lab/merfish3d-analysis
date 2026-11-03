@@ -365,6 +365,12 @@ def test_2d_chromatic_estimator_ignores_z_and_removes_previous_axial_correction(
     # Axial data, including invalid values, must not affect lateral fitting.
     for bit in range(1, 5):
         decoder._df_barcodes_loaded[f"bit{bit:02d}_center_z"] = np.nan
+        for axis in ("z", "y", "x"):
+            column = f"bit{bit:02d}_center_{axis}"
+            decoder._df_barcodes_loaded[column] = decoder._df_barcodes_loaded[
+                column
+            ].astype(np.float64)
+    decoder._df_barcodes_loaded = decoder._df_barcodes_loaded.copy()
     decoder._estimate_chromatic_affines_from_barcodes()
 
     calibration = datastore.load_chromatic_affine_transforms_zyx_um()

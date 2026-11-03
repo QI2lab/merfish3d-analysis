@@ -91,12 +91,21 @@ def test_decoded_run_name_cannot_escape_its_product_folder(image_datastore, run)
 
 
 @pytest.mark.unit
-def test_validated_reopen_accepts_complete_named_decoding_run(image_datastore):
+@pytest.mark.parametrize("string_dtype", [None, "string"])
+def test_validated_reopen_accepts_complete_named_decoding_run(
+    image_datastore, string_dtype
+):
     import pandas as pd
 
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
-    features = pd.DataFrame({"gene_id": ["gene"], "global_x": [1.0]})
+    features = pd.DataFrame(
+        {
+            "gene_id": pd.Series(["gene", "gene2"], dtype=string_dtype),
+            "global_x": [1.0, 2.0],
+            "cell_id": pd.Series([1, pd.NA], dtype="Int64"),
+        }
+    )
     for tile in range(image_datastore.num_tiles):
         image_datastore.save_local_decoded_spots(features, tile, decode_run_key="run1")
     image_datastore.save_global_filtered_decoded_spots(features, decode_run_key="run1")

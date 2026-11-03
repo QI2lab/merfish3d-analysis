@@ -11,6 +11,9 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
 @pytest.mark.integration
+@pytest.mark.filterwarnings(
+    "error:Calling float on a single element Series:FutureWarning"
+)
 def test_simulation_figure_projects_each_spacing_on_the_common_physical_grid(
     tmp_path, monkeypatch, capsys
 ):

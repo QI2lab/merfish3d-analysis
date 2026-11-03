@@ -338,7 +338,7 @@ def test_scene_preserves_nominal_channel_slots_and_linker_overrides(image_datast
         original.to_numpy().tolist()
     )
 
-    changed.to_parquet(path, engine="fastparquet", index=False)
+    changed.to_parquet(path, engine="pyarrow", index=False)
     with pytest.raises(ValueError, match="Experiment order"):
         qi2labDataStore(datastore.datastore_path, validate=False)
 

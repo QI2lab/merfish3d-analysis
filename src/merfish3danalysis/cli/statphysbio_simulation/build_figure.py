@@ -42,7 +42,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             / Path("data_r0001_tile0000_1")
             / Path("data_r0001_tile0000.tif")
         )
-        metadata = pd.read_csv(top_path / Path(str(z)) / Path("scan_metadata.csv"))
+        metadata = pd.read_csv(
+            top_path / Path(str(z)) / Path("scan_metadata.csv")
+        ).iloc[0]
         print(round_pixel_size_um(metadata["axial_step_size [micron]"]))
         print(round_pixel_size_um(metadata["pixel_size [micron]"]))
         if z == "0.315":
