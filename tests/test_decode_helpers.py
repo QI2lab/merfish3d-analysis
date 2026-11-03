@@ -95,6 +95,10 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
 
     import pandas as pd
 
+    from merfish3danalysis.cli.statphysbio_simulation.sweep_f1 import (
+        calculate_F1 as calculate_sweep_f1,
+    )
+
     command = importlib.import_module(
         "merfish3danalysis.cli.statphysbio_simulation.calculate_F1"
     )
@@ -164,3 +168,10 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     assert result["Precision"] == pytest.approx(1 / 2)
     assert result["Recall"] == pytest.approx(2 / 3)
     assert result["F1 Score"] == pytest.approx(4 / 7)
+
+    # The sweep can use an alternate ground-truth file, independent of the
+    # default CSV. Both entry points must use the same coordinate conventions.
+    alternate_truth = tmp_path / "alternate_ground_truth.csv"
+    truth.to_csv(alternate_truth, index=False)
+    truth.iloc[0:0].to_csv(tmp_path / "GT_spots.csv", index=False)
+    assert calculate_sweep_f1(tmp_path, alternate_truth, search_radius=0.01) == result

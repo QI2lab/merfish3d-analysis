@@ -21,26 +21,29 @@ app.pretty_exceptions_enable = False
 
 @app.command()
 def calculate_F1(
-    root_path: Path, search_radius: float = 1.0, decode_run_key: str | None = None
+    root_path: Path,
+    search_radius: float = 1.0,
+    decode_run_key: str | None = None,
+    gt_path: Path | None = None,
 ) -> dict:
     """Calculate F1 using ground truth.
 
     Parameters
     ----------
-    root_path: Path
-        path to experiment
-    gt_path: Path
-        path to ground truth file
-    search_radius: float
-        search radius for a sphere in microns. Should be 2-3x the z step,
+    root_path : Path
+        Experiment directory containing ``GT_spots.csv`` and the datastore.
+    search_radius : float, default 1.0
+        Search radius for a sphere in microns. Should be 2-3x the z step,
         depending on the amount of low-pass blur applied.
     decode_run_key : str or None
         Optional named decode run to score; None selects the default output.
+    gt_path : Path or None
+        Ground-truth CSV path; None selects ``root_path / "GT_spots.csv"``.
 
     Returns
     -------
-    results: dict
-        dictionary of results for F1 score calculation
+    results : dict
+        F1 score, precision, recall, and match counts.
     """
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path / "sim_acquisition")
@@ -53,7 +56,8 @@ def calculate_F1(
         raise FileNotFoundError(
             f"Filtered codewords not found for run {decode_run_key!r}."
         )
-    gt_path = root_path / Path("GT_spots.csv")
+    if gt_path is None:
+        gt_path = root_path / "GT_spots.csv"
     gt_spots = pd.read_csv(gt_path)
     gene_ids = np.array(gene_ids)
     image = datastore.load_local_corrected_image(tile=0, round=0, return_future=False)

@@ -58,36 +58,14 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             images.append(temp)
         else:
             temp_filled = np.zeros_like(images[0])
-            if z == "1.0":
-                image_10_voxel = np.array(
-                    [
-                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                    ]
-                )
-                for z_idx in range(temp.shape[1]):
-                    temp_filled[
-                        :,
-                        int(np.floor(z_idx * image_10_voxel[0] / image_0315_voxel[0])),
-                        :,
-                        :,
-                    ] = temp[:, z_idx, :, :]
-            elif z == "1.5":
-                image_15_voxel = np.array(
-                    [
-                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                    ]
-                )
-                for z_idx in range(temp.shape[1]):
-                    temp_filled[
-                        :,
-                        int(np.floor(z_idx * image_15_voxel[0] / image_0315_voxel[0])),
-                        :,
-                        :,
-                    ] = temp[:, z_idx, :, :]
+            axial_spacing = round_pixel_size_um(metadata["axial_step_size [micron]"])
+            for z_idx in range(temp.shape[1]):
+                temp_filled[
+                    :,
+                    int(np.floor(z_idx * axial_spacing / image_0315_voxel[0])),
+                    :,
+                    :,
+                ] = temp[:, z_idx, :, :]
             images.append(temp_filled)
 
         gt_spots = pd.read_csv(top_path / Path(str(z)) / Path("GT_spots.csv"))
@@ -117,20 +95,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
 
         gt_coords = gt_coords + gt_coords_offset
 
-        if z == "0.315":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
-
-        elif z == "1.0":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
-
-        elif z == "1.5":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
+        z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
+            qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
+        )
 
         # Build one points array + one categorical status property
         z_parts = []
