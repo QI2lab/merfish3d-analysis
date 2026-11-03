@@ -12,21 +12,24 @@ from typer.testing import CliRunner
 def ndtiff_acquisition(tmp_path, request):
     """Write and reopen a two-position acquisition using ndstorage."""
     path = tmp_path / "acquisition"
-    writer = NDTiffDataset(
-        str(path), summary_metadata={"ChNames": ["DAPI", "Cy5"]}, writable=True
-    )
     variant = getattr(request, "param", None)
     realistic = variant == "realistic"
+    channels = ("F-Blue", "F-Red") if realistic else ("DAPI", "Cy5")
+    writer = NDTiffDataset(
+        str(path), summary_metadata={"ChNames": list(channels)}, writable=True
+    )
     if realistic:
         from scipy.ndimage import gaussian_filter
 
-    for channel in ("DAPI", "Cy5"):
+    for channel in channels:
         channel_coordinate = (
-            ("DAPI", "Cy5").index(channel) if variant == "numeric" else channel
+            channels.index(channel) if variant == "numeric" else channel
         )
         for position in (0, 2):
             if realistic:
-                rng = np.random.default_rng(position + (100 if channel == "Cy5" else 0))
+                rng = np.random.default_rng(
+                    position + (100 if channel == "F-Red" else 0)
+                )
                 beads = np.zeros((9, 96, 96), dtype=np.float32)
                 for _ in range(24):
                     z, y, x = rng.integers([1, 8, 8], [8, 88, 88])
@@ -96,17 +99,27 @@ def test_expands_consecutive_ufish_channel_arguments() -> None:
 
 @pytest.mark.unit
 def test_generate_channel_psfs_uses_repository_microscope_parameters():
-    from merfish3danalysis.utils.psf import generate_qi2lab_psf
+    from psfmodels import make_psf
 
     spacing = (0.32, 0.0985, 0.0985)
     psfs = script.generate_channel_psfs(
-        ["Blue", "Yellow", "Red"], z_depth=7, voxel_size_zyx_um=spacing
+        ["F-Blue", "F-Yellow", "F-Red"], z_depth=7, voxel_size_zyx_um=spacing
     )
     for channel, wavelength in zip(psfs, (0.520, 0.580, 0.670), strict=True):
-        expected = generate_qi2lab_psf(
-            z_depth=7, voxel_size_zyx_um=spacing, emission_wavelength_um=wavelength
-        )
-        np.testing.assert_array_equal(psfs[channel], expected)
+        expected = make_psf(
+            z=7,
+            nx=51,
+            dxy=0.098,
+            dz=0.32,
+            NA=1.35,
+            wvl=wavelength,
+            ns=1.47,
+            ni=1.51,
+            ni0=1.51,
+            model="vectorial",
+        ).astype(np.float32)
+        expected /= np.sum(expected, dtype=np.float64)
+        np.testing.assert_allclose(psfs[channel], expected, rtol=2e-6, atol=1e-10)
         assert psfs[channel].dtype == np.float32
         assert psfs[channel].sum() == pytest.approx(1)
 
@@ -198,7 +211,7 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
             "--output-dir",
             str(output),
             "--ufish-channel",
-            "Cy5",
+            "F-Red",
             "--deconvolve",
         ],
     )
@@ -207,13 +220,13 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
     for position in (0, 2):
         directory = output / f"pos{position:04d}"
         assert sorted(path.name for path in directory.iterdir()) == [
-            "Cy5.ome.tif",
-            "Cy5_decon.ome.tif",
-            "Cy5_ufish.ome.tif",
-            "DAPI.ome.tif",
-            "DAPI_decon.ome.tif",
+            "F-Blue.ome.tif",
+            "F-Blue_decon.ome.tif",
+            "F-Red.ome.tif",
+            "F-Red_decon.ome.tif",
+            "F-Red_ufish.ome.tif",
         ]
-        for channel in ("DAPI", "Cy5"):
+        for channel in ("F-Blue", "F-Red"):
             raw = np.stack(
                 [
                     ndtiff_acquisition.read_image(
@@ -235,7 +248,7 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
             assert 'PhysicalSizeX="0.108"' in metadata
             assert 'PhysicalSizeY="0.108"' in metadata
             assert 'PhysicalSizeZ="0.315"' in metadata
-        prediction = imread(directory / "Cy5_ufish.ome.tif")
+        prediction = imread(directory / "F-Red_ufish.ome.tif")
         assert prediction.shape == (9, 96, 96)
         assert prediction.dtype == np.float32
         assert np.isfinite(prediction).all()
@@ -244,13 +257,13 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
     # Check the actual model received deconvolved rather than corrected pixels.
     model = script.load_default_ufish(0)
     _, expected = model.predict(
-        imread(output / "pos0000" / "Cy5_decon.ome.tif"),
+        imread(output / "pos0000" / "F-Red_decon.ome.tif"),
         axes="zyx",
         blend_3d=False,
         batch_size=1,
     )
     np.testing.assert_allclose(
-        imread(output / "pos0000" / "Cy5_ufish.ome.tif"), expected, atol=1e-5
+        imread(output / "pos0000" / "F-Red_ufish.ome.tif"), expected, atol=1e-5
     )
 
 
