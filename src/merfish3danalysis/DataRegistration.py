@@ -1984,7 +1984,7 @@ class DataRegistration:
         Notes
         -----
         For one tile, save its stage origin and an identity registration
-        correction without a pairwise fit. Use ``fuse_global_registered`` to also produce its mosaic.
+        correction without a pairwise fit, then fuse the tile.
         """
         from multiview_stitcher import (
             msi_utils,
@@ -2013,6 +2013,7 @@ class DataRegistration:
                     time_stamp(),
                     "Skipping global registration because datastore has one tile.",
                 )
+            self.fuse_global_registered(create_max_proj_tiff=create_max_proj_tiff)
             return
 
         if self._verbose >= 1:
@@ -2132,8 +2133,7 @@ class DataRegistration:
                     "registration before fusion.",
                 )
             self.global_register(create_max_proj_tiff=create_max_proj_tiff)
-            if len(self._tile_ids) != 1:
-                return
+            return
 
         if self._verbose >= 1:
             print(

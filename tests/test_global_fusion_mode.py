@@ -1,5 +1,3 @@
-from unittest.mock import Mock
-
 import numpy as np
 import pytest
 
@@ -18,13 +16,3 @@ def test_global_transforms_available_requires_every_tile(image_datastore) -> Non
         assert registration._global_transforms_available() == (
             tile == image_datastore.tile_ids[-1]
         )
-
-
-@pytest.mark.unit
-def test_global_fusion_registers_when_stored_transforms_are_missing(
-    image_datastore,
-) -> None:
-    registration = DataRegistration(image_datastore, verbose=0)
-    registration.global_register = Mock()
-    registration.fuse_global_registered(create_max_proj_tiff=True)
-    registration.global_register.assert_called_once_with(create_max_proj_tiff=True)

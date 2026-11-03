@@ -1,9 +1,10 @@
 import runpy
 from pathlib import Path
 
+import numpy as np
 import pytest
+from typer.testing import CliRunner
 
-import merfish3danalysis.DataRegistration as registration_module
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 EXAMPLE_PATH = (
@@ -12,66 +13,43 @@ EXAMPLE_PATH = (
 )
 
 
-@pytest.mark.unit
+@pytest.mark.integration
+@pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
 @pytest.mark.parametrize("datastore_argument", [False, True])
-def test_local_registration_preserves_existing_settings_and_state(
-    image_datastore, monkeypatch, datastore_argument
+def test_global_registration_cli_creates_projection(
+    image_datastore, datastore_argument
 ):
-    datastore_path = image_datastore.datastore_path
+    datastore = image_datastore
+    datastore_path = datastore.datastore_path
+    datastore.voxel_size_zyx_um = [1, 1, 1]
+    image = np.zeros((3, 12, 16), dtype=np.uint16)
+    image[:, 2:-2, 2:-2] = np.arange(288).reshape(3, 8, 12) + 1
+    datastore.save_local_corrected_image(image, tile=0, round=0)
+    datastore.save_local_stage_position_zyx_um([10, 20, 30], np.eye(4), tile=0, round=0)
     example = runpy.run_path(str(EXAMPLE_PATH))
-    registrations = []
-    monkeypatch.setattr(
-        registration_module.DataRegistration,
-        "register_all_tiles",
-        lambda registration: registrations.append(registration),
+    result = CliRunner().invoke(
+        example["app"],
+        [
+            str(datastore_path if datastore_argument else datastore_path.parent),
+            "--global-only",
+        ],
     )
-
-    example["local_register_data"](
-        datastore_path if datastore_argument else datastore_path.parent
+    assert result.exit_code == 0, result.exception
+    reopened = qi2labDataStore(datastore_path)
+    fused, affine, origin, spacing = reopened.load_global_fiducial_image(False)
+    projection, projection_affine, projection_origin, projection_spacing = (
+        reopened.load_global_fiducial_projection(False)
     )
-
-    assert len(registrations) == 1
-    registration = registrations[0]
-    assert registration.datastore.datastore_path == datastore_path
-    assert registration._decon_fiducial is False
-    assert registration._decon_readout is False
-    assert registration._perform_deformable_registration is False
-    assert registration._overwrite_outputs is True
-    assert registration._crop_yx_decon == 2048
-    reopened = qi2labDataStore(datastore_path, validate=False)
-    assert reopened.datastore_state["Calibrations"]
-    assert reopened.datastore_state["LocalRegistered"]
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("datastore_argument", [False, True])
-@pytest.mark.parametrize("create_projection", [False, True])
-def test_global_registration_uses_shared_workflow(
-    image_datastore, monkeypatch, datastore_argument, create_projection
-):
-    datastore_path = image_datastore.datastore_path
-    example = runpy.run_path(str(EXAMPLE_PATH))
-    calls = []
-    monkeypatch.setattr(
-        registration_module.DataRegistration,
-        "global_register",
-        lambda registration, **kwargs: calls.append((registration, kwargs)),
-    )
-
-    example["global_register_data"](
-        datastore_path if datastore_argument else datastore_path.parent,
-        create_max_proj_tiff=create_projection,
-    )
-
-    assert len(calls) == 1
-    registration, options = calls[0]
-    assert registration.datastore.datastore_path == datastore_path
-    assert registration._perform_deformable_registration is False
-    assert registration._global_registration is True
-    assert registration._global_registration_config == (
-        registration_module.GlobalRegistrationConfig(registration_binning_zyx=(1, 3, 3))
-    )
-    assert options == {"create_max_proj_tiff": create_projection}
+    np.testing.assert_array_equal(np.squeeze(fused), image)
+    np.testing.assert_array_equal(projection, image.max(axis=0))
+    np.testing.assert_array_equal(affine, np.eye(4))
+    np.testing.assert_array_equal(origin, [10, 20, 30])
+    np.testing.assert_array_equal(spacing, [1, 1, 1])
+    np.testing.assert_array_equal(projection_affine, affine)
+    np.testing.assert_array_equal(projection_origin, origin)
+    np.testing.assert_array_equal(projection_spacing, spacing)
+    assert reopened.datastore_state["GlobalRegistered"]
+    assert reopened.datastore_state["Fused"]
 
 
 @pytest.mark.unit

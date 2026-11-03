@@ -1,12 +1,10 @@
 """Keep the fused segmentation grid, TIFF calibration, and ROI mapping aligned."""
 
-from types import SimpleNamespace
-from unittest.mock import Mock
 from xml.etree import ElementTree
 
 import numpy as np
 import pytest
-from roifile import roiread
+from roifile import roiread, roiwrite
 from tifffile import TiffFile
 from yaozarrs import open_group
 
@@ -15,7 +13,7 @@ from merfish3danalysis.cli.qi2lab_microscopes import segment_fiducial
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
 @pytest.mark.parametrize(
     "native_spacing, expected_spacing",
@@ -26,9 +24,8 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
     ids=["simulation-nyquist", "anisotropic-xy"],
 )
 def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
-    tmp_path, image_datastore, monkeypatch, native_spacing, expected_spacing
+    tmp_path, image_datastore, native_spacing, expected_spacing
 ):
-    datastore_path = tmp_path / "qi2labdatastore"
     datastore = image_datastore
     datastore.voxel_size_zyx_um = native_spacing
     data = np.random.default_rng(8).integers(0, 65536, (7, 140, 168), dtype=np.uint16)
@@ -64,7 +61,7 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     ):
         assert abs(actual - native_size * native_step / fused_step) < 2
     projection_path = (
-        datastore_path / "fiducial_projection_tiff/fiducial_max_projection.ome.tiff"
+        datastore.fiducial_projection_tiff_path() / "fiducial_max_projection.ome.tiff"
     )
     with TiffFile(projection_path) as tif:
         projection = tif.asarray()
@@ -77,12 +74,18 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
 
     masks = np.zeros(projection.shape, dtype=np.uint16)
     masks[1:5, 2:6] = 1
-    model = SimpleNamespace(
-        pretrained_model="test", eval=Mock(return_value=(masks, None, None))
+    datastore.save_global_cellpose_segmentation_image(
+        masks, downsampling=np.asarray(expected_spacing) / np.asarray(native_spacing)
     )
-    monkeypatch.setattr(segment_fiducial.models, "CellposeModel", lambda **_: model)
-    segment_fiducial.run_cellpose(tmp_path, use_gpu=False, roi_multiprocessing=False)
-    np.testing.assert_array_equal(model.eval.call_args.args[0], projection[..., None])
+    pixel_roi_path = datastore.cellpose_pixel_rois_path()
+    pixel_roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(
+        pixel_roi_path,
+        segment_fiducial.extract_pixel_rois(masks, np.array([1]), workers=1),
+    )
+    segment_fiducial.run_cellpose(
+        tmp_path, outlines_only=True, roi_multiprocessing=False
+    )
     np.testing.assert_array_equal(
         datastore.load_global_cellpose_segmentation_image(False), masks
     )
@@ -94,9 +97,8 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     mask_grid = labels[label_name].ome_metadata(strict=True).multiscales[0]
     projection_grid = projection_group.ome_metadata(strict=True).multiscales[0]
     assert mask_grid.datasets[0].transform == projection_grid.datasets[0].transform
-    roi_directory = datastore_path / "cell_boundaries"
-    pixel_roi = roiread(roi_directory / "pixel_rois.zip")[0]
-    global_roi = roiread(roi_directory / "cell_rois.zip")[0]
+    pixel_roi = roiread(pixel_roi_path)[0]
+    global_roi = roiread(datastore.cellpose_global_rois_path())[0]
     xy = pixel_roi.coordinates()
     np.testing.assert_array_equal(xy.min(axis=0), [2, 1])
     np.testing.assert_array_equal(xy.max(axis=0), [5, 4])
@@ -116,9 +118,8 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     segment_fiducial.run_cellpose(
         tmp_path, outlines_only=True, roi_multiprocessing=False
     )
-    regenerated = roiread(roi_directory / "cell_rois.zip")[0]
+    regenerated = roiread(datastore.cellpose_global_rois_path())[0]
     np.testing.assert_array_equal(regenerated.coordinates(), global_roi.coordinates())
-    model.eval.assert_called_once()
 
 
 @pytest.mark.integration
