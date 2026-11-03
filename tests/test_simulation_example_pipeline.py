@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from merfish3danalysis.utils.ufish import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
+from merfish3danalysis.utils.ufish import DEFAULT_UFISH_MODEL
 
 DEFAULT_TESTS_DATA_DIR = Path(__file__).resolve().parent / "data"
 PERFORMANCE_REPORT_ENV = "MERFISH3D_PERFORMANCE_REPORT"
@@ -140,16 +140,6 @@ def _sha256_file(path: Path) -> str:
         return hashlib.file_digest(file_handle, "sha256").hexdigest()
 
 
-def _ufish_label_from_weights_path(weights_path: Path) -> str:
-    """Return a stable test id for a cached U-FISH ONNX weights file."""
-    label = weights_path.stem
-    if label.startswith("v1.0.1-"):
-        label = label[len("v1.0.1-") :]
-    if label.endswith("_model"):
-        label = label[: -len("_model")]
-    return label.lower()
-
-
 def _simulation_dataset_case_id(item: tuple[str, str]) -> str:
     """
     Return the pytest id for a simulation dataset fixture value.
@@ -184,39 +174,7 @@ def _ufish_model_id(model: tuple[str, str | None]) -> str:
     return model[0]
 
 
-def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
-    """Return every locally available distinct U-FISH model."""
-    models: list[tuple[str, str | None]] = []
-    seen_weights: set[str | None] = set()
-
-    for alias, weights_file in UFISH_MODEL_ALIASES.items():
-        if weights_file is None:
-            continue
-        weights_path = Path.home() / ".ufish" / weights_file
-        if not weights_path.exists():
-            continue
-        resolved = str(weights_path)
-        if resolved in seen_weights:
-            continue
-        models.append((alias, resolved))
-        seen_weights.add(resolved)
-
-    finetune_dir = Path.home() / ".ufish" / "finetune_models"
-    if finetune_dir.exists():
-        for weights_path in sorted(finetune_dir.glob("*.onnx")):
-            resolved = str(weights_path)
-            if resolved in seen_weights:
-                continue
-            models.append((_ufish_label_from_weights_path(weights_path), resolved))
-            seen_weights.add(resolved)
-
-    return tuple(models)
-
-
-UFISH_MODELS = _available_ufish_models()
-DEFAULT_UFISH_MODELS = tuple(
-    model for model in UFISH_MODELS if model[0] == DEFAULT_UFISH_MODEL
-)
+DEFAULT_UFISH_MODELS = ((DEFAULT_UFISH_MODEL, DEFAULT_UFISH_MODEL),)
 EXHAUSTIVE_SIMULATION_MATRIX = tuple(
     {
         "dataset_variant": dataset_variant,

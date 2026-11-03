@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from cellpose import models
 from roifile import roiread
 from typer.testing import CliRunner
 
@@ -33,8 +32,6 @@ def test_zhuang_example_segments_real_projection(image_datastore):
 
     if not torch.cuda.is_available():
         pytest.skip("Cellpose integration requires CUDA")
-    if not (models.MODEL_DIR / "cpsam_v2").is_file():
-        pytest.skip("Cellpose cpsam_v2 model weights are not cached")
     datastore = image_datastore
     spacing = [0.107, 0.107, 0.107]
     datastore.voxel_size_zyx_um = spacing

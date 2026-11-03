@@ -108,7 +108,6 @@ def test_projection_scene_reopens_with_cellpose_labels(image_datastore):
 @pytest.mark.gpu
 def test_real_cellpose_segments_fused_projection_scene(image_datastore):
     import torch
-    from cellpose import models
     from roifile import roiread
     from scipy.ndimage import gaussian_filter
     from skimage import data
@@ -122,9 +121,6 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
 
     if not torch.cuda.is_available():
         pytest.skip("Cellpose integration requires CUDA")
-    if not (models.MODEL_DIR / "cpsam_v2").is_file():
-        pytest.skip("Cellpose cpsam_v2 model weights are not cached")
-
     datastore = image_datastore
     datastore.voxel_size_zyx_um = [0.107, 0.107, 0.107]
     cell = data.cell().astype(np.float32)
