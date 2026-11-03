@@ -38,14 +38,12 @@ DEFAULT_PREPROCESS_MODE = "decon"
 DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 F1_ACCURACY_ALLOWANCE = 0.02
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
-DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
-DEFAULT_MINIMUM_PIXELS_2D = 7
-DEFAULT_MINIMUM_PIXELS_3D = 28
-SIMULATION_AXIAL_NYQUIST_STEP_UM = 0.315
-SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
-    3.0: 0.7,
-    5.0: 0.2,
+SIMULATION_MAGNITUDE_THRESHOLDS = {
+    "0.315": (0.9, 10.0),
+    "1.0": (0.7, 10.0),
+    "1.5": (0.2, 10.0),
 }
+SIMULATION_MINIMUM_PIXELS = {"0.315": 28, "1.0": 7, "1.5": 7}
 F1_RADIUS_BY_AXIAL_SPACING_UM = {
     "0.315": 1.0,
     "1.0": 1.0,
@@ -128,21 +126,6 @@ EXHAUSTIVE_EXPECTED_F1_SCORES = {
     ("uniform", "1.5", "decon"): 0.5370,
     ("uniform", "1.5", "no-decon"): 0.7914,
 }
-
-
-def _nearest_nyquist_multiple(
-    thresholds_by_multiple: dict[float, float],
-    nyquist_multiple: float,
-) -> float:
-    """Return the configured Nyquist multiple nearest to a measured multiple."""
-    best_multiple = next(iter(thresholds_by_multiple))
-    best_distance = abs(best_multiple - nyquist_multiple)
-    for multiple in thresholds_by_multiple:
-        distance = abs(multiple - nyquist_multiple)
-        if distance < best_distance:
-            best_multiple = multiple
-            best_distance = distance
-    return best_multiple
 
 
 def _total_seconds(record: dict[str, Any]) -> float:
@@ -336,29 +319,6 @@ def _normalize_dataset_root(root: Path) -> Path:
         )
 
     return root
-
-
-def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
-    """Return the default minimum-pixel threshold for a simulation spacing."""
-    if axial_spacing_um == "0.315":
-        return DEFAULT_MINIMUM_PIXELS_3D
-    return DEFAULT_MINIMUM_PIXELS_2D
-
-
-def _default_standard_magnitude_threshold(
-    axial_spacing_um: str,
-) -> tuple[float, float]:
-    """Return the sampling-aware default magnitude threshold for simulations."""
-    if axial_spacing_um == "0.315":
-        return DEFAULT_MAGNITUDE_THRESHOLD
-
-    nyquist_multiple = float(axial_spacing_um) / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = _nearest_nyquist_multiple(
-        SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        nyquist_multiple,
-    )
-    lower_threshold = SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
-    return (lower_threshold, DEFAULT_MAGNITUDE_THRESHOLD[1])
 
 
 @pytest.fixture(scope="session")
@@ -590,10 +550,8 @@ def _prepare_preprocessed_magnitude_case(
         pytest.skip(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
@@ -611,7 +569,7 @@ def _prepare_preprocessed_magnitude_case(
         synthetic_chromatic_aberration=synthetic_chromatic_aberration,
     )
     if run_calibration_decode:
-        default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
+        default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
         calibration_label = f"{case_label}-calibration"
         calibration_start = time.perf_counter()
         print(f"[{calibration_label}] decode_pixels: start", flush=True)
@@ -892,10 +850,8 @@ def _run_standard_simulation_case(
         pytest.skip(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     case_root = _prepare_case_workspace(source_case_dir, work_root)
     case_label = (
@@ -1159,10 +1115,8 @@ def simulation_full_case_result(
     chromatic_mode = case_spec["chromatic_mode"]
     synthetic_chromatic_aberration = case_spec["synthetic_chromatic_aberration"]
     estimate_chromatic_affines = case_spec["estimate_chromatic_affines"]
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     f1_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
         case_root,

@@ -9,6 +9,11 @@ from pathlib import Path
 
 import typer
 
+from merfish3danalysis.cli.qi2lab_microscopes.pixeldecode import (
+    _nearest_nyquist_multiple,
+    _readouts_are_deconvolved,
+    _validate_filter_arguments,
+)
 from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
@@ -27,35 +32,6 @@ SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST = {
 }
 SIMULATION_AXIAL_NYQUIST_STEP_UM = 0.315
 SIMULATION_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
-
-
-def _nearest_nyquist_multiple(
-    thresholds_by_multiple: dict[float, float],
-    nyquist_multiple: float,
-) -> float:
-    """
-    Return the configured Nyquist multiple nearest to a measured multiple.
-
-    Parameters
-    ----------
-    thresholds_by_multiple : dict[float, float]
-        Threshold table keyed by Nyquist sampling multiple.
-    nyquist_multiple : float
-        Measured axial step divided by the axial Nyquist step.
-
-    Returns
-    -------
-    float
-        Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
-    """
-    best_multiple = next(iter(thresholds_by_multiple))
-    best_distance = abs(best_multiple - nyquist_multiple)
-    for multiple in thresholds_by_multiple:
-        distance = abs(multiple - nyquist_multiple)
-        if distance < best_distance:
-            best_multiple = multiple
-            best_distance = distance
-    return best_multiple
 
 
 def _default_simulation_magnitude_threshold(
@@ -87,37 +63,6 @@ def _default_simulation_magnitude_threshold(
     return (lower_threshold, 10.0)
 
 
-def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
-    """
-    Return whether registered readout data were saved after deconvolution.
-
-    Parameters
-    ----------
-    datastore : qi2labDataStore
-        Datastore containing registered readout metadata.
-
-    Returns
-    -------
-    bool
-        True if the first registered readout records deconvolution metadata.
-    """
-    tile_ids = datastore.tile_ids
-    bit_ids = datastore.bit_ids
-    if tile_ids is None or bit_ids is None:
-        return False
-    tile_ids = list(tile_ids)
-    bit_ids = list(bit_ids)
-    if not tile_ids or not bit_ids:
-        return False
-
-    attributes = datastore.load_local_image_metadata(
-        tile_ids[0],
-        bit=bit_ids[0],
-        image_names=("decon_data",),
-    )
-    return bool(attributes.get("deconvolution", False))
-
-
 def _default_simulation_feature_predictor_threshold(
     datastore: qi2labDataStore,
 ) -> float:
@@ -144,49 +89,6 @@ def _default_simulation_feature_predictor_threshold(
         nyquist_multiple,
     )
     return SIMULATION_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
-
-
-def _validate_filter_arguments(
-    filter_method: str,
-    target_gross_misid_rate: float,
-    lr_fdr_target: float,
-) -> None:
-    """
-    Validate that the selected filter uses the matching control parameter.
-
-    Parameters
-    ----------
-    filter_method : {'blank_fraction', 'lr'}
-        Transcript filtering method.
-    target_gross_misid_rate : float
-        Gross misidentification-rate target for blank-fraction filtering.
-    lr_fdr_target : float
-        False-discovery-rate target for LR filtering.
-
-    Returns
-    -------
-    None
-        This function raises when arguments are inconsistent.
-    """
-    if filter_method == "blank_fraction":
-        if lr_fdr_target != 0.05:
-            raise typer.BadParameter(
-                "--lr-fdr-target only applies with --filter-method lr. "
-                "Use --target-gross-misid-rate with --filter-method "
-                "blank_fraction."
-            )
-        return
-
-    if filter_method == "lr":
-        if target_gross_misid_rate != 0.05:
-            raise typer.BadParameter(
-                "--target-gross-misid-rate only applies with "
-                "--filter-method blank_fraction. Use --lr-fdr-target with "
-                "--filter-method lr."
-            )
-        return
-
-    raise typer.BadParameter("filter_method must be one of 'blank_fraction' or 'lr'.")
 
 
 @app.command()

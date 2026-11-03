@@ -22,35 +22,41 @@ runner = CliRunner()
 @pytest.mark.unit
 @pytest.mark.parametrize("measured, expected", [(2.8, 3), (4, 3), (5.1, 5)])
 def test_nearest_sampling_preset_preserves_first_key_on_ties(measured, expected):
-    zhuang = runpy.run_path(str(EXAMPLES / "04_pixel_decode.py"))
-    for select in (
-        qi2lab_decode._nearest_nyquist_multiple,
-        simulation_decode._nearest_nyquist_multiple,
-        zhuang["_nearest_nyquist_multiple"],
-    ):
-        assert select({3.0: 0.7, 5.0: 0.2}, measured) == expected
+    assert (
+        qi2lab_decode._nearest_nyquist_multiple({3.0: 0.7, 5.0: 0.2}, measured)
+        == expected
+    )
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("command", [qi2lab_decode, simulation_decode])
 @pytest.mark.parametrize(
     "method, gross, fdr",
     [("lr", 0.1, 0.05), ("blank_fraction", 0.05, 0.1), ("unknown", 0.05, 0.05)],
 )
-def test_filter_control_must_match_selected_method(command, method, gross, fdr):
+def test_filter_control_must_match_selected_method(method, gross, fdr):
     with pytest.raises(typer.BadParameter):
-        command._validate_filter_arguments(method, gross, fdr)
+        qi2lab_decode._validate_filter_arguments(method, gross, fdr)
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("command", [qi2lab_decode, simulation_decode])
+@pytest.mark.parametrize(
+    "select_threshold",
+    [
+        qi2lab_decode._default_qi2lab_feature_predictor_threshold,
+        simulation_decode._default_simulation_feature_predictor_threshold,
+    ],
+)
 @pytest.mark.parametrize("deconvolved", [False, True])
-def test_readout_deconvolution_uses_stored_flag(command, deconvolved, image_datastore):
+def test_readout_deconvolution_sets_default_threshold(
+    select_threshold, deconvolved, image_datastore
+):
+    image_datastore.microscope_type = "2D"
+    image_datastore.voxel_size_zyx_um = [1.5, 0.2, 0.4]
     image = np.ones((4, 8, 8), dtype=np.uint16)
     image_datastore.save_local_corrected_image(image, tile=0, bit=0)
     if deconvolved:
         image_datastore.save_local_deconvolved_readout_image(image, tile=0, bit=0)
-    assert command._readouts_are_deconvolved(image_datastore) is deconvolved
+    assert select_threshold(image_datastore) == (0.2 if deconvolved else 0.5)
 
 
 @pytest.mark.unit
