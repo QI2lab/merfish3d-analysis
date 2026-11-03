@@ -12,24 +12,12 @@ from roifile import roiread
 from typer.testing import CliRunner
 
 import merfish3danalysis.qi2labDataStore as datastore_module
+from merfish3danalysis.utils.cellpose_rois import global_rois as transform_pixel_rois
 
 EXAMPLE_PATH = (
     Path(__file__).resolve().parents[1]
     / "examples/zhuang_lab/03_cellpose_segmentation.py"
 )
-
-
-@pytest.mark.unit
-def test_warp_point_uses_fused_spacing_and_origin():
-    example = runpy.run_path(str(EXAMPLE_PATH))
-    affine = np.eye(4)
-    actual = example["warp_point"](
-        np.array([10, 2, 4]),
-        np.array([1.5, 1.501, 1.501]),
-        np.array([12, 100, 200]),
-        affine,
-    )
-    np.testing.assert_allclose(actual, [27, 103.002, 206.004])
 
 
 @pytest.mark.unit
@@ -169,7 +157,9 @@ def test_zhuang_example_segments_real_projection(image_datastore):
     spacing = [0.107, 0.107, 0.107]
     datastore.voxel_size_zyx_um = spacing
     projection = data.cell()
-    datastore.save_global_fiducial_projection(projection, np.eye(4), [0, 0, 0], spacing)
+    datastore.save_global_fiducial_projection(
+        projection, np.eye(4), [3, 20, 30], spacing
+    )
 
     example = runpy.run_path(str(EXAMPLE_PATH))
     result = CliRunner().invoke(example["app"], [str(datastore.datastore_path)])
@@ -178,4 +168,13 @@ def test_zhuang_example_segments_real_projection(image_datastore):
     masks = reopened.load_global_cellpose_segmentation_image(return_future=False)
     assert masks.shape == projection.shape
     assert np.any(masks)
-    assert len(roiread(datastore.cellpose_global_rois_path())) > 0
+    pixel_rois = roiread(reopened.cellpose_pixel_rois_path())
+    world_rois = roiread(reopened.cellpose_global_rois_path())
+    _projection, affine, origin, spacing = reopened.load_global_fiducial_projection(
+        return_future=False
+    )
+    expected_rois = list(transform_pixel_rois(pixel_rois, spacing, origin, affine, 0))
+    assert len(world_rois) == len(expected_rois) > 0
+    for actual, expected in zip(world_rois, expected_rois, strict=True):
+        assert actual.name == expected.name
+        np.testing.assert_array_equal(actual.coordinates(), expected.coordinates())

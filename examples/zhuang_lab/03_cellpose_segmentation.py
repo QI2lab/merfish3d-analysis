@@ -17,47 +17,14 @@ from pathlib import Path
 import numpy as np
 import typer
 from cellpose import io, models
-from roifile import ImagejRoi, roiread, roiwrite
+from roifile import roiread, roiwrite
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.cellpose_rois import global_rois
 from merfish3danalysis.utils.dataio import resolve_datastore_path
 from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer(pretty_exceptions_enable=False)
-
-
-def warp_point(
-    pixel_space_point: np.ndarray,
-    spacing: np.ndarray,
-    origin: np.ndarray,
-    affine: np.ndarray,
-) -> np.ndarray:
-    """Warp point from pixel space to global space using known transforms.
-
-    Parameters
-    ----------
-    pixel_space_point : np.ndarray
-        point in the image coordinate system, zyx order
-    spacing: np.ndarray
-        pixel size in microns, zyx order
-    origin: np.ndarray
-        world coordinate origin (um), zyx order
-    affine: np.ndarray
-        4x4 affine matrix (um), zyx order
-
-    Returns
-    -------
-    registered_space_point: np.ndarray
-        point in the world coordinate system (um), zyx order
-
-    """
-    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
-    physical_space_point = pixel_space_point * spacing + origin
-    registered_space_point = (
-        np.array(affine) @ np.array([*list(physical_space_point), 1])
-    )[:-1]
-
-    return registered_space_point
 
 
 def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
@@ -118,33 +85,16 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     # load pixel spaced ROIs
     pixel_spacing_rois = roiread(cellpose_roi_path)
 
-    # warp ROIs into global coordinates
-    # the ROIs are in (x,y) format. So we have to (1) fake a z dimension,
-    # (2) flip xy to yx, (3) warp, (4) remove the z, (5) flip back to (x,y)
-    # When we load to check if RNA are in an ROI, need to remember to flip
-    # back to (y,x).
-    global_spacing_rois = []
-    for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
-        pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
-        padding = np.full((pixel_coordinates.shape[0], 1), 10)
-        padded_pixel_coordinates = np.hstack((padding, pixel_coordinates[:, ::-1]))
-        global_coordinates_padded = np.zeros_like(
-            padded_pixel_coordinates, dtype=np.float32
+    global_spacing_rois = list(
+        global_rois(
+            pixel_spacing_rois,
+            spacing_zyx_um,
+            origin_zyx_um,
+            affine_zyx_um,
+            min_cell_area_um2=0,
+            workers=1,
         )
-        for pt_idx, pts in enumerate(padded_pixel_coordinates):
-            global_coordinates_padded[pt_idx, :] = warp_point(
-                pts.copy().astype(np.float32),
-                spacing_zyx_um,
-                origin_zyx_um,
-                affine_zyx_um,
-            )
-        global_coordinates = global_coordinates_padded[:, 1:]
-        roi = ImagejRoi.frompoints(
-            np.round(global_coordinates[:, ::-1], 2).astype(np.float32)
-        )
-        roi.name = "cell_" + str(cell_idx).zfill(7)
-        global_spacing_rois.append(roi)
-        del roi
+    )
 
     # write global coordinate ROIs
     global_roi_path = datastore.cellpose_global_rois_path()
