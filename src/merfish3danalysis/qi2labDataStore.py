@@ -493,17 +493,14 @@ class qi2labDataStore:
             No return value.
         """
         if key in {"exp_order", "codebook"}:
-            if key == "exp_order":
-                path = (
-                    self._datastore_path
-                    / "acquisition/experiment_order/experiment_order.parquet"
-                )
-                table = self._experiment_order
-            else:
-                path = self._datastore_path / "acquisition/codebook/codebook.parquet"
-                table = self._codebook
+            product = (
+                "experiment_order/experiment_order.parquet"
+                if key == "exp_order"
+                else "codebook/codebook.parquet"
+            )
+            path = self._datastore_path / "acquisition" / product
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._save_to_parquet(table, path)
+            self._save_to_parquet(value, path)
             return
         if key == "psf_manifest":
             path = self._datastore_path / "psfs/psf_metadata/manifest.json"
@@ -1126,7 +1123,7 @@ class qi2labDataStore:
         self._experiment_order = order
         value = order.to_numpy()
 
-        self._set_calibration_attribute("exp_order", self._experiment_order.values)
+        self._set_calibration_attribute("exp_order", self._experiment_order)
 
         if self.num_rounds is None:
             self.num_rounds = int(value[-1, 0])
@@ -1188,7 +1185,7 @@ class qi2labDataStore:
             New codebook.
         """
         self._codebook = value
-        self._set_calibration_attribute("codebook", self._codebook.values)
+        self._set_calibration_attribute("codebook", self._codebook)
 
     @property
     def voxel_size_zyx_um(self) -> ArrayLike | None:
@@ -1823,27 +1820,14 @@ class qi2labDataStore:
         list[int]
             Chunk shape for fused image storage.
         """
-        shape = [int(dim) for dim in array.shape]
         if array.ndim == 2:
-            return [min(shape[0], 2048), min(shape[1], 2048)]
-        if array.ndim == 3:
-            return [min(shape[0], 16), min(shape[1], 512), min(shape[2], 512)]
-        if array.ndim == 4:
-            return [
-                min(shape[0], 1),
-                min(shape[1], 16),
-                min(shape[2], 512),
-                min(shape[3], 512),
-            ]
-        if array.ndim == 5:
-            return [
-                min(shape[0], 1),
-                min(shape[1], 1),
-                min(shape[2], 16),
-                min(shape[3], 512),
-                min(shape[4], 512),
-            ]
-        return list(array.shape)
+            return [min(int(dim), 2048) for dim in array.shape]
+        return [
+            min(int(dim), chunk)
+            for dim, chunk in zip(
+                array.shape, qi2labDataStore._default_chunks(array), strict=True
+            )
+        ]
 
     @staticmethod
     def _image_store_path(image_path: Path | str) -> Path:
@@ -4453,8 +4437,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{round_id}/decon_data",
                 scene_frame=frame,
             )
-            if write_future is not None:
-                write_future.result()
             return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved fiducial image.")
@@ -4654,8 +4636,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{bit_id}/decon_data",
                 scene_frame=f"{tile_id}/{round_id}/{bit_id}/native",
             )
-            if write_future is not None:
-                write_future.result()
             return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved readout image.")
@@ -4824,8 +4804,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{local_id}/{self.feature_predictor_folder_name}_data",
                 scene_frame=f"{tile_id}/{round_id}/{local_id}/native",
             )
-            if write_future is not None:
-                write_future.result()
             return write_future
         except (OSError, ValueError) as e:
             print(e)
@@ -5298,13 +5276,12 @@ class qi2labDataStore:
             Fused image and image metadata, or None when unavailable.
         """
         if fusion_type == "fiducial":
-            paths = [self.fused_image_path()]
+            image_path = self.fused_image_path()
         elif fusion_type == "all_channels":
-            paths = [self.fused_image_path("full_dataset")]
+            image_path = self.fused_image_path("full_dataset")
         else:
             raise ValueError("fusion_type must be 'fiducial' or 'all_channels'.")
-        image_path = next((path for path in paths if path.exists()), None)
-        if image_path is None:
+        if not image_path.exists():
             return None
         return (
             self._load_from_zarr_array(image_path, return_future),
@@ -5407,8 +5384,6 @@ class qi2labDataStore:
                 scene_frame="world",
                 scene_affine=affine_zyx_um,
             )
-            if write_future is not None:
-                write_future.result()
             return write_future
         except (OSError, TimeoutError):
             print("Error saving fused image.")
