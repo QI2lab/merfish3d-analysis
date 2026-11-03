@@ -442,7 +442,7 @@ def fuse_all_channels(
     -------
     None
         The multiscale image is published in the datastore Scene. Optional
-        TIFFs are written to ``qi2labdatastore/fused``.
+        TIFFs are written to ``qi2labdatastore/fused_tiff``.
     """
     output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
     try:
@@ -476,8 +476,6 @@ def fuse_all_channels(
         )
         for tile_id in tqdm(datastore.tile_ids, desc="tile")
     ]
-    output_directory = datastore.datastore_path / "fused"
-    output_directory.mkdir(parents=True, exist_ok=True)
     _fuse_views_to_scene(
         datastore,
         tile_msims,
@@ -499,6 +497,8 @@ def fuse_all_channels(
     )
 
     if write_ome_tiffs:
+        output_directory = datastore.fused_tiff_path()
+        output_directory.mkdir(parents=True, exist_ok=True)
         export_ome_tiffs(
             datastore,
             output_directory,

@@ -73,7 +73,7 @@ def global_register_data(
         path to experiment
 
     create_max_proj_tiff: bool or None
-        Also write a maximum-projection TIFF in the segmentation/cellpose
+        Also write a maximum-projection TIFF in the fiducial_projection_tiff
         directory. The projection Scene is always created. Default = True.
     """
     # initialize datastore
@@ -121,16 +121,9 @@ def global_register_data(
         spacing_zyx_um = spacing
 
         filename = "fiducial_max_projection.ome.tiff"
-        cellpose_path = (
-            datastore.datastore_path / Path("segmentation") / Path("cellpose")
-        )
-        cellpose_path.mkdir(exist_ok=True)
-        filename_path = (
-            datastore.datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path(filename)
-        )
+        cellpose_path = datastore.fiducial_projection_tiff_path()
+        cellpose_path.mkdir(parents=True, exist_ok=True)
+        filename_path = cellpose_path / filename
         with TiffWriter(filename_path, bigtiff=True) as tif:
             metadata = {
                 "axes": "YX",

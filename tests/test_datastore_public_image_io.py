@@ -10,6 +10,79 @@ from yaozarrs import open_group
 
 
 @pytest.mark.unit
+def test_decoded_codewords_and_normalization_remain_isolated_by_run(image_datastore):
+    import pandas as pd
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = image_datastore
+    for run, gene in ((None, "default"), ("run1", "named")):
+        frame = pd.DataFrame({"gene_id": [gene], "global_x": [1.0]})
+        datastore.save_local_decoded_spots(frame, tile=0, decode_run_key=run)
+        datastore.save_global_filtered_decoded_spots(frame, decode_run_key=run)
+        datastore.save_decode_normalization_vectors(
+            run, "global", np.ones(4), np.zeros(4), metadata={"run": gene}
+        )
+
+    root = datastore.datastore_path / "codewords"
+    for path in (
+        "tiles/tile0000.parquet",
+        "tiles/runs/run1/tile0000.parquet",
+        "global_filtered/decoded_features.parquet",
+        "global_filtered/decoded_features.csv.gz",
+        "global_filtered/runs/run1/decoded_features.parquet",
+        "global_filtered/runs/run1/decoded_features.csv.gz",
+        "normalization/default.json",
+        "normalization/runs/run1.json",
+    ):
+        assert (root / path).is_file()
+
+    reopened = qi2labDataStore(datastore.datastore_path, validate=False)
+    for run, gene in ((None, "default"), ("run1", "named")):
+        assert reopened.load_local_decoded_spots(0, run).iloc[0]["gene_id"] == gene
+        assert (
+            reopened.load_global_filtered_decoded_spots(run).iloc[0]["gene_id"] == gene
+        )
+        assert reopened.load_decode_normalization_metadata(run, "global") == {
+            "run": gene
+        }
+        normalization, background = reopened.load_decode_normalization_vectors(
+            run, "global"
+        )
+        np.testing.assert_array_equal(normalization, np.ones(4))
+        np.testing.assert_array_equal(background, np.zeros(4))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("run", [".", "..", "../outside"])
+def test_decoded_run_name_cannot_escape_its_product_folder(image_datastore, run):
+    import pandas as pd
+
+    with pytest.raises(ValueError, match="single run name"):
+        image_datastore.save_local_decoded_spots(
+            pd.DataFrame({"gene_id": ["gene"]}), tile=0, decode_run_key=run
+        )
+
+
+@pytest.mark.unit
+def test_validated_reopen_accepts_complete_named_decoding_run(image_datastore):
+    import pandas as pd
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    features = pd.DataFrame({"gene_id": ["gene"], "global_x": [1.0]})
+    for tile in range(image_datastore.num_tiles):
+        image_datastore.save_local_decoded_spots(features, tile, decode_run_key="run1")
+    image_datastore.save_global_filtered_decoded_spots(features, decode_run_key="run1")
+    image_datastore.datastore_state = {"DecodedSpots": True, "FilteredSpots": True}
+
+    reopened = qi2labDataStore(image_datastore.datastore_path)
+    pd.testing.assert_frame_equal(
+        reopened.load_global_filtered_decoded_spots("run1"), features
+    )
+
+
+@pytest.mark.unit
 def test_calibration_images_written_before_tiles_reopen_with_channel_order(tmp_path):
     """Camera maps and per-channel PSFs retain their values and NGFF axes."""
     import pandas as pd
@@ -42,6 +115,18 @@ def test_calibration_images_written_before_tiles_reopen_with_channel_order(tmp_p
     datastore.channel_psfs = psfs
     datastore.datastore_state = {"Calibrations": True}
     datastore.initialize_tile(0)
+    assert (datastore.datastore_path / "camera/camera_noise.ome.zarr").is_dir()
+    assert (datastore.datastore_path / "shading/shading_maps.ome.zarr").is_dir()
+    assert (datastore.datastore_path / "psfs/images/psf_000.ome.zarr").is_dir()
+    assert (datastore.datastore_path / "psfs/images/psf_001.ome.zarr").is_dir()
+    assert (datastore.datastore_path / "psfs/psf_metadata/manifest.json").is_file()
+    assert (
+        datastore.datastore_path / "acquisition/codebook/codebook.parquet"
+    ).is_file()
+    assert (
+        datastore.datastore_path
+        / "acquisition/experiment_order/experiment_order.parquet"
+    ).is_file()
     datastore.save_local_corrected_image(
         np.ones((3, 3, 4), dtype=np.uint16), tile=0, bit=0, psf_idx=1
     )
@@ -163,12 +248,12 @@ def test_native_images_are_published_in_the_acquisition_scene(
 
     reopened = qi2labDataStore(datastore.datastore_path, validate=False)
     path = reopened.local_image_path(0, image_name, **selection)
-    scene = open_group(reopened.datastore_path).validate(strict=True)
+    scene = open_group(reopened.tile_scene_path).validate(strict=True)
     image_group = open_group(path)
     image = image_group.ome_metadata(strict=True)
     assert isinstance(scene.ome_metadata(strict=True), v06.Scene)
     assert isinstance(image, v06.Image)
-    relative_path = str(path.relative_to(reopened.datastore_path))
+    relative_path = str(path.relative_to(reopened.tile_scene_path))
     link = next(
         transform
         for transform in scene.ome_metadata().scene.coordinateTransformations
@@ -219,10 +304,10 @@ def test_round_linker_update_moves_the_readout_images_in_the_scene(image_datasto
     datastore.save_local_round_linker(2, tile=0, bit=0)
 
     datastore = qi2labDataStore(datastore.datastore_path, validate=False)
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+    scene = open_group(datastore.tile_scene_path).validate(strict=True).ome_metadata()
     for image_name in ("corrected_data", "feature_predictor_data"):
         path = datastore.local_image_path(0, image_name, bit=0)
-        relative_path = str(path.relative_to(datastore.datastore_path))
+        relative_path = str(path.relative_to(datastore.tile_scene_path))
         link = next(
             transform
             for transform in scene.scene.coordinateTransformations
@@ -260,7 +345,7 @@ def test_chromatic_calibration_tracks_each_tile_and_late_wavelengths(image_datas
         },
     }
     datastore.save_chromatic_affine_transforms_zyx_um(calibration)
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+    scene = open_group(datastore.tile_scene_path).validate(strict=True).ome_metadata()
     transforms = {t.name: t for t in scene.scene.coordinateTransformations}
     for name in (
         "tile0000/round001/bit001/chromatic",
@@ -289,7 +374,7 @@ def test_chromatic_calibration_tracks_each_tile_and_late_wavelengths(image_datas
     np.testing.assert_allclose(
         reopened.load_chromatic_affine_transform_zyx_um(wavelength_um=0.67), affine
     )
-    group = open_group(reopened.datastore_path).validate(strict=True)
+    group = open_group(reopened.tile_scene_path).validate(strict=True)
     scene = group.ome_metadata()
     transforms = {t.name: t for t in scene.scene.coordinateTransformations}
     late = transforms["tile0001/round001/bit001/chromatic"]
@@ -365,7 +450,7 @@ def test_chromatic_scene_and_decoder_select_the_same_affine(image_datastore, cas
         {"estimator": estimator, "channels": channels}
     )
     decoded = load_optimizer_chromatic_affine(datastore, wavelength_um=0.67)
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+    scene = open_group(datastore.tile_scene_path).validate(strict=True).ome_metadata()
     transform = next(
         t
         for t in scene.scene.coordinateTransformations
@@ -509,14 +594,14 @@ def test_public_image_write_and_read_modes(
     if writer == "save_local_sofima_flow_field":
         from yaozarrs import v06
 
-        scene = open_group(datastore.datastore_path).ome_metadata(strict=True)
+        scene = open_group(datastore.tile_scene_path).ome_metadata(strict=True)
         deformation = next(
             t
             for t in scene.scene.coordinateTransformations
             if t.name == "tile0000/round001/deformable"
         )
         assert isinstance(deformation, v06.DisplacementsTransformation)
-        image_path = datastore.datastore_path / deformation.path
+        image_path = datastore.tile_scene_path / deformation.path
     elif writer in NATIVE_WRITERS:
         image_path = datastore.local_image_path(
             image_name=Path(relative_path).name.removesuffix(".ome.zarr"), **selection
@@ -630,7 +715,9 @@ def test_invalid_local_image_identifiers_return_none_without_io(
     invalid,
 ):
     datastore = image_datastore
-    before = open_group(datastore.datastore_path).ome_metadata(strict=True).model_dump()
+    before = (
+        open_group(datastore.tile_scene_path).ome_metadata(strict=True).model_dump()
+    )
     paths_before = set(datastore.datastore_path.rglob("zarr.json"))
     for key in selection:
         arguments = dict(selection, **{key: invalid})
@@ -639,7 +726,7 @@ def test_invalid_local_image_identifiers_return_none_without_io(
         )
         assert getattr(datastore, reader)(**arguments) is None
     assert (
-        open_group(datastore.datastore_path).ome_metadata(strict=True).model_dump()
+        open_group(datastore.tile_scene_path).ome_metadata(strict=True).model_dump()
         == before
     )
     assert set(datastore.datastore_path.rglob("zarr.json")) == paths_before
@@ -650,7 +737,7 @@ def test_invalid_local_image_identifiers_return_none_without_io(
 def test_sofima_reference_round_is_validated_before_writing(image_datastore, reference):
     from yaozarrs import open_group
 
-    scene_path = image_datastore.datastore_path
+    scene_path = image_datastore.tile_scene_path
     scene_before = open_group(scene_path).ome_metadata(strict=True).model_dump()
     assert (
         image_datastore.save_local_sofima_flow_field(

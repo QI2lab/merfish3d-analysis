@@ -206,6 +206,9 @@ def publish_acquisition_scene(
     path: str | Path,
     tile_ids: Sequence[str],
     bits_by_round: Mapping[str, Sequence[str]],
+    bit_linkers_by_round: Mapping[str, Sequence[int]],
+    experiment_order: Sequence[Sequence[int]],
+    channels_in_data: Sequence[Any],
 ) -> None:
     """Replace a newly initialized Scene with its pending acquisition graph."""
     scene, statuses = build_acquisition_scene(tile_ids, bits_by_round)
@@ -242,6 +245,16 @@ def publish_acquisition_scene(
                 )
             }
         )
+        entity_metadata = {
+            f"fiducial/{tile}/{round_id}": {"bit_linker": list(values)}
+            for tile in tile_ids
+            for round_id, values in bit_linkers_by_round.items()
+        }
+        round_links: dict[str, str] = {}
+        for tile in tile_ids:
+            for round_id, bits in bits_by_round.items():
+                for bit in bits:
+                    round_links.setdefault(f"{tile}/{bit}", round_id)
         state.update(
             generation=int(state["generation"]) + 1,
             transform_status=statuses,
@@ -249,6 +262,10 @@ def publish_acquisition_scene(
             reference_round=next(iter(bits_by_round)),
             tile_ids=list(tile_ids),
             bits_by_round={key: list(value) for key, value in bits_by_round.items()},
+            experiment_order=[list(row) for row in experiment_order],
+            channels_in_data=list(channels_in_data),
+            entity_metadata=entity_metadata,
+            round_links=round_links,
         )
         attributes["qi2lab"] = state
         return candidate, attributes

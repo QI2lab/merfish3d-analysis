@@ -985,8 +985,12 @@ def _run_standard_simulation_case(
 
 @pytest.mark.integration
 @pytest.mark.gpu
+@pytest.mark.parametrize(
+    "decode_run_key",
+    [pytest.param(None, id="default"), pytest.param("integration_run", id="named")],
+)
 def test_qi2lab_commands_decode_simulation_ground_truth(
-    simulation_dataset_dirs, simulation_api, tmp_path
+    simulation_dataset_dirs, simulation_api, tmp_path, decode_run_key
 ):
     """Run the standard qi2lab commands on the published Nyquist acquisition."""
     from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode, preprocess
@@ -1014,21 +1018,41 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
     np.testing.assert_allclose(spacing, [0.315, 0.081, 0.081])
     assert datastore.datastore_state["LocalRegistered"]
 
-    result = runner.invoke(
-        pixeldecode.app,
-        [
-            str(acquisition_root),
-            "--normalization-features",
-            "all",
-            "--minimum-pixels-per-RNA",
-            "28",
-            "--magnitude-threshold",
-            "0.9",
-            "10",
-        ],
-    )
+    arguments = [
+        str(acquisition_root),
+        "--normalization-features",
+        "all",
+        "--minimum-pixels-per-RNA",
+        "28",
+        "--magnitude-threshold",
+        "0.9",
+        "10",
+    ]
+    if decode_run_key is not None:
+        arguments.extend(["--decode-run-key", decode_run_key])
+    result = runner.invoke(pixeldecode.app, arguments)
     assert result.exit_code == 0, (result.output, result.exception)
-    scores = simulation_api["calculate_F1"](case_root, search_radius=1.0)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert (
+        datastore.load_local_decoded_spots(tile=0, decode_run_key=decode_run_key)
+        is not None
+    )
+    assert (
+        datastore.load_global_filtered_decoded_spots(decode_run_key=decode_run_key)
+        is not None
+    )
+    other_run = "integration_run" if decode_run_key is None else None
+    assert datastore.load_local_decoded_spots(tile=0, decode_run_key=other_run) is None
+    assert datastore.load_global_filtered_decoded_spots(decode_run_key=other_run) is None
+    for kind in ("global", "iterative"):
+        normalization, background = datastore.load_decode_normalization_vectors(
+            decode_run_key, kind
+        )
+        assert normalization is not None
+        assert background is not None
+    scores = simulation_api["calculate_F1"](
+        case_root, search_radius=1.0, decode_run_key=decode_run_key
+    )
     tp, fp, fn = (
         scores[key] for key in ("True Positives", "False Positives", "False Negatives")
     )

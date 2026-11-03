@@ -30,7 +30,7 @@ def test_stage_and_camera_roundtrip_through_scene(image_datastore, position, exp
     np.testing.assert_array_equal(stage, expected)
     np.testing.assert_array_equal(actual_camera, camera)
     scene = (
-        open_group(reopened.datastore_path)
+        open_group(reopened.tile_scene_path)
         .validate(strict=True)
         .ome_metadata(strict=True)
     )
@@ -78,4 +78,4 @@ def test_concurrent_tile_stage_writes_preserve_both_transforms(image_datastore):
         )
         np.testing.assert_array_equal(stage, expected)
         np.testing.assert_array_equal(actual_camera, camera)
-    open_group(reopened.datastore_path).validate(strict=True)
+    open_group(reopened.tile_scene_path).validate(strict=True)

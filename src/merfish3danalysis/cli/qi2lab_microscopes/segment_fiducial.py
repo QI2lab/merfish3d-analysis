@@ -123,9 +123,8 @@ def run_cellpose(
         raise FileNotFoundError("Fused fiducial projection Scene not found.")
     projection_array, affine_zyx_um, origin_zyx_um, spacing_zyx_um = projection
 
-    imagej_roi_path_dir = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
-    cellpose_roi_path = imagej_roi_path_dir / "pixel_spacing_rois.zip"
-    global_roi_path = imagej_roi_path_dir / "global_coords_rois.zip"
+    cellpose_roi_path = datastore.cellpose_pixel_rois_path()
+    global_roi_path = datastore.cellpose_global_rois_path()
     if outlines_only:
         if not cellpose_roi_path.exists():
             raise FileNotFoundError(
@@ -255,7 +254,7 @@ def run_cellpose(
 
     # save pixel spaced ROIs
     step_start = perf_counter()
-    imagej_roi_path_dir.mkdir(exist_ok=True)
+    cellpose_roi_path.parent.mkdir(parents=True, exist_ok=True)
     print(
         f"Extracting pixel-space ImageJ ROIs with {workers} workers.",
         flush=True,

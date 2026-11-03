@@ -30,7 +30,7 @@ def resolve_datastore_path(path: Path | str) -> Path:
     Returns
     -------
     Path
-        Absolute datastore directory identified by datastore_state.json.
+        Absolute datastore directory identified by its state metadata.
 
     Raises
     ------
@@ -40,7 +40,7 @@ def resolve_datastore_path(path: Path | str) -> Path:
     """
     path = Path(path).expanduser().resolve()
     for candidate in (path, path / "qi2labdatastore"):
-        if (candidate / "datastore_state.json").is_file():
+        if (candidate / "datastore_state" / "state.json").is_file():
             return candidate
     raise FileNotFoundError(
         f"No qi2lab datastore found at {path} or its qi2labdatastore child."

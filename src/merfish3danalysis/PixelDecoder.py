@@ -117,7 +117,6 @@ from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
 from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
-from roifile import roiread
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, Polygon
 from skimage.draw import polygon as rasterize_polygon
@@ -222,6 +221,7 @@ def decode_tiles_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
     normalization_method: Literal["iterative", "global", "none"],
+    decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
@@ -252,6 +252,8 @@ def decode_tiles_worker(
         Minimum feature-predictor probability passed to tile decoding.
     normalization_method : Literal['iterative', 'global', 'none']
         Normalization source used for pixel traces.
+    decode_run_key : str or None
+        Optional run whose normalization and decoded outputs the worker uses.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
 
@@ -283,6 +285,7 @@ def decode_tiles_worker(
         num_gpus=1,
         verbose=0,
         decode_mode=decode_mode,
+        decode_run_key=decode_run_key,
         normalization_features=normalization_features,
     )
 
@@ -342,6 +345,7 @@ def _optimize_norm_worker(
     feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
     excluded_gene_ids: Sequence[str],
+    decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
@@ -377,6 +381,8 @@ def _optimize_norm_worker(
     excluded_gene_ids : Sequence[str]
         Codebook gene IDs whose winning pixel assignments are suppressed during
         iterative optimization.
+    decode_run_key : str or None
+        Optional run whose normalization vectors the worker loads and updates.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
     """
@@ -398,6 +404,7 @@ def _optimize_norm_worker(
         verbose=0,
         decode_mode=decode_mode,
         excluded_gene_ids=excluded_gene_ids,
+        decode_run_key=decode_run_key,
         normalization_features=normalization_features,
     )
 
@@ -477,6 +484,7 @@ class PixelDecoder:
         chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
         excluded_gene_ids: Sequence[str] | None = None,
         normalization_features: Literal["all", "cells"] = "cells",
+        decode_run_key: str | None = None,
     ) -> None:
         """
         Initialize the object.
@@ -514,6 +522,8 @@ class PixelDecoder:
             features inside Cellpose outlines. Without segmentation, ``cells``
             falls back to all features. This does not spatially filter the
             final decoded output.
+        decode_run_key : str or None
+            Optional run name used to isolate normalization and decoded output.
         """
         self._datastore_path = Path(datastore.datastore_path)
         self._datastore = datastore
@@ -546,7 +556,7 @@ class PixelDecoder:
             self._is_3D = False
         else:
             self._is_3D = True
-        self._decode_run_key = None
+        self._decode_run_key = datastore._validate_decode_run_key(decode_run_key)
         if z_range is None:
             self._z_crop = False
             self._z_range = [0, None]
@@ -595,39 +605,15 @@ class PixelDecoder:
             return cached
 
         outlines = None
-        segmentation_root = getattr(self._datastore, "_segmentation_root_path", None)
-        if segmentation_root is not None:
-            cellpose_root = Path(segmentation_root) / Path("cellpose")
-            roi_path = cellpose_root / Path("imagej_rois/global_coords_rois.zip")
-            outline_path = cellpose_root / Path("cell_outlines.json")
-            segmentation_geometry_exists = roi_path.exists() or outline_path.exists()
-        else:
-            segmentation_geometry_exists = callable(
-                getattr(self._datastore, "load_global_cellpose_roi_zip", None)
-            ) or callable(
-                getattr(self._datastore, "load_global_cellpose_outlines", None)
-            )
+        segmentation_geometry_exists = (
+            self._datastore.cellpose_global_rois_path().exists()
+            or self._datastore.cellpose_outlines_path().exists()
+        )
 
         if segmentation_geometry_exists:
-            load_roi_zip = getattr(
-                self._datastore,
-                "load_global_cellpose_roi_zip",
-                None,
-            )
-            if callable(load_roi_zip):
-                outlines = load_roi_zip()
-                if outlines is not None:
-                    segmentation_geometry_exists = True
+            outlines = self._datastore.load_global_cellpose_roi_zip()
             if outlines is None:
-                load_outlines = getattr(
-                    self._datastore,
-                    "load_global_cellpose_outlines",
-                    None,
-                )
-                if callable(load_outlines):
-                    outlines = load_outlines()
-                    if outlines is not None:
-                        segmentation_geometry_exists = True
+                outlines = self._datastore.load_global_cellpose_outlines()
 
         polygons = []
         for coordinates in (outlines or {}).values():
@@ -1317,6 +1303,11 @@ class PixelDecoder:
                 self._iterative_background_vector = cp.asarray(background_vector)
                 self._iterative_normalization_loaded = True
             else:
+                if getattr(self, "_df_barcodes_loaded", None) is None:
+                    raise ValueError(
+                        "Iterative normalization is not available for this decode "
+                        "run. Run iterative optimization before decoding."
+                    )
                 self._iterative_normalization_vectors(gpu_id=gpu_id)
 
             cp.cuda.Stream.null.synchronize()
@@ -4143,42 +4134,15 @@ class PixelDecoder:
             if self._verbose >= 1:
                 print("Insufficient Blank barcodes called for filtering.")
 
-    @staticmethod
-    def _roi_to_shapely(roi):  # noqa
-        """
-        Convert an ImageJ ROI boundary to the cell-assignment polygon.
-
-        Parameters
-        ----------
-        roi : Any
-            ImageJ ROI containing subpixel boundary coordinates.
-
-        Returns
-        -------
-        Any
-            Shapely polygon with the ROI coordinate columns reversed for cell assignment.
-        """
-        return Polygon(roi.subpixel_coordinates[:, ::-1])
-
     def _assign_cells(self) -> None:
         """Assign cells to barcodes using Cellpose ROIs."""
-        cellpose_roi_path = (
-            self._datastore.datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path("imagej_rois")
-            / Path("global_coords_rois.zip")
-        )
-
-        try:
-            rois = roiread(cellpose_roi_path)
-        except (OSError, FileNotFoundError, ValueError) as e:
-            print(f"Failed to read ROIs: {e}")
+        rois = self._datastore.load_global_cellpose_roi_zip()
+        if rois is None:
             return
 
         shapely_polygons = []
-        for roi in rois:
-            shapely_polygon = self._roi_to_shapely(roi)
+        for coordinates in rois.values():
+            shapely_polygon = Polygon(np.asarray(coordinates)[:, ::-1])
             if shapely_polygon:
                 shapely_polygons.append(shapely_polygon)
 
@@ -4785,6 +4749,7 @@ class PixelDecoder:
                         feature_predictor_threshold,
                         run_chromatic_estimation,
                         self._optimization_excluded_gene_ids,
+                        self._decode_run_key,
                         getattr(self, "_normalization_features", "cells"),
                     ),
                     physical_gpu_id=gpu,
@@ -4873,6 +4838,14 @@ class PixelDecoder:
             target_gross_misid_rate=float(target_gross_misid_rate),
             lr_fdr_target=float(lr_fdr_target),
         )
+        # All workers share one run's cached vectors. Calculate them once
+        # before spawning workers so they cannot race to replace the cache.
+        if normalization_method != "none":
+            self._load_global_normalization_vectors(
+                gpu_id=0, lowpass_sigma=lowpass_sigma
+            )
+        if normalization_method == "iterative":
+            self._load_iterative_normalization_vectors(gpu_id=0)
         all_tiles = list(range(len(self._datastore.tile_ids)))
         chunk_size = (len(all_tiles) + self._num_gpus - 1) // self._num_gpus
 
@@ -4897,6 +4870,7 @@ class PixelDecoder:
                     minimum_pixels,
                     feature_predictor_threshold,
                     normalization_method,
+                    self._decode_run_key,
                     getattr(self, "_normalization_features", "cells"),
                 ),
                 physical_gpu_id=gpu,

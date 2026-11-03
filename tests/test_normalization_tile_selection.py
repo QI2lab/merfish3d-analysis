@@ -57,10 +57,7 @@ def test_normalization_rejects_empty_or_invalid_candidate_indices(decoder, indic
 @pytest.mark.unit
 @pytest.mark.parametrize("has_cell", [False, True])
 def test_normalization_screens_fiducial_signal_inside_cell_mask(decoder, has_cell):
-    roi_path = (
-        decoder._datastore.datastore_path
-        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
-    )
+    roi_path = decoder._datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     rois = (
         [ImagejRoi.frompoints([[6, 2], [12, 2], [12, 5], [6, 5]])] if has_cell else []

@@ -73,9 +73,11 @@ def test_all_channels_setter_replaces_its_own_scene_image(image_datastore):
         np.testing.assert_array_equal(stored.read().result(), expected)
         np.testing.assert_array_equal(group.attrs["affine_zyx_um"], affine)
         scene = (
-            open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+            open_group(datastore.datastore_path / "fused.ome.zarr")
+            .validate(strict=True)
+            .ome_metadata()
         )
-        relative = str(path.relative_to(datastore.datastore_path))
+        relative = str(path.relative_to(datastore.datastore_path / "fused.ome.zarr"))
         assert any(
             t.input.path == relative and t.output.name == "world"
             for t in scene.scene.coordinateTransformations

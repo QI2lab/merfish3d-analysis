@@ -83,7 +83,9 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(
         global_registration_config=GlobalRegistrationConfig(fusion_workers=1),
     )
     registration.fuse_global_registered(create_max_proj_tiff=False)
-    assert datastore.fused_image_path().parent == datastore.datastore_path
+    assert datastore.fused_image_path().parent == (
+        datastore.datastore_path / "fiducial_fusion.ome.zarr"
+    )
 
     fuseall.fuse_all_channels(
         datastore.datastore_path,
@@ -93,14 +95,13 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(
         compression="blosc-lz4",
         compression_level=2,
     )
-    output = datastore.datastore_path / "fused"
+    output = datastore.fused_tiff_path()
     group = open_group(datastore.fused_image_path("full_dataset"))
     image = group.ome_metadata(strict=True)
     assert isinstance(image, v06.Image)
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
-    relative = str(
-        datastore.fused_image_path("full_dataset").relative_to(datastore.datastore_path)
-    )
+    fused_scene = datastore.datastore_path / "fused.ome.zarr"
+    scene = open_group(fused_scene).validate(strict=True).ome_metadata()
+    relative = str(datastore.fused_image_path("full_dataset").relative_to(fused_scene))
     assert any(
         t.input.path == relative and t.output.name == "world"
         for t in scene.scene.coordinateTransformations

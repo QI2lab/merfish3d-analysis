@@ -64,9 +64,8 @@ def saved_segmentation(image_datastore, monkeypatch):
     labels[:3, :3] = 1
     datastore.save_global_cellpose_segmentation_image(labels, downsampling=[1, 1, 1])
     datastore_path = datastore.datastore_path
-    roi_directory = datastore_path / "segmentation" / "cellpose" / "imagej_rois"
-    roi_directory.mkdir(parents=True, exist_ok=True)
-    pixel_path = roi_directory / "pixel_spacing_rois.zip"
+    pixel_path = datastore.cellpose_pixel_rois_path()
+    pixel_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(pixel_path, [ImagejRoi.frompoints([[0, 0], [2, 0], [2, 2], [0, 2]])])
     monkeypatch.setattr(
         segment_fiducial.models,
@@ -97,10 +96,7 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
             ],
         )
         assert result.exit_code == 0, result.output
-        assert (
-            len(roiread(pixel_path.with_name("global_coords_rois.zip")))
-            == expected_count
-        )
+        assert len(roiread(datastore.cellpose_global_rois_path())) == expected_count
         assert pixel_path.read_bytes() == original_pixel_rois
 
     reopened = segment_fiducial.qi2labDataStore(datastore.datastore_path)
@@ -147,7 +143,7 @@ def test_inference_exports_filtered_global_rois(
         "roiread",
         Mock(side_effect=AssertionError("must reuse pixel ROIs in memory")),
     )
-    roiwrite(pixel_path.with_name("global_coords_rois.zip"), roiread(pixel_path))
+    roiwrite(datastore.cellpose_global_rois_path(), roiread(pixel_path))
 
     segment_fiducial.run_cellpose(
         root,
@@ -157,7 +153,7 @@ def test_inference_exports_filtered_global_rois(
     )
 
     assert len(roiread(pixel_path)) == (0 if empty_masks else 2)
-    saved_rois = roiread(pixel_path.with_name("global_coords_rois.zip"))
+    saved_rois = roiread(datastore.cellpose_global_rois_path())
     assert [Polygon(roi.coordinates()).area for roi in saved_rois] == (
         [] if empty_masks else [16]
     )

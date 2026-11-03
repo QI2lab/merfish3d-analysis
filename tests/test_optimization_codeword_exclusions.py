@@ -260,7 +260,8 @@ def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
     args = start_worker.call_args.kwargs["args"]
     assert args[0] == decoder._datastore.datastore_path
     assert args[1] == [1]
-    assert args[-2] == ("GeneB",)
+    assert args[-3] == ("GeneB",)
+    assert args[-2] is None
     assert args[-1] == normalization_features
     assert (
         decoder._iterative_normalization_metadata()["normalization_features"]

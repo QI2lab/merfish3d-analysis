@@ -204,6 +204,7 @@ def decode_pixels(
     lr_fdr_target: float = 0.05,
     normalization_iterations: int = 3,
     estimate_chromatic_affines: bool = False,
+    decode_run_key: str | None = None,
 ) -> None:
     """Perform pixel decoding.
 
@@ -243,6 +244,8 @@ def decode_pixels(
         If True, estimate chromatic affine transforms during iterative
         normalization. Existing datastore calibration is still used when this
         is False, with identity fallback when no calibration is present.
+    decode_run_key : str or None, default None
+        Optional run name used to isolate normalization and decoded output.
     """
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path)
@@ -255,6 +258,7 @@ def decode_pixels(
         use_mask=False,
         merfish_bits=merfish_bits,
         verbose=1,
+        decode_run_key=decode_run_key,
     )
     if minimum_pixels_per_RNA is None:
         minimum_pixels_per_RNA = 7 if datastore.microscope_type == "2D" else 28

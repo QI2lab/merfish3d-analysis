@@ -42,8 +42,7 @@ def test_projection_scene_reopens_with_cellpose_labels(image_datastore):
     np.testing.assert_array_equal(lazy_masks.read().result(), masks)
 
     scene_path = reopened.fiducial_projection_path()
-    assert scene_path.parent == datastore.datastore_path.parent
-    assert scene_path != datastore.datastore_path
+    assert scene_path == datastore.datastore_path / "fiducial_projection.ome.zarr"
     group = open_group(scene_path).validate(strict=True)
     scene = group.ome_metadata(strict=True)
     assert isinstance(scene, v06.Scene)
@@ -170,11 +169,5 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
         .ome_metadata(),
         v06.Scene,
     )
-    roi_path = (
-        reopened.datastore_path
-        / "segmentation"
-        / "cellpose"
-        / "imagej_rois"
-        / "global_coords_rois.zip"
-    )
+    roi_path = reopened.datastore_path / "cell_boundaries" / "cell_rois.zip"
     assert len(roiread(roi_path)) > 0

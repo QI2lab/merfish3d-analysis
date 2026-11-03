@@ -86,7 +86,7 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
     assert all(image.shape == (2, 4, 3) for channel in samples for image in channel)
 
     datastore = qi2labDataStore(output, validate=False)
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == list(
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == list(
         datastore.tile_ids
     )
     assert datastore.datastore_state["Corrected"] is True
@@ -172,7 +172,7 @@ def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
     assert [int(images[0][0, 1, 0]) for images in samples] == [92, 92, 184]
     datastore = qi2labDataStore(output, validate=False)
     assert datastore.datastore_state["Corrected"] is True
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == [
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == [
         datastore.tile_ids[1]
     ]
     for tile in range(2):
@@ -194,8 +194,9 @@ def test_zhuang_no_signal_stops_before_flatfield_fitting(
         zhuang_conversion(tmp_path, output_path=output, max_flatfield_images=1)
     assert screen.call_count == 2
     estimate.assert_not_called()
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == []
-    assert qi2labDataStore(output, validate=False).datastore_state["Corrected"] is False
+    datastore = qi2labDataStore(output, validate=False)
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == []
+    assert datastore.datastore_state["Corrected"] is False
 
 
 @pytest.mark.unit

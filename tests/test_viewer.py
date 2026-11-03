@@ -175,11 +175,12 @@ def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines(image_datastore
 
     datastore = image_datastore
     datastore.save_global_coord_xforms_um(np.eye(4), np.zeros(3), np.ones(3), tile=0)
-    root = datastore.datastore_path / "segmentation" / "cellpose"
-    roi_path = root / "imagej_rois" / "global_coords_rois.zip"
+    roi_path = datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(roi_path, [], mode="w")
-    (root / "cell_outlines.json").write_text(
+    outline_path = datastore.cellpose_outlines_path()
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text(
         json.dumps(
             {
                 "features": [
@@ -682,10 +683,7 @@ def test_local_baysor_boundaries_do_not_require_proseg_run(image_datastore) -> N
         }
     )
     # Baysor owns this parquet output; the datastore provides the read API.
-    path = (
-        image_datastore.datastore_path
-        / "segmentation/baysor/3D/cell_boundaries_3d.parquet"
-    )
+    path = image_datastore.datastore_path / "baysor/3D/cell_boundaries_3d.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     boundaries.to_parquet(path)
     model = ViewerDisplayModel()

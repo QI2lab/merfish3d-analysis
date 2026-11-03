@@ -20,7 +20,9 @@ app.pretty_exceptions_enable = False
 
 
 @app.command()
-def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
+def calculate_F1(
+    root_path: Path, search_radius: float = 1.0, decode_run_key: str | None = None
+) -> dict:
     """Calculate F1 using ground truth.
 
     Parameters
@@ -32,6 +34,8 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
     search_radius: float
         search radius for a sphere in microns. Should be 2-3x the z step,
         depending on the amount of low-pass blur applied.
+    decode_run_key : str or None
+        Optional named decode run to score; None selects the default output.
 
     Returns
     -------
@@ -42,7 +46,13 @@ def calculate_F1(root_path: Path, search_radius: float = 1.0) -> dict:
     datastore_path = resolve_datastore_path(root_path / "sim_acquisition")
     datastore = qi2labDataStore(datastore_path)
     gene_ids, _ = datastore.load_codebook_parsed()
-    decoded_spots = datastore.load_global_filtered_decoded_spots()
+    decoded_spots = datastore.load_global_filtered_decoded_spots(
+        decode_run_key=decode_run_key
+    )
+    if decoded_spots is None:
+        raise FileNotFoundError(
+            f"Filtered codewords not found for run {decode_run_key!r}."
+        )
     gt_path = root_path / Path("GT_spots.csv")
     gt_spots = pd.read_csv(gt_path)
     gene_ids = np.array(gene_ids)

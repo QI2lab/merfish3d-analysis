@@ -109,18 +109,15 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     )
 
     # save pixel spaced ROIs
-    imagej_roi_path_dir = (
-        datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
-    )
-    imagej_roi_path_dir.mkdir(parents=True, exist_ok=True)
-    imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
+    cellpose_roi_path = datastore.cellpose_pixel_rois_path()
+    cellpose_roi_path.parent.mkdir(parents=True, exist_ok=True)
+    imagej_roi_path = cellpose_roi_path.with_name("pixel")
     if np.any(masks):
         io.save_rois(masks, str(imagej_roi_path))
     else:
-        roiwrite(imagej_roi_path_dir / "pixel_spacing_rois.zip", [], mode="w")
+        roiwrite(cellpose_roi_path, [], mode="w")
 
     # load pixel spaced ROIs
-    cellpose_roi_path = imagej_roi_path_dir / Path("pixel_spacing_rois.zip")
     pixel_spacing_rois = roiread(cellpose_roi_path)
 
     # warp ROIs into global coordinates
@@ -152,7 +149,7 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
         del roi
 
     # write global coordinate ROIs
-    global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
+    global_roi_path = datastore.cellpose_global_rois_path()
     roiwrite(global_roi_path, global_spacing_rois, mode="w")
 
     # update datastore state

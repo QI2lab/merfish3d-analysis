@@ -70,13 +70,19 @@ def image_datastore(tmp_path, request):
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
     datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
-    six_bits = getattr(request, "param", None) == "six_bits"
+    six_bits = getattr(request, "param", None) in {"six_bits", "six_bits_one_tile"}
+    zero_slot = getattr(request, "param", None) == "zero_slot"
     six_tiles = getattr(request, "param", None) == "six_tiles"
+    one_tile = getattr(request, "param", None) in {"one_tile", "six_bits_one_tile"}
     datastore.channels_in_data = ["fiducial", "readout1", "readout2"]
     datastore.voxel_size_zyx_um = [0.4, 0.2, 0.4]
-    datastore.num_tiles = 6 if six_tiles else 2
+    datastore.num_tiles = 1 if one_tile else 6 if six_tiles else 2
     datastore.experiment_order = np.array(
-        [[1, 1, 2], [2, 3, 4], [3, 5, 6]] if six_bits else [[1, 1, 3], [2, 2, 4]]
+        [[1, 1, 2], [2, 3, 4], [3, 5, 6]]
+        if six_bits
+        else [[1, 1, 0], [2, 2, 3]]
+        if zero_slot
+        else [[1, 1, 3], [2, 2, 4]]
     )
     datastore.tile_overlap = 0.1
     datastore.binning = 1
@@ -88,7 +94,10 @@ def image_datastore(tmp_path, request):
     datastore.codebook = pd.DataFrame(
         {
             "gene_id": ["gene"],
-            **{f"bit{bit:02}": [1] for bit in range(1, 7 if six_bits else 5)},
+            **{
+                f"bit{bit:02}": [1]
+                for bit in range(1, 7 if six_bits else 4 if zero_slot else 5)
+            },
         }
     )
     for tile in range(datastore.num_tiles):
@@ -103,4 +112,4 @@ def image_datastore(tmp_path, request):
 @pytest.fixture
 def pending_scene(image_datastore):
     """Use the acquisition Scene initialized by the datastore API."""
-    return image_datastore.datastore_path
+    return image_datastore.tile_scene_path

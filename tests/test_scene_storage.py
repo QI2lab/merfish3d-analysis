@@ -21,7 +21,9 @@ def test_new_scene_is_valid_and_has_no_measured_position(tmp_path):
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
     datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
-    group = open_group(datastore.datastore_path).validate(strict=True)
+    assert datastore.tile_scene_path == datastore.datastore_path / "tiles.ome.zarr"
+    assert not (datastore.datastore_path / "zarr.json").exists()
+    group = open_group(datastore.tile_scene_path).validate(strict=True)
     scene = group.ome_metadata(strict=True)
     assert isinstance(scene, v06.Scene)
     assert scene.version == "0.6"
@@ -33,6 +35,16 @@ def test_new_scene_is_valid_and_has_no_measured_position(tmp_path):
     transform = scene.scene.coordinateTransformations[0]
     assert isinstance(transform, v06.IdentityTransformation)
     assert transform.input.name == transform.output.name == system.name
+
+
+@pytest.mark.unit
+def test_previous_root_scene_requires_regenerating_datastore(tmp_path):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    path = tmp_path / "qi2labdatastore"
+    initialize_scene(path)
+    with pytest.raises(ValueError, match="regenerate"):
+        qi2labDataStore(path)
 
 
 @pytest.mark.unit
@@ -60,7 +72,7 @@ def test_pending_scene_covers_every_tile_round_and_readout(image_datastore):
             strict=True,
         )
     }
-    group = open_group(datastore.datastore_path).validate(strict=True)
+    group = open_group(datastore.tile_scene_path).validate(strict=True)
     reopened = group.ome_metadata(strict=True)
 
     transforms = {t.name: t for t in reopened.scene.coordinateTransformations}
@@ -86,6 +98,17 @@ def test_pending_scene_covers_every_tile_round_and_readout(image_datastore):
     assert group.attrs["qi2lab"]["transform_status"] == dict.fromkeys(
         expected_names, "pending"
     )
+    state = group.attrs["qi2lab"]
+    for tile in datastore.tile_ids:
+        for round_id, row in zip(
+            datastore.round_ids, datastore.experiment_order.to_numpy(), strict=True
+        ):
+            assert state["entity_metadata"][f"fiducial/{tile}/{round_id}"][
+                "bit_linker"
+            ] == [int(value) for value in row[1:]]
+            for bit in row[1:]:
+                if bit:
+                    assert state["round_links"][f"{tile}/bit{int(bit):03d}"] == round_id
     assert all(isinstance(t, v06.IdentityTransformation) for t in transforms.values())
 
     # The reference pixel-to-world chain adds stage before camera and global.
@@ -110,7 +133,7 @@ def test_public_stage_write_updates_its_scene_transforms(image_datastore):
         [10, 20, 30], camera, tile=0, round=1
     )
 
-    group = open_group(image_datastore.datastore_path).validate(strict=True)
+    group = open_group(image_datastore.tile_scene_path).validate(strict=True)
     transforms = {
         t.name: t
         for t in group.ome_metadata(strict=True).scene.coordinateTransformations
@@ -132,7 +155,7 @@ def test_public_local_registration_updates_scene_transform(image_datastore):
     transform = np.array([[1, 0, 0, 2], [0, 0, -1, 3], [0, 1, 0, 4], [0, 0, 0, 1]])
     image_datastore.save_local_round_transform_zyx_um(transform, tile=0, round=1)
 
-    group = open_group(image_datastore.datastore_path).validate(strict=True)
+    group = open_group(image_datastore.tile_scene_path).validate(strict=True)
     transforms = {
         t.name: t
         for t in group.ome_metadata(strict=True).scene.coordinateTransformations
@@ -153,7 +176,7 @@ def test_public_local_registration_updates_scene_transform(image_datastore):
 
 @pytest.mark.unit
 def test_conflicting_stage_batch_does_not_replace_committed_pair(image_datastore):
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     group = open_group(path)
     transforms = {
         t.name: t
@@ -201,14 +224,14 @@ def test_conflicting_stage_batch_does_not_replace_committed_pair(image_datastore
 def test_disjoint_worker_transform_updates_survive_reopen(image_datastore):
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     group = open_group(path)
     before = {
         transform.name: transform
         for transform in group.ome_metadata(strict=True).scene.coordinateTransformations
     }
-    alias = path.parent / "scene-alias"
-    alias.symlink_to(path, target_is_directory=True)
+    alias = image_datastore.datastore_path.parent / "scene-alias"
+    alias.symlink_to(image_datastore.datastore_path, target_is_directory=True)
     alias_datastore = qi2labDataStore(alias, validate=False)
 
     with ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn")) as pool:
@@ -238,11 +261,136 @@ def test_disjoint_worker_transform_updates_survive_reopen(image_datastore):
     statuses = group.attrs["qi2lab"]["transform_status"]
     assert all(statuses[name] == "calculated" for name in names + cameras)
     assert statuses["tile0000/round002/local"] == "pending"
-    reopened = qi2labDataStore(path, validate=False)
+    reopened = qi2labDataStore(image_datastore.datastore_path, validate=False)
     for tile in range(2):
         stage, camera = reopened.load_local_stage_position_zyx_um(tile=tile, round=0)
         np.testing.assert_array_equal(stage, [tile + 1, -2, 3])
         np.testing.assert_array_equal(camera, np.eye(4))
+
+
+@pytest.mark.unit
+def test_concurrent_tile_metadata_updates_survive_reopen(image_datastore):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    with ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn")) as pool:
+        futures = [
+            pool.submit(image_datastore.save_local_bit_linker, [0, 2], tile=0, round=1),
+            pool.submit(
+                image_datastore.save_local_wavelengths_um,
+                (0.53, 0.61),
+                tile=0,
+                round=1,
+            ),
+        ]
+        for future in futures:
+            future.result()
+
+    pixels = np.arange(24, dtype=np.uint16).reshape(2, 3, 4)
+    image_datastore.save_local_corrected_image(pixels, tile=0, round=1)
+    reopened = qi2labDataStore(image_datastore.datastore_path, validate=False)
+    assert reopened.load_local_bit_linker(tile=0, round=1) == [0, 2]
+    np.testing.assert_allclose(
+        reopened.load_local_wavelengths_um(tile=0, round=1), (0.53, 0.61)
+    )
+    assert reopened.load_local_round_linker(tile=0, bit=1) == 2
+    np.testing.assert_array_equal(
+        reopened.load_local_corrected_image(tile=0, round=1, return_future=False),
+        pixels,
+    )
+    assert not (reopened.tile_scene_path / "fiducial").exists()
+    assert not (reopened.tile_scene_path / "readouts").exists()
+    open_group(reopened.tile_scene_path).validate(strict=True)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("image_datastore", ["zero_slot"], indirect=True)
+def test_scene_preserves_nominal_channel_slots_and_linker_overrides(image_datastore):
+    import pandas as pd
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = image_datastore
+    original = datastore.experiment_order.copy()
+    changed = original.copy()
+    changed.iloc[0, 1:] = [0, 1]
+    path = (
+        datastore.datastore_path
+        / "acquisition/experiment_order/experiment_order.parquet"
+    )
+    original_parquet = path.read_bytes()
+    pixels = np.arange(24, dtype=np.uint16).reshape(2, 3, 4)
+    datastore.save_local_corrected_image(pixels, tile=0, round=0)
+    datastore.save_local_bit_linker([0, 1], tile=0, round=0)
+
+    datastore.experiment_order = original.copy()
+    with pytest.raises(ValueError, match="Experiment order"):
+        datastore.experiment_order = changed
+
+    assert path.read_bytes() == original_parquet
+    pd.testing.assert_frame_equal(datastore.experiment_order, original)
+    reopened = qi2labDataStore(datastore.datastore_path, validate=False)
+    assert reopened.load_local_bit_linker(tile=0, round=0) == [0, 1]
+    np.testing.assert_array_equal(
+        reopened.load_local_corrected_image(tile=0, round=0, return_future=False),
+        pixels,
+    )
+    assert open_group(reopened.tile_scene_path).attrs["qi2lab"]["experiment_order"] == (
+        original.to_numpy().tolist()
+    )
+
+    changed.to_parquet(path, engine="fastparquet", index=False)
+    with pytest.raises(ValueError, match="Experiment order"):
+        qi2labDataStore(datastore.datastore_path, validate=False)
+
+
+@pytest.mark.unit
+def test_scene_preserves_acquisition_channel_order(image_datastore):
+    import json
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = image_datastore
+    channels = list(datastore.channels_in_data)
+    changed = [channels[0], channels[2], channels[1]]
+    path = (
+        datastore.datastore_path / "acquisition/acquisition_metadata/acquisition.json"
+    )
+    datastore.channels_in_data = channels.copy()
+    original_metadata = path.read_bytes()
+
+    with pytest.raises(ValueError, match="Acquisition channels"):
+        datastore.channels_in_data = changed
+    assert path.read_bytes() == original_metadata
+    assert datastore.channels_in_data == channels
+
+    reopened = qi2labDataStore(datastore.datastore_path, validate=False)
+    assert reopened.channels_in_data == channels
+    assert (
+        open_group(reopened.tile_scene_path).attrs["qi2lab"]["channels_in_data"]
+        == channels
+    )
+
+    metadata = json.loads(original_metadata)
+    metadata["channels_in_data"] = changed
+    path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="Acquisition channels"):
+        qi2labDataStore(datastore.datastore_path, validate=False)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["num_rounds", "num_tiles"])
+def test_scene_preserves_acquisition_counts(image_datastore, name):
+    datastore = image_datastore
+    count = getattr(datastore, name)
+    path = (
+        datastore.datastore_path / "acquisition/acquisition_metadata/acquisition.json"
+    )
+    setattr(datastore, name, count)
+    original_metadata = path.read_bytes()
+    with pytest.raises(ValueError, match="does not match the tile Scene"):
+        setattr(datastore, name, count + 1)
+    assert getattr(datastore, name) == count
+    assert path.read_bytes() == original_metadata
 
 
 @pytest.mark.unit
@@ -289,7 +437,7 @@ def test_stale_update_does_not_replace_a_completed_transform(pending_scene):
 
 @pytest.mark.unit
 def test_calculated_identity_is_distinct_from_pending_identity(image_datastore):
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     scene = open_group(path).ome_metadata(strict=True)
     original = next(
         transform
@@ -328,7 +476,7 @@ def test_calculated_identity_is_distinct_from_pending_identity(image_datastore):
 def test_transform_publication_preserves_existing_image_pixels(image_datastore):
     pixels = np.arange(24, dtype=np.uint16).reshape(2, 3, 4)
     image_datastore.save_local_corrected_image(pixels, tile=0, round=0)
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     transform = np.eye(4)
     transform[:3, 3] = [1, 2, 3]
     image_datastore.save_local_round_transform_zyx_um(transform, tile=0, round=1)
@@ -359,7 +507,7 @@ def test_published_image_supports_native_reads_reopen_and_replacement(image_data
     )
     # A reader opened before publication retains its immutable image revision.
     np.testing.assert_array_equal(reopened.read().result(), pixels)
-    open_group(image_datastore.datastore_path).validate(strict=True)
+    open_group(image_datastore.tile_scene_path).validate(strict=True)
 
 
 @pytest.mark.unit
@@ -371,7 +519,7 @@ def test_concurrent_image_writers_cannot_replace_each_other(image_datastore):
         image_datastore.local_image_path(1, "corrected_data", bit=0)
     ).ome_metadata(strict=True)
     selection = "tile0001/bit001/corrected_data"
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     product = open_group(path).attrs["qi2lab"]["products"][selection]
     frame, revision = product["frame"], product["revision"]
     candidates = (pixels, pixels * 2)
@@ -410,7 +558,7 @@ def test_sofima_field_uses_xyz_pixels_and_patch_centered_lattice(image_datastore
     image_datastore.save_local_corrected_image(
         np.zeros((8, 10, 12), dtype=np.uint16), tile=0, round=0
     )
-    path = image_datastore.datastore_path
+    path = image_datastore.tile_scene_path
     group = open_group(path)
     original = next(
         transform
@@ -503,7 +651,7 @@ def test_sofima_field_uses_xyz_pixels_and_patch_centered_lattice(image_datastore
     )
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
-    datastore = qi2labDataStore(path, validate=False)
+    datastore = qi2labDataStore(image_datastore.datastore_path, validate=False)
     updated, metadata = datastore.load_local_sofima_flow_field(
         tile=0, round=1, return_future=False
     )

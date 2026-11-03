@@ -25,7 +25,7 @@ def test_registration_resumes_completed_scene_images(image_datastore):
             datastore.save_local_round_transform_zyx_um(
                 np.eye(4), tile=tile, round=round_index
             )
-    before = open_group(datastore.datastore_path).attrs["qi2lab"]["products"]
+    before = open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
     registration = DataRegistration(
         datastore,
         num_gpus=0,
@@ -35,7 +35,7 @@ def test_registration_resumes_completed_scene_images(image_datastore):
         verbose=0,
     )
     registration.register_all_tiles(process_readouts=False)
-    assert open_group(datastore.datastore_path).attrs["qi2lab"]["products"] == before
+    assert open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"] == before
 
 
 @pytest.mark.unit
@@ -425,11 +425,10 @@ def test_tile_completion_requires_requested_sofima_field_without_reading_pixels(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
 def test_single_tile_global_metadata_preserves_origin_without_baking_in_camera(
     registration,
 ):
-    registration.datastore.num_tiles = 1
-    registration = DataRegistration(registration.datastore, verbose=0)
     camera = np.diag([1, -1, 1, 1])
     registration.datastore.save_local_stage_position_zyx_um(
         [10, 20, 30], camera, tile=0, round=0

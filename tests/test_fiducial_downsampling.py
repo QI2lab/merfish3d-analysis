@@ -16,6 +16,7 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
 @pytest.mark.parametrize(
     "native_spacing, expected_spacing",
     [
@@ -30,7 +31,6 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     datastore_path = tmp_path / "qi2labdatastore"
     datastore = image_datastore
     datastore.voxel_size_zyx_um = native_spacing
-    datastore.num_tiles = 1
     data = np.random.default_rng(8).integers(0, 65536, (7, 140, 168), dtype=np.uint16)
     datastore.save_local_stage_position_zyx_um(
         [12, 100, 200], np.eye(4), tile=0, round=0
@@ -64,7 +64,7 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     ):
         assert abs(actual - native_size * native_step / fused_step) < 2
     projection_path = (
-        datastore_path / "segmentation/cellpose/fiducial_max_projection.ome.tiff"
+        datastore_path / "fiducial_projection_tiff/fiducial_max_projection.ome.tiff"
     )
     with TiffFile(projection_path) as tif:
         projection = tif.asarray()
@@ -94,9 +94,9 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     mask_grid = labels[label_name].ome_metadata(strict=True).multiscales[0]
     projection_grid = projection_group.ome_metadata(strict=True).multiscales[0]
     assert mask_grid.datasets[0].transform == projection_grid.datasets[0].transform
-    roi_directory = projection_path.parent / "imagej_rois"
-    pixel_roi = roiread(roi_directory / "pixel_spacing_rois.zip")[0]
-    global_roi = roiread(roi_directory / "global_coords_rois.zip")[0]
+    roi_directory = datastore_path / "cell_boundaries"
+    pixel_roi = roiread(roi_directory / "pixel_rois.zip")[0]
+    global_roi = roiread(roi_directory / "cell_rois.zip")[0]
     xy = pixel_roi.coordinates()
     np.testing.assert_array_equal(xy.min(axis=0), [2, 1])
     np.testing.assert_array_equal(xy.max(axis=0), [5, 4])
@@ -116,7 +116,7 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     segment_fiducial.run_cellpose(
         tmp_path, outlines_only=True, roi_multiprocessing=False
     )
-    regenerated = roiread(roi_directory / "global_coords_rois.zip")[0]
+    regenerated = roiread(roi_directory / "cell_rois.zip")[0]
     np.testing.assert_array_equal(regenerated.coordinates(), global_roi.coordinates())
     model.eval.assert_called_once()
 
@@ -126,7 +126,7 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
 def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
     tmp_path, pre_registered
 ):
-    from yaozarrs import open_group
+    from yaozarrs import open_group, v06
 
     datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
     datastore.num_tiles = 1
@@ -152,6 +152,18 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
 
     registration.fuse_global_registered(create_max_proj_tiff=True)
 
+    fiducial_scene = datastore.fused_scene_path()
+    assert fiducial_scene == datastore.datastore_path / "fiducial_fusion.ome.zarr"
+    assert isinstance(
+        open_group(fiducial_scene).validate(strict=True).ome_metadata(), v06.Scene
+    )
+    assert datastore.fused_image_path().is_relative_to(fiducial_scene)
+    assert (
+        datastore.fiducial_projection_path()
+        == datastore.datastore_path / "fiducial_projection.ome.zarr"
+    )
+    assert not (datastore.datastore_path / "fused.ome.zarr").exists()
+
     stored_affine, stored_origin, stored_spacing = (
         datastore.load_global_coord_xforms_um(tile=0)
     )
@@ -165,7 +177,7 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
     np.testing.assert_array_equal(group.attrs["origin_zyx_um"], [10, -29, 30])
     with TiffFile(
         datastore.datastore_path
-        / "segmentation/cellpose/fiducial_max_projection.ome.tiff"
+        / "fiducial_projection_tiff/fiducial_max_projection.ome.tiff"
     ) as tif:
         np.testing.assert_array_equal(tif.asarray(), native[:, ::-1, :].max(axis=0))
     assert datastore.datastore_state["Fused"]
@@ -269,14 +281,14 @@ def test_two_tile_registration_fuses_directly_to_zarr(
                 image_datastore.save_local_corrected_image(
                     moving, tile=tile, **selection, **storage
                 )
-    scene_group = open_group(image_datastore.datastore_path).validate(strict=True)
+    scene_group = open_group(image_datastore.tile_scene_path).validate(strict=True)
     scene = scene_group.ome_metadata(strict=True)
     assert isinstance(scene, v06.Scene)
     for tile in range(2):
         image_name = "corrected_data" if register_rounds else "decon_data"
         path = image_datastore.local_image_path(tile, image_name, round=0)
         assert isinstance(open_group(path).ome_metadata(strict=True), v06.Image)
-        relative_path = str(path.relative_to(image_datastore.datastore_path))
+        relative_path = str(path.relative_to(image_datastore.tile_scene_path))
         assert any(
             transform.input.path == relative_path
             and transform.output.name == f"tile{tile:04}/reference"
@@ -301,7 +313,9 @@ def test_two_tile_registration_fuses_directly_to_zarr(
     model = group.ome_metadata(strict=True)
     assert isinstance(model, v06.Image)
     scene = (
-        open_group(image_datastore.datastore_path).validate(strict=True).ome_metadata()
+        open_group(image_datastore.fused_scene_path())
+        .validate(strict=True)
+        .ome_metadata()
     )
     if register_rounds:
         from merfish3danalysis.utils.decode_warping import (
@@ -310,7 +324,7 @@ def test_two_tile_registration_fuses_directly_to_zarr(
         )
 
         reopened = qi2labDataStore(image_datastore.datastore_path, validate=False)
-        scene_group = open_group(reopened.datastore_path).validate(strict=True)
+        scene_group = open_group(reopened.tile_scene_path).validate(strict=True)
         transforms = {
             transform.name: transform
             for transform in scene_group.ome_metadata().scene.coordinateTransformations
@@ -426,7 +440,9 @@ def test_two_tile_registration_fuses_directly_to_zarr(
                     assert np.linalg.norm(peak - 3) <= 2
                     assert neighborhood.max() > 1000
     image_path = str(
-        image_datastore.fused_image_path().relative_to(image_datastore.datastore_path)
+        image_datastore.fused_image_path().relative_to(
+            image_datastore.fused_scene_path()
+        )
     )
     link = next(
         t for t in scene.scene.coordinateTransformations if t.input.path == image_path
@@ -480,7 +496,7 @@ def test_two_tile_registration_fuses_directly_to_zarr(
     np.testing.assert_array_equal(pyramid, expected_pyramid)
     with TiffFile(
         image_datastore.datastore_path
-        / "segmentation/cellpose/fiducial_max_projection.ome.tiff"
+        / "fiducial_projection_tiff/fiducial_max_projection.ome.tiff"
     ) as tif:
         np.testing.assert_array_equal(tif.asarray(), fused.max(axis=0))
     assert image_datastore.datastore_state["Fused"]
@@ -512,8 +528,9 @@ def test_single_tile_fiducial_publication_preserves_world_grid(
     path = datastore.fused_image_path()
     image = open_group(path).validate(strict=True).ome_metadata(strict=True)
     assert isinstance(image, v06.Image)
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
-    relative = str(path.relative_to(datastore.datastore_path))
+    scene_path = datastore.fused_scene_path()
+    scene = open_group(scene_path).validate(strict=True).ome_metadata()
+    relative = str(path.relative_to(scene_path))
     edge = next(
         t for t in scene.scene.coordinateTransformations if t.input.path == relative
     )

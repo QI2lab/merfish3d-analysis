@@ -166,9 +166,9 @@ def test_fiducial_sampling_is_capped_but_corrects_every_tile(
         )
 
     datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
-    assert json.loads(
-        (datastore.datastore_path / "flatfield_tile_ids.json").read_text()
-    ) == [datastore.tile_ids[tile] for tile in range(empty_count, 2)]
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == [
+        datastore.tile_ids[tile] for tile in range(empty_count, 2)
+    ]
     if not available:
         assert samples == []
         return

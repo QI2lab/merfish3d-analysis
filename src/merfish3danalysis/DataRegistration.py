@@ -1934,11 +1934,9 @@ class DataRegistration:
 
         if create_max_proj_tiff:
             projection_start_time = timeit.default_timer()
-            cellpose_path = (
-                self._datastore.datastore_path / Path("segmentation") / Path("cellpose")
-            )
-            cellpose_path.mkdir(exist_ok=True)
-            filename_path = cellpose_path / Path("fiducial_max_projection.ome.tiff")
+            cellpose_path = self._datastore.fiducial_projection_tiff_path()
+            cellpose_path.mkdir(parents=True, exist_ok=True)
+            filename_path = cellpose_path / "fiducial_max_projection.ome.tiff"
             _write_zarr_max_projection_tiff(
                 array=fused_array,
                 dims=dims,
@@ -1980,7 +1978,7 @@ class DataRegistration:
         Parameters
         ----------
         create_max_proj_tiff : bool, default=True
-            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            If True, write ``fiducial_projection_tiff/fiducial_max_projection.ome.tiff``
             from the downsampled fused fiducial OME-Zarr, retaining its spacing.
 
         Returns
@@ -2123,7 +2121,7 @@ class DataRegistration:
         Parameters
         ----------
         create_max_proj_tiff : bool, default=True
-            If True, write ``segmentation/cellpose/fiducial_max_projection.ome.tiff``
+            If True, write ``fiducial_projection_tiff/fiducial_max_projection.ome.tiff``
             from the downsampled fused fiducial OME-Zarr, retaining its spacing.
 
         Returns

@@ -168,7 +168,7 @@ def test_register_pair_to_fixed_recovers_z_shift_for_warp_contract(
     )
 
     image_datastore.save_local_round_transform_zyx_um(transform, tile=0, round=1)
-    scene = open_group(image_datastore.datastore_path).ome_metadata(strict=True)
+    scene = open_group(image_datastore.tile_scene_path).ome_metadata(strict=True)
     local = next(
         t
         for t in scene.scene.coordinateTransformations

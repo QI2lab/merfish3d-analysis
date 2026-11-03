@@ -62,7 +62,7 @@ def global_register_data(
         path to experiment or qi2labdatastore directory
 
     create_max_proj_tiff: Optional[bool]
-        Also write a maximum-projection TIFF in the segmentation/cellpose
+        Also write a maximum-projection TIFF in the fiducial_projection_tiff
         directory when fusion runs. Fusion also creates the projection Scene.
         Default = True.
     """

@@ -530,7 +530,7 @@ def test_sofima_flow_field_datastore_roundtrip_preserves_warp(
     assert isinstance(future, Future)
     np.testing.assert_array_equal(future.result(), flow_field_xyz_px)
 
-    scene = open_group(datastore.datastore_path).validate(strict=True).ome_metadata()
+    scene = open_group(datastore.tile_scene_path).validate(strict=True).ome_metadata()
     transform = next(
         t
         for t in scene.scene.coordinateTransformations
@@ -539,7 +539,7 @@ def test_sofima_flow_field_datastore_roundtrip_preserves_warp(
     assert isinstance(transform, v06.DisplacementsTransformation)
     systems = {system.name: system for system in scene.scene.coordinateSystems}
     assert [axis.name for axis in systems[transform.output.name].axes] == list("xyz")
-    stored = open_group(datastore.datastore_path)[transform.path]
+    stored = open_group(datastore.tile_scene_path)[transform.path]
     model = stored.ome_metadata(strict=True)
     array = stored[model.multiscales[0].datasets[0].path].to_tensorstore()
     np.testing.assert_array_equal(array.read().result(), flow_field_xyz_px)

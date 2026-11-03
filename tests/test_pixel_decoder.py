@@ -292,9 +292,9 @@ def test_load_bit_data_weights_then_warps_then_crops_generated_readouts(
         verbose=0,
         decode_mode="3d",
         z_range=[1, 4],
+        decode_run_key="current",
     )
     decoder._tile_idx = 0
-    decoder._decode_run_key = "current"
     native = np.arange(6 * 8 * 12, dtype=np.float32).reshape(6, 8, 12)
     prediction = np.broadcast_to(
         np.arange(1, 9, dtype=np.float32)[None, :, None] / 8, native.shape
@@ -511,7 +511,7 @@ def test_iterative_normalization_saves_and_keeps_memory_consistent(
 @pytest.mark.gpu
 @pytest.mark.parametrize("use_flow", [False, True])
 @pytest.mark.parametrize("use_chromatic", [False, True])
-@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+@pytest.mark.parametrize("image_datastore", ["six_bits_one_tile"], indirect=True)
 def test_bits_decode_in_round_one_before_world_mapping(
     cuda, image_datastore, use_flow, use_chromatic
 ):
@@ -588,7 +588,7 @@ def test_bits_decode_in_round_one_before_world_mapping(
     datastore.save_global_coord_xforms_um(
         global_affine, [10, 20, 30], [0.5, 0.25, 0.25], tile=0
     )
-    datastore = qi2labDataStore(datastore.datastore_path, validate=False)
+    datastore = qi2labDataStore(datastore.datastore_path)
     decoder = PixelDecoder(
         datastore, merfish_bits=6, num_gpus=1, verbose=0, decode_mode="3d"
     )
@@ -620,3 +620,76 @@ def test_bits_decode_in_round_one_before_world_mapping(
         rtol=0,
         atol=1e-10,
     )
+
+    if not (use_flow and use_chromatic):
+        return
+
+    # Use the same transformed acquisition to exercise projection, ROI export,
+    # named-run decoding and cell assignment through the actual library APIs.
+    from roifile import roiwrite
+
+    from merfish3danalysis.cli.qi2lab_microscopes.segment_fiducial import run_cellpose
+    from merfish3danalysis.DataRegistration import (
+        DataRegistration,
+        GlobalRegistrationConfig,
+    )
+    from merfish3danalysis.utils.cellpose_rois import extract_pixel_rois
+
+    fiducial = (reference.max(axis=0) * 60000).astype(np.uint16)
+    datastore.save_local_corrected_image(fiducial, tile=0, round=0)
+    registration = DataRegistration(
+        datastore,
+        decon_fiducial=False,
+        verbose=0,
+        global_registration_config=GlobalRegistrationConfig(fusion_workers=1),
+    )
+    registration.fuse_global_registered(create_max_proj_tiff=False)
+    projection, _, projection_origin, projection_spacing = (
+        datastore.load_global_fiducial_projection(return_future=False)
+    )
+    # Known independent world location of gene A from the camera/stage/global
+    # transform above. Its neighbor B is outside this labelled region.
+    center = np.rint(
+        (np.array([-31.12, -17.88]) - projection_origin[1:]) / projection_spacing[1:]
+    ).astype(int)
+    labels = np.zeros(projection.shape, dtype=np.uint16)
+    y, x = center
+    labels[max(0, y - 2) : y + 3, max(0, x - 2) : x + 3] = 1
+    assert projection[y, x] > 0
+    datastore.save_global_cellpose_segmentation_image(
+        labels,
+        downsampling=(projection_spacing / datastore.voxel_size_zyx_um).tolist(),
+    )
+    pixel_roi_path = datastore.cellpose_pixel_rois_path()
+    pixel_roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(pixel_roi_path, extract_pixel_rois(labels, np.array([1]), workers=1))
+    run_cellpose(
+        datastore.datastore_path, outlines_only=True, roi_multiprocessing=False
+    )
+
+    named_decoder = PixelDecoder(
+        datastore,
+        merfish_bits=6,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d",
+        decode_run_key="coordinate_check",
+        normalization_features="all",
+    )
+    named_decoder.decode_all_tiles(
+        assign_to_cells=True,
+        lowpass_sigma=None,
+        magnitude_threshold=(1, 2),
+        minimum_pixels=8,
+        normalization_method="none",
+        filter_method="lr",
+    )
+    reopened = qi2labDataStore(datastore.datastore_path)
+    local = reopened.load_local_decoded_spots(0, decode_run_key="coordinate_check")
+    filtered = reopened.load_global_filtered_decoded_spots(
+        decode_run_key="coordinate_check"
+    ).sort_values("gene_id")
+    assert local["gene_id"].tolist() == ["A", "B"]
+    assert filtered["gene_id"].tolist() == ["A", "B"]
+    assert filtered["cell_id"].tolist() == [1, 0]
+    assert reopened.load_local_decoded_spots(0) is None

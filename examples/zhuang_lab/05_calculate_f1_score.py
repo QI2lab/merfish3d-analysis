@@ -17,6 +17,9 @@ import typer
 from numpy.typing import ArrayLike
 from scipy.spatial import cKDTree
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import resolve_datastore_path
+
 app = typer.Typer(pretty_exceptions_enable=False)
 
 
@@ -176,55 +179,20 @@ def calculate_F1_with_radius(
     return results, tp_coords, fp_coords, fn_coords
 
 
-def resolve_qi2lab_transcripts_path(specified_dir: Path) -> Path:
-    """Resolve the qi2lab filtered decoded output path from a directory or file path."""
-
-    if specified_dir.is_file():
-        return specified_dir
-
-    if specified_dir.name == "qi2labdatastore":
-        parquet_path = (
-            specified_dir
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.parquet")
-        )
-        csv_gz_path = (
-            specified_dir
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.csv.gz")
-        )
-    else:
-        parquet_path = (
-            specified_dir
-            / Path("qi2labdatastore")
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.parquet")
-        )
-        csv_gz_path = (
-            specified_dir
-            / Path("qi2labdatastore")
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.csv.gz")
-        )
-
-    if parquet_path.exists():
-        return parquet_path
-    if csv_gz_path.exists():
-        return csv_gz_path
-
-    raise FileNotFoundError(
-        f"Could not find filtered decoded features at {parquet_path} or {csv_gz_path}"
-    )
-
-
 def load_qi2lab_transcripts_within_cells(specified_dir: Path) -> pd.DataFrame:
     """Load filtered decoded features and keep only transcripts assigned to cells."""
-
-    transcripts_path = resolve_qi2lab_transcripts_path(specified_dir)
-    if transcripts_path.suffixes[-2:] == [".csv", ".gz"]:
-        transcripts_df = pd.read_csv(transcripts_path)
+    if specified_dir.is_file():
+        if specified_dir.suffixes[-2:] == [".csv", ".gz"]:
+            transcripts_df = pd.read_csv(specified_dir)
+        else:
+            transcripts_df = pd.read_parquet(specified_dir)
     else:
-        transcripts_df = pd.read_parquet(transcripts_path)
+        datastore = qi2labDataStore(
+            resolve_datastore_path(specified_dir), validate=False
+        )
+        transcripts_df = datastore.load_global_filtered_decoded_spots()
+        if transcripts_df is None:
+            raise FileNotFoundError("Filtered decoded features not found in datastore.")
 
     required_columns = {
         "gene_id",
@@ -236,7 +204,7 @@ def load_qi2lab_transcripts_within_cells(specified_dir: Path) -> pd.DataFrame:
     missing_columns = sorted(required_columns - set(transcripts_df.columns))
     if missing_columns:
         raise ValueError(
-            f"Missing required columns in {transcripts_path}: {missing_columns}"
+            f"Missing required columns in {specified_dir}: {missing_columns}"
         )
 
     transcripts_df = transcripts_df.copy()

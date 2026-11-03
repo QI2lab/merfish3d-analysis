@@ -47,7 +47,6 @@ def test_zhuang_example_passes_own_parameters_and_exports_scaled_rois(
 ):
     datastore = image_datastore
     datastore_path = datastore.datastore_path
-    cellpose_path = datastore_path / "segmentation" / "cellpose"
     volume = np.arange(3 * 12 * 16, dtype=np.uint16).reshape(3, 12, 16)
     projection = volume.max(axis=0)
     spacing = np.array([1.5, 1.501, 1.501])
@@ -81,9 +80,8 @@ def test_zhuang_example_passes_own_parameters_and_exports_scaled_rois(
         reopened.load_global_cellpose_segmentation_image(False), masks
     )
     assert reopened.datastore_state["SegmentedCells"] is True
-    roi_path = cellpose_path / "imagej_rois"
-    pixel_rois = roiread(roi_path / "pixel_spacing_rois.zip")
-    global_rois = roiread(roi_path / "global_coords_rois.zip")
+    pixel_rois = roiread(datastore.cellpose_pixel_rois_path())
+    global_rois = roiread(datastore.cellpose_global_rois_path())
     assert len(pixel_rois) == len(global_rois) == (0 if empty_masks else 1)
     for pixel_roi, global_roi in zip(pixel_rois, global_rois, strict=True):
         xy = pixel_roi.coordinates()
@@ -113,7 +111,6 @@ def test_zhuang_example_reopens_real_masks_and_replaces_existing_rois(
     datastore.save_global_fiducial_projection(
         volume.max(axis=0), affine, origin, spacing
     )
-    cellpose_path = datastore_path / "segmentation/cellpose"
     masks = np.zeros((12, 16), dtype=np.uint16)
     masks[2:7, 3:9] = 1
     model = SimpleNamespace(eval=Mock(return_value=(masks, None, None)))
@@ -144,9 +141,8 @@ def test_zhuang_example_reopens_real_masks_and_replaces_existing_rois(
             grid.datasets[0].transform
             == image.ome_metadata(strict=True).multiscales[0].datasets[0].transform
         )
-        rois = cellpose_path / "imagej_rois"
-        pixels = roiread(rois / "pixel_spacing_rois.zip")
-        physical = roiread(rois / "global_coords_rois.zip")
+        pixels = roiread(datastore.cellpose_pixel_rois_path())
+        physical = roiread(datastore.cellpose_global_rois_path())
         assert len(pixels) == len(physical) == (0 if empty else 1)
         if not empty:
             xy = pixels[0].coordinates()
@@ -182,5 +178,4 @@ def test_zhuang_example_segments_real_projection(image_datastore):
     masks = reopened.load_global_cellpose_segmentation_image(return_future=False)
     assert masks.shape == projection.shape
     assert np.any(masks)
-    rois = datastore.datastore_path / "segmentation/cellpose/imagej_rois"
-    assert len(roiread(rois / "global_coords_rois.zip")) > 0
+    assert len(roiread(datastore.cellpose_global_rois_path())) > 0

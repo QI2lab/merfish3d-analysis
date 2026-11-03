@@ -27,7 +27,9 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 def test_invalid_voxel_calibration_does_not_replace_valid_calibration(tmp_path, value):
     datastore = qi2labDataStore(tmp_path / "store")
     datastore.voxel_size_zyx_um = [0.4, 0.2, 0.2]
-    path = tmp_path / "store/calibrations/attributes.json"
+    path = (
+        datastore.datastore_path / "acquisition/acquisition_metadata/acquisition.json"
+    )
     before = path.read_bytes()
     with pytest.raises(ValueError, match="voxel"):
         datastore.voxel_size_zyx_um = value
@@ -40,7 +42,10 @@ def test_invalid_voxel_calibration_does_not_replace_valid_calibration(tmp_path, 
 def test_invalid_stored_voxel_calibration_is_not_exposed_as_usable(
     image_datastore, value
 ):
-    path = image_datastore.datastore_path / "calibrations/attributes.json"
+    path = (
+        image_datastore.datastore_path
+        / "acquisition/acquisition_metadata/acquisition.json"
+    )
     metadata = json.loads(path.read_text())
     metadata["voxel_size_zyx_um"] = value
     path.write_text(json.dumps(metadata))
@@ -49,27 +54,13 @@ def test_invalid_stored_voxel_calibration_is_not_exposed_as_usable(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value", [[], 1, None, "not metadata"])
-def test_entity_metadata_must_be_a_json_object(tmp_path, value):
-    datastore = qi2labDataStore(tmp_path / "store")
-    entity = tmp_path / "entity"
-    entity.mkdir()
-    (entity / "attributes.json").write_text(json.dumps(value))
-    with pytest.raises(ValueError, match="object"):
-        datastore._load_entity_attributes(entity)
-    before = (entity / "attributes.json").read_bytes()
-    with pytest.raises(ValueError, match="object"):
-        datastore._save_entity_attributes(entity, {"deconvolution": True})
-    assert (entity / "attributes.json").read_bytes() == before
-
-
-@pytest.mark.unit
 def test_missing_required_calibration_metadata_is_not_optional(tmp_path):
     datastore = qi2labDataStore(tmp_path / "store")
-    (tmp_path / "store/calibrations/attributes.json").unlink()
+    (
+        datastore.datastore_path / "acquisition/acquisition_metadata/acquisition.json"
+    ).unlink()
     with pytest.raises(FileNotFoundError, match="Calibration"):
         datastore._load_calibrations_attributes()
-    assert datastore._load_entity_attributes(tmp_path / "optional") == {}
 
 
 @pytest.mark.unit
@@ -165,13 +156,7 @@ def test_segmented_state_requires_cellpose_labels_when_reopening(image_datastore
         origin_zyx_um=[0, 0, 0],
         spacing_zyx_um=datastore.voxel_size_zyx_um,
     )
-    roi_path = (
-        datastore.datastore_path
-        / "segmentation"
-        / "cellpose"
-        / "imagej_rois"
-        / "global_coords_rois.zip"
-    )
+    roi_path = datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(roi_path, [], mode="w")
     datastore.datastore_state = {"SegmentedCells": True}

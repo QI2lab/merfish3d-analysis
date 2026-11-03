@@ -63,9 +63,7 @@ def load_fused_channels(root_path: Path) -> list[LazyGlobalChannelData]:
         else:
             stacks.append((array, coords))
     if not stacks:
-        raise FileNotFoundError(
-            f"No fused OME-Zarr images in {datastore_path / 'fused'}"
-        )
+        raise FileNotFoundError(f"No fused OME-Zarr images in {datastore_path}")
     return [
         LazyGlobalChannelData(
             fused_zyx=array[0],

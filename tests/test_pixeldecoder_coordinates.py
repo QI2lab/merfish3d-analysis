@@ -123,7 +123,7 @@ def test_distinct_global_grid_and_stage_survive_reopen(image_datastore, global_f
         [9, -2, 16],
     )
 
-    group = open_group(datastore.datastore_path).validate(strict=True)
+    group = open_group(datastore.tile_scene_path).validate(strict=True)
     scene = group.ome_metadata(strict=True)
     transforms = {t.name: t for t in scene.scene.coordinateTransformations}
     stage_model = transforms["tile0000/round001/stage"]

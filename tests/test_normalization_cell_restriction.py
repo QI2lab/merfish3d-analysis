@@ -12,6 +12,138 @@ from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode
 from merfish3danalysis.PixelDecoder import PixelDecoder
 
 
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize("normalization_method", ["global", "iterative"])
+def test_named_run_workers_share_one_normalization_cache(
+    image_datastore, normalization_method
+):
+    import multiprocessing as mp
+
+    from merfish3danalysis.PixelDecoder import decode_tiles_worker
+
+    datastore = image_datastore
+    rng = np.random.default_rng(52)
+    shape = (4, 24, 24)
+    for tile in range(2):
+        stage = [0, 0, tile * 4]
+        datastore.save_local_stage_position_zyx_um(stage, np.eye(4), tile=tile, round=0)
+        datastore.save_global_coord_xforms_um(
+            np.eye(4), stage, datastore.voxel_size_zyx_um, tile=tile
+        )
+        datastore.save_local_round_transform_zyx_um(np.eye(4), tile=tile, round=1)
+        fiducial = rng.poisson(50, shape).astype(np.uint16)
+        fiducial[1:3, 9:14, 8:13] += 400
+        datastore.save_local_corrected_image(fiducial, tile=tile, round=0)
+        for bit in range(4):
+            image = rng.poisson(30, shape).astype(np.uint16)
+            image[1:3, 9:14, 8:13] += 200 + 5 * bit
+            datastore.save_local_corrected_image(image, tile=tile, bit=bit)
+            datastore.save_local_feature_predictor_image(
+                np.ones(shape, dtype=np.float32), tile=tile, bit=bit
+            )
+
+    run = f"parallel_{normalization_method}"
+    if normalization_method == "iterative":
+        datastore.save_decode_normalization_vectors(
+            run,
+            "iterative",
+            np.ones(4),
+            np.zeros(4),
+            decode_mode="3d",
+            metadata={"normalization_features": "all"},
+        )
+    decoder = PixelDecoder(
+        datastore,
+        merfish_bits=4,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d",
+        decode_run_key=run,
+        normalization_features="all",
+    )
+    decoder.decode_all_tiles(
+        assign_to_cells=False,
+        lowpass_sigma=None,
+        magnitude_threshold=(0.1, 20),
+        minimum_pixels=1,
+        normalization_method=normalization_method,
+        filter_method="lr",
+    )
+    normalization, background = datastore.load_decode_normalization_vectors(
+        run, "global"
+    )
+    assert normalization is not None and background is not None
+    assert datastore.load_decode_normalization_vectors(None, "global") == (None, None)
+    cache = (
+        datastore.datastore_path
+        / "codewords"
+        / "normalization"
+        / "runs"
+        / f"{run}.json"
+    )
+    before, timestamp = cache.read_bytes(), cache.stat().st_mtime_ns
+
+    # Both workers use the one available GPU but write different tile products.
+    workers = [
+        mp.get_context("spawn").Process(
+            target=decode_tiles_worker,
+            kwargs={
+                "datastore_path": datastore.datastore_path,
+                "tile_indices": [tile],
+                "gpu_id": 0,
+                "merfish_bits": 4,
+                "verbose": 0,
+                "decode_mode": "3d",
+                "lowpass_sigma": None,
+                "magnitude_threshold": (0.1, 20),
+                "minimum_pixels": 1,
+                "feature_predictor_threshold": 0.1,
+                "normalization_method": normalization_method,
+                "decode_run_key": run,
+                "normalization_features": "all",
+            },
+        )
+        for tile in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+        assert worker.exitcode == 0
+    assert cache.read_bytes() == before
+    assert cache.stat().st_mtime_ns == timestamp
+    for tile in range(2):
+        assert datastore.load_local_decoded_spots(tile, decode_run_key=run) is not None
+
+
+@pytest.mark.unit
+@pytest.mark.gpu
+def test_decode_requires_iterative_normalization_for_new_run(image_datastore):
+    datastore = image_datastore
+    run = "not_optimized"
+    datastore.save_decode_normalization_vectors(
+        run,
+        "global",
+        np.ones(4),
+        np.zeros(4),
+        decode_mode="3d",
+        metadata={"normalization_features": "all"},
+    )
+    decoder = PixelDecoder(
+        datastore,
+        merfish_bits=4,
+        num_gpus=1,
+        verbose=0,
+        decode_mode="3d",
+        decode_run_key=run,
+        normalization_features="all",
+    )
+    with pytest.raises(ValueError, match="Run iterative optimization"):
+        decoder.decode_all_tiles(normalization_method="iterative")
+    assert datastore.load_local_decoded_spots(0, decode_run_key=run) is None
+
+
 @pytest.mark.unit
 @pytest.mark.gpu
 @pytest.mark.parametrize("reflected", [False, True])
@@ -22,10 +154,7 @@ def test_cell_mask_rasterizes_global_segmentation_into_tile_pixels(
     camera = np.diag([1, -1 if reflected else 1, 1, 1])
     datastore.save_local_stage_position_zyx_um(np.zeros(3), camera, tile=0, round=0)
     datastore.save_global_coord_xforms_um(np.eye(4), np.zeros(3), np.ones(3), tile=0)
-    roi_path = (
-        datastore.datastore_path
-        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
-    )
+    roi_path = datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     sign = -1 if reflected else 1
     roi = ImagejRoi.frompoints([[1, sign], [3, sign], [3, 3 * sign], [1, 3 * sign]])
@@ -63,13 +192,12 @@ def test_global_normalization_pixel_selection_excludes_noncell_voxels() -> None:
 def test_present_empty_segmentation_does_not_fall_back_to_all_pixels(
     image_datastore,
 ) -> None:
-    roi_path = (
-        image_datastore.datastore_path
-        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
-    )
+    roi_path = image_datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(roi_path, [], mode="w")
-    (roi_path.parent.parent / "cell_outlines.json").write_text(
+    outline_path = image_datastore.cellpose_outlines_path()
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text(
         json.dumps(
             {
                 "features": [
@@ -127,10 +255,7 @@ def test_iterative_normalization_selects_requested_features(
     first_tile.to_parquet(tmp_path / "tile000_temp_decoded.parquet")
     second_tile.to_parquet(tmp_path / "tile001_temp_decoded.parquet")
 
-    roi_path = (
-        image_datastore.datastore_path
-        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
-    )
+    roi_path = image_datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(
         roi_path, [ImagejRoi.frompoints([[0, 0], [4, 0], [4, 4], [0, 4]])], mode="w"
@@ -153,10 +278,7 @@ def test_iterative_normalization_selects_requested_features(
 @pytest.mark.unit
 @pytest.mark.gpu
 def test_all_features_bypasses_mask_loading_and_selects_all_voxels(image_datastore):
-    roi_path = (
-        image_datastore.datastore_path
-        / "segmentation/cellpose/imagej_rois/global_coords_rois.zip"
-    )
+    roi_path = image_datastore.cellpose_global_rois_path()
     roi_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(
         roi_path, [ImagejRoi.frompoints([[0, 0], [1, 0], [1, 1], [0, 1]])], mode="w"
