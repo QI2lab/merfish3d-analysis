@@ -1,5 +1,4 @@
 from pathlib import Path
-from unittest.mock import Mock
 
 import cupy as cp
 import numpy as np
@@ -7,7 +6,6 @@ import pandas as pd
 import pytest
 import typer
 
-import merfish3danalysis.PixelDecoder as pixel_decoder_module
 from merfish3danalysis.cli.qi2lab_microscopes.pixeldecode import (
     _load_optimization_exclusions_file,
     _optimization_exclusions_path,
@@ -214,59 +212,6 @@ def test_centroid_support_does_not_resolve_a_near_tie_using_a_farther_label():
     # two planes away on both sides, cannot claim those eight photons.
     np.testing.assert_array_equal(sums, [8, 0, 0, 0])
     np.testing.assert_array_equal(z_moments, [16, 0, 0, 0])
-
-
-@pytest.mark.unit
-@pytest.mark.gpu
-@pytest.mark.parametrize("normalization_features", ["all", "cells"])
-def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
-    monkeypatch: pytest.MonkeyPatch,
-    decoder,
-    normalization_features: str,
-) -> None:
-    for tile in range(2):
-        fiducial = np.full((1, 32, 48), 100, dtype=np.uint16)
-        if tile == 1:
-            fiducial[:, 12:20, 18:26] = 1000
-        decoder._datastore.save_local_corrected_image(fiducial, tile=tile, round=0)
-    monkeypatch.setattr(
-        pixel_decoder_module, "sample", lambda values, count: list(values)
-    )
-    decoder._normalization_features = normalization_features
-    decoder._global_normalization_vector = np.ones(4, dtype=np.float32)
-    decoder._cleanup = Mock()
-    decoder._load_all_barcodes = Mock()
-    decoder._iterative_normalization_vectors = Mock()
-    decoder._load_global_normalization_vectors = Mock()
-    start_worker = Mock()
-    monkeypatch.setattr(
-        pixel_decoder_module,
-        "_start_gpu_worker_process",
-        start_worker,
-    )
-    monkeypatch.setattr(pixel_decoder_module, "_join_gpu_workers", Mock())
-
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=1,
-        n_iterations=1,
-        minimum_pixels=1,
-        excluded_gene_ids=["GeneB", "GeneB"],
-    )
-
-    start_worker.assert_called_once()
-    assert decoder._load_global_normalization_vectors.call_args_list[0].kwargs[
-        "tile_indices"
-    ] == [1]
-    args = start_worker.call_args.kwargs["args"]
-    assert args[0] == decoder._datastore.datastore_path
-    assert args[1] == [1]
-    assert args[-3] == ("GeneB",)
-    assert args[-2] is None
-    assert args[-1] == normalization_features
-    assert (
-        decoder._iterative_normalization_metadata()["normalization_features"]
-        == normalization_features
-    )
 
 
 @pytest.mark.unit

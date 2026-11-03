@@ -2,7 +2,6 @@
 
 import runpy
 from pathlib import Path
-from unittest.mock import Mock, call
 
 import numpy as np
 import pytest
@@ -60,113 +59,16 @@ def test_readout_deconvolution_sets_default_threshold(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    "filename, operation, arguments, expected",
-    [
-        ("00a_test_image_orientation.py", "create_overview_image", [], 2),
-        (
-            "00a_test_image_orientation.py",
-            "create_overview_image",
-            ["--n-tiles", "5"],
-            5,
-        ),
-        ("01_convert_to_qi2lab.py", "convert_data", [], None),
-        ("03_cellpose_segmentation.py", "run_cellpose", [], None),
-        ("04_pixel_decode.py", "decode_pixels", [], False),
-        ("04_pixel_decode.py", "decode_pixels", ["--reprocess-existing"], True),
-        ("05_one_tile_F1.py", "decode_pixels", [], None),
-        ("05_calculate_f1_score.py", "calculate_F1", [], None),
-    ],
-)
-def test_zhuang_cli_preserves_arguments_and_defaults(
-    tmp_path, monkeypatch, filename, operation, arguments, expected
-):
-    example = runpy.run_path(str(EXAMPLES / filename))
-    process = Mock()
-    monkeypatch.setitem(example["main"].__globals__, operation, process)
-    monkeypatch.chdir(tmp_path)
-
-    result = runner.invoke(example["app"], ["input data", *arguments])
-
-    assert result.exit_code == 0, result.output
-    root = tmp_path / "input data"
-    if operation == "create_overview_image":
-        process.assert_called_once_with(root, expected)
-    elif operation == "convert_data":
-        process.assert_called_once_with(
-            root_path=root,
-            channel_names=["alexa488", "cy5", "alexa750"],
-            codebook_path=root / "additional_files/codebook.csv",
-        )
-    elif operation == "run_cellpose":
-        process.assert_called_once_with(
-            root,
-            {
-                "normalization": [0.5, 99.5],
-                "flow_threshold": 0.4,
-                "cellprob_threshold": 1.0,
-                "diameter": 15,
-            },
-        )
-    elif operation == "calculate_F1":
-        process.assert_called_once_with(
-            root,
-            root
-            / "mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv",
-            search_radius=3.0,
-        )
-    elif filename == "04_pixel_decode.py":
-        process.assert_called_once_with(root_path=root, reprocess_existing=expected)
-    else:
-        process.assert_called_once_with(root_path=root)
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("flags", [[], ["--local-only"], ["--global-only"]])
-def test_registration_cli_selects_stages_in_order(tmp_path, monkeypatch, flags):
+def test_registration_cli_rejects_conflicting_stages_before_processing():
     example = runpy.run_path(str(EXAMPLES / "02_register_and_deconvolve.py"))
-    process = Mock()
-    monkeypatch.setitem(
-        example["main"].__globals__, "local_register_data", process.local
-    )
-    monkeypatch.setitem(
-        example["main"].__globals__, "global_register_data", process.global_register
-    )
-
-    result = runner.invoke(example["app"], [str(tmp_path), *flags])
-
-    assert result.exit_code == 0, result.output
-    expected = []
-    if "--global-only" not in flags:
-        expected.append(call.local(tmp_path))
-    if "--local-only" not in flags:
-        expected.append(call.global_register(tmp_path, create_max_proj_tiff=True))
-    assert process.mock_calls == expected
-
-
-@pytest.mark.unit
-def test_registration_cli_rejects_conflicting_stages_before_processing(monkeypatch):
-    example = runpy.run_path(str(EXAMPLES / "02_register_and_deconvolve.py"))
-    local = Mock()
-    global_register = Mock()
-    monkeypatch.setitem(example["main"].__globals__, "local_register_data", local)
-    monkeypatch.setitem(
-        example["main"].__globals__, "global_register_data", global_register
-    )
-
     result = runner.invoke(example["app"], ["data", "--local-only", "--global-only"])
 
     assert result.exit_code == 2
     assert "mutually exclusive" in result.output
-    local.assert_not_called()
-    global_register.assert_not_called()
 
 
 @pytest.mark.unit
-def test_orientation_cli_rejects_noninteger_tile_count(monkeypatch):
+def test_orientation_cli_rejects_noninteger_tile_count():
     example = runpy.run_path(str(EXAMPLES / "00a_test_image_orientation.py"))
-    process = Mock()
-    monkeypatch.setitem(example["main"].__globals__, "create_overview_image", process)
     result = runner.invoke(example["app"], ["data", "--n-tiles", "invalid"])
     assert result.exit_code == 2
-    process.assert_not_called()

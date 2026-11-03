@@ -9,6 +9,7 @@ coverage to the standard Zenodo F1 integration matrix.
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import time
 from datetime import UTC, datetime
@@ -262,63 +263,18 @@ def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
     if not configured_root:
         pytest.skip("Pass --simulation-data-root with the extracted Zenodo dataset.")
     root = Path(configured_root).expanduser().resolve()
-    if not root.exists():
-        pytest.skip(f"Local simulation dataset root does not exist: {root}")
-    return _normalize_dataset_root(root)
+    if not root.is_dir():
+        pytest.fail(f"Simulation dataset root is not a directory: {root}")
+    return root
 
 
 @pytest.fixture(scope="session")
 def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
-    """Resolve local dataset directories for the simulation matrix."""
-    resolved_dirs: dict[str, Path] = {}
-    missing_variants: list[str] = []
-    for variant, dataset_dir in SIMULATION_DATASET_DIRS.items():
-        candidate = simulation_dataset_root / dataset_dir
-        if candidate.exists():
-            resolved_dirs[variant] = candidate
-        else:
-            missing_variants.append(f"{variant}:{dataset_dir}")
-
-    if missing_variants:
-        pytest.skip(
-            "Missing required simulation dataset directories under "
-            f"{simulation_dataset_root}: {missing_variants}"
-        )
-
-    fingerprint_errors: list[str] = []
-    for (
-        variant,
-        axial_spacing_um,
-    ), expected_hash in ZENODO_ALIGNED_IMAGE_SHA256.items():
-        image_path = resolved_dirs[variant] / axial_spacing_um / "aligned_1.tiff"
-        if not image_path.exists():
-            fingerprint_errors.append(f"missing {image_path}")
-            continue
-        actual_hash = _sha256_file(image_path)
-        if actual_hash != expected_hash:
-            fingerprint_errors.append(
-                f"{image_path}: expected {expected_hash}, got {actual_hash}"
-            )
-
-    if fingerprint_errors:
-        pytest.fail(
-            "Simulation data do not match Zenodo record 17274305:\n"
-            + "\n".join(fingerprint_errors)
-        )
-
-    return resolved_dirs
-
-
-def _normalize_dataset_root(root: Path) -> Path:
-    """Normalize the configured local simulation dataset root."""
-    example_dir = root / "example_16bit_flat"
-    if not example_dir.exists():
-        pytest.skip(
-            f"Could not find 'example_16bit_flat' under dataset root: {root}. "
-            "Pass --simulation-data-root with the extracted Zenodo dataset."
-        )
-
-    return root
+    """Resolve variant paths; each selected case validates only its inputs."""
+    return {
+        variant: simulation_dataset_root / directory
+        for variant, directory in SIMULATION_DATASET_DIRS.items()
+    }
 
 
 @pytest.fixture(scope="session")
@@ -410,11 +366,25 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
     missing_files = [
         filename
         for filename in REQUIRED_SIMULATION_FILES
-        if not (source_case_dir / filename).exists()
+        if not (source_case_dir / filename).is_file()
     ]
     if missing_files:
-        pytest.skip(
+        pytest.fail(
             f"Missing required simulation files in {source_case_dir}: {missing_files}"
+        )
+
+    variant = next(
+        name
+        for name, directory in SIMULATION_DATASET_DIRS.items()
+        if directory == source_case_dir.parent.name
+    )
+    image_path = source_case_dir / "aligned_1.tiff"
+    expected_hash = ZENODO_ALIGNED_IMAGE_SHA256[(variant, source_case_dir.name)]
+    actual_hash = _sha256_file(image_path)
+    if actual_hash != expected_hash:
+        pytest.fail(
+            "Simulation data do not match Zenodo record 17274305: "
+            f"{image_path}: expected {expected_hash}, got {actual_hash}"
         )
 
     case_root = work_root / source_case_dir.name
@@ -540,11 +510,6 @@ def _prepare_preprocessed_magnitude_case(
     )
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
-    if not source_case_dir.exists():
-        pytest.skip(
-            f"Dataset case missing for {dataset_variant} at {axial_spacing_um} um."
-        )
-
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:
         pytest.skip(
@@ -840,11 +805,6 @@ def _run_standard_simulation_case(
     feature_predictor_threshold = DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
-    if not source_case_dir.exists():
-        pytest.skip(
-            f"Dataset case missing for {dataset_variant} at {axial_spacing_um} um."
-        )
-
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:
         pytest.skip(
@@ -918,12 +878,128 @@ def _run_standard_simulation_case(
 
 @pytest.mark.integration
 @pytest.mark.gpu
+def test_zhuang_local_registration_on_published_simulation(
+    simulation_dataset_dirs, simulation_api, tmp_path
+):
+    """Run the Zhuang example's local registration on a real acquisition."""
+    case_root = _prepare_case_workspace(
+        simulation_dataset_dirs["uniform"] / "0.315", tmp_path
+    )
+    simulation_api["convert_simulation"](case_root)
+    acquisition_root = case_root / "sim_acquisition"
+    simulation_api["convert_data"](acquisition_root)
+    example = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "examples/zhuang_lab/02_register_and_deconvolve.py"
+        )
+    )
+    result = CliRunner().invoke(example["app"], [str(acquisition_root), "--local-only"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for round_id in datastore.round_ids:
+        transform = datastore.load_local_round_transform_zyx_um(0, round_id)
+        assert transform is not None and np.isfinite(transform).all()
+        assert (
+            datastore.load_local_deconvolved_fiducial_image(0, round_id, None) is None
+        )
+    for bit in datastore.bit_ids:
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+    assert datastore.load_global_fiducial_projection(False) is None
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+def test_qi2lab_fiducial_only_then_no_decon_preprocessing(
+    simulation_dataset_dirs, simulation_api, tmp_path
+):
+    """Exercise both preprocessing modes on the published acquisition."""
+    from merfish3danalysis.cli.qi2lab_microscopes import preprocess
+
+    case_root = _prepare_case_workspace(
+        simulation_dataset_dirs["uniform"] / "0.315", tmp_path
+    )
+    simulation_api["convert_simulation"](case_root)
+    acquisition_root = case_root / "sim_acquisition"
+    simulation_api["convert_data"](acquisition_root)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        preprocess.app, [str(acquisition_root), "--fiducial-registration-only"]
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert not datastore.datastore_state["LocalRegistered"]
+    for round_id in datastore.round_ids:
+        assert datastore.load_local_round_transform_zyx_um(0, round_id) is not None
+        assert (
+            datastore.load_local_deconvolved_fiducial_image(0, round_id, None)
+            is not None
+        )
+    assert datastore.load_global_fiducial_projection(False) is not None
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+        assert datastore.load_local_feature_predictor_image(0, bit, None) is None
+        assert datastore.load_local_feature_predictor_spots(0, bit) is None
+
+    result = runner.invoke(preprocess.app, [str(acquisition_root), "--no-decon"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+
+    first_bit = datastore.bit_ids[0]
+    original_prediction = datastore.load_local_feature_predictor_image(
+        0, first_bit, False
+    )
+    original_spots = datastore.load_local_feature_predictor_spots(0, first_bit)
+    result = runner.invoke(
+        preprocess.app, [str(acquisition_root), "--fiducial-registration-only"]
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_feature_predictor_image(0, bit, None) is not None
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+    np.testing.assert_array_equal(
+        datastore.load_local_feature_predictor_image(0, first_bit, False),
+        original_prediction,
+    )
+    import pandas as pd
+
+    pd.testing.assert_frame_equal(
+        datastore.load_local_feature_predictor_spots(0, first_bit), original_spots
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
 @pytest.mark.parametrize(
-    "decode_run_key",
-    [pytest.param(None, id="default"), pytest.param("integration_run", id="named")],
+    "decode_run_key,normalization_features,check_exclusions",
+    [
+        pytest.param(None, "all", False, id="default-run-all-features"),
+        pytest.param("integration_run", None, False, id="named-run-default-features"),
+        pytest.param("exclusion_baseline", None, True, id="excluded-cells"),
+    ],
 )
 def test_qi2lab_commands_decode_simulation_ground_truth(
-    simulation_dataset_dirs, simulation_api, tmp_path, decode_run_key
+    simulation_dataset_dirs,
+    simulation_api,
+    tmp_path,
+    decode_run_key,
+    normalization_features,
+    check_exclusions,
 ):
     """Run the standard qi2lab commands on the published Nyquist acquisition."""
     from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode, preprocess
@@ -950,17 +1026,24 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
     np.testing.assert_allclose(origin, [0, -10.37, -10.37])
     np.testing.assert_allclose(spacing, [0.315, 0.081, 0.081])
     assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        deconvolved = datastore.load_local_deconvolved_readout_image(0, bit, None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert deconvolved is not None and deconvolved.shape == corrected.shape
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
 
     arguments = [
         str(acquisition_root),
-        "--normalization-features",
-        "all",
         "--minimum-pixels-per-RNA",
         "28",
         "--magnitude-threshold",
         "0.9",
         "10",
     ]
+    if normalization_features is not None:
+        arguments.extend(["--normalization-features", normalization_features])
     if decode_run_key is not None:
         arguments.extend(["--decode-run-key", decode_run_key])
     result = runner.invoke(pixeldecode.app, arguments)
@@ -985,6 +1068,8 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         )
         assert normalization is not None
         assert background is not None
+        metadata = datastore.load_decode_normalization_metadata(decode_run_key, kind)
+        assert metadata["normalization_features"] == (normalization_features or "cells")
     scores = simulation_api["calculate_F1"](
         case_root, search_radius=1.0, decode_run_key=decode_run_key
     )
@@ -999,6 +1084,88 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         STANDARD_EXPECTED_F1_SCORES[("uniform", "0.315", "no-chromatic")]
         - F1_ACCURACY_ALLOWANCE
     )
+
+    if check_exclusions:
+        import pandas as pd
+        from roifile import ImagejRoi, roiwrite
+        from shapely.geometry import Point, Polygon
+
+        from merfish3danalysis.PixelDecoder import PixelDecoder
+
+        # Reuse the real first optimization iteration to select an abundant,
+        # nonblank gene and a cell ROI containing only part of the field.
+        baseline = pd.read_parquet(
+            datastore.decoded_temporary_dir(decode_run_key, iteration=0)
+            / "tile000_temp_decoded.parquet"
+        )
+        genes = baseline["gene_id"].astype("string")
+        excluded_gene = (
+            genes[~genes.str.lower().str.startswith("blank")].value_counts().index[0]
+        )
+        x_min, x_max = (
+            baseline["global_x"].min() - 1,
+            baseline["global_x"].quantile(0.75),
+        )
+        y_min, y_max = baseline["global_y"].min() - 1, baseline["global_y"].max() + 1
+        roi = ImagejRoi.frompoints(
+            np.array([[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]])
+        )
+        roiwrite(datastore.cellpose_global_rois_path(), [roi], mode="w")
+        polygon = Polygon(next(iter(datastore.load_global_cellpose_roi_zip().values())))
+
+        run = "excluded_cells"
+        decoder = PixelDecoder(
+            datastore,
+            merfish_bits=datastore.num_bits,
+            num_gpus=1,
+            verbose=0,
+            decode_run_key=run,
+            normalization_features="cells",
+        )
+        decoder.optimize_normalization_by_decoding(
+            n_random_tiles=1,
+            n_iterations=1,
+            minimum_pixels=28,
+            magnitude_threshold=(0.9, 10),
+            excluded_gene_ids=[excluded_gene, excluded_gene],
+        )
+
+        optimization = pd.read_parquet(
+            datastore.decoded_temporary_dir(run, iteration=0)
+            / "tile000_temp_decoded.parquet"
+        )
+        assert (genes == excluded_gene).any()
+        assert not (optimization["gene_id"] == excluded_gene).any()
+        inside = np.array(
+            [
+                polygon.covers(Point(x, y))
+                for x, y in zip(
+                    optimization["global_x"], optimization["global_y"], strict=True
+                )
+            ]
+        )
+        assert inside.any() and (~inside).any()
+        pd.testing.assert_frame_equal(
+            decoder._df_barcodes_loaded.reset_index(drop=True),
+            optimization.loc[inside].reset_index(drop=True),
+        )
+        metadata = datastore.load_decode_normalization_metadata(run, "iterative")
+        assert metadata["excluded_gene_ids"] == [excluded_gene]
+        assert metadata["normalization_features"] == "cells"
+        global_cells, _ = datastore.load_decode_normalization_vectors(run, "global")
+        global_all, _ = datastore.load_decode_normalization_vectors(
+            decode_run_key, "global"
+        )
+        assert not np.allclose(global_cells, global_all)
+
+        # Exclusions apply to fitting only; the final decoder still calls that gene.
+        decoder.decode_one_tile(
+            tile_idx=0,
+            minimum_pixels=28,
+            magnitude_threshold=(0.9, 10),
+            normalization_method="iterative",
+        )
+        assert (decoder.decoded_barcodes["gene_id"] == excluded_gene).any()
 
 
 @pytest.mark.integration
