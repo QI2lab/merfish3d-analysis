@@ -1,6 +1,4 @@
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -18,12 +16,24 @@ def ndtiff_acquisition(tmp_path, request):
         str(path), summary_metadata={"ChNames": ["DAPI", "Cy5"]}, writable=True
     )
     variant = getattr(request, "param", None)
+    realistic = variant == "realistic"
+    if realistic:
+        from scipy.ndimage import gaussian_filter
+
     for channel in ("DAPI", "Cy5"):
         channel_coordinate = (
             ("DAPI", "Cy5").index(channel) if variant == "numeric" else channel
         )
         for position in (0, 2):
-            for z in range(3):
+            if realistic:
+                rng = np.random.default_rng(position + (100 if channel == "Cy5" else 0))
+                beads = np.zeros((9, 96, 96), dtype=np.float32)
+                for _ in range(24):
+                    z, y, x = rng.integers([1, 8, 8], [8, 88, 88])
+                    beads[z, y, x] += rng.uniform(1000, 3000)
+                signal = gaussian_filter(beads, sigma=(0.8, 1.4, 1.4))
+                raw = rng.poisson(5 + signal).astype(np.uint16) + 100
+            for z in range(9 if realistic else 3):
                 writer.put_image(
                     {
                         "channel": channel_coordinate,
@@ -31,7 +41,9 @@ def ndtiff_acquisition(tmp_path, request):
                         "z": z,
                         "time": 0,
                     },
-                    np.full(
+                    raw[z]
+                    if realistic
+                    else np.full(
                         (3, 4),
                         100 + (10 if channel == "Cy5" else 0) + position + z,
                         dtype=np.uint16,
@@ -54,25 +66,6 @@ def ndtiff_acquisition(tmp_path, request):
     dataset = script._load_dataset(path)
     yield dataset
     dataset.close()
-
-
-class _FakeUFish:
-    def __init__(self) -> None:
-        self.calls: list[np.ndarray] = []
-
-    def predict(
-        self,
-        image: np.ndarray,
-        *,
-        axes: str,
-        blend_3d: bool,
-        batch_size: int,
-    ) -> tuple[None, np.ndarray]:
-        assert axes == "zyx"
-        assert blend_3d is False
-        assert batch_size == 1
-        self.calls.append(image.copy())
-        return None, image.astype(np.float64) / 10.0
 
 
 @pytest.mark.unit
@@ -102,75 +95,20 @@ def test_expands_consecutive_ufish_channel_arguments() -> None:
 
 
 @pytest.mark.unit
-def test_generate_channel_psfs_uses_repository_microscope_parameters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = []
+def test_generate_channel_psfs_uses_repository_microscope_parameters():
+    from merfish3danalysis.utils.psf import generate_qi2lab_psf
 
-    def fake_make_psf(**kwargs: object) -> np.ndarray:
-        calls.append(kwargs)
-        return np.ones((int(kwargs["z"]), 3, 3), dtype=np.float64)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "psfmodels",
-        SimpleNamespace(make_psf=fake_make_psf),
-    )
-
+    spacing = (0.32, 0.0985, 0.0985)
     psfs = script.generate_channel_psfs(
-        ["Blue", "Yellow", "Red"],
-        z_depth=7,
-        voxel_size_zyx_um=(0.32, 0.0985, 0.0985),
+        ["Blue", "Yellow", "Red"], z_depth=7, voxel_size_zyx_um=spacing
     )
-
-    assert [call["wvl"] for call in calls] == [0.520, 0.580, 0.670]
-    for call in calls:
-        assert call == {
-            "z": 7,
-            "nx": 51,
-            "dxy": 0.098,
-            "dz": 0.32,
-            "NA": 1.35,
-            "wvl": call["wvl"],
-            "ns": 1.47,
-            "ni": 1.51,
-            "ni0": 1.51,
-            "model": "vectorial",
-        }
-    for psf in psfs.values():
-        assert psf.dtype == np.float32
-        assert np.isclose(np.sum(psf), 1.0)
-
-
-@pytest.mark.unit
-def test_deconvolve_stack_uses_repository_rlgc_defaults(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = []
-
-    def fake_chunked_rlgc(**kwargs: object) -> np.ndarray:
-        calls.append(kwargs)
-        return np.asarray([[[-1.0, 1.9, 70000.0]]], dtype=np.float32)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "merfish3danalysis.utils.rlgc",
-        SimpleNamespace(chunked_rlgc=fake_chunked_rlgc),
-    )
-    image = np.ones((1, 2, 3), dtype=np.uint16)
-    psf = np.ones((1, 3, 3), dtype=np.float32)
-
-    deconvolved = script.deconvolve_stack(image, psf, gpu_id=2)
-
-    assert len(calls) == 1
-    assert calls[0]["image"] is image
-    assert calls[0]["psf"] is psf
-    assert calls[0]["gpu_id"] == 2
-    assert calls[0]["crop_yx"] == 2048
-    assert calls[0]["crop_z"] is None
-    assert calls[0]["release_memory"] is True
-    assert deconvolved.dtype == np.uint16
-    np.testing.assert_array_equal(deconvolved, [[[0, 1, 65535]]])
+    for channel, wavelength in zip(psfs, (0.520, 0.580, 0.670), strict=True):
+        expected = generate_qi2lab_psf(
+            z_depth=7, voxel_size_zyx_um=spacing, emission_wavelength_um=wavelength
+        )
+        np.testing.assert_array_equal(psfs[channel], expected)
+        assert psfs[channel].dtype == np.float32
+        assert psfs[channel].sum() == pytest.approx(1)
 
 
 @pytest.mark.unit
@@ -213,65 +151,107 @@ def test_aliases_missing_first_stack_to_zero_suffixed_reader(
         dataset.close()
 
 
-@pytest.mark.unit
-def test_process_dataset_writes_all_corrected_and_selected_ufish_stacks(
-    tmp_path: Path,
-    ndtiff_acquisition,
-) -> None:
-    dataset = ndtiff_acquisition
-    ufish = _FakeUFish()
-
+@pytest.mark.integration
+def test_exports_corrected_channels_and_selected_z_planes(ndtiff_acquisition, tmp_path):
+    output = tmp_path / "output"
     script.process_dataset(
-        dataset,
-        output_dir=tmp_path / "output",
-        ufish_channels=["Cy5"],
+        ndtiff_acquisition,
+        output_dir=output,
+        ufish_channels=[],
         z_start=1,
         z_stop=3,
         overwrite=False,
-        ufish=ufish,
+        ufish=None,
     )
-
-    tmp_path = tmp_path / "output"
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["pos0000", "pos0002"]
-    assert sorted(path.name for path in (tmp_path / "pos0000").iterdir()) == [
-        "Cy5.ome.tif",
-        "Cy5_ufish.ome.tif",
-        "DAPI.ome.tif",
-    ]
-    assert sorted(path.name for path in (tmp_path / "pos0002").iterdir()) == [
-        "Cy5.ome.tif",
-        "Cy5_ufish.ome.tif",
-        "DAPI.ome.tif",
-    ]
-
-    expected_dapi = np.stack(
-        [
-            np.full((3, 4), 2, dtype=np.uint16),
-            np.full((3, 4), 4, dtype=np.uint16),
+    for position in (0, 2):
+        directory = output / f"pos{position:04d}"
+        assert sorted(path.name for path in directory.iterdir()) == [
+            "Cy5.ome.tif",
+            "DAPI.ome.tif",
         ]
+        for channel, offset in (("DAPI", 0), ("Cy5", 10)):
+            expected = np.stack(
+                [np.full((3, 4), 2 * (offset + position + z)) for z in (1, 2)]
+            ).astype(np.uint16)
+            with TiffFile(directory / f"{channel}.ome.tif") as tiff:
+                np.testing.assert_array_equal(tiff.asarray(), expected)
+                assert tiff.is_ome
+                assert all(page.compression.name == "NONE" for page in tiff.pages)
+                metadata = tiff.ome_metadata or ""
+            assert 'PhysicalSizeX="0.108"' in metadata
+            assert 'PhysicalSizeY="0.108"' in metadata
+            assert 'PhysicalSizeZ="0.315"' in metadata
+            assert f'Name="{channel}"' in metadata
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize("ndtiff_acquisition", ["realistic"], indirect=True)
+def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
+    ndtiff_acquisition, tmp_path
+):
+    output = tmp_path / "output"
+    result = CliRunner().invoke(
+        script.app,
+        [
+            str(tmp_path / "acquisition"),
+            "--output-dir",
+            str(output),
+            "--ufish-channel",
+            "Cy5",
+            "--deconvolve",
+        ],
     )
-    expected_cy5 = expected_dapi + 20
-    np.testing.assert_array_equal(
-        imread(tmp_path / "pos0000" / "DAPI.ome.tif"), expected_dapi
+    assert result.exit_code == 0, (result.output, result.exception)
+
+    for position in (0, 2):
+        directory = output / f"pos{position:04d}"
+        assert sorted(path.name for path in directory.iterdir()) == [
+            "Cy5.ome.tif",
+            "Cy5_decon.ome.tif",
+            "Cy5_ufish.ome.tif",
+            "DAPI.ome.tif",
+            "DAPI_decon.ome.tif",
+        ]
+        for channel in ("DAPI", "Cy5"):
+            raw = np.stack(
+                [
+                    ndtiff_acquisition.read_image(
+                        channel=channel, position=position, z=z, time=0
+                    )
+                    for z in range(9)
+                ]
+            )
+            corrected = imread(directory / f"{channel}.ome.tif")
+            np.testing.assert_array_equal(corrected, (raw - 100) * 2)
+            deconvolved = imread(directory / f"{channel}_decon.ome.tif")
+            assert deconvolved.shape == corrected.shape
+            assert deconvolved.dtype == np.uint16
+            assert np.any(deconvolved)
+            assert not np.array_equal(deconvolved, corrected)
+            with TiffFile(directory / f"{channel}_decon.ome.tif") as tiff:
+                assert tiff.is_ome
+                metadata = tiff.ome_metadata or ""
+            assert 'PhysicalSizeX="0.108"' in metadata
+            assert 'PhysicalSizeY="0.108"' in metadata
+            assert 'PhysicalSizeZ="0.315"' in metadata
+        prediction = imread(directory / "Cy5_ufish.ome.tif")
+        assert prediction.shape == (9, 96, 96)
+        assert prediction.dtype == np.float32
+        assert np.isfinite(prediction).all()
+        assert prediction.max() > 0
+
+    # Check the actual model received deconvolved rather than corrected pixels.
+    model = script.load_default_ufish(0)
+    _, expected = model.predict(
+        imread(output / "pos0000" / "Cy5_decon.ome.tif"),
+        axes="zyx",
+        blend_3d=False,
+        batch_size=1,
     )
-    np.testing.assert_array_equal(
-        imread(tmp_path / "pos0000" / "Cy5.ome.tif"), expected_cy5
+    np.testing.assert_allclose(
+        imread(output / "pos0000" / "Cy5_ufish.ome.tif"), expected, atol=1e-5
     )
-    ufish_output = imread(tmp_path / "pos0000" / "Cy5_ufish.ome.tif")
-    assert ufish_output.dtype == np.float32
-    np.testing.assert_array_equal(
-        ufish_output,
-        expected_cy5.astype(np.float32) / 10.0,
-    )
-    with TiffFile(tmp_path / "pos0000" / "DAPI.ome.tif") as tiff:
-        assert tiff.is_ome
-        assert all(page.compression.name == "NONE" for page in tiff.pages)
-        ome_metadata = tiff.ome_metadata or ""
-    assert 'PhysicalSizeX="0.108"' in ome_metadata
-    assert 'PhysicalSizeY="0.108"' in ome_metadata
-    assert 'PhysicalSizeZ="0.315"' in ome_metadata
-    assert 'Name="DAPI"' in ome_metadata
-    assert len(ufish.calls) == 2
 
 
 @pytest.mark.unit
@@ -291,72 +271,10 @@ def test_process_dataset_preflights_existing_outputs(
             z_start=0,
             z_stop=1,
             overwrite=False,
-            ufish=_FakeUFish(),
+            ufish=None,
         )
 
     assert existing_path.read_bytes() == b"keep me"
-
-
-@pytest.mark.unit
-def test_deconvolution_writes_stacks_and_supplies_ufish_input(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    ndtiff_acquisition,
-) -> None:
-    ufish = _FakeUFish()
-    deconvolution_calls = []
-    psfs = {
-        "DAPI": np.ones((2, 3, 3), dtype=np.float32),
-        "Cy5": np.full((2, 3, 3), 2, dtype=np.float32),
-    }
-    monkeypatch.setattr(
-        script,
-        "generate_channel_psfs",
-        lambda *_args, **_kwargs: psfs,
-    )
-
-    def fake_deconvolve(
-        image: np.ndarray,
-        psf: np.ndarray,
-        *,
-        gpu_id: int,
-    ) -> np.ndarray:
-        deconvolution_calls.append((image.copy(), psf, gpu_id))
-        return image + 5
-
-    monkeypatch.setattr(script, "deconvolve_stack", fake_deconvolve)
-
-    script.process_dataset(
-        ndtiff_acquisition,
-        output_dir=tmp_path / "output",
-        ufish_channels=["Cy5"],
-        z_start=0,
-        z_stop=2,
-        overwrite=False,
-        ufish=ufish,
-        gpu_id=3,
-        deconvolve=True,
-    )
-
-    tmp_path = tmp_path / "output"
-    assert len(deconvolution_calls) == 4
-    assert all(call[2] == 3 for call in deconvolution_calls)
-    assert sorted(path.name for path in (tmp_path / "pos0000").iterdir()) == [
-        "Cy5.ome.tif",
-        "Cy5_decon.ome.tif",
-        "Cy5_ufish.ome.tif",
-        "DAPI.ome.tif",
-        "DAPI_decon.ome.tif",
-    ]
-    deconvolved_cy5 = imread(tmp_path / "pos0000" / "Cy5_decon.ome.tif")
-    np.testing.assert_array_equal(ufish.calls[0], deconvolved_cy5)
-    for filename in ("Cy5_decon.ome.tif", "Cy5_ufish.ome.tif"):
-        with TiffFile(tmp_path / "pos0000" / filename) as tiff:
-            assert tiff.is_ome
-            ome_metadata = tiff.ome_metadata or ""
-        assert 'PhysicalSizeX="0.108"' in ome_metadata
-        assert 'PhysicalSizeY="0.108"' in ome_metadata
-        assert 'PhysicalSizeZ="0.315"' in ome_metadata
 
 
 @pytest.mark.unit
@@ -366,11 +284,11 @@ def test_negative_one_z_stop_includes_final_plane(
     script.process_dataset(
         ndtiff_acquisition,
         output_dir=tmp_path / "output",
-        ufish_channels=["Cy5"],
+        ufish_channels=[],
         z_start=0,
         z_stop=-1,
         overwrite=False,
-        ufish=_FakeUFish(),
+        ufish=None,
     )
 
     corrected = imread(tmp_path / "output" / "pos0000" / "DAPI.ome.tif")
@@ -390,7 +308,7 @@ def test_process_dataset_requires_exact_metadata_channel_name(
             z_start=0,
             z_stop=1,
             overwrite=False,
-            ufish=_FakeUFish(),
+            ufish=None,
         )
 
 
