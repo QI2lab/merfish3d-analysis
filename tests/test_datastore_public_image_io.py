@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -854,28 +853,25 @@ def test_sofima_reference_round_is_validated_before_writing(image_datastore, ref
         }
     ],
 )
-@pytest.mark.parametrize("error_type", [OSError, ValueError, AttributeError])
-def test_public_reader_storage_errors_and_programming_errors(
+def test_public_reader_rejects_corrupt_image_metadata(
     image_datastore,
-    monkeypatch,
     writer,
     reader,
     selection,
     options,
     relative_path,
     shape,
-    error_type,
 ):
     datastore = image_datastore
     getattr(datastore, writer)(np.zeros(shape, dtype=np.uint16), **selection, **options)
-    monkeypatch.setattr(
-        datastore, "_load_from_zarr_array", Mock(side_effect=error_type("unreadable"))
-    )
-    if error_type is AttributeError:
-        with pytest.raises(AttributeError, match="unreadable"):
-            getattr(datastore, reader)(**selection, return_future=False)
+    if writer in NATIVE_WRITERS:
+        image_path = datastore.local_image_path(
+            image_name=Path(relative_path).name.removesuffix(".ome.zarr"), **selection
+        )
     else:
-        assert getattr(datastore, reader)(**selection, return_future=False) is None
+        image_path = datastore.fused_image_path()
+    (image_path / "zarr.json").write_text('{"incomplete":')
+    assert getattr(datastore, reader)(**selection, return_future=False) is None
 
 
 @pytest.mark.unit

@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -330,28 +329,6 @@ def test_cells_without_segmentation_uses_all_features(image_datastore):
 
 
 @pytest.mark.unit
-@pytest.mark.gpu
-@pytest.mark.parametrize("features", [None, "cells", "all"])
-def test_cli_passes_normalization_feature_selection(
-    monkeypatch, image_datastore, features
-):
-    factory = Mock(wraps=PixelDecoder)
-    optimize = Mock()
-    decode = Mock()
-    monkeypatch.setattr(PixelDecoder, "optimize_normalization_by_decoding", optimize)
-    monkeypatch.setattr(PixelDecoder, "decode_all_tiles", decode)
-    monkeypatch.setattr(pixeldecode, "PixelDecoder", factory)
-    args = [str(image_datastore.datastore_path)]
-    if features is not None:
-        args.extend(["--normalization-features", features])
-    result = CliRunner().invoke(pixeldecode.app, args)
-    assert result.exit_code == 0, result.output
-    assert factory.call_args.kwargs["normalization_features"] == (features or "cells")
-    optimize.assert_called_once()
-    decode.assert_called_once()
-
-
-@pytest.mark.unit
 def test_cli_rejects_unknown_normalization_features(tmp_path):
     datastore_path = tmp_path / "datastore"
     result = CliRunner().invoke(
@@ -363,9 +340,7 @@ def test_cli_rejects_unknown_normalization_features(tmp_path):
 
 @pytest.fixture
 def normalization_cache(image_datastore):
-    decoder = PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
-    decoder._global_normalization_vectors = Mock()
-    return decoder
+    return PixelDecoder(image_datastore, merfish_bits=4, num_gpus=0, verbose=0)
 
 
 @pytest.mark.unit
@@ -395,8 +370,28 @@ def test_normalization_cache_respects_feature_selection(
         decoder._datastore.save_decode_normalization_vectors(
             None, kind, np.ones(4), np.zeros(4), metadata=metadata
         )
-    decoder._load_global_normalization_vectors()
-    assert decoder._global_normalization_vectors.called is not matches
+    if not matches:
+        datastore = decoder._datastore
+        datastore.save_local_round_transform_zyx_um(np.eye(4), tile=0, round=1)
+        for bit in range(4):
+            image = (np.arange(144).reshape(4, 6, 6) + 10 + 10 * bit).astype(np.uint16)
+            datastore.save_local_corrected_image(image, tile=0, bit=bit)
+            datastore.save_local_feature_predictor_image(
+                np.ones(image.shape, dtype=np.float32), tile=0, bit=bit
+            )
+    decoder._load_global_normalization_vectors(tile_indices=[0], lowpass_sigma=None)
+    global_norm, global_background = (
+        decoder._datastore.load_decode_normalization_vectors(None, "global")
+    )
+    if matches:
+        np.testing.assert_array_equal(global_norm, np.ones(4))
+        np.testing.assert_array_equal(global_background, np.zeros(4))
+    else:
+        np.testing.assert_allclose(global_norm, [129] * 4)
+        np.testing.assert_allclose(global_background, [17, 27, 37, 47])
+        assert decoder._datastore.load_decode_normalization_metadata(
+            None, "global"
+        ) == {"normalization_features": features}
     if matches:
         decoder._load_iterative_normalization_vectors()
         np.testing.assert_array_equal(

@@ -74,9 +74,12 @@ def image_datastore(tmp_path, request):
     zero_slot = getattr(request, "param", None) == "zero_slot"
     six_tiles = getattr(request, "param", None) == "six_tiles"
     one_tile = getattr(request, "param", None) in {"one_tile", "six_bits_one_tile"}
+    shading_tiles = {"shading_16": 16, "shading_100": 100}.get(
+        getattr(request, "param", None)
+    )
     datastore.channels_in_data = ["fiducial", "readout1", "readout2"]
     datastore.voxel_size_zyx_um = [0.4, 0.2, 0.4]
-    datastore.num_tiles = 1 if one_tile else 6 if six_tiles else 2
+    datastore.num_tiles = shading_tiles or (1 if one_tile else 6 if six_tiles else 2)
     datastore.experiment_order = np.array(
         [[1, 1, 2], [2, 3, 4], [3, 5, 6]]
         if six_bits

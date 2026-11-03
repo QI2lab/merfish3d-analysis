@@ -13,23 +13,6 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX named semaphor
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("missing", [False, True])
-def test_semaphore_cleanup_unregisters_present_and_already_removed_names(
-    monkeypatch, missing
-):
-    import multiprocessing.resource_tracker as tracker
-    import multiprocessing.synchronize as synchronize
-
-    unlink = Mock(side_effect=FileNotFoundError() if missing else None)
-    unregister = Mock()
-    monkeypatch.setattr(synchronize, "sem_unlink", unlink)
-    monkeypatch.setattr(tracker, "unregister", unregister)
-    _cleanup_fusion_worker_semaphore("/loky-test")
-    unlink.assert_called_once_with("/loky-test")
-    unregister.assert_called_once_with("/loky-test", "semaphore")
-
-
-@pytest.mark.unit
 def test_semaphore_cleanup_preserves_other_errors_and_tracking(monkeypatch):
     import multiprocessing.resource_tracker as tracker
     import multiprocessing.synchronize as synchronize

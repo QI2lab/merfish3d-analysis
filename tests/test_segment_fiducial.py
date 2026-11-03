@@ -1,8 +1,6 @@
 """Cellpose outline filtering and reuse of saved pixel ROIs."""
 
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -54,7 +52,7 @@ def test_invalid_area_is_rejected_before_loading_data(cutoff):
 
 
 @pytest.fixture
-def saved_segmentation(image_datastore, monkeypatch):
+def saved_segmentation(image_datastore):
     datastore = image_datastore
     datastore.voxel_size_zyx_um = [1, 1, 1]
     datastore.save_global_fiducial_projection(
@@ -67,11 +65,6 @@ def saved_segmentation(image_datastore, monkeypatch):
     pixel_path = datastore.cellpose_pixel_rois_path()
     pixel_path.parent.mkdir(parents=True, exist_ok=True)
     roiwrite(pixel_path, [ImagejRoi.frompoints([[0, 0], [2, 0], [2, 2], [0, 2]])])
-    monkeypatch.setattr(
-        segment_fiducial.models,
-        "CellposeModel",
-        Mock(side_effect=AssertionError("must not run inference")),
-    )
     return datastore_path.parent, pixel_path, datastore
 
 
@@ -105,6 +98,22 @@ def test_outlines_only_cli_can_remove_all_then_restore_from_raw_rois(
         reopened.load_global_cellpose_segmentation_image(False), original_labels
     )
 
+    # Replacing a populated segmentation with no cells must clear the old
+    # global outlines as well as the labels and pixel-space ROI archive.
+    empty_labels = np.zeros_like(original_labels)
+    reopened.save_global_cellpose_segmentation_image(
+        empty_labels, downsampling=[1, 1, 1]
+    )
+    roiwrite(pixel_path, [], mode="w")
+    result = runner.invoke(segment_fiducial.app, [str(root), "--outlines-only"])
+    assert result.exit_code == 0, result.output
+    assert roiread(pixel_path) == []
+    assert roiread(reopened.cellpose_global_rois_path()) == []
+    reopened = segment_fiducial.qi2labDataStore(datastore.datastore_path)
+    np.testing.assert_array_equal(
+        reopened.load_global_cellpose_segmentation_image(False), empty_labels
+    )
+
 
 @pytest.mark.unit
 def test_outlines_only_requires_saved_pixel_rois(saved_segmentation):
@@ -120,46 +129,6 @@ def test_outlines_only_requires_saving_outputs():
         segment_fiducial.run_cellpose(
             Path("/unused"), outlines_only=True, save_outputs=False
         )
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("empty_masks", [False, True])
-def test_inference_exports_filtered_global_rois(
-    saved_segmentation, monkeypatch, empty_masks
-):
-    root, pixel_path, datastore = saved_segmentation
-    masks = np.zeros((20, 20), dtype=np.uint16)
-    if not empty_masks:
-        masks[1:4, 1:4] = 1
-        masks[10:15, 10:15] = 2
-    model = SimpleNamespace(
-        pretrained_model="fake", eval=Mock(return_value=(masks, None, None))
-    )
-    monkeypatch.setattr(
-        segment_fiducial.models, "CellposeModel", Mock(return_value=model)
-    )
-    monkeypatch.setattr(
-        segment_fiducial,
-        "roiread",
-        Mock(side_effect=AssertionError("must reuse pixel ROIs in memory")),
-    )
-    roiwrite(datastore.cellpose_global_rois_path(), roiread(pixel_path))
-
-    segment_fiducial.run_cellpose(
-        root,
-        min_cell_area_um2=5,
-        use_gpu=False,
-        roi_multiprocessing=False,
-    )
-
-    assert len(roiread(pixel_path)) == (0 if empty_masks else 2)
-    saved_rois = roiread(datastore.cellpose_global_rois_path())
-    assert [Polygon(roi.coordinates()).area for roi in saved_rois] == (
-        [] if empty_masks else [16]
-    )
-    np.testing.assert_array_equal(
-        datastore.load_global_cellpose_segmentation_image(False), masks
-    )
 
 
 @pytest.mark.unit

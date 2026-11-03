@@ -1,7 +1,7 @@
 """Datastore image coordinates and Zarr v3 persistence contracts."""
 
 import json
-from unittest.mock import Mock
+import os
 
 import numpy as np
 import pytest
@@ -34,15 +34,18 @@ def test_incompatible_transform_is_rejected(values):
 
 
 @pytest.mark.unit
-def test_failed_image_write_propagates_before_success_metadata(
-    image_datastore, monkeypatch
-):
-    write = Mock(side_effect=OSError("disk full"))
-    monkeypatch.setattr("merfish3danalysis.storage.ome.write_image", write)
-    with pytest.raises(OSError, match="disk full"):
-        image_datastore.save_local_corrected_image(
-            np.ones((3, 4), dtype=np.uint16), tile=0, round=0
-        )
+def test_failed_image_write_propagates_before_success_metadata(image_datastore):
+    scene = image_datastore.tile_scene_path
+    scene.chmod(0o555)
+    try:
+        if os.access(scene, os.W_OK):
+            pytest.skip("read-only permissions are not enforced for this user")
+        with pytest.raises(OSError):
+            image_datastore.save_local_corrected_image(
+                np.ones((3, 4), dtype=np.uint16), tile=0, round=0
+            )
+    finally:
+        scene.chmod(0o755)
     assert image_datastore.load_local_corrected_image(0, round=0) is None
 
 

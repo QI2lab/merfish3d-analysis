@@ -66,46 +66,12 @@ def test_registration_resumes_completed_scene_images(image_datastore):
     assert open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"] == before
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize("psf_idx", [0, 1, 2])
-def test_fiducial_deconvolution_uses_recorded_psf(registration, monkeypatch, psf_idx):
-    import merfish3danalysis.DataRegistration as registration_module
-
-    registration.datastore.channel_psfs = np.eye(3, dtype=np.float32).reshape(
-        3, 1, 1, 3
-    )
-    registration = DataRegistration(
-        registration.datastore, decon_fiducial=True, verbose=0
-    )
-    registration.tile_id = 0
-    native = np.arange(24, dtype=np.uint16).reshape(2, 3, 4)
-    registration.datastore.save_local_corrected_image(
-        native, tile=0, round=0, psf_idx=psf_idx
-    )
-    deconvolve = Mock(return_value=native.astype(np.float32))
-    monkeypatch.setattr(
-        registration_module, "_run_chunked_rlgc_remembering_crop", deconvolve
-    )
-
-    result = registration_module._load_deconvolve_fiducial_round(
-        registration, "round001", 0, Mock()
-    )
-
-    np.testing.assert_array_equal(
-        deconvolve.call_args.kwargs["psf"], registration._psfs[psf_idx]
-    )
-    np.testing.assert_array_equal(result, native)
-    np.testing.assert_array_equal(
-        registration.datastore.load_local_deconvolved_fiducial_image(
-            tile=0, round=0, return_future=False
-        ),
-        native,
-    )
-
-
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.gpu
-def test_fiducial_deconvolution_restores_generated_point_source(tmp_path):
+@pytest.mark.parametrize("psf_idx", [0, 1, 2])
+def test_fiducial_deconvolution_restores_generated_point_source(
+    image_datastore, psf_idx
+):
     cp = pytest.importorskip("cupy")
     try:
         if cp.cuda.runtime.getDeviceCount() == 0:
@@ -116,7 +82,6 @@ def test_fiducial_deconvolution_restores_generated_point_source(tmp_path):
     from scipy.ndimage import convolve
 
     from merfish3danalysis.DataRegistration import _load_deconvolve_fiducial_round
-    from merfish3danalysis.qi2labDataStore import qi2labDataStore
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     # A normalized anisotropic PSF conserves photons when imaging a point
@@ -131,14 +96,12 @@ def test_fiducial_deconvolution_restores_generated_point_source(tmp_path):
     truth[center] = 10000
     native = np.rint(convolve(truth, psf, mode="constant")).astype(np.uint16)
 
-    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
-    datastore.num_tiles = 1
-    datastore.channels_in_data = ["fiducial", "readout"]
-    datastore.experiment_order = np.array([[1, 1]])
+    datastore = image_datastore
     datastore.voxel_size_zyx_um = [0.315, 0.081, 0.081]
-    datastore.channel_psfs = np.stack([identity_psf, psf])
-    datastore.initialize_tile(0)
-    datastore.save_local_corrected_image(native, tile=0, round=0, psf_idx=1)
+    psfs = np.stack([identity_psf] * 3)
+    psfs[psf_idx] = psf
+    datastore.channel_psfs = psfs
+    datastore.save_local_corrected_image(native, tile=0, round=0, psf_idx=psf_idx)
     registration = DataRegistration(datastore, decon_fiducial=True, verbose=0)
     registration.tile_id = 0
 
@@ -460,6 +423,9 @@ def test_single_tile_global_metadata_preserves_origin_without_baking_in_camera(
     camera = np.diag([1, -1, 1, 1])
     registration.datastore.save_local_stage_position_zyx_um(
         [10, 20, 30], camera, tile=0, round=0
+    )
+    registration.datastore.save_local_corrected_image(
+        np.ones((3, 10, 12), dtype=np.uint16), tile=0, round=0
     )
     registration.global_register(create_max_proj_tiff=False)
     affine, origin, _ = registration.datastore.load_global_coord_xforms_um(tile=0)

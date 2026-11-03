@@ -1,7 +1,7 @@
 """Calibration and metadata errors fail at their responsible datastore boundary."""
 
 import json
-from unittest.mock import Mock
+import os
 
 import numpy as np
 import pytest
@@ -65,55 +65,61 @@ def test_missing_required_calibration_metadata_is_not_optional(tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "name, cache_name, value",
+    "name, cache_name, value, image_path",
     [
-        ("noise_map", "_noise_map", np.ones((3, 4))),
-        ("channel_shading_maps", "_shading_maps", np.ones((1, 3, 4))),
-        ("channel_psfs", "_psfs", [np.ones((2, 3, 4))]),
+        ("noise_map", "_noise_map", np.ones((3, 4)), "camera/camera_noise.ome.zarr"),
+        (
+            "channel_shading_maps",
+            "_shading_maps",
+            np.ones((1, 3, 4)),
+            "shading/shading_maps.ome.zarr",
+        ),
+        ("channel_psfs", "_psfs", [np.ones((2, 3, 4))], "psfs/images/psf_000.ome.zarr"),
     ],
 )
 def test_failed_calibration_image_write_does_not_update_cache(
-    image_datastore, monkeypatch, name, cache_name, value
+    image_datastore, name, cache_name, value, image_path
 ):
     datastore = image_datastore
     original = [np.zeros((2, 3, 4))] if name == "channel_psfs" else np.zeros((1, 3, 4))
     setattr(datastore, name, original)
     previous = getattr(datastore, cache_name)
     state = dict(datastore.datastore_state)
-    monkeypatch.setattr(
-        datastore, "_save_to_zarr_array", Mock(side_effect=OSError("disk full"))
-    )
-    with pytest.raises(OSError, match="disk full"):
+    path = datastore.datastore_path / image_path
+    path.rename(path.with_name(path.name + ".backup"))
+    path.write_text("not a directory")
+    with pytest.raises(OSError):
         setattr(datastore, name, value)
     assert getattr(datastore, cache_name) is previous
     assert datastore.datastore_state == state
 
 
 @pytest.mark.unit
-def test_failed_state_write_does_not_change_cached_success_flags(
-    image_datastore, monkeypatch
-):
+def test_failed_state_write_does_not_change_cached_success_flags(image_datastore):
     datastore = image_datastore
     previous = dict(datastore.datastore_state)
-    monkeypatch.setattr(
-        datastore, "_save_to_json", Mock(side_effect=OSError("disk full"))
-    )
-    with pytest.raises(OSError, match="disk full"):
+    state_dir = datastore.datastore_path / "datastore_state"
+    state_dir.rename(state_dir.with_name("unavailable_state"))
+    with pytest.raises(FileNotFoundError):
         datastore.datastore_state = {"Fused": True}
     assert datastore.datastore_state == previous
 
 
 @pytest.mark.unit
-def test_failed_voxel_metadata_write_preserves_cached_calibration(
-    image_datastore, monkeypatch
-):
+def test_failed_voxel_metadata_write_preserves_cached_calibration(image_datastore):
     datastore = image_datastore
     datastore.voxel_size_zyx_um = [0.4, 0.2, 0.2]
-    monkeypatch.setattr(
-        datastore, "_save_to_json", Mock(side_effect=OSError("disk full"))
+    path = (
+        datastore.datastore_path / "acquisition/acquisition_metadata/acquisition.json"
     )
-    with pytest.raises(OSError, match="disk full"):
-        datastore.voxel_size_zyx_um = [0.8, 0.4, 0.4]
+    path.chmod(0o444)
+    try:
+        if os.access(path, os.W_OK):
+            pytest.skip("read-only permissions are not enforced for this user")
+        with pytest.raises(PermissionError):
+            datastore.voxel_size_zyx_um = [0.8, 0.4, 0.4]
+    finally:
+        path.chmod(0o644)
     assert datastore.voxel_size_zyx_um == [0.4, 0.2, 0.2]
 
 
