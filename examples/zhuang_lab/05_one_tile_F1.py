@@ -66,8 +66,9 @@ def decode_pixels(
         feature_predictor_threshold=feature_predictor_threshold,
         lowpass_sigma=(3, 1, 1),
     )
-    RNA_file_name = Path("spots_mouse1sample1.csv")
-    file_name = root_path / RNA_file_name
+    file_name = root_path / (
+        "mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv"
+    )
     df_RNA = pd.read_csv(file_name)
 
     x_min = 3804.87
@@ -94,7 +95,7 @@ def decode_pixels(
     merlin_coords[:, 2] = merlin_coords[:, 2] / 0.1085
     merlin_coords[:, 0] = merlin_coords[:, 0] / 1.5
 
-    fiducial_image = datastore.load_local_registered_image(
+    fiducial_image = datastore.load_local_fiducial_image(
         tile=tile_idx, round=0, return_future=False
     )
 

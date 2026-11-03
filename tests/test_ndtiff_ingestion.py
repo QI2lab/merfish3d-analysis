@@ -15,7 +15,7 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 def test_ndtiff_ingestion_preserves_channel_pixels_and_stage(
     tmp_path, reversed_channels
 ):
-    root_name = "acquisition"
+    root_name = "M1"
     base = f"{root_name}_r0001_tile0000"
     raw_path = tmp_path / f"{base}_1"
     dataset = NDTiffDataset(str(raw_path), summary_metadata={}, writable=True)
@@ -45,7 +45,7 @@ def test_ndtiff_ingestion_preserves_channel_pixels_and_stage(
     (tmp_path / "scan_metadata.csv").write_text(
         "root_name,num_r,num_xyz,num_ch,blue_active,yellow_active,red_active,"
         "channels_reversed,z_step_um,yx_pixel_um,binning\n"
-        f"{root_name},1,1,2,True,True,False,{reversed_channels},1.0,0.2,1\n"
+        f"{root_name},1,1,2,True,True,False,{reversed_channels},1e0,0.2,1\n"
     )
     pd.DataFrame({"round": [1], "bit": [1]}).to_csv(
         tmp_path / "bit_order.csv", index=False

@@ -73,7 +73,7 @@ def read_metadatafile(fname: str | Path) -> dict:
     for ii in range(len(vals)):
         if re.fullmatch(r"\d+", vals[ii]):
             vals[ii] = int(vals[ii])
-        elif re.fullmatch(r"\d*.\d+", vals[ii]):
+        elif re.fullmatch(r"(?:\d*\.\d+|\d+[eE]\d+|[+-]\d+)", vals[ii]):
             vals[ii] = float(vals[ii])
         elif vals[ii].lower() == "False".lower():
             vals[ii] = False
@@ -154,7 +154,8 @@ def write_sparse_mtx(
     features: Sequence[str]
         Feature names
     """
-    sparse_mat = sparse.coo_matrix(matrix.values)
+    output_dir_path = Path(output_dir_path)
+    sparse_mat = sparse.coo_matrix(matrix)
     sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
     write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
     write_tsv(
@@ -168,7 +169,17 @@ def write_sparse_mtx(
             for f in features
         ],
     )
-    subprocess.run(f"gzip -f {output_dir_path!s}/*", shell=True)
+    subprocess.run(
+        [
+            "gzip",
+            "-f",
+            *(
+                str(output_dir_path / name)
+                for name in ("matrix.mtx", "barcodes.tsv", "features.tsv")
+            ),
+        ],
+        check=True,
+    )
 
 
 def write_tsv(filename: str | Path, data: Sequence[str | Sequence[str]]) -> None:
