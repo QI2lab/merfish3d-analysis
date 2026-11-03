@@ -440,8 +440,7 @@ def _optimize_norm_worker(
 
 
 class PixelDecoder:
-    """
-    Retrieve and process one tile from qi2lab 3D widefield zarr structure.
+    """Retrieve and decode tiles from a qi2lab datastore.
 
     Normalize the MERFISH codebook and image data, perform
     plane-by-plane voxel decoding with the exact two-threshold caller,
@@ -449,19 +448,19 @@ class PixelDecoder:
 
     Parameters
     ----------
-    datastore: qi2labDataStore
-        qi2labDataStore object
-    merfish_bits: int, default 16
-        number of merfish bits. Assumes that in codebook, MERFISH rounds are [0,merfish_bits].
-    num_gpus: int, default 1
-        number of GPUs to use for decoding. If > 1, will split decoding across GPUs.
-    verbose: int, default 1
-        control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
-    use_mask: bool, default False
-        use mask stored in fiducial directory
-    z_range: Sequence[int], default None
-        z range to analyze. In integer indices from [0,N] where N is number of
-        z planes.
+    datastore : qi2labDataStore
+        Datastore containing preprocessed images, transforms, and the codebook.
+    merfish_bits : int, default 16
+        Number of MERFISH readout bits.
+    num_gpus : int, default 1
+        Number of GPUs to use for decoding.
+    verbose : int, default 1
+        Progress verbosity: 0 suppresses routine output, 1 shows progress,
+        and 2 includes diagnostic output.
+    use_mask : bool or None, default False
+        Masked decoding is not implemented; this must be False or None.
+    z_range : Sequence[int] or None, default None
+        Half-open Z-index range to decode. None selects all planes.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Connected-component and filtering mode. ``auto`` follows the datastore
         microscope type.
@@ -469,6 +468,17 @@ class PixelDecoder:
         If True, estimate chromatic affine transforms during iterative
         normalization. If False, use existing datastore calibration metadata
         with identity fallback.
+    chromatic_affine_config : ChromaticAffineEstimationConfig or None, default None
+        Parameters for RNA-derived chromatic affine estimation.
+    excluded_gene_ids : Sequence[str] or None, default None
+        Codebook gene IDs whose winning pixel assignments should be suppressed.
+        The full codebook remains in the nearest-neighbor search.
+    normalization_features : {'all', 'cells'}, default 'cells'
+        Fit normalization using all features or only those inside Cellpose
+        outlines. Without segmentation, ``cells`` falls back to all features.
+        This does not spatially filter the final decoded output.
+    decode_run_key : str or None, default None
+        Optional run name used to isolate normalization and decoded output.
     """
 
     def __init__(
@@ -486,45 +496,10 @@ class PixelDecoder:
         normalization_features: Literal["all", "cells"] = "cells",
         decode_run_key: str | None = None,
     ) -> None:
-        """
-        Initialize the object.
+        """Initialize the decoding workflow."""
+        if use_mask:
+            raise NotImplementedError("Masked decoding is not implemented.")
 
-        Parameters
-        ----------
-        datastore : qi2labDataStore
-            Datastore containing preprocessed images, transforms, codebook, and
-            decoded output groups.
-        merfish_bits : int
-            Number of MERFISH readout bits.
-        num_gpus : int
-            Number of GPUs to use for decoding.
-        verbose : int
-            Progress verbosity.
-        use_mask : bool | None
-            If True, use the stored fiducial mask during decoding.
-        z_range : Sequence[int] | None
-            Z-index range to decode. If None, decode all planes.
-        decode_mode : Literal['auto', '2d', '3d']
-            Connected-component and filtering mode.
-        estimate_chromatic_affines : bool
-            If True, iterative normalization estimates chromatic affine
-            transforms from decoded on-bit centroids. If False, decoding uses
-            existing datastore chromatic calibration metadata with identity
-            fallback.
-        chromatic_affine_config : ChromaticAffineEstimationConfig or None
-            Explicit RNA-derived chromatic affine estimation parameters.
-        excluded_gene_ids : Sequence[str] or None
-            Codebook gene IDs whose winning pixel assignments should be
-            suppressed. The full codebook remains in the nearest-neighbor
-            search so excluded signal cannot fall through to another codeword.
-        normalization_features : Literal['all', 'cells']
-            Fit global and iterative normalization with all features or only
-            features inside Cellpose outlines. Without segmentation, ``cells``
-            falls back to all features. This does not spatially filter the
-            final decoded output.
-        decode_run_key : str or None
-            Optional run name used to isolate normalization and decoded output.
-        """
         self._datastore_path = Path(datastore.datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
@@ -574,14 +549,7 @@ class PixelDecoder:
         self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
         self._decoding_matrix = self._decoding_matrix_no_errors.copy()
         self._barcode_count = self._decoding_matrix.shape[0]
-        self._bit_count = self._decoding_matrix.shape[1]
 
-        if use_mask:
-            self._load_mask()  # TO DO: implement
-        else:
-            self._mask_image = None
-
-        self._codebook_style = 1
         self._optimize_normalization_weights = False
         self._collect_chromatic_centroids = False
         self._global_normalization_loaded = False

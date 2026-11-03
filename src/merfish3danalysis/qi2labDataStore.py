@@ -87,7 +87,19 @@ class qi2labDataStore:
         return self._datastore_path / "fiducial_projection.ome.zarr"
 
     def fused_scene_path(self, fusion_type: str = "fiducial") -> Path:
-        """Return the separate Scene for a fiducial or full-data fusion."""
+        """Return the separate Scene for a fiducial or full-data fusion.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` for the downsampled fiducial volume or
+            ``"all_channels"`` for the full-data fusion.
+
+        Returns
+        -------
+        Path
+            Scene path; the Scene is not created by this method.
+        """
         names = {
             "fiducial": "fiducial_fusion.ome.zarr",
             "all_channels": "fused.ome.zarr",
@@ -146,6 +158,16 @@ class qi2labDataStore:
 
         MVS writes blocks directly, so the Scene must reference the output only
         after all blocks are complete. Concurrent writers use unique image paths.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` or ``"all_channels"``.
+
+        Returns
+        -------
+        tuple of (Path, str, str or None)
+            New image path, new revision, and the previous published revision.
         """
         from uuid import uuid4
 
@@ -172,7 +194,19 @@ class qi2labDataStore:
         revision: str,
         expected_revision: str | None,
     ) -> None:
-        """Publish completed MVS blocks atomically; yaozarrs cannot resume a Scene writer."""
+        """Publish completed MVS blocks atomically; yaozarrs cannot resume a Scene writer.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` or ``"all_channels"``.
+        image : yaozarrs.v06.Image
+            Metadata for the completed image.
+        revision : str
+            Revision returned when the image was staged.
+        expected_revision : str or None
+            Previously published revision, used to detect concurrent updates.
+        """
         from merfish3danalysis.storage.ome import publish_completed_image
 
         try:
@@ -253,6 +287,23 @@ class qi2labDataStore:
         registration and fusion's existing input selection. Other datastore
         array access uses TensorStore. ``chunks`` requests a compatible lazy
         chunk view when mixing products with different storage layouts.
+
+        Parameters
+        ----------
+        tile : int or str
+            Zero-based tile index or stored tile identifier.
+        round : int or str or None
+            Fiducial round index or identifier; excludes bit.
+        bit : int or str or None
+            Readout bit index or identifier; excludes round.
+        chunks : Sequence[int] or None
+            Chunk shape for a lazy TensorStore-backed view, or None to use the
+            native layout when supported.
+
+        Returns
+        -------
+        zarr.Array
+            Lazy array accepted by multiview-stitcher.
         """
         for image_name in ("decon_data", "corrected_data"):
             path = self.local_image_path(tile, image_name, round=round, bit=bit)
@@ -267,7 +318,20 @@ class qi2labDataStore:
         )
 
     def local_feature_predictor_spots_path(self, tile: str, bit: str) -> Path:
-        """Return the localization table path for a tile and readout identifier."""
+        """Return the localization table path for a tile and readout identifier.
+
+        Parameters
+        ----------
+        tile : str
+            Stored tile identifier.
+        bit : str
+            Stored readout bit identifier.
+
+        Returns
+        -------
+        Path
+            Localization Parquet path; the file may not yet exist.
+        """
         if tile not in self._tile_ids or bit not in self._bit_ids:
             raise ValueError(f"Invalid tile or bit: {tile}, {bit}")
         return (
@@ -282,7 +346,7 @@ class qi2labDataStore:
         bit: int | str | None = None,
         image_names: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """Load image and sidecar metadata for one fiducial round or readout bit.
+        """Load Scene and image metadata for one fiducial round or readout bit.
 
         Parameters
         ----------
@@ -292,14 +356,13 @@ class qi2labDataStore:
             Fiducial round index or identifier; excludes bit.
         bit : int or str or None
             Readout bit index or identifier; excludes round.
-
         image_names : Sequence[str] or None
             Image names to inspect, in metadata precedence order.
 
         Returns
         -------
         dict[str, Any]
-            Merged image metadata, with sidecar values taking precedence.
+            Merged image metadata, with Scene entity values taking precedence.
         """
         self.local_image_path(tile, "corrected_data", round=round, bit=bit)
         tile_id = self._tile_ids[tile] if isinstance(tile, int) else tile
@@ -364,7 +427,7 @@ class qi2labDataStore:
 
     def _calibrations_attributes_path(self) -> Path:
         """
-        Path to calibrations metadata sidecar.
+        Return the acquisition metadata JSON path.
 
         Returns
         -------
@@ -375,12 +438,12 @@ class qi2labDataStore:
 
     def _load_calibrations_attributes(self) -> dict[str, Any]:
         """
-        Load calibrations metadata sidecar.
+        Load acquisition and calibration metadata from their product folders.
 
         Returns
         -------
         dict[str, Any]
-            Calibration metadata loaded from disk.
+            Merged metadata loaded from JSON and Parquet files.
         """
         attributes_path = self._calibrations_attributes_path()
         if not attributes_path.is_file():
@@ -871,12 +934,12 @@ class qi2labDataStore:
 
     @property
     def channel_shading_maps(self) -> ArrayLike | None:
-        """Channel shaiding images.
+        """Channel shading images.
 
         Returns
         -------
-        channel_shading_maps : ArrayLike
-            Channel shading images.
+        channel_shading_maps : ArrayLike or None
+            Channel shading images in CYX order, or None when unavailable.
         """
         if not hasattr(self, "_shading_maps"):
             path = self._datastore_path / "shading/shading_maps.ome.zarr"
@@ -902,15 +965,6 @@ class qi2labDataStore:
             raise ValueError(
                 f"Shading maps must be 2D or 3D, got shape {shading_maps.shape}"
             )
-        if shading_maps.shape[0] > 1:
-            reference_shape = tuple(shading_maps[0].shape)
-            for channel_map in shading_maps[1:]:
-                if tuple(channel_map.shape) != reference_shape:
-                    raise ValueError(
-                        "All shading maps must share the same YX shape "
-                        f"(expected {reference_shape}, got {tuple(channel_map.shape)})."
-                    )
-
         current_local_zarr_path = self._datastore_path / "shading/shading_maps.ome.zarr"
 
         self._save_to_zarr_array(
@@ -934,8 +988,9 @@ class qi2labDataStore:
 
         Returns
         -------
-        channel_psfs : ArrayLike
-            Channel point spread functions (PSF).
+        channel_psfs : ArrayLike or list of ArrayLike or None
+            Stacked channel PSFs when shapes match, a list when shapes differ,
+            or None when unavailable.
         """
         psfs = getattr(self, "_psfs", None)
         if psfs is None:
@@ -1563,7 +1618,20 @@ class qi2labDataStore:
         decode_run_key: str | None,
         kind: str,
     ) -> dict[str, Any] | None:
-        """Load provenance for default or run-scoped normalization vectors."""
+        """Load provenance for default or run-scoped normalization vectors.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Named decode run, or None for the default run.
+        kind : str
+            ``"global"`` or ``"iterative"`` normalization.
+
+        Returns
+        -------
+        dict[str, Any] or None
+            Stored provenance, or None when unavailable.
+        """
         if kind not in {"global", "iterative"}:
             raise ValueError("kind must be one of 'global' or 'iterative'.")
         calib_attrs = self._load_from_json(
@@ -5067,6 +5135,24 @@ class qi2labDataStore:
         The projection has no measured Z. Its world link uses the existing ROI
         convention of pixel Z=10; the original 3D grid remains available for
         the library's ROI calculations.
+
+        Parameters
+        ----------
+        projection : ArrayLike
+            Two-dimensional YX projection pixels.
+        affine_zyx_um : ArrayLike
+            Homogeneous 4-by-4 affine for the original fused grid.
+        origin_zyx_um : ArrayLike
+            Original fused-grid origin in ZYX micrometers.
+        spacing_zyx_um : ArrayLike
+            Original fused-grid spacing in ZYX micrometers.
+        return_future : bool or None
+            Return the completed TensorStore pixel-write handle when True.
+
+        Returns
+        -------
+        tensorstore.WriteFutures or None
+            Completed write handle when requested; otherwise None.
         """
         import os
         from tempfile import TemporaryDirectory
@@ -5158,7 +5244,19 @@ class qi2labDataStore:
     def load_global_fiducial_projection(
         self, return_future: bool | None = True
     ) -> "tuple[np.ndarray | Future | TensorStore, np.ndarray, np.ndarray, np.ndarray] | None":
-        """Read the projection and its original fused 3D ROI coordinate metadata."""
+        """Read the projection and its original fused 3D ROI coordinate metadata.
+
+        Parameters
+        ----------
+        return_future : bool or None
+            True returns a TensorStore read future, False a NumPy array, and
+            None a sliceable TensorStore handle.
+
+        Returns
+        -------
+        tuple or None
+            Projection, affine, ZYX origin, and ZYX spacing; None if missing.
+        """
         path = self.fiducial_projection_path()
         if not path.exists():
             return None
@@ -5185,6 +5283,19 @@ class qi2labDataStore:
         ``return_future=None`` provides a lazy TensorStore for consumers such as
         the fused viewer and TIFF export. ``all_channels`` selects the fusion
         workflow output or the product written by the existing image setter.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` or ``"all_channels"``.
+        return_future : bool or None
+            True returns a TensorStore read future, False a NumPy array, and
+            None a sliceable TensorStore handle.
+
+        Returns
+        -------
+        tuple or None
+            Fused image and image metadata, or None when unavailable.
         """
         if fusion_type == "fiducial":
             paths = [self.fused_image_path()]

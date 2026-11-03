@@ -7,6 +7,12 @@ import pytest
 from merfish3danalysis.PixelDecoder import PixelDecoder
 
 
+@pytest.mark.unit
+def test_decoder_rejects_unimplemented_masking(image_datastore):
+    with pytest.raises(NotImplementedError, match="Masked decoding is not implemented"):
+        PixelDecoder(image_datastore, merfish_bits=4, use_mask=True)
+
+
 @pytest.fixture
 def cuda():
     cp = pytest.importorskip("cupy")
