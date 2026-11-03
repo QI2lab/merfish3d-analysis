@@ -1043,7 +1043,9 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
     )
     other_run = "integration_run" if decode_run_key is None else None
     assert datastore.load_local_decoded_spots(tile=0, decode_run_key=other_run) is None
-    assert datastore.load_global_filtered_decoded_spots(decode_run_key=other_run) is None
+    assert (
+        datastore.load_global_filtered_decoded_spots(decode_run_key=other_run) is None
+    )
     for kind in ("global", "iterative"):
         normalization, background = datastore.load_decode_normalization_vectors(
             decode_run_key, kind
@@ -1117,15 +1119,11 @@ def test_simulation_standard_matrix(
 
     affine_f1 = round(affine_result["performance_metrics"]["f1_score"], 3)
     sofima_f1 = round(sofima_result["performance_metrics"]["f1_score"], 3)
-    if sofima_f1 < affine_f1:
-        pytest.exit(
-            (
-                "SOFIMA standard simulation integration failure: "
-                f"{sofima_result['case_label']} F1={sofima_f1:.3f} "
-                f"is lower than {affine_result['case_label']} F1={affine_f1:.3f}."
-            ),
-            returncode=1,
-        )
+    assert sofima_f1 >= affine_f1, (
+        "SOFIMA standard simulation integration failure: "
+        f"{sofima_result['case_label']} F1={sofima_f1:.3f} "
+        f"is lower than {affine_result['case_label']} F1={affine_f1:.3f}."
+    )
 
 
 @pytest.fixture(

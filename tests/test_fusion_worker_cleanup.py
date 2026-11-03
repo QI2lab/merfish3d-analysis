@@ -50,9 +50,9 @@ def test_loky_worker_cleanup_race_exits_without_stale_tracker_warnings():
     script = """
 import gc
 import multiprocessing as mp
-from types import SimpleNamespace
 from joblib import Parallel, delayed
 from joblib.externals.loky import get_reusable_executor
+from multiview_stitcher import misc_utils
 from merfish3danalysis.DataRegistration import _direct_zarr_fusion_kwargs
 
 def work(remove_first):
@@ -68,7 +68,7 @@ def work(remove_first):
 
 if __name__ == "__main__":
     options = _direct_zarr_fusion_kwargs(
-        misc_utils=SimpleNamespace(process_batch_using_joblib=None), fusion_workers=2
+        misc_utils=misc_utils, fusion_workers=2
     )
     result = Parallel(**options["batch_options"]["batch_func_kwargs"])(
         delayed(work)(remove_first) for remove_first in [False, True, False, True]

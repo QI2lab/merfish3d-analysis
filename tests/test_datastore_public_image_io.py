@@ -54,6 +54,32 @@ def test_decoded_codewords_and_normalization_remain_isolated_by_run(image_datast
 
 
 @pytest.mark.unit
+def test_global_and_iterative_normalization_are_preserved_per_run(image_datastore):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    for run_index, run in enumerate((None, "run1", "run2")):
+        for kind_index, kind in enumerate(("global", "iterative")):
+            foreground = np.full(4, 1 + run_index * 2 + kind_index)
+            background = foreground / 10
+            image_datastore.save_decode_normalization_vectors(
+                run, kind, foreground, background, metadata={"source": f"{run}-{kind}"}
+            )
+
+    reopened = qi2labDataStore(image_datastore.datastore_path)
+    for run_index, run in enumerate((None, "run1", "run2")):
+        for kind_index, kind in enumerate(("global", "iterative")):
+            expected = np.full(4, 1 + run_index * 2 + kind_index)
+            foreground, background = reopened.load_decode_normalization_vectors(
+                run, kind
+            )
+            np.testing.assert_array_equal(foreground, expected)
+            np.testing.assert_allclose(background, expected / 10)
+            assert reopened.load_decode_normalization_metadata(run, kind) == {
+                "source": f"{run}-{kind}"
+            }
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("run", [".", "..", "../outside"])
 def test_decoded_run_name_cannot_escape_its_product_folder(image_datastore, run):
     import pandas as pd

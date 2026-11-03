@@ -141,7 +141,7 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
         image = volume[z_start : z_start + 48, :, x_start : x_start + 384]
         datastore.save_local_corrected_image(image, tile=tile, round=0)
         datastore.save_local_stage_position_zyx_um(
-            [0, 0, stage_x_px * 0.107], np.eye(4), tile=tile, round=0
+            [10, 20, 30 + stage_x_px * 0.107], np.eye(4), tile=tile, round=0
         )
     registration = DataRegistration(
         datastore,
@@ -157,7 +157,7 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
     run_cellpose(datastore.datastore_path, use_gpu=True, roi_multiprocessing=False)
 
     reopened = qi2labDataStore(datastore.datastore_path)
-    projection, _affine, _origin, _spacing = reopened.load_global_fiducial_projection(
+    projection, affine, origin, spacing = reopened.load_global_fiducial_projection(
         return_future=False
     )
     masks = reopened.load_global_cellpose_segmentation_image(return_future=False)
@@ -169,5 +169,13 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
         .ome_metadata(),
         v06.Scene,
     )
-    roi_path = reopened.datastore_path / "cell_boundaries" / "cell_rois.zip"
-    assert len(roiread(roi_path)) > 0
+    pixel_rois = roiread(reopened.cellpose_pixel_rois_path())
+    world_rois = roiread(reopened.cellpose_global_rois_path())
+    assert len(pixel_rois) == len(world_rois) > 0
+    np.testing.assert_allclose(affine, np.eye(4))
+    assert np.all(np.abs(origin[1:]) > 1)
+    for pixel_roi, world_roi in zip(pixel_rois, world_rois, strict=True):
+        expected_xy = pixel_roi.coordinates() * spacing[[2, 1]] + origin[[2, 1]]
+        np.testing.assert_allclose(
+            world_roi.coordinates(), expected_xy, rtol=0, atol=0.011
+        )

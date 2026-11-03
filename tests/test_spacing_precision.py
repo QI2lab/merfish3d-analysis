@@ -48,19 +48,17 @@ def test_chromatic_calibration_spacing_rounds_on_read_and_write(image_datastore)
 
 
 @pytest.mark.unit
-def test_image_writer_rounds_spatial_scale_and_preserves_time_scale(tmp_path):
-    image_path = tmp_path / "image.ome.zarr"
-    qi2labDataStore._save_to_zarr_array(
-        np.ones((1, 1, 2, 3, 4), dtype=np.uint16),
-        image_path,
-        ome_scale=[0.123456, 1, 0.31561, 0.107999995, 0.09831],
+def test_corrected_image_scene_uses_rounded_spatial_scale(image_datastore):
+    from yaozarrs import open_group
+
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [0.31561, 0.107999995, 0.09831]
+    datastore.save_local_corrected_image(
+        np.ones((2, 3, 4), dtype=np.uint16), tile=0, round=0
     )
-    metadata = json.loads((image_path / "zarr.json").read_text())
-    transforms = metadata["attributes"]["ome"]["multiscales"][0]["datasets"][0][
-        "coordinateTransformations"
-    ]
-    scale = next(t["scale"] for t in transforms if t["type"] == "scale")
-    assert scale == [0.123456, 1, 0.316, 0.108, 0.098]
+    path = datastore.local_image_path(0, "corrected_data", round=0)
+    image = open_group(path).ome_metadata(strict=True)
+    assert image.multiscales[0].datasets[0].transform.scale == [0.316, 0.108, 0.098]
 
 
 @pytest.mark.unit
