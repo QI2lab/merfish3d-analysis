@@ -1,5 +1,6 @@
 """Public image readers and writers must preserve their documented I/O modes."""
 
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -77,6 +78,55 @@ def test_global_and_iterative_normalization_are_preserved_per_run(image_datastor
             assert reopened.load_decode_normalization_metadata(run, kind) == {
                 "source": f"{run}-{kind}"
             }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("run", [None, "named"])
+@pytest.mark.parametrize("kind", ["global", "iterative"])
+@pytest.mark.parametrize("metadata", [None, {"source": "test"}])
+def test_decode_normalization_preserves_decode_mode_and_other_vectors(
+    image_datastore, run, kind, metadata
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    other_kind = "iterative" if kind == "global" else "global"
+    image_datastore.save_decode_normalization_vectors(
+        run,
+        other_kind,
+        np.full(4, 3),
+        np.full(4, 0.3),
+        decode_mode="3d",
+        metadata={"source": "previous"},
+    )
+    image_datastore.save_decode_normalization_vectors(
+        run,
+        kind,
+        np.full(4, 2),
+        np.full(4, 0.2),
+        decode_mode="2d",
+        metadata=metadata,
+    )
+    image_datastore.save_decode_normalization_vectors(
+        run, kind, np.full(4, 2), np.full(4, 0.2)
+    )
+
+    reopened = qi2labDataStore(image_datastore.datastore_path)
+    normalization, background = reopened.load_decode_normalization_vectors(run, kind)
+    np.testing.assert_array_equal(normalization, np.full(4, 2))
+    np.testing.assert_allclose(background, np.full(4, 0.2))
+    other_normalization, other_background = reopened.load_decode_normalization_vectors(
+        run, other_kind
+    )
+    np.testing.assert_array_equal(other_normalization, np.full(4, 3))
+    np.testing.assert_allclose(other_background, np.full(4, 0.3))
+    assert reopened.load_decode_normalization_metadata(run, kind) == metadata
+    assert reopened.load_decode_normalization_metadata(run, other_kind) == {
+        "source": "previous"
+    }
+
+    root = reopened.datastore_path / "codewords" / "normalization"
+    path = root / "default.json" if run is None else root / "runs" / f"{run}.json"
+    assert json.loads(path.read_text())["decode_mode"] == "2d"
 
 
 @pytest.mark.unit

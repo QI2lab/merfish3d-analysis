@@ -1568,7 +1568,9 @@ class qi2labDataStore:
             if decode_run_key is None:
                 self.global_normalization_vector = normalization_vector
                 self.global_background_vector = background_vector
-                self._save_default_decode_normalization_metadata(kind, metadata)
+                self._save_default_decode_normalization_metadata(
+                    kind, metadata, decode_mode
+                )
                 return
             norm_key = "global_normalization_vector"
             background_key = "global_background_vector"
@@ -1576,7 +1578,9 @@ class qi2labDataStore:
             if decode_run_key is None:
                 self.iterative_normalization_vector = normalization_vector
                 self.iterative_background_vector = background_vector
-                self._save_default_decode_normalization_metadata(kind, metadata)
+                self._save_default_decode_normalization_metadata(
+                    kind, metadata, decode_mode
+                )
                 return
             norm_key = "iterative_normalization_vector"
             background_key = "iterative_background_vector"
@@ -1599,16 +1603,20 @@ class qi2labDataStore:
         self,
         kind: str,
         metadata: Mapping[str, Any] | None,
+        decode_mode: str | None,
     ) -> None:
-        """Save provenance for default, non-run-scoped normalization vectors."""
-        if metadata is None:
+        """Save optional provenance and decode mode for default normalization."""
+        if metadata is None and decode_mode is None:
             return
         path = self._decode_normalization_path(None)
-        all_metadata = dict(
-            self._load_from_json(path).get("decode_normalization_metadata", {})
-        )
-        all_metadata[kind] = dict(metadata)
-        self._set_calibration_attribute("decode_normalization_metadata", all_metadata)
+        attributes = self._load_from_json(path)
+        if metadata is not None:
+            all_metadata = dict(attributes.get("decode_normalization_metadata", {}))
+            all_metadata[kind] = dict(metadata)
+            attributes["decode_normalization_metadata"] = all_metadata
+        if decode_mode is not None:
+            attributes["decode_mode"] = str(decode_mode)
+        self._save_to_json(self._to_json_compatible(attributes), path)
 
     def load_decode_normalization_metadata(
         self,
