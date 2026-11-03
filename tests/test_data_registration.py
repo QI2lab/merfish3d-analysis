@@ -17,7 +17,7 @@ from merfish3danalysis.DataRegistration import (
     "module",
     [
         "merfish3danalysis.DataRegistration",
-        "merfish3danalysis.PixelDecoder",
+        pytest.param("merfish3danalysis.PixelDecoder", marks=pytest.mark.gpu),
         "merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore",
     ],
 )

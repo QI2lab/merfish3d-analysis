@@ -61,6 +61,7 @@ jobs:
             tests/test_datastore_stage_position.py \
             tests/test_datastore_feature_predictor.py \
             tests/test_data_registration.py \
+            tests/test_dataio.py \
             tests/test_global_fusion_mode.py \
             tests/test_multiview_registration.py \
             tests/test_spacing_precision.py \
