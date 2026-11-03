@@ -221,8 +221,8 @@ Cellpose or loading the fused image:
 uv run qi2lab-segment /path/to/experiment --outlines-only --min-cell-area-um2 20
 ```
 
-This regenerates `segmentation/cellpose/imagej_rois/global_coords_rois.zip`
-from the saved `pixel_spacing_rois.zip` and fused-image transform metadata.
+This regenerates `cell_boundaries/cell_rois.zip` from the saved
+`cell_boundaries/pixel_rois.zip` and fused-image transform metadata.
 Raw masks and pixel-space ROIs are retained so the cutoff can be lowered later.
 The command reports the retained and removed counts. Reload the viewer to see
 the new boundaries; rerun decoding if existing cell assignments or normalization

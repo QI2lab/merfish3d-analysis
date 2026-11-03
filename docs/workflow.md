@@ -152,7 +152,8 @@ geometry. The registration step refines global tile transforms on CPU. The
 fusion step writes directly to OME-Zarr with the CPU backend. Fiducial fusion
 preserves Z spacing and downsamples each lateral axis by
 `round(z_spacing / lateral_spacing, 1)` for the segmentation grid. Its
-maximum-Z projection is stored in a separate sibling OME-NGFF Scene, with an
+maximum-Z projection is stored in `fiducial_projection.ome.zarr`, a separate
+OME-NGFF Scene inside the datastore, with an
 optional TIFF on the same grid. Cellpose labels are associated with the Scene's
 projection image. The fused spacing is used to transform Cellpose pixel ROIs into
 global coordinates. The full global
@@ -162,7 +163,7 @@ stage can be rerun on an existing locally registered datastore with
 ## Fuse all channels
 
 Once local and global registrations are complete, create one multichannel
-OME-NGFF v0.6 image in the datastore Scene:
+OME-NGFF v0.6 image in `qi2labdatastore/fused.ome.zarr`:
 
 ```bash
 uv run qi2lab-fuseall /path/to/experiment \
@@ -179,7 +180,7 @@ MVS composes the stored local-round affine, stage-camera affine, stage position
 and global refinement while sampling native images. Chromatic correction is
 applied during decoding.
 SOFIMA fields are ignored. `--write-ome-tiffs` additionally exports one
-full-resolution OME-TIFF per channel under `qi2labdatastore/fused/`.
+full-resolution OME-TIFF per channel under `qi2labdatastore/fused_tiff/`.
 
 Both this command and `DataRegistration.py` use the same CPU fusion options.
 The shared default codec is lossless Blosc-Zstd with bitshuffle at level 1.
