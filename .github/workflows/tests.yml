@@ -68,6 +68,7 @@ jobs:
             tests/test_fiducial_projection.py \
             tests/test_projection_scene.py \
             tests/test_fusion_compression.py \
+            tests/test_fusion_worker_cleanup.py \
             tests/test_fiducial_downsampling.py \
             tests/test_fuseall.py \
             tests/test_fused_viewer.py \
@@ -81,5 +82,8 @@ jobs:
             tests/test_zhuang_conversion.py \
             tests/test_zhuang_registration.py \
             tests/test_zhuang_segmentation.py \
+            tests/test_preprocess_cli.py \
+            tests/test_export_tile.py \
             tests/test_cellpose_rois.py \
+            tests/test_segment_fiducial.py \
             tests/test_decode_helpers.py
