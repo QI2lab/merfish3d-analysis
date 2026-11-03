@@ -21,6 +21,10 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.12"
+      - name: Install headless rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libfontconfig1 libglib2.0-0 libx11-6 libxkbcommon0
       - name: Install CPU test dependencies from project declarations
         run: |
           uv venv
@@ -33,7 +37,7 @@ jobs:
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
               "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely",
-              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "fastparquet",
+              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "pyarrow",
               "ndv", "matplotlib", "scikit-image",
           }
           requirements = [
