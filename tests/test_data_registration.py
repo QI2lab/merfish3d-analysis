@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from queue import SimpleQueue
 from unittest.mock import Mock
 
@@ -8,6 +10,32 @@ from merfish3danalysis.DataRegistration import (
     DataRegistration,
     GlobalRegistrationConfig,
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "module",
+    [
+        "merfish3danalysis.DataRegistration",
+        "merfish3danalysis.PixelDecoder",
+        "merfish3danalysis.cli.statphysbio_simulation.convert_to_datastore",
+    ],
+)
+def test_processing_import_preserves_application_multiprocessing_context(module):
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import importlib, multiprocessing as mp, sys; "
+            "mp.set_start_method('fork'); "
+            "importlib.import_module(sys.argv[1]); "
+            "assert mp.get_start_method() == 'fork'",
+            module,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 @pytest.mark.unit

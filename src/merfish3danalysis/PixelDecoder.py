@@ -18,16 +18,10 @@ History:
 - **2024/01**: Updated for qi2lab MERFISH file format v1.0.
 """
 
-import multiprocessing as mp
-
-from merfish3danalysis.utils.dataio import time_stamp
-from merfish3danalysis.utils.imageprocessing import image_has_signal
-
-mp.set_start_method("spawn", force=True)
-
 import ctypes
 import gc
 import hashlib
+import multiprocessing as mp
 import operator
 import os
 import shutil
@@ -40,7 +34,11 @@ from pathlib import Path
 from random import sample
 from typing import Literal
 
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.imageprocessing import image_has_signal
+
 _CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+_SPAWN_CONTEXT = mp.get_context("spawn")
 
 
 @dataclass(frozen=True)
@@ -171,7 +169,7 @@ def _start_gpu_worker_process(
     previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
     try:
-        process = mp.Process(target=target, args=args)
+        process = _SPAWN_CONTEXT.Process(target=target, args=args)
         process.start()
     finally:
         if previous_visible_devices is None:

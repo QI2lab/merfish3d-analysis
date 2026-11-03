@@ -673,6 +673,15 @@ def test_bits_decode_in_round_one_before_world_mapping(
         datastore.datastore_path, outlines_only=True, roi_multiprocessing=False
     )
 
+    for kind in ("global", "iterative"):
+        datastore.save_decode_normalization_vectors(
+            "coordinate_check",
+            kind,
+            np.full(6, 100.0),
+            np.zeros(6),
+            metadata={"normalization_features": "cells"},
+        )
+
     named_decoder = PixelDecoder(
         datastore,
         merfish_bits=6,
@@ -699,3 +708,12 @@ def test_bits_decode_in_round_one_before_world_mapping(
     assert filtered["gene_id"].tolist() == ["A", "B"]
     assert filtered["cell_id"].tolist() == [1, 0]
     assert reopened.load_local_decoded_spots(0) is None
+    for kind in ("global", "iterative"):
+        normalization, background = reopened.load_decode_normalization_vectors(
+            "coordinate_check", kind
+        )
+        np.testing.assert_array_equal(normalization, np.full(6, 100.0))
+        np.testing.assert_array_equal(background, np.zeros(6))
+        assert reopened.load_decode_normalization_metadata(
+            "coordinate_check", kind
+        ) == {"normalization_features": "cells"}

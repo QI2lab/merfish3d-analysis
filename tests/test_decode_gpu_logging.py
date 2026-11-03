@@ -1,224 +1,41 @@
 import os
+import subprocess
 import sys
-from types import SimpleNamespace
-from unittest.mock import Mock, call
 
-import numpy as np
 import pytest
 
 import merfish3danalysis.PixelDecoder as pixel_decoder_module
-from merfish3danalysis.PixelDecoder import PixelDecoder
-
-
-@pytest.fixture
-def worker_dependencies(monkeypatch):
-    """Observe GPU selection while running workers against the real datastore."""
-    device = Mock()
-    cupy = SimpleNamespace(
-        cuda=SimpleNamespace(
-            Device=device,
-            Stream=SimpleNamespace(null=Mock()),
-        ),
-        get_default_memory_pool=Mock(),
-        get_default_pinned_memory_pool=Mock(),
-    )
-    torch = SimpleNamespace(cuda=SimpleNamespace(set_device=Mock()))
-    methods = SimpleNamespace(
-        **{
-            name: Mock()
-            for name in (
-                "_load_global_normalization_vectors",
-                "_load_iterative_normalization_vectors",
-                "decode_one_tile",
-                "_save_barcodes",
-                "_cleanup",
-            )
-        }
-    )
-    for name, mock in vars(methods).items():
-        monkeypatch.setattr(PixelDecoder, name, mock)
-    monkeypatch.setattr(
-        PixelDecoder, "_normalize_codebook", Mock(return_value=np.full((1, 4), 0.5))
-    )
-    decoder_factory = Mock(wraps=PixelDecoder)
-    monkeypatch.setitem(sys.modules, "cupy", cupy)
-    monkeypatch.setitem(sys.modules, "torch", torch)
-    monkeypatch.setattr(pixel_decoder_module, "preload_cuda_libraries", Mock())
-    monkeypatch.setattr(pixel_decoder_module, "PixelDecoder", decoder_factory)
-    return SimpleNamespace(
-        device=device,
-        set_device=torch.cuda.set_device,
-        decoder=methods,
-        decoder_factory=decoder_factory,
-    )
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(
-    ("visible_devices", "gpu_id", "expected_label"),
-    [
-        ("0", 0, "0"),
-        ("1", 0, "1"),
-        (None, 1, "1"),
-        ("3,5", 1, "5"),
-        ("GPU-assigned-device", 0, "GPU-assigned-device"),
-    ],
-)
-def test_worker_logs_visible_gpu_but_computes_on_local_device(
-    monkeypatch,
-    capsys,
-    image_datastore,
-    worker_dependencies,
-    visible_devices,
-    gpu_id,
-    expected_label,
+@pytest.mark.parametrize("initial_visible", [None, "8,9"])
+def test_spawn_workers_receive_distinct_gpu_assignments(
+    monkeypatch, tmp_path, initial_visible
 ):
-    if visible_devices is None:
+    if initial_visible is None:
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     else:
-        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible_devices)
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", initial_visible)
 
-    pixel_decoder_module.decode_tiles_worker(
-        datastore_path=image_datastore.datastore_path,
-        tile_indices=[1],
-        gpu_id=gpu_id,
-        merfish_bits=4,
-        verbose=1,
-        decode_mode="3d",
-        lowpass_sigma=(3, 1, 1),
-        magnitude_threshold=(1.5, 10),
-        minimum_pixels=1,
-        feature_predictor_threshold=0.1,
-        normalization_method="iterative",
-    )
-
-    lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 2
-    assert f"GPU {expected_label}: starting tile 1 of 1 (tile index: 1)." in lines[0]
-    assert (
-        f"GPU {expected_label}: decoded and saved tile 1 of 1 (tile index: 1)."
-        in lines[1]
-    )
-    worker_dependencies.device.assert_called_once_with(gpu_id)
-    worker_dependencies.set_device.assert_called_once_with(gpu_id)
-    assert (
-        worker_dependencies.decoder._load_global_normalization_vectors.call_args.kwargs[
-            "gpu_id"
+    paths = [tmp_path / "gpu0.txt", tmp_path / "gpu1.txt"]
+    processes = []
+    for gpu_id, path in enumerate(paths):
+        command = [
+            sys.executable,
+            "-c",
+            "import os, pathlib, sys; "
+            "pathlib.Path(sys.argv[1]).write_text(os.environ['CUDA_VISIBLE_DEVICES'])",
+            str(path),
         ]
-        == gpu_id
-    )
-    worker_dependencies.decoder._load_iterative_normalization_vectors.assert_called_once_with(
-        gpu_id=gpu_id
-    )
-    assert (
-        worker_dependencies.decoder.decode_one_tile.call_args.kwargs["gpu_id"] == gpu_id
-    )
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("normalization_method", ["global", "none"])
-def test_worker_does_not_load_unused_iterative_normalization(
-    image_datastore, worker_dependencies, normalization_method
-):
-    pixel_decoder_module.decode_tiles_worker(
-        datastore_path=image_datastore.datastore_path,
-        tile_indices=[0],
-        gpu_id=0,
-        merfish_bits=4,
-        verbose=0,
-        decode_mode="3d",
-        lowpass_sigma=(3, 1, 1),
-        magnitude_threshold=(1.5, 10),
-        minimum_pixels=1,
-        feature_predictor_threshold=0.1,
-        normalization_method=normalization_method,
-        normalization_features="all",
-    )
-    assert (
-        worker_dependencies.decoder_factory.call_args.kwargs["normalization_features"]
-        == "all"
-    )
-    worker_dependencies.decoder._load_iterative_normalization_vectors.assert_not_called()
-    assert worker_dependencies.decoder._load_global_normalization_vectors.called == (
-        normalization_method == "global"
-    )
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("verbose", [0, 1])
-@pytest.mark.parametrize("normalization_features", ["all", "cells"])
-def test_two_gpu_decode_logs_each_assignment_without_changing_local_device(
-    monkeypatch,
-    capsys,
-    image_datastore,
-    worker_dependencies,
-    verbose,
-    normalization_features,
-):
-    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    started_masks = []
-
-    class InlineProcess:
-        """Run workers with the environment present when Process.start is called."""
-
-        def __init__(self, *, target, args):
-            self.target = target
-            self.args = args
-            self.exitcode = None
-
-        def start(self):
-            started_masks.append(os.environ["CUDA_VISIBLE_DEVICES"])
-            self.target(*self.args)
-            self.exitcode = 0
-
-        def join(self):
-            assert self.exitcode == 0
-
-    monkeypatch.setattr(pixel_decoder_module.mp, "Process", InlineProcess)
-    decoder = PixelDecoder(
-        image_datastore,
-        merfish_bits=4,
-        num_gpus=2,
-        verbose=verbose,
-        decode_mode="3d",
-        normalization_features=normalization_features,
-    )
-    decoder._df_barcodes_loaded = []
-    for method in (
-        "_load_all_barcodes",
-        "_apply_filter_method",
-        "_remove_duplicates_in_tile_overlap",
-        "_save_barcodes",
-    ):
-        monkeypatch.setattr(decoder, method, Mock())
-
-    decoder.decode_all_tiles(assign_to_cells=False, minimum_pixels=1)
-
-    assert started_masks == ["0", "1"]
-    assert [
-        invocation.kwargs["normalization_features"]
-        for invocation in worker_dependencies.decoder_factory.call_args_list
-    ] == [normalization_features, normalization_features]
-    assert "CUDA_VISIBLE_DEVICES" not in os.environ
-    assert worker_dependencies.device.call_args_list == [call(0), call(0)]
-    assert worker_dependencies.set_device.call_args_list == [call(0), call(0)]
-    assert [
-        (invocation.kwargs["tile_idx"], invocation.kwargs["gpu_id"])
-        for invocation in worker_dependencies.decoder.decode_one_tile.call_args_list
-    ] == [(0, 0), (1, 0)]
-    gpu_lines = [
-        line for line in capsys.readouterr().out.splitlines() if "GPU " in line
-    ]
-    if verbose:
-        assert len(gpu_lines) == 4
-        for gpu_id in range(2):
-            assert (
-                f"GPU {gpu_id}: starting tile 1 of 1 (tile index: {gpu_id})."
-                in gpu_lines[2 * gpu_id]
+        processes.append(
+            pixel_decoder_module._start_gpu_worker_process(
+                target=subprocess.check_call,
+                args=(command,),
+                physical_gpu_id=gpu_id,
             )
-            assert (
-                f"GPU {gpu_id}: decoded and saved tile 1 of 1 (tile index: {gpu_id})."
-                in gpu_lines[2 * gpu_id + 1]
-            )
-    else:
-        assert gpu_lines == []
+        )
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == initial_visible
+
+    pixel_decoder_module._join_gpu_workers(processes, "decode")
+    assert [path.read_text() for path in paths] == ["0", "1"]
+    assert os.environ.get("CUDA_VISIBLE_DEVICES") == initial_visible

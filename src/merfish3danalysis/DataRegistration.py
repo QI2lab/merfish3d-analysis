@@ -28,14 +28,12 @@ History:
 """
 
 import multiprocessing as mp
-
-from merfish3danalysis.utils.dataio import time_stamp
-from merfish3danalysis.utils.ufish import load_ufish_model
-
-mp.set_start_method("spawn", force=True)
 import os
 import warnings
 from collections.abc import Iterator
+
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.ufish import load_ufish_model
 
 warnings.filterwarnings(
     "ignore",
@@ -59,6 +57,8 @@ import numpy as np
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.sofima_registration import SofimaRegistrationConfig
 from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
+
+_SPAWN_CONTEXT = mp.get_context("spawn")
 
 
 @dataclass(frozen=True)
@@ -2225,7 +2225,7 @@ class DataRegistration:
             gc.collect()
             return
 
-        result_queue = mp.Queue()
+        result_queue = _SPAWN_CONTEXT.Queue()
         num_workers = min(self._num_gpus, len(moving_rounds))
         chunk_size = (len(moving_rounds) + num_workers - 1) // num_workers
         processes = []
@@ -2237,7 +2237,7 @@ class DataRegistration:
                 break
 
             subset = moving_rounds[start:end]
-            process = mp.Process(
+            process = _SPAWN_CONTEXT.Process(
                 target=_process_fiducial_rounds_on_gpu,
                 args=(self, subset, reference_image, gpu_id, result_queue),
             )
@@ -2288,7 +2288,7 @@ class DataRegistration:
         gc.collect()
 
         if self._perform_deformable_registration:
-            sofima_queue = mp.Queue()
+            sofima_queue = _SPAWN_CONTEXT.Queue()
             sofima_processes = []
 
             for gpu_id in range(num_workers):
@@ -2298,7 +2298,7 @@ class DataRegistration:
                     break
 
                 subset = moving_rounds[start:end]
-                process = mp.Process(
+                process = _SPAWN_CONTEXT.Process(
                     target=_process_sofima_rounds_on_gpu,
                     args=(self, subset, gpu_id, sofima_queue),
                 )
@@ -2388,7 +2388,9 @@ class DataRegistration:
                 break  # no more bits to assign
 
             subset = all_bits[start:end]
-            p = mp.Process(target=_apply_bits_on_gpu, args=(self, subset, gpu_id))
+            p = _SPAWN_CONTEXT.Process(
+                target=_apply_bits_on_gpu, args=(self, subset, gpu_id)
+            )
             p.start()
             processes.append(p)
 

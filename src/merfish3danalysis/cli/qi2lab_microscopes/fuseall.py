@@ -3,7 +3,6 @@
 import gc
 import json
 import multiprocessing as mp
-import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -24,9 +23,6 @@ from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
 from merfish3danalysis.utils.decode_warping import load_bit_round_transform_zyx_um
 from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
-
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.simplefilter("ignore", category=FutureWarning)
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False

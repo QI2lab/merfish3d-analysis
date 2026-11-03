@@ -16,7 +16,7 @@ from merfish3danalysis.PixelDecoder import PixelDecoder
 @pytest.mark.gpu
 @pytest.mark.parametrize("normalization_method", ["global", "iterative"])
 def test_named_run_workers_share_one_normalization_cache(
-    image_datastore, normalization_method
+    image_datastore, normalization_method, capfd
 ):
     import multiprocessing as mp
 
@@ -44,20 +44,20 @@ def test_named_run_workers_share_one_normalization_cache(
             )
 
     run = f"parallel_{normalization_method}"
-    if normalization_method == "iterative":
-        datastore.save_decode_normalization_vectors(
-            run,
-            "iterative",
-            np.ones(4),
-            np.zeros(4),
-            decode_mode="3d",
-            metadata={"normalization_features": "all"},
-        )
+    iterative_features = "all" if normalization_method == "iterative" else "cells"
+    datastore.save_decode_normalization_vectors(
+        run,
+        "iterative",
+        np.ones(4),
+        np.zeros(4),
+        decode_mode="3d",
+        metadata={"normalization_features": iterative_features},
+    )
     decoder = PixelDecoder(
         datastore,
         merfish_bits=4,
         num_gpus=1,
-        verbose=0,
+        verbose=1,
         decode_mode="3d",
         decode_run_key=run,
         normalization_features="all",
@@ -70,6 +70,21 @@ def test_named_run_workers_share_one_normalization_cache(
         normalization_method=normalization_method,
         filter_method="lr",
     )
+    output = capfd.readouterr().out
+    for tile in range(2):
+        assert f"GPU 0: starting tile {tile + 1} of 2 (tile index: {tile})." in output
+        assert (
+            f"GPU 0: decoded and saved tile {tile + 1} of 2 (tile index: {tile})."
+            in output
+        )
+    iterative_norm, iterative_background = datastore.load_decode_normalization_vectors(
+        run, "iterative"
+    )
+    np.testing.assert_array_equal(iterative_norm, np.ones(4))
+    np.testing.assert_array_equal(iterative_background, np.zeros(4))
+    assert datastore.load_decode_normalization_metadata(run, "iterative") == {
+        "normalization_features": iterative_features
+    }
     normalization, background = datastore.load_decode_normalization_vectors(
         run, "global"
     )
