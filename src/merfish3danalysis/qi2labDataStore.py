@@ -396,9 +396,16 @@ class qi2labDataStore:
         value : dict
             New datastore state.
         """
+        import os
+        from tempfile import TemporaryDirectory
+
         state = dict(self.datastore_state or {})
         state.update(value)
-        self._save_to_json(state, self._datastore_state_json_path)
+        path = self._datastore_state_json_path
+        with TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as temp:
+            candidate = Path(temp) / path.name
+            self._save_to_json(state, candidate)
+            os.replace(candidate, path)
         self._datastore_state = state
 
     def cellpose_pixel_rois_path(self) -> Path:
@@ -5122,6 +5129,10 @@ class qi2labDataStore:
         convention of pixel Z=10; the original 3D grid remains available for
         the library's ROI calculations.
 
+        Replacing a segmented projection archives its active ROI files under
+        ``cell_boundaries/archive/<projection revision>`` and clears the
+        segmentation state. Labels remain with the previous image revision.
+
         Parameters
         ----------
         projection : ArrayLike
@@ -5207,24 +5218,84 @@ class qi2labDataStore:
                 missing_z_origin_um=float(origin[0] + 10 * spacing[0]),
             )
 
-        if not path.exists():
-            with TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as temp:
-                candidate = Path(temp) / path.name
-                initialize_scene(candidate)
-                published = publish(candidate, None)
-                open_group(candidate).validate(strict=True)
-                with _scene_lock(path.resolve()):
-                    if path.exists():
-                        raise FileExistsError(
-                            "Projection Scene was created by another worker."
+        # Scene updates take their own lock. A separate lock serializes the
+        # projection publication and associated segmentation-file changes.
+        with _scene_lock(path.with_name(path.name + ".publication").resolve()):
+            if not path.exists():
+                with TemporaryDirectory(
+                    prefix=f".{path.name}.", dir=path.parent
+                ) as temp:
+                    candidate = Path(temp) / path.name
+                    initialize_scene(candidate)
+                    published = publish(candidate, None)
+                    open_group(candidate).validate(strict=True)
+                    with _scene_lock(path.resolve()):
+                        if path.exists():
+                            raise FileExistsError(
+                                "Projection Scene was created by another worker."
+                            )
+                        os.rename(candidate, path)
+            else:
+                products = open_group(path).attrs["qi2lab"]["products"]
+                previous = products.get("projection/fiducial")
+                revision = None if previous is None else previous["revision"]
+                state = self._load_from_json(self._datastore_state_json_path)
+                self._datastore_state = state.copy()
+                files = (
+                    self.cellpose_pixel_rois_path(),
+                    self.cellpose_global_rois_path(),
+                    self.cellpose_outlines_path(),
+                )
+                segmented = (
+                    bool(state.get("SegmentedCells"))
+                    or (self.load_global_cellpose_segmentation_image(None) is not None)
+                    or any(source.exists() or source.is_symlink() for source in files)
+                )
+                with TemporaryDirectory(
+                    prefix=".segmentation-state.",
+                    dir=self._datastore_state_json_path.parent,
+                ) as temp:
+                    backup = Path(temp) / self._datastore_state_json_path.name
+                    moved = []
+                    try:
+                        if previous is not None and segmented:
+                            boundaries = self._datastore_path / "cell_boundaries"
+                            archive = boundaries / "archive" / revision
+                            for source in files:
+                                target = archive / source.relative_to(boundaries)
+                                if (source.exists() or source.is_symlink()) and (
+                                    target.exists() or target.is_symlink()
+                                ):
+                                    raise FileExistsError(
+                                        f"Segmentation archive already contains {target}"
+                                    )
+                            if state.get("SegmentedCells"):
+                                # Preserve the old bytes without another write on rollback.
+                                os.link(self._datastore_state_json_path, backup)
+                                self.datastore_state = {"SegmentedCells": False}
+                            for source in files:
+                                if source.exists() or source.is_symlink():
+                                    target = archive / source.relative_to(boundaries)
+                                    target.parent.mkdir(parents=True, exist_ok=True)
+                                    source.replace(target)
+                                    moved.append((source, target))
+                        published = publish(path, revision)
+                    except Exception:
+                        current = (
+                            open_group(path)
+                            .attrs["qi2lab"]["products"]
+                            .get("projection/fiducial")
                         )
-                    os.rename(candidate, path)
-        else:
-            products = open_group(path).attrs["qi2lab"]["products"]
-            previous = products.get("projection/fiducial")
-            published = publish(
-                path, None if previous is None else previous["revision"]
-            )
+                        if (
+                            None if current is None else current["revision"]
+                        ) == revision:
+                            for source, target in reversed(moved):
+                                source.parent.mkdir(parents=True, exist_ok=True)
+                                target.replace(source)
+                            if self.datastore_state != state:
+                                os.replace(backup, self._datastore_state_json_path)
+                                self._datastore_state = state
+                        raise
         return published[1] if return_future else None
 
     def load_global_fiducial_projection(

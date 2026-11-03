@@ -6,6 +6,285 @@ from tensorstore import TensorStore
 from yaozarrs import open_group, v06
 
 
+@pytest.fixture
+def segmented_projection(image_datastore):
+    """Create a real projection, labels, and all Cellpose outline products."""
+    from roifile import ImagejRoi, roiwrite
+
+    datastore = image_datastore
+    projection = np.arange(80, dtype=np.uint16).reshape(8, 10)
+    datastore.save_global_fiducial_projection(
+        projection, np.eye(4), [10, 20, 30], datastore.voxel_size_zyx_um
+    )
+    labels = np.zeros(projection.shape, dtype=np.uint16)
+    labels[1:5, 2:7] = 1
+    datastore.save_global_cellpose_segmentation_image(labels, [1, 1, 1])
+    roi = ImagejRoi.frompoints([[2, 1], [6, 1], [6, 4], [2, 4]])
+    for path in (
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        roiwrite(path, [roi])
+    outline = datastore.cellpose_outlines_path()
+    outline.parent.mkdir(parents=True, exist_ok=True)
+    outline.write_text('{"type":"FeatureCollection","features":[]}')
+    datastore.datastore_state = {"SegmentedCells": True}
+    return datastore
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("state_recorded", [False, True])
+def test_replacing_projection_archives_existing_labels_and_outlines(
+    segmented_projection, state_recorded
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = segmented_projection
+    datastore.datastore_state = {"SegmentedCells": state_recorded}
+    path = datastore.fiducial_projection_path()
+    old_product = open_group(path).attrs["qi2lab"]["products"]["projection/fiducial"]
+    old_revision = old_product["revision"]
+    old_labels = datastore.load_global_cellpose_segmentation_image(False)
+    files = (
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+        datastore.cellpose_outlines_path(),
+    )
+    original = [file.read_bytes() for file in files]
+    datastore.save_global_fiducial_projection(
+        np.full((8, 10), 42, dtype=np.uint16),
+        np.eye(4),
+        [10, 20, 30],
+        datastore.voxel_size_zyx_um,
+    )
+
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert not reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is None
+    boundaries = datastore.datastore_path / "cell_boundaries"
+    for file, contents in zip(files, original, strict=True):
+        assert not file.exists()
+        assert (
+            boundaries / "archive" / old_revision / file.relative_to(boundaries)
+        ).read_bytes() == contents
+    old_group = open_group(path)[old_product["path"]]["labels"]
+    label = old_group[old_group.ome_metadata(strict=True).labels[0]]
+    array = label.ome_metadata(strict=True).multiscales[0].datasets[0].path
+    np.testing.assert_array_equal(
+        label[array].to_tensorstore().read().result(), old_labels
+    )
+
+
+@pytest.mark.unit
+def test_failed_projection_publication_restores_existing_segmentation(
+    segmented_projection,
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = segmented_projection
+    files = (
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+        datastore.cellpose_outlines_path(),
+    )
+    original = [file.read_bytes() for file in files]
+    projection = datastore.load_global_fiducial_projection(False)[0]
+    labels = datastore.load_global_cellpose_segmentation_image(False)
+
+    invalid_affine = np.eye(4)
+    invalid_affine[3, 3] = 0
+    with pytest.raises(ValueError, match="homogeneous"):
+        datastore.save_global_fiducial_projection(
+            projection + 1, invalid_affine, [10, 20, 30], datastore.voxel_size_zyx_um
+        )
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert reopened.datastore_state["SegmentedCells"]
+    np.testing.assert_array_equal(
+        reopened.load_global_fiducial_projection(False)[0], projection
+    )
+    np.testing.assert_array_equal(
+        reopened.load_global_cellpose_segmentation_image(False), labels
+    )
+    assert [file.read_bytes() for file in files] == original
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fail_after_archival", [False, True])
+def test_failed_state_write_preserves_segmented_projection(
+    segmented_projection, fail_after_archival
+):
+    import os
+    import subprocess
+    import sys
+
+    if os.name != "posix":
+        pytest.skip("File size limits require POSIX")
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = segmented_projection
+    files = (
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+        datastore.cellpose_outlines_path(),
+    )
+    original = [file.read_bytes() for file in files]
+    projection = datastore.load_global_fiducial_projection(False)[0]
+    state_path = datastore.datastore_path / "datastore_state/state.json"
+    state_bytes = state_path.read_bytes()
+    revision = open_group(datastore.fiducial_projection_path()).attrs["qi2lab"][
+        "products"
+    ]["projection/fiducial"]["revision"]
+    script = """
+import errno
+import resource
+import sys
+import numpy as np
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+datastore = qi2labDataStore(sys.argv[1])
+_, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+resource.setrlimit(resource.RLIMIT_FSIZE, (int(sys.argv[2]), hard_limit))
+try:
+    datastore.save_global_fiducial_projection(
+        np.ones((8, 10), dtype=np.uint16), np.eye(4), [10, 20, 30],
+        datastore.voxel_size_zyx_um,
+    )
+except OSError as exc:
+    assert exc.errno == errno.EFBIG
+else:
+    raise AssertionError("expected a file-size limit error")
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(datastore.datastore_path),
+            str(len(state_bytes) + 8 if fail_after_archival else 0),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert state_path.read_bytes() == state_bytes
+    assert [file.read_bytes() for file in files] == original
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is not None
+    np.testing.assert_array_equal(
+        reopened.load_global_fiducial_projection(False)[0], projection
+    )
+    assert list(state_path.parent.iterdir()) == [state_path]
+    if fail_after_archival:
+        assert (
+            datastore.datastore_path / "cell_boundaries/archive" / revision
+        ).is_dir()
+
+
+@pytest.mark.unit
+def test_segmentation_archive_collision_preserves_both_copies(segmented_projection):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = segmented_projection
+    products = open_group(datastore.fiducial_projection_path()).attrs["qi2lab"][
+        "products"
+    ]
+    revision = products["projection/fiducial"]["revision"]
+    pixel = datastore.cellpose_pixel_rois_path()
+    original = pixel.read_bytes()
+    collision = pixel.parent / "archive" / revision / pixel.name
+    collision.parent.mkdir(parents=True)
+    collision.write_bytes(b"existing archive")
+    with pytest.raises(FileExistsError, match="archive already contains"):
+        datastore.save_global_fiducial_projection(
+            np.zeros((8, 10), dtype=np.uint16),
+            np.eye(4),
+            [10, 20, 30],
+            datastore.voxel_size_zyx_um,
+        )
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is not None
+    assert pixel.read_bytes() == original
+    assert collision.read_bytes() == b"existing archive"
+
+
+@pytest.mark.integration
+def test_competing_projection_publishers_preserve_segmentation_archive(
+    segmented_projection,
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = segmented_projection
+    scene = datastore.fiducial_projection_path()
+    revision = open_group(scene).attrs["qi2lab"]["products"]["projection/fiducial"][
+        "revision"
+    ]
+    paths = (
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+        datastore.cellpose_outlines_path(),
+    )
+    contents = [path.read_bytes() for path in paths]
+    writers = [qi2labDataStore(datastore.datastore_path) for _ in range(2)]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        completions = [
+            executor.submit(
+                writer.save_global_fiducial_projection,
+                np.full((8, 10), value, dtype=np.uint16),
+                np.eye(4),
+                [10, 20, 30],
+                writer.voxel_size_zyx_um,
+            )
+            for writer, value in zip(writers, (1, 2), strict=True)
+        ]
+        for completion in completions:
+            completion.result()
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert not reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is None
+    boundaries = datastore.datastore_path / "cell_boundaries"
+    for path, expected in zip(paths, contents, strict=True):
+        assert not path.exists()
+        assert (
+            boundaries / "archive" / revision / path.relative_to(boundaries)
+        ).read_bytes() == expected
+    assert np.unique(reopened.load_global_fiducial_projection(False)[0]).item() in (
+        1,
+        2,
+    )
+
+
+@pytest.mark.unit
+def test_replacing_projection_archives_standalone_rois_only(image_datastore):
+    from roifile import ImagejRoi, roiwrite
+
+    datastore = image_datastore
+    image = np.zeros((8, 10), dtype=np.uint16)
+    datastore.save_global_fiducial_projection(
+        image, np.eye(4), [10, 20, 30], datastore.voxel_size_zyx_um
+    )
+    path = datastore.cellpose_global_rois_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(path, [ImagejRoi.frompoints([[0, 0], [3, 0], [3, 3]])])
+    original = path.read_bytes()
+    unrelated = path.parent / "notes.txt"
+    unrelated.write_text("independent annotation")
+    revision = open_group(datastore.fiducial_projection_path()).attrs["qi2lab"][
+        "products"
+    ]["projection/fiducial"]["revision"]
+    datastore.save_global_fiducial_projection(
+        image + 1, np.eye(4), [10, 20, 30], datastore.voxel_size_zyx_um
+    )
+    assert not path.exists()
+    assert (path.parent / "archive" / revision / path.name).read_bytes() == original
+    assert unrelated.read_text() == "independent annotation"
+
+
 @pytest.mark.unit
 def test_projection_scene_reopens_with_cellpose_labels(image_datastore):
     from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -175,3 +454,40 @@ def test_real_cellpose_segments_fused_projection_scene(image_datastore):
         np.testing.assert_allclose(
             world_roi.coordinates(), expected_xy, rtol=0, atol=0.011
         )
+
+    projection_scene = reopened.fiducial_projection_path()
+    old_product = open_group(projection_scene).attrs["qi2lab"]["products"][
+        "projection/fiducial"
+    ]
+    pixel_path = reopened.cellpose_pixel_rois_path()
+    global_path = reopened.cellpose_global_rois_path()
+    original_pixel, original_global = pixel_path.read_bytes(), global_path.read_bytes()
+    registration.fuse_global_registered(create_max_proj_tiff=False)
+
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert not reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is None
+    assert reopened.load_global_cellpose_roi_zip() is None
+    assert not pixel_path.exists() and not global_path.exists()
+    archive = (
+        datastore.datastore_path / "cell_boundaries/archive" / old_product["revision"]
+    )
+    assert (archive / pixel_path.name).read_bytes() == original_pixel
+    assert (archive / global_path.name).read_bytes() == original_global
+    old_labels = open_group(projection_scene)[old_product["path"]]["labels"]
+    label = old_labels[old_labels.ome_metadata(strict=True).labels[0]]
+    dataset = label.ome_metadata(strict=True).multiscales[0].datasets[0].path
+    np.testing.assert_array_equal(
+        label[dataset].to_tensorstore().read().result(), masks
+    )
+
+    run_cellpose(datastore.datastore_path, use_gpu=True, roi_multiprocessing=False)
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert reopened.datastore_state["SegmentedCells"]
+    regenerated_masks = reopened.load_global_cellpose_segmentation_image(False)
+    assert regenerated_masks.shape == projection.shape
+    assert np.any(regenerated_masks)
+    assert len(roiread(reopened.cellpose_pixel_rois_path())) > 0
+    assert len(roiread(reopened.cellpose_global_rois_path())) > 0
+    assert (archive / pixel_path.name).read_bytes() == original_pixel
+    assert (archive / global_path.name).read_bytes() == original_global

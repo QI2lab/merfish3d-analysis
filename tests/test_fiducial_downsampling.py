@@ -121,6 +121,63 @@ def test_fiducial_fusion_tiff_and_rois_share_downsampled_grid(
     regenerated = roiread(datastore.cellpose_global_rois_path())[0]
     np.testing.assert_array_equal(regenerated.coordinates(), global_roi.coordinates())
 
+    # A newly fused projection must not expose segmentation from the old image.
+    outline_path = datastore.cellpose_outlines_path()
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text('{"type":"FeatureCollection","features":[]}')
+    active_paths = [
+        datastore.cellpose_pixel_rois_path(),
+        datastore.cellpose_global_rois_path(),
+        outline_path,
+    ]
+    previous_contents = [path.read_bytes() for path in active_paths]
+    previous_projection = product["path"]
+    previous_revision = product["revision"]
+    registration.fuse_global_registered(create_max_proj_tiff=False)
+
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert not reopened.datastore_state["SegmentedCells"]
+    assert reopened.load_global_cellpose_segmentation_image(False) is None
+    assert reopened.load_global_cellpose_roi_zip() is None
+    assert reopened.load_global_cellpose_outlines() is None
+    assert all(not path.exists() for path in active_paths)
+    archive = datastore.datastore_path / "cell_boundaries/archive" / previous_revision
+    for path, contents in zip(active_paths, previous_contents, strict=True):
+        relative = path.relative_to(datastore.datastore_path / "cell_boundaries")
+        assert (archive / relative).read_bytes() == contents
+    old_labels = open_group(datastore.fiducial_projection_path())[previous_projection][
+        "labels"
+    ]
+    old_label = old_labels.ome_metadata(strict=True).labels[0]
+    old_group = old_labels[old_label]
+    dataset = old_group.ome_metadata(strict=True).multiscales[0].datasets[0].path
+    np.testing.assert_array_equal(
+        old_group[dataset].to_tensorstore().read().result(), masks
+    )
+    with pytest.raises(FileNotFoundError, match="Saved pixel-space ROIs"):
+        segment_fiducial.run_cellpose(tmp_path, outlines_only=True)
+
+    # A new segmentation can be saved against the replacement projection.
+    reopened.save_global_cellpose_segmentation_image(
+        masks, downsampling=np.asarray(expected_spacing) / np.asarray(native_spacing)
+    )
+    roiwrite(
+        pixel_roi_path,
+        segment_fiducial.extract_pixel_rois(masks, np.array([1]), workers=1),
+    )
+    segment_fiducial.run_cellpose(
+        tmp_path, outlines_only=True, roi_multiprocessing=False
+    )
+    regenerated = qi2labDataStore(datastore.datastore_path)
+    assert regenerated.datastore_state["SegmentedCells"]
+    np.testing.assert_array_equal(
+        regenerated.load_global_cellpose_segmentation_image(False), masks
+    )
+    np.testing.assert_array_equal(
+        roiread(regenerated.cellpose_global_rois_path())[0].coordinates(),
+        global_roi.coordinates(),
+    )
+
 
 @pytest.mark.integration
 @pytest.mark.parametrize("pre_registered", [False, True])
