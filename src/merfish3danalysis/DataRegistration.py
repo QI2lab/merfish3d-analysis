@@ -1983,8 +1983,9 @@ class DataRegistration:
 
         Notes
         -----
-        For one tile, save its stage origin and an identity registration
-        correction without a pairwise fit, then fuse the tile.
+        For one tile, save its stage origin rounded to the MVS grid precision
+        and an identity registration correction without a pairwise fit, then
+        fuse the tile.
         """
         from multiview_stitcher import (
             msi_utils,
@@ -2001,7 +2002,7 @@ class DataRegistration:
             )
             self._datastore.save_global_coord_xforms_um(
                 affine_zyx_um=np.eye(4, dtype=np.float32),
-                origin_zyx_um=origin,
+                origin_zyx_um=np.round(origin, 2),
                 spacing_zyx_um=round_spacing_um(self._datastore.voxel_size_zyx_um),
                 tile=self._tile_ids[0],
             )

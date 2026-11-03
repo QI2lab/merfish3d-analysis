@@ -136,7 +136,8 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
     datastore.initialize_tile(0)
     datastore.voxel_size_zyx_um = [1, 1, 1]
     camera = np.diag([1, -1, 1, 1])
-    datastore.save_local_stage_position_zyx_um([10, 20, 30], camera, tile=0, round=0)
+    stage = np.array([10.004, 20.004, 30.004], dtype=np.float32)
+    datastore.save_local_stage_position_zyx_um(stage, camera, tile=0, round=0)
     native = np.zeros((3, 10, 12), dtype=np.uint16)
     native[:, 2:-2, 2:-2] = np.arange(144).reshape(3, 6, 8) + 1
     datastore.save_local_corrected_image(native, tile=0, round=0)
@@ -168,6 +169,9 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
     stored_affine, stored_origin, stored_spacing = (
         datastore.load_global_coord_xforms_um(tile=0)
     )
+    stored_stage, stored_camera = datastore.load_local_stage_position_zyx_um(0, 0)
+    np.testing.assert_array_equal(stored_stage, stage)
+    np.testing.assert_array_equal(stored_camera, camera)
     np.testing.assert_array_equal(stored_affine, np.eye(4))
     np.testing.assert_array_equal(stored_origin, [10, 20, 30])
     np.testing.assert_array_equal(stored_spacing, [1, 1, 1])
@@ -176,6 +180,21 @@ def test_single_tile_fusion_reopens_with_reflected_pixels_and_stage_origin(
     fused = group[dataset].to_tensorstore().read().result().squeeze()
     np.testing.assert_array_equal(fused, native[:, ::-1, :])
     np.testing.assert_array_equal(group.attrs["origin_zyx_um"], [10, -29, 30])
+    # A native point mapped with the decoder's stored coordinates and camera
+    # must coincide with the corresponding reflected voxel on the fused grid.
+    native_point = np.array([1, 2, 3])
+    decoded_world = (
+        stored_affine @ camera @ np.r_[stored_origin + native_point * stored_spacing, 1]
+    )
+    fused_world = np.asarray(group.attrs["origin_zyx_um"]) + np.array([1, 7, 3])
+    np.testing.assert_array_equal(decoded_world[:3], fused_world)
+    _, _, projection_origin, projection_spacing = (
+        datastore.load_global_fiducial_projection(False)
+    )
+    np.testing.assert_array_equal(
+        (projection_origin + np.array([1, 7, 3]) * projection_spacing)[1:],
+        decoded_world[1:3],
+    )
     with TiffFile(
         datastore.datastore_path
         / "fiducial_projection_tiff/fiducial_max_projection.ome.tiff"
