@@ -38,6 +38,11 @@ def ensure_scene_group(dest: str | PathLike, relative_path: str) -> Path:
     relative_path : str
         Relative group path beneath the Scene. Parent groups are created as
         needed; existing groups are preserved and symbolic links are rejected.
+
+    Returns
+    -------
+    Path
+        Path to the requested group within the Scene.
     """
     relative = PurePosixPath(relative_path)
     if (

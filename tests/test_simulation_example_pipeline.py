@@ -135,7 +135,6 @@ def _nearest_nyquist_multiple(
     nyquist_multiple: float,
 ) -> float:
     """Return the configured Nyquist multiple nearest to a measured multiple."""
-
     best_multiple = next(iter(thresholds_by_multiple))
     best_distance = abs(best_multiple - nyquist_multiple)
     for multiple in thresholds_by_multiple:
@@ -148,20 +147,17 @@ def _nearest_nyquist_multiple(
 
 def _total_seconds(record: dict[str, Any]) -> float:
     """Return elapsed seconds from a performance record."""
-
     return float(record["total_seconds"])
 
 
 def _sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of a file without loading it into memory."""
-
     with path.open("rb") as file_handle:
         return hashlib.file_digest(file_handle, "sha256").hexdigest()
 
 
 def _ufish_label_from_weights_path(weights_path: Path) -> str:
     """Return a stable test id for a cached U-FISH ONNX weights file."""
-
     label = weights_path.stem
     if label.startswith("v1.0.1-"):
         label = label[len("v1.0.1-") :]
@@ -184,7 +180,6 @@ def _simulation_dataset_case_id(item: tuple[str, str]) -> str:
     str
         Dataset variant name.
     """
-
     return item[0]
 
 
@@ -202,13 +197,11 @@ def _ufish_model_id(model: tuple[str, str | None]) -> str:
     str
         Model display name.
     """
-
     return model[0]
 
 
 def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
     """Return every locally available distinct U-FISH model."""
-
     models: list[tuple[str, str | None]] = []
     seen_weights: set[str | None] = set()
 
@@ -282,7 +275,6 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
 @pytest.fixture(scope="session")
 def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
     """Resolve the simulation dataset root passed to pytest."""
-
     configured_root = pytestconfig.getoption("--simulation-data-root")
     if not configured_root:
         pytest.skip("Pass --simulation-data-root with the extracted Zenodo dataset.")
@@ -295,7 +287,6 @@ def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
 @pytest.fixture(scope="session")
 def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
     """Resolve local dataset directories for the simulation matrix."""
-
     resolved_dirs: dict[str, Path] = {}
     missing_variants: list[str] = []
     for variant, dataset_dir in SIMULATION_DATASET_DIRS.items():
@@ -337,7 +328,6 @@ def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
 
 def _normalize_dataset_root(root: Path) -> Path:
     """Normalize the configured local simulation dataset root."""
-
     example_dir = root / "example_16bit_flat"
     if not example_dir.exists():
         pytest.skip(
@@ -350,7 +340,6 @@ def _normalize_dataset_root(root: Path) -> Path:
 
 def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
     """Return the default minimum-pixel threshold for a simulation spacing."""
-
     if axial_spacing_um == "0.315":
         return DEFAULT_MINIMUM_PIXELS_3D
     return DEFAULT_MINIMUM_PIXELS_2D
@@ -360,7 +349,6 @@ def _default_standard_magnitude_threshold(
     axial_spacing_um: str,
 ) -> tuple[float, float]:
     """Return the sampling-aware default magnitude threshold for simulations."""
-
     if axial_spacing_um == "0.315":
         return DEFAULT_MAGNITUDE_THRESHOLD
 
@@ -376,7 +364,6 @@ def _default_standard_magnitude_threshold(
 @pytest.fixture(scope="session")
 def simulation_api() -> dict[str, Any]:
     """Import callable APIs used by the former notebook workflow."""
-
     from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
         calculate_F1,
     )
@@ -405,7 +392,6 @@ def simulation_api() -> dict[str, Any]:
 @pytest.fixture(scope="session")
 def performance_records() -> list[dict[str, Any]]:
     """Collect and persist runtime/performance records across all approaches."""
-
     records: list[dict[str, Any]] = []
     yield records
 
@@ -453,7 +439,6 @@ def performance_records() -> list[dict[str, Any]]:
 
 def _link_or_copy(src: Path, dst: Path) -> None:
     """Use symlinks for large files when possible, with copy fallback."""
-
     try:
         dst.symlink_to(src.resolve())
     except OSError:
@@ -462,7 +447,6 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 
 def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
     """Create an isolated workspace with only files needed for this pipeline."""
-
     missing_files = [
         filename
         for filename in REQUIRED_SIMULATION_FILES
@@ -578,7 +562,6 @@ def _prepare_preprocessed_magnitude_case(
     run_calibration_decode: bool = True,
 ) -> dict[str, Any]:
     """Prepare one simulation case once before decode-only magnitude sweeps."""
-
     dataset_variant = case_spec["dataset_variant"]
     axial_spacing_um = case_spec["axial_spacing_um"]
     ufish_model_name = case_spec["ufish_model_name"]
@@ -789,7 +772,6 @@ def simulation_standard_dataset_case(
     tuple[str, str]
         Dataset variant name and cached dataset directory name.
     """
-
     return request.param
 
 
@@ -810,7 +792,6 @@ def simulation_standard_axial_spacing_um(
     str
         Axial spacing in microns.
     """
-
     return request.param
 
 
@@ -831,7 +812,6 @@ def simulation_standard_ufish_model(
     tuple[str, str | None]
         Model display name and optional local weights path.
     """
-
     return request.param
 
 
@@ -857,13 +837,11 @@ def simulation_standard_chromatic_case(
     tuple[str, bool, bool]
         Case label, synthetic aberration flag, and estimator flag.
     """
-
     return request.param
 
 
 def _assert_standard_result_valid(result: dict[str, Any]) -> None:
     """Validate stored outputs and independently calculate metrics from counts."""
-
     datastore_path = result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     assert datastore_path.exists()
     assert isinstance(result["f1_results"], dict)
@@ -893,7 +871,6 @@ def _run_standard_simulation_case(
     work_root: Path,
 ) -> dict[str, Any]:
     """Run one standard simulation pipeline case."""
-
     dataset_variant, _ = dataset_case
     ufish_model_name, ufish_model = ufish_model_case
     chromatic_mode, synthetic_chromatic_aberration, estimate_chromatic_affines = (
@@ -1081,7 +1058,6 @@ def test_simulation_standard_matrix(
     tmp_path: Path,
 ) -> None:
     """Require ground-truth accuracy for both affine and SOFIMA processing."""
-
     affine_result = _run_standard_simulation_case(
         simulation_dataset_dirs,
         simulation_api,
@@ -1141,7 +1117,6 @@ def test_simulation_standard_matrix(
 )
 def simulation_exhaustive_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Parametrize the exhaustive local simulation base cases."""
-
     return request.param
 
 
@@ -1153,7 +1128,6 @@ def simulation_full_preprocessed_case(
     tmp_path: Path,
 ) -> dict[str, Any]:
     """Prepare one exhaustive simulation case before decoding."""
-
     return _prepare_preprocessed_magnitude_case(
         simulation_dataset_dirs,
         simulation_api,
@@ -1170,7 +1144,6 @@ def simulation_full_case_result(
     simulation_full_preprocessed_case: dict[str, Any],
 ) -> dict[str, Any]:
     """Decode and score one exhaustive simulation case."""
-
     case_root = simulation_full_preprocessed_case["case_root"]
     case_spec = simulation_full_preprocessed_case["case_spec"]
     case_label = simulation_full_preprocessed_case["case_label"]
@@ -1257,7 +1230,6 @@ def test_simulation_exhaustive_matrix(
     simulation_full_case_result: dict[str, Any],
 ) -> None:
     """Run the exhaustive simulation matrix with package-default settings."""
-
     _assert_standard_result_valid(simulation_full_case_result)
     performance_metrics = simulation_full_case_result["performance_metrics"]
 

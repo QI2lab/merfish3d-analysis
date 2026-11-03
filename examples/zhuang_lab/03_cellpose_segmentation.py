@@ -51,7 +51,6 @@ def warp_point(
         point in the world coordinate system (um), zyx order
 
     """
-
     spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
     physical_space_point = pixel_space_point * spacing + origin
     registered_space_point = (
@@ -62,7 +61,7 @@ def warp_point(
 
 
 def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
-    """Run cellpose and save ROIs
+    """Run cellpose and save ROIs.
 
     Parameters
     ----------
@@ -71,7 +70,6 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     cellpose_parameters: dict
         dictionary of cellpose parameters
     """
-
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)

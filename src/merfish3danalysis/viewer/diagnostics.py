@@ -14,6 +14,23 @@ def diagnostic_channel_data(
     Leading image dimensions are flattened into labeled channels. All images
     must share the same trailing ZYX shape. Spacing is in microns, or unity
     when the caller wants pixel coordinates.
+
+    Parameters
+    ----------
+    images : Mapping[str, numpy.ndarray]
+        Named images with at least YX dimensions and matching spatial shapes.
+    spacing_zyx : Sequence[float]
+        Positive ZYX spacing in the desired coordinate units.
+
+    Returns
+    -------
+    xarray.DataArray
+        Channel-stacked CZYX data with spatial coordinates.
+
+    Raises
+    ------
+    ValueError
+        Spacing is invalid, an image shape is incompatible, or no images exist.
     """
     spacing = np.asarray(spacing_zyx, dtype=float)
     if spacing.shape != (3,) or not np.all(np.isfinite(spacing) & (spacing > 0)):
@@ -63,6 +80,24 @@ def show_diagnostic_images(
     Each point layer supplies a name, coordinates, color, and VisPy marker
     symbol. Points follow the selected Z plane. Images retain independent
     channel visibility and contrast controls in NDV.
+
+    Parameters
+    ----------
+    images : Mapping[str, numpy.ndarray]
+        Named images with matching spatial shapes.
+    spacing_zyx : Sequence[float]
+        Positive ZYX spacing in the desired coordinate units.
+    points : sequence of tuple, optional
+        Layers containing a name, ZYX pixel coordinates, color, and marker symbol.
+    units : str, optional
+        Coordinate unit label displayed in the window title.
+
+    Raises
+    ------
+    ValueError
+        Image or spacing validation fails.
+    RuntimeError
+        Point layers were requested but the NDV VisPy canvas is unavailable.
     """
     import os
 

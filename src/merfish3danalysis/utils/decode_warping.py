@@ -18,7 +18,18 @@ _OPTIMIZER_ESTIMATORS = {
 
 
 def optimizer_calibration_is_applicable(calibration: Any) -> bool:
-    """Identify corrections produced by the iterative decoder."""
+    """Identify corrections produced by the iterative decoder.
+
+    Parameters
+    ----------
+    calibration : Any
+        Calibration metadata to inspect.
+
+    Returns
+    -------
+    bool
+        Whether the metadata identifies an iterative decoder estimator.
+    """
     return (
         isinstance(calibration, Mapping)
         and calibration.get("estimator") in _OPTIMIZER_ESTIMATORS
@@ -32,7 +43,24 @@ def select_chromatic_affine(
     channel_index: int | None = None,
     wavelength_um: float | None = None,
 ) -> np.ndarray | None:
-    """Share the datastore's channel priority with atomic Scene updates."""
+    """Select a chromatic affine using the datastore's channel priority.
+
+    Parameters
+    ----------
+    calibration : Mapping
+        Calibration metadata containing channel transforms.
+    channel_name : str or None, optional
+        Channel name to match first.
+    channel_index : int or None, optional
+        Channel index to match after the name.
+    wavelength_um : float or None, optional
+        Emission wavelength in microns to match last.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Selected affine as float32, or None if no match contains an affine.
+    """
     channels = calibration.get("channels", {})
     if not isinstance(channels, Mapping):
         return None
@@ -65,7 +93,18 @@ def select_chromatic_affine(
 
 
 def validate_chromatic_affine(affine: Any) -> np.ndarray | None:
-    """Keep Scene publication and decoder float32 validation consistent."""
+    """Validate a chromatic affine for Scene publication and decoding.
+
+    Parameters
+    ----------
+    affine : Any
+        Candidate homogeneous affine transform.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Finite, invertible 4-by-4 float32 affine, or None if invalid.
+    """
     if affine is None:
         return None
     affine = np.asarray(affine, dtype=np.float32)
@@ -82,7 +121,20 @@ def validate_chromatic_affine(affine: Any) -> np.ndarray | None:
 def load_optimizer_chromatic_affine(
     datastore: Any, *, wavelength_um: float
 ) -> np.ndarray:
-    """Load an applicable iterative optimizer estimate, or identity."""
+    """Load an applicable iterative optimizer estimate, or identity.
+
+    Parameters
+    ----------
+    datastore : Any
+        Datastore providing chromatic calibration metadata and transforms.
+    wavelength_um : float
+        Emission wavelength in microns.
+
+    Returns
+    -------
+    numpy.ndarray
+        Validated float32 affine, or identity when no applicable estimate exists.
+    """
     identity = np.eye(4, dtype=np.float32)
     load_metadata = getattr(datastore, "load_chromatic_affine_transforms_zyx_um", None)
     if load_metadata is None:

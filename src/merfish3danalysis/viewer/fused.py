@@ -15,6 +15,21 @@ def load_fused_channels(root_path: Path) -> list[LazyGlobalChannelData]:
 
     Stores sharing a spatial grid are combined into one channel stack. Different
     grids remain separate so that viewing never resamples saved scientific data.
+
+    Parameters
+    ----------
+    root_path : pathlib.Path
+        Datastore root or experiment directory containing it.
+
+    Returns
+    -------
+    list of LazyGlobalChannelData
+        Lazy channel stacks grouped by their spatial grid.
+
+    Raises
+    ------
+    FileNotFoundError
+        No datastore or fused image is found at the supplied path.
     """
     datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path, validate=False)
@@ -75,7 +90,13 @@ def load_fused_channels(root_path: Path) -> list[LazyGlobalChannelData]:
 
 
 def view_fused_channels(root_path: Path) -> None:
-    """Display all saved fused channels; use separate windows for different grids."""
+    """Display saved fused channels in separate windows for different grids.
+
+    Parameters
+    ----------
+    root_path : pathlib.Path
+        Datastore root or experiment directory containing it.
+    """
     import os
 
     import ndv

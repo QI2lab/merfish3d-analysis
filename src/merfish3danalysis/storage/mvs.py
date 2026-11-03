@@ -130,7 +130,20 @@ class _TensorStoreChunkView(Store):
 
 
 def mvs_array(array: Any, chunks: Sequence[int] | None = None) -> zarr.Array:
-    """Adapt sharded yaozarrs arrays until MVS supports its virtual transforms."""
+    """Adapt sharded yaozarrs arrays until MVS supports its virtual transforms.
+
+    Parameters
+    ----------
+    array : Any
+        Open yaozarrs array.
+    chunks : Sequence[int] or None
+        Requested view chunk shape, or None to use the native layout.
+
+    Returns
+    -------
+    zarr.Array
+        Lazy MVS-compatible view of the array.
+    """
     metadata = array.metadata.model_dump(mode="json")
     if chunks is None and not any(
         codec["name"] == "sharding_indexed" for codec in metadata["codecs"]
@@ -142,7 +155,18 @@ def mvs_array(array: Any, chunks: Sequence[int] | None = None) -> zarr.Array:
 
 
 def shared_mvs_chunks(arrays: Sequence[zarr.Array]) -> tuple[int, ...] | None:
-    """Match mixed channel views so MVS can concatenate them without loading them."""
+    """Match mixed channel views so MVS can concatenate them without loading them.
+
+    Parameters
+    ----------
+    arrays : Sequence[zarr.Array]
+        Native or TensorStore-backed image arrays to combine.
+
+    Returns
+    -------
+    tuple[int, ...] or None
+        Minimum chunk size along each axis when a view is needed; otherwise None.
+    """
     if not any(isinstance(array.store, _TensorStoreChunkView) for array in arrays):
         return None
     return tuple(

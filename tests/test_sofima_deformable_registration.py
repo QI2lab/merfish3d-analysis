@@ -20,7 +20,6 @@ def _flow_to_rgb(flow_xyz: np.ndarray, max_abs_flow: float) -> np.ndarray:
     numpy.ndarray
         RGB flow visualization in ``(z, y, x, 3)`` order.
     """
-
     normalized = 0.5 + 0.5 * flow_xyz / max(float(max_abs_flow), 1e-6)
     return np.moveaxis(np.clip(normalized, 0.0, 1.0), 0, -1)
 
@@ -57,7 +56,6 @@ def _save_sofima_recovery_png(
     None
         The PNG is written to ``output_path``.
     """
-
     import matplotlib
 
     matplotlib.use("Agg")

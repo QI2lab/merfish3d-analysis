@@ -207,7 +207,6 @@ def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines(image_datastore
 @pytest.mark.unit
 def test_lazy_global_channel_data_supports_list_channel_indexing() -> None:
     """Lazy global image stacks support NumPy-style list channel indexing."""
-
     fused = np.arange(4, dtype=np.uint16).reshape(1, 2, 2)
     image_channel = fused + 10
     data = LazyGlobalChannelData(
@@ -226,7 +225,6 @@ def test_lazy_global_channel_data_supports_list_channel_indexing() -> None:
 @pytest.mark.unit
 def test_warp_chain_labels_and_optional_affine_composition() -> None:
     """Viewer warp-chain labels and affine toggles reflect selected components."""
-
     round_transform = np.eye(4, dtype=np.float32)
     round_transform[1, 3] = 2.0
     chromatic_transform = np.eye(4, dtype=np.float32)
@@ -255,7 +253,6 @@ def test_warp_chain_labels_and_optional_affine_composition() -> None:
 @pytest.mark.unit
 def test_transcript_color_hex_returns_distinct_hex_colors() -> None:
     """Transcript color key values are hex colors and vary by selected value."""
-
     first_color = transcript_color_hex(1, 3)
     second_color = transcript_color_hex(2, 3)
     expected_first_color = "#" + "".join(
@@ -309,7 +306,6 @@ def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors(
 @pytest.mark.unit
 def test_lazy_max_projection_image_presents_one_z_plane() -> None:
     """Lazy max projection reads selected YX pixels across all Z planes."""
-
     from merfish3danalysis.viewer.overlays import LazyMaxProjectionImage
 
     image_zyx = np.asarray(
@@ -335,7 +331,6 @@ def test_lazy_max_projection_image_presents_one_z_plane() -> None:
 
 def _write_proseg_run(root: Path) -> None:
     """Write a tiny datastore-like Proseg run."""
-
     root.mkdir(parents=True)
     transcript_table = "transcript_id,qv,x,y,z,gene\n,inf,2.0,4.0,1.0,GeneA\n"
     with gzip.open(
@@ -367,7 +362,6 @@ def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
     image_datastore,
 ) -> None:
     """Datastore Proseg discovery finds default and nested 3D run folders."""
-
     datastore = image_datastore
     proseg_root = datastore.datastore_path / "proseg" / "3D"
     _write_proseg_run(proseg_root)
@@ -383,7 +377,6 @@ def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
 @pytest.mark.unit
 def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -> None:
     """Proseg transcript coordinates index in global and local coordinate frames."""
-
     run_root = tmp_path / "proseg" / "3D"
     _write_proseg_run(run_root)
     transcripts = pd.read_csv(run_root / "transcript_metadata_3D.csv.gz")
@@ -414,7 +407,6 @@ def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -
 @pytest.mark.unit
 def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> None:
     """Transcript coordinate indices are independent of selected genes."""
-
     run_root = tmp_path / "proseg" / "3D"
     _write_proseg_run(run_root)
     transcripts = pd.read_csv(run_root / "transcript_metadata_3D.csv.gz")
@@ -433,7 +425,6 @@ def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> No
 @pytest.mark.unit
 def test_sparse_point_data_uses_selected_gene_colors() -> None:
     """Sparse point layers return 2D and 3D marker positions for selected genes."""
-
     point_index = PointOverlayIndex.from_points(
         np.asarray([[1.0, 4.0, 2.0], [2.0, 5.0, 3.0]], dtype=float),
         np.asarray(["GeneA", "GeneB"], dtype=object),
@@ -468,7 +459,6 @@ def test_sparse_point_data_uses_selected_gene_colors() -> None:
 @pytest.mark.unit
 def test_sparse_point_data_projects_selected_genes_across_z() -> None:
     """Sparse point layers can project selected transcript positions across Z."""
-
     point_index = PointOverlayIndex.from_points(
         np.asarray([[1.0, 4.0, 2.0], [2.0, 5.0, 3.0]], dtype=float),
         np.asarray(["GeneA", "GeneA"], dtype=object),
@@ -495,7 +485,6 @@ def test_sparse_point_data_projects_selected_genes_across_z() -> None:
 @pytest.mark.unit
 def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
     """Sparse line layers return VisPy segment arrays in 2D and 3D."""
-
     repeated = PolylineGeometry(
         (np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float),),
         shape=(4, 8, 8),
@@ -562,7 +551,6 @@ def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
 @pytest.mark.unit
 def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
     """Sparse Z-aware line layers use pre-binned 2D contours when available."""
-
     surface_stack = np.asarray(
         [
             [[1.0, 100.0, 100.0], [1.0, 100.0, 102.0], [1.0, 102.0, 100.0]],
@@ -598,7 +586,6 @@ def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
 @pytest.mark.unit
 def test_sparse_max_lines_use_projected_boundaries() -> None:
     """Sparse Z-aware line layers can project max boundary outlines."""
-
     z_ring = np.asarray(
         [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
         dtype=float,
@@ -633,7 +620,6 @@ def test_sparse_max_lines_use_projected_boundaries() -> None:
 @pytest.mark.unit
 def test_transcript_refresh_preserves_sparse_cell_boundaries() -> None:
     """Transcript refreshes keep existing sparse boundary layers."""
-
     stack = ChannelStack(
         data=np.zeros((1, 1, 4, 4), dtype=np.uint16),
         labels=["global empty canvas"],
@@ -773,7 +759,6 @@ def test_sparse_overlay_recreates_visuals_when_dimension_changes(monkeypatch) ->
 @pytest.mark.unit
 def test_local_datastore_transcripts_index_from_global_coordinates() -> None:
     """Final datastore transcripts index locally from global coordinates."""
-
     datastore_transcripts = pd.DataFrame(
         {
             "global_z": [1.0],

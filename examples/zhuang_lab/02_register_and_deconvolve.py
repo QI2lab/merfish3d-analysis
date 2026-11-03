@@ -66,7 +66,6 @@ def global_register_data(
         directory when fusion runs. Fusion also creates the projection Scene.
         Default = True.
     """
-
     from merfish3danalysis.DataRegistration import (
         DataRegistration,
         GlobalRegistrationConfig,

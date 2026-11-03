@@ -246,7 +246,13 @@ class DisplayContext:
     refresh_only: bool = False
 
     def as_refresh(self) -> "DisplayContext":
-        """Return this context marked as an overlay-only refresh."""
+        """Return this context marked as an overlay-only refresh.
+
+        Returns
+        -------
+        DisplayContext
+            Copy with ``refresh_only`` enabled.
+        """
         return replace(self, refresh_only=True)
 
 

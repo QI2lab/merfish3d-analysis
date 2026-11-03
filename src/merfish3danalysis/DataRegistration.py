@@ -342,7 +342,29 @@ def _fuse_views_to_scene(
         compression: str,
         dimension_names: list[str] | None,
     ) -> Any:
-        """Let MVS write pixels while yaozarrs creates v0.6 metadata."""
+        """Let MVS write pixels while yaozarrs creates v0.6 metadata.
+
+        Parameters
+        ----------
+        path : pathlib.Path
+            Destination array path for this pyramid level.
+        shape : tuple of int
+            Level shape supplied by the yaozarrs writer interface.
+        dtype : Any
+            Array dtype supplied by the writer interface.
+        chunks : tuple of int
+            Chunk shape supplied by the writer interface.
+        shards : tuple of int or None
+            Sharding is unsupported for MVS fusion output and must be None.
+        overwrite : bool
+            Whether MVS may overwrite the destination array.
+        compression : str
+            Compression name supplied by the writer interface; MVS uses the
+            codecs prepared for the fusion.
+        dimension_names : list of str or None
+            Axis names supplied by the writer interface; MVS uses the fusion
+            dimensions prepared above.
+        """
         nonlocal previous_level
         if shards is not None:
             raise ValueError("MVS fusion output must not be sharded.")
@@ -1307,28 +1329,40 @@ class DataRegistration:
     Parameters
     ----------
     datastore : qi2labDataStore
-        Initialized qi2labDataStore object
-    decon_fiducial: bool, default True
-        Deconvolve ALL fiducial rounds. False = only deconvolve round 1 for downstream
-        stitching.
-    decon_readout: bool, default False
-        Deconvolve readout images before saving unwarped readout data for
-        decode-time registration.
-    overwrite_outputs: bool, default False
+        Datastore containing corrected images, PSFs, metadata, and outputs.
+    decon_fiducial : bool, default True
+        Deconvolve fiducial images before registration. If False, use the
+        corrected fiducial images directly.
+    decon_readout : bool, default False
+        Deconvolve readout images before U-FISH feature prediction; registration
+        is applied when the images are loaded for decoding.
+    overwrite_outputs : bool, default False
         Overwrite existing local transforms and preprocessing outputs.
-    perform_deformable_registration: bool, default True
+    perform_deformable_registration : bool, default True
         Estimate and save a residual SOFIMA deformable flow field after affine
-        fiducial registration.
-    num_gpus: int, default 1
+        fiducial registration. The field has X, Y, Z channels, Z, Y, X
+        spatial axes, and a patch-centered map origin. Decoding composes it
+        with affine and chromatic transforms.
+    num_gpus : int, default 1
         Number of GPUs to use for registration.
-    crop_yx_decon: int, default 2048
-        Crop size for deconvolution applied to both y and x dimensions.
-    ufish_model: str or pathlib.Path or None, default None
+    crop_yx_decon : int, default 2048
+        Initial lateral deconvolution crop size. GPU memory fallback can reduce
+        this value and cache the successful size.
+    ufish_model : str or pathlib.Path or None, default None
         U-FISH model to use for feature prediction. If omitted or ``None``, use
         the package default ``simfish`` weights. Known aliases include
         ``simfish``, ``merfish``, ``seqfish``,
         ``deepspot``, and ``exseq``. A local ``.onnx``/``.pth`` path or
         HuggingFace weights filename can also be supplied.
+    global_registration : bool, default False
+        Run global tile registration and fused fiducial OME-Zarr generation
+        after local tile preprocessing.
+    registration_diagnostics : bool, default False
+        Print detailed registration diagnostics.
+    sofima_config : SofimaRegistrationConfig or None, default None
+        SOFIMA deformable registration parameters.
+    global_registration_config : GlobalRegistrationConfig or None, default None
+        Multiview-stitcher global registration parameters.
     verbose : int, default 1
         Progress verbosity. Set to 0 to suppress routine progress prints.
     """
@@ -1349,47 +1383,7 @@ class DataRegistration:
         global_registration_config: GlobalRegistrationConfig | None = None,
         verbose: int = 1,
     ) -> None:
-        """
-        Initialize the object.
-
-        Parameters
-        ----------
-        datastore : qi2labDataStore
-            Datastore containing corrected images, PSFs, metadata, and output
-            groups.
-        decon_fiducial : bool
-            If True, deconvolve fiducial images before registration.
-        decon_readout : bool
-            If True, deconvolve readout images before U-FISH prediction and
-            warping.
-        overwrite_outputs : bool
-            If True, regenerate local transforms, optional decon images, and
-            feature predictor outputs even when they already exist.
-        perform_deformable_registration : bool
-            If True, estimate a SOFIMA flow field after affine registration.
-            The saved field uses channel order X, Y, Z; spatial order Z, Y, X;
-            and a patch-centered map origin. Pixel decoding composes this field
-            with affine and chromatic transforms when readout images are loaded.
-        num_gpus : int
-            Number of GPUs available for deconvolution and readout processing.
-        crop_yx_decon : int
-            Initial lateral RLGC crop size. GPU memory fallback can reduce this
-            value and cache the successful size.
-        ufish_model : str | Path | None
-            U-FISH model alias, weights filename, local path, or None for the
-            default model.
-        global_registration : bool, default=False
-            If True, run global tile registration and fused fiducial OME-Zarr
-            generation after local tile preprocessing.
-        registration_diagnostics : bool, default=False
-            If True, print detailed registration diagnostics.
-        sofima_config : SofimaRegistrationConfig or None, default=None
-            Explicit SOFIMA deformable registration parameters.
-        global_registration_config : GlobalRegistrationConfig or None, default=None
-            Explicit multiview-stitcher global registration parameters.
-        verbose : int
-            Verbosity level for progress messages.
-        """
+        """Initialize the registration workflow."""
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
         self._tile_ids = self._datastore.tile_ids

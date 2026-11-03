@@ -81,6 +81,18 @@ def build_acquisition_scene(
     separate acquisition frames, avoiding a second registration path to world.
     Chromatic edges point from a readout channel toward its round reference.
     The returned statuses are application state, not transform values.
+
+    Parameters
+    ----------
+    tile_ids : Sequence[str]
+        Stored tile identifiers.
+    bits_by_round : Mapping[str, Sequence[str]]
+        Ordered mapping from round identifiers to their readout bit identifiers.
+
+    Returns
+    -------
+    tuple of (yaozarrs.v06.Scene, dict[str, str])
+        Acquisition Scene and pending status for each transform.
     """
     tiles = list(tile_ids)
     rounds = list(bits_by_round)
@@ -168,6 +180,16 @@ def initialize_scene(path: str | Path) -> Path:
 
     The initial self-edge is a neutral identity, not a measured stage position.
     The writer refuses existing destinations so it cannot replace a live Scene.
+
+    Parameters
+    ----------
+    path : str or Path
+        Destination for the new Scene.
+
+    Returns
+    -------
+    Path
+        Path to the created Scene.
     """
     system = v06.CoordinateSystem(
         name="world",
@@ -210,7 +232,23 @@ def publish_acquisition_scene(
     experiment_order: Sequence[Sequence[int]],
     channels_in_data: Sequence[Any],
 ) -> None:
-    """Replace a newly initialized Scene with its pending acquisition graph."""
+    """Replace a newly initialized Scene with its pending acquisition graph.
+
+    Parameters
+    ----------
+    path : str or Path
+        Existing initialized Scene path.
+    tile_ids : Sequence[str]
+        Stored tile identifiers.
+    bits_by_round : Mapping[str, Sequence[str]]
+        Ordered round-to-readout identifier mapping.
+    bit_linkers_by_round : Mapping[str, Sequence[int]]
+        Per-round bit linkers to store for each tile.
+    experiment_order : Sequence[Sequence[int]]
+        Acquisition order, including empty channel slots.
+    channels_in_data : Sequence[Any]
+        Acquisition channel identifiers in order.
+    """
     scene, statuses = build_acquisition_scene(tile_ids, bits_by_round)
 
     def update(
@@ -282,7 +320,23 @@ def publish_transform(
     expected_revision: int = 0,
     provenance: Mapping[str, Any] | None = None,
 ) -> None:
-    """Publish one completed transform without overwriting concurrent updates."""
+    """Publish one completed transform without overwriting concurrent updates.
+
+    Parameters
+    ----------
+    path : str or Path
+        Acquisition Scene path.
+    expected : yaozarrs.v06.CoordinateTransformation
+        Previously read transform, used to detect concurrent updates.
+    replacement : yaozarrs.v06.CoordinateTransformation
+        New transform with the same name and coordinate frames.
+    expected_status : str
+        Previously read transform status.
+    expected_revision : int
+        Previously read transform revision.
+    provenance : Mapping[str, Any] or None
+        Optional provenance stored with the replacement.
+    """
     publish_transforms(
         path,
         [expected],
@@ -302,7 +356,23 @@ def publish_transforms(
     expected_revisions: Mapping[str, int],
     provenance: Mapping[str, Any] | None = None,
 ) -> None:
-    """Publish related transforms atomically because yaozarrs cannot update a Scene."""
+    """Publish related transforms atomically because yaozarrs cannot update a Scene.
+
+    Parameters
+    ----------
+    path : str or Path
+        Acquisition Scene path.
+    expected : Sequence[yaozarrs.v06.CoordinateTransformation]
+        Previously read transforms, used to detect concurrent updates.
+    replacements : Sequence[yaozarrs.v06.CoordinateTransformation]
+        New transforms in the same order, preserving names and frames.
+    expected_statuses : Mapping[str, str]
+        Previously read status for each transform name.
+    expected_revisions : Mapping[str, int]
+        Previously read revision for each transform name.
+    provenance : Mapping[str, Any] or None
+        Optional provenance stored with each replacement.
+    """
     names = [transform.name for transform in expected]
     if not names or any(not name for name in names) or len(set(names)) != len(names):
         raise ValueError("Expected uniquely named transforms.")
@@ -379,7 +449,18 @@ def update_chromatic_metadata(
     calibration: Mapping[str, Any] | None = None,
     wavelength: tuple[str, str, tuple[float, float]] | None = None,
 ) -> None:
-    """Update wavelength links atomically; yaozarrs cannot amend an existing Scene."""
+    """Update wavelength links atomically; yaozarrs cannot amend an existing Scene.
+
+    Parameters
+    ----------
+    path : str or Path
+        Acquisition Scene path.
+    calibration : Mapping[str, Any] or None
+        Updated optimizer chromatic calibration, if supplied.
+    wavelength : tuple or None
+        Tile identifier, bit identifier, and excitation/emission wavelengths
+        in micrometers, if updating a readout link.
+    """
     from merfish3danalysis.utils.decode_warping import (
         optimizer_calibration_is_applicable,
         select_chromatic_affine,
@@ -479,7 +560,36 @@ def publish_sofima_field(
     extra_attributes: Mapping[str, Any] | None = None,
     return_write_future: bool = False,
 ) -> WriteFutures | None:
-    """Store the existing XYZ-pixel field using NGFF displacement models."""
+    """Store the existing XYZ-pixel field using NGFF displacement models.
+
+    Parameters
+    ----------
+    path : str or Path
+        Acquisition Scene path.
+    expected : yaozarrs.v06.CoordinateTransformation
+        Previously read deformable transform.
+    field_xyz_px : Any
+        Displacement field with XYZ pixel components and ZYX spatial axes.
+    spacing_zyx_um : Sequence[float]
+        Image pixel spacing in ZYX micrometers.
+    stride_zyx_px : Sequence[float]
+        Field lattice stride in ZYX pixels.
+    start_xyz_px : Sequence[float]
+        Field lattice origin in XYZ pixels.
+    expected_status : str
+        Previously read transform status.
+    expected_revision : int
+        Previously read transform revision.
+    extra_attributes : Mapping[str, Any] or None
+        Additional metadata stored with the field image.
+    return_write_future : bool
+        Return the completed TensorStore write handle when True.
+
+    Returns
+    -------
+    tensorstore.WriteFutures or None
+        Completed field-write handle when requested; otherwise None.
+    """
     if not expected.name or not expected.name.endswith("/deformable"):
         raise ValueError("A SOFIMA field must replace a deformable relationship.")
     field = np.asarray(field_xyz_px, dtype=np.float32)
@@ -679,7 +789,40 @@ def publish_image(
     affine_zyx_um: Any | None = None,
     missing_z_origin_um: float = 0,
 ) -> str | tuple[str, WriteFutures]:
-    """Publish an image only after its TensorStore write has completed."""
+    """Publish an image only after its TensorStore write has completed.
+
+    Parameters
+    ----------
+    path : str or Path
+        Destination Scene path.
+    selection : str
+        Logical product identifier in the Scene.
+    frame : str
+        Scene coordinate system to which the image is linked.
+    image : yaozarrs.v06.Image
+        Image metadata model.
+    pixels : Any
+        Image pixel data passed to the TensorStore writer.
+    expected_revision : str or None
+        Previously published product revision, used to detect concurrent writes.
+    chunks : Sequence[int] or None
+        Inner chunk shape; None selects the writer default.
+    shards : Sequence[int] or None
+        Shard shape, or None for unsharded storage.
+    extra_attributes : Mapping[str, Any] or None
+        Additional image metadata.
+    return_write_future : bool
+        Return the completed TensorStore pixel-write handle when True.
+    affine_zyx_um : Any or None
+        Optional 3D affine from the image coordinates to its Scene frame.
+    missing_z_origin_um : float
+        Z coordinate used when linking a 2D image into a 3D frame.
+
+    Returns
+    -------
+    str or tuple of (str, tensorstore.WriteFutures)
+        Published revision, optionally with its completed write handle.
+    """
     if not selection:
         raise ValueError("An image selection is required.")
     current = open_group(path)
@@ -732,7 +875,27 @@ def publish_completed_image(
     affine_zyx_um: Any | None = None,
     missing_z_origin_um: float = 0,
 ) -> None:
-    """Publish completed pixels; yaozarrs cannot update an existing Scene."""
+    """Publish completed pixels; yaozarrs cannot update an existing Scene.
+
+    Parameters
+    ----------
+    path : str or Path
+        Destination Scene path.
+    selection : str
+        Logical product identifier in the Scene.
+    frame : str
+        Scene coordinate system to which the image is linked.
+    image : yaozarrs.v06.Image
+        Metadata for the completed image.
+    revision : str
+        Revision used in the completed image path.
+    expected_revision : str or None
+        Previously published product revision, used to detect concurrent writes.
+    affine_zyx_um : Any or None
+        Optional 3D affine from the image coordinates to its Scene frame.
+    missing_z_origin_um : float
+        Z coordinate used when linking a 2D image into a 3D frame.
+    """
     relative_path = f"image_{revision}.ome.zarr"
     edge_name = f"image/{revision}"
 
@@ -818,7 +981,22 @@ def publish_completed_image(
 def publish_projection_labels(
     path: str | Path, labels: Any, *, return_write_future: bool = False
 ) -> WriteFutures | None:
-    """Stage labels before publication because yaozarrs lists them before writing."""
+    """Stage labels before publication because yaozarrs lists them before writing.
+
+    Parameters
+    ----------
+    path : str or Path
+        Fiducial projection Scene path.
+    labels : Any
+        Integer YX labels on the projection grid.
+    return_write_future : bool
+        Return the completed TensorStore pixel-write handle when True.
+
+    Returns
+    -------
+    tensorstore.WriteFutures or None
+        Completed label-write handle when requested; otherwise None.
+    """
     import os
     import shutil
     from tempfile import NamedTemporaryFile, TemporaryDirectory
@@ -947,7 +1125,23 @@ def load_sofima_field(
     *,
     return_future: bool | None = False,
 ) -> tuple[Any, dict[str, Any]] | None:
-    """Read the NGFF field in the SOFIMA API's existing XYZ/ZYX convention."""
+    """Read the NGFF field in the SOFIMA API's existing XYZ/ZYX convention.
+
+    Parameters
+    ----------
+    path : str, Path, or yaozarrs.ZarrGroup
+        Acquisition Scene path or open group.
+    transform_name : str
+        Name of the deformable Scene transform.
+    return_future : bool or None
+        True returns a TensorStore read future, False a NumPy array, and None
+        a sliceable TensorStore handle.
+
+    Returns
+    -------
+    tuple or None
+        Field and metadata, or None if the transform is still identity.
+    """
     group = open_group(path)
     scene = group.ome_metadata(strict=True)
     if not isinstance(scene, v06.Scene):
