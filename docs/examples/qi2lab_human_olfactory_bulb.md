@@ -13,10 +13,8 @@ You need to make sure you have a working `uv` environment with
 `merfish3d-analysis` properly installed, `proseg` installed if you plan to run
 downstream RNA-based segmentation refinement, and our human olfactory bulb 3D
 MERFISH dataset downloaded. The dataset is approximately 0.7 TB, and you will
-need roughly
-another ~0.5 TB of space to create the `qi2labDataStore` structure we use to
-perform tile registration, global registration, segmentation, pixel decoding,
-filtering, and cell assignment.
+need roughly another 0.5 TB for the `qi2labDataStore` used for registration,
+segmentation, pixel decoding, filtering, and cell assignment.
 
 - [merfish3d-analysis](https://www.github.com/qi2lab/merfish3d-analysis)
 - [Raw 3D Human olfactory bulb MERFISH data](https://www.dropbox.com/scl/fo/gwtgsfoa5t65b0wszzamn/ANIjNG6s6RZRHaplw6xCJeQ?rlkey=wzsoq3f0gou4az64yv794r8pi&st=nj1q2fhh&dl=0)
@@ -50,7 +48,8 @@ two-GPU workflow used for this dataset.
 
 All of the commands given here are run from the terminal.  
 
-Each command list below can be queried using `--help` to discover all of the available parameters, if the defaults are not correct for your dataset. For example,
+Use `--help` to see the available parameters. For example:
+
 ```bash
 uv run qi2lab-decode --help
 ```
@@ -115,6 +114,7 @@ Because there are 2 smFISH bits at the end of the codebook, we instruct the `mer
 ```bash
 uv run qi2lab-decode /path/to/data \
   --num-gpus 2 \
+  --merfish-bits 16 \
   --estimate-chromatic-affines
 ```
 

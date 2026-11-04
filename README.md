@@ -80,17 +80,13 @@ uv run qi2lab-fuseall /path/to/experiment \
   --compression-level 1
 ```
 
-All output levels use lossless compression. The shared default for fiducial
-and all-channel fusion is `blosc-zstd` with bitshuffle at level 1. The example
-selects `blosc-lz4` with bitshuffle for faster encoding; compression ratio and
-speed depend on the data. `zstd` is also available. Levels 1 through 9 are
-accepted; compression cannot be disabled. Changing compression preserves the
-pixel values produced by fusion.
+Fusion uses lossless compression. The default is `blosc-zstd` with bitshuffle
+at level 1; `blosc-lz4` and `zstd` are also available at levels 1 through 9.
 
 The output is an OME-NGFF v0.6 image, with the fiducial first and then bits in
-numeric codebook order. Its path is available through
-`datastore.fused_image_path("full_dataset")`. The command uses stored local-round, stage and global transforms;
-chromatic correction is applied during decoding and SOFIMA is omitted from fusion.
+numeric codebook order. The command uses stored local-round, stage and global
+transforms; chromatic correction is applied during decoding and SOFIMA is
+omitted from fusion.
 See the [fusion workflow](https://qi2lab.github.io/merfish3d-analysis/workflow/#fuse-all-channels)
 for resource settings and restart behavior.
 
@@ -111,13 +107,9 @@ or open a datastore directly:
 uv run viewer /path/to/experiment/qi2labdatastore
 ```
 
-The viewer only reads existing datastore contents. It uses NDV for Zarr-backed
-image channels and VisPy for sparse transcript and cell-boundary overlays. It
-can inspect local native tiles, local tiles warped with selected stage/round affine
-and SOFIMA components, and global fused views. Transcript
-sources are mutually exclusive: datastore transcripts, Proseg transcripts, or
-Baysor transcripts. Cell boundaries can be shown from Cellpose, Proseg, or
-Baysor when those outputs are present.
+The viewer displays native and registered tiles, fused images, transcripts, and
+cell boundaries. It can display transcripts and boundaries from the datastore,
+Proseg, or Baysor.
 
 The documentation includes a [viewer guide with screenshots](https://qi2lab.github.io/merfish3d-analysis/viewer/) and a [current API notes](https://qi2lab.github.io/merfish3d-analysis/api/) page covering the current RLGC, PSF, and U-FISH defaults.
 
@@ -147,11 +139,8 @@ To build the documentation, install using `uv sync --group docs`.
 Then execute `uv run mkdocs build --clean` or `uv run mkdocs serve`. The
 documentation is available in your web browser at `http://127.0.0.1:8000/`.
 
-Pushes to `main` automatically build and deploy the documentation through the
-`Documentation` GitHub Actions workflow. The workflow installs only the
-documentation dependency group and runs on a standard CPU runner; it does not
-require CUDA or GPU hardware. Configure the repository's Pages source as
-**GitHub Actions** under **Settings → Pages**.
+The `Documentation` GitHub Actions workflow deploys the site after pushes to
+`main`. Set the repository's Pages source to **GitHub Actions**.
 
 ## Testing
 
@@ -166,9 +155,8 @@ uv run pytest -m integration
 See the [testing guidelines](docs/contributing.md#testing) for the required
 assertions and how to classify tests.
 
-The simulation tests require an NVIDIA GPU, the extracted Zenodo sample data,
-and the default `simfish` U-FISH weights cached by U-FISH. Pass the extracted
-dataset directory with `--simulation-data-root`. See the
+The simulation tests require an NVIDIA GPU and the extracted Zenodo sample data.
+Pass the dataset directory with `--simulation-data-root`. See the
 [synthetic-data example](https://qi2lab.github.io/merfish3d-analysis/examples/statphysbio_synthetic/)
 for setup instructions.
 
@@ -185,12 +173,3 @@ Full repository suite, including the exhaustive simulation matrix:
 uv run pytest -vv --run-simulation-exhaustive \
   --simulation-data-root simulation-data/merfish3d_analysis-simulation
 ```
-
-The standard simulation matrix uses CUDA device 0 and runs paired affine and
-SOFIMA preprocessing for every default dataset, axial spacing, and
-chromatic-aberration setting. The exhaustive mode adds deconvolution-on and
-deconvolution-off coverage using SOFIMA and synthetic chromatic aberration. It
-writes measured performance records to
-`tests/data/simulation_performance.json`. The tests verify the Zenodo image
-fingerprints and enforce the documented F1 baselines with an absolute tolerance
-of 0.02.

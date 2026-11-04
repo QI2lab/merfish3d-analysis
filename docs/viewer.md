@@ -76,14 +76,14 @@ Transcript sources are mutually exclusive:
 
 - Datastore transcripts from filtered decoded features
 - Proseg transcripts from `proseg/3D` run folders
-- Baysor transcripts from `segmentation/baysor/3D/molecules.parquet`
+- Baysor transcripts from `baysor/3D/molecules.parquet`
 
 Cell boundaries can be displayed from:
 
 - Cellpose
 - Proseg refined cell boundaries
 - Baysor cell boundaries from
-  `segmentation/baysor/3D/cell_boundaries_3d.parquet`
+  `baysor/3D/cell_boundaries_3d.parquet`
 
 The Proseg run selector detects `proseg/3D` outputs, including nested run
 folders such as `fdr.75`.

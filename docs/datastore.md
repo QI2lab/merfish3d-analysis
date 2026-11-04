@@ -2,15 +2,7 @@
 
 ## Philosophy
 
-`qi2labDataStore` stores acquisition images and their spatial relationships in
-an [OME-NGFF v0.6](https://ngff.openmicroscopy.org/latest/) Scene. It uses
-[yaozarrs](https://imaging-formats.github.io/yaozarrs/) for NGFF models and
-metadata, and TensorStore for library array I/O. Multiview-stitcher performs
-direct-to-Zarr fusion using its own I/O pathway. Tabular outputs use
-[Parquet](https://parquet.apache.org/docs/).
-
-The NDTiff and `ndstorage` conversion behavior is preserved. The application
-layout version is separate from the OME-NGFF version.
+To efficiently handle 3D MERFISH experiments, `qi2labDataStore` stores images and their spatial relationships in an [OME-NGFF v0.6](https://ngff.openmicroscopy.org/latest/) Scene. Images are accessed through [yaozarrs](https://imaging-formats.github.io/yaozarrs/) and TensorStore. Tabular outputs are stored as [Parquet](https://parquet.apache.org/docs/).
 
 ## Important considerations
 
@@ -26,7 +18,7 @@ To create a `qi2labDataStore`, we need to know the following metadata:
 - the acquisition order in each tile (channel,z) or (z,channel)
 - the excitation and emission wavelengths for each channel
 
-Physical pixel sizes and voxel spacing are rounded to three decimal places in microns (0.001 µm). This applies when loading and saving calibration metadata and throughout registration, fusion, decoding, segmentation, and image export. Legacy spacing values are rounded on read; existing files are updated when written again. Global fusion uses the rounded native voxel spacing, and fused OME metadata records the spacing of the fused image. The shared rounding helpers are in `merfish3danalysis.utils.spacing`.
+Physical pixel sizes and voxel spacing are rounded to three decimal places in microns (0.001 µm). Fused image metadata records the spacing of the fused image.
 
 Most of these are straightforward to obtain. The camera orientation and stage direction can be the trickiest. In our experience, one way to figure this out is to load a few tiles in the NDV datastore viewer and compare the image orientation with the recorded stage direction.
 
@@ -68,7 +60,7 @@ For a 16-bit codebook, where we acquire the bits in sequential order within roun
 
 Here, we use a hypothetical dataset that only has one round with two bits. We assume the data is already gain, offset, and hot pixel corrected.
 
-Tiles, rounds, and bits are indexed from `0` in the Python API, but datastore IDs are stored as 1-based, zero-padded strings (`round001`, `bit001`, `tile0000`).
+Tiles, rounds, and bits are indexed from `0` in the Python API. Datastore IDs are zero-padded strings: tiles start at `tile0000`, rounds at `round001`, and bits at `bit001`.
 
 ```python
 from pathlib import Path
@@ -110,7 +102,7 @@ tile_idx = 0
 datastore.initialize_tile(tile_idx)
 
 # code to read image tile here
-# Assume the images are of shape [n_channels,nz,nx,ny]
+# Assume the images are of shape [n_channels, nz, ny, nx]
 fiducial_data = imread(raw_path / "tile001" / "image.tif")[0, :]
 
 # save image data for tile = 0, round = 0, fiducial
@@ -141,7 +133,7 @@ datastore.save_local_wavelengths_um(
 )
 
 # code to read image tile here
-# Assume the images are of shape [n_channels,nz,nx,ny]
+# Assume the images are of shape [n_channels, nz, ny, nx]
 bit001_data = imread(raw_path / "tile001" / "image.tif")[1, :]
 
 # save first readout channel for tile = 0, bit = 0 (bit001)
@@ -163,7 +155,7 @@ datastore.save_local_wavelengths_um(
 )
 
 # code to read image tile here
-# Assume the images are of shape [n_channels,nz,nx,ny]
+# Assume the images are of shape [n_channels, nz, ny, nx]
 bit002_data = imread(raw_path / "tile001" / "image.tif")[2, :]
 
 # save second readout channel for tile = 0, bit = 1 (bit002)
@@ -190,37 +182,20 @@ datastore.datastore_state = {"Corrected": True}
 
 ## SOFIMA deformable registration convention
 
-When deformable local registration is enabled, preprocessing estimates a
-SOFIMA residual flow field after the moving fiducial round has already been
-affine-initialized into the first fiducial round frame. The field is stored as an
-NGFF displacement image in the acquisition Scene.
-SOFIMA's local patch-correlation measurements are integer-pixel vectors. The
-preprocessing pipeline refines accepted vectors within a small subpixel search
-window, composes a bounded residual pass, and saves the float32 result after
-the measurements are relaxed with SOFIMA's 3D elastic mesh. The SOFIMA flow
-estimation, residual composition, and subpixel patch scoring are run through
-JAX on the GPU.
+When deformable local registration is enabled, preprocessing estimates a SOFIMA
+residual flow field after affine registration to the first round. The field is
+stored as a displacement image in the acquisition Scene.
 
-The saved array and attributes use the following convention:
+The array has shape `(3, z, y, x)`, with `X, Y, Z` displacement channels and
+`Z, Y, X` spatial axes. Values are relative displacements in reference-image
+pixels. Adding the interpolated field to a first-round reference coordinate gives
+the coordinate in the affine-initialized moving image.
 
-- Array shape is `(3, z, y, x)`.
-- Channel order is `X, Y, Z`.
-- Spatial axis order is `Z, Y, X`, matching image arrays.
-- Values are relative displacements in reference-image pixels. Adding the
-  interpolated field to a round001 reference coordinate gives the coordinate in
-  the affine-initialized moving image.
-- `map_stride_zyx_px` is the flow-map spacing in reference pixels, ordered
-  `Z, Y, X`.
-- `map_box_start_xyz_px` is the reference pixel coordinate of the first flow
-  sample, ordered `X, Y, Z`. SOFIMA estimates patch-centered vectors, so this
-  value is normally half the patch size, not `(0, 0, 0)`.
-- `map_box_size_xyz_px` is the sampled flow-lattice extent from
-  `map_box_start_xyz_px` through the last stored map sample, ordered `X, Y, Z`.
-- `reference_shape_zyx_px` records the output grid used when the field is
-  applied after reload.
-
-The datastore round trip is expected to preserve the float32 flow array exactly.
-Applying a reloaded SOFIMA field with its saved metadata preserves the warp.
+The associated metadata records the flow-map spacing (`map_stride_zyx_px`),
+the first sample's reference coordinate (`map_box_start_xyz_px`), the lattice
+extent (`map_box_size_xyz_px`), and the output grid shape
+(`reference_shape_zyx_px`). SOFIMA vectors are patch-centered, so the first
+sample is normally at half the patch size.
 
 ## DataStore structure
 
@@ -266,15 +241,10 @@ A typical experiment contains:
     └── baysor/3D/                       # optional native Baysor output
 ```
 
-The projection Scene is created during fiducial fusion. Cellpose labels are
-associated with its projection image in the `labels` group. Global-coordinate
-and pixel-coordinate ImageJ ROI ZIPs are stored under `cell_boundaries/`.
-Optional Baysor and Proseg results retain their native formats.
-Per-tile codewords are Parquet files under `codewords/tiles/`. The filtered
-global table is saved as Parquet and compressed CSV under
-`codewords/global_filtered/`. Named decode runs use `runs/<run>/` under each
-of those folders; their normalization metadata is stored separately under
-`codewords/normalization/`.
+The projection Scene is created during fiducial fusion and holds the Cellpose
+labels. ImageJ ROIs are stored under `cell_boundaries/` in global and pixel
+coordinates. Per-tile and filtered global codewords are stored under
+`codewords/`; named decode runs use `runs/<run>/` within those folders.
 
 ## Metadata conventions
 
@@ -290,9 +260,6 @@ of those folders; their normalization metadata is stored separately under
   stages run. Use `local_image_path` and the datastore readers to access them.
 - Calibration arrays are NGFF v0.6 images. PSFs are stored individually under
   `psfs/images/`, allowing different shapes per channel.
-- Extra acquisition attributes and non-image outputs remain alongside their
-  corresponding application records. Transform models and Scene relationships
-  describe the image coordinate systems and their links.
 
 ## DataStore API
 
@@ -300,33 +267,15 @@ Nearly all parameters are accessible as class properties and all data has helper
 
 ## Image access and coordinates
 
-Datastore images use Zarr v3 with OME-NGFF v0.6 metadata. yaozarrs opens and
-validates the models, while TensorStore provides the library's image reads and
-writes. Metadata-only shape queries do not open a pixel backend. The datastore
-coordinates local metadata updates so workers do not overwrite each other's
-Scene changes.
+The fused fiducial image and its maximum projection share the downsampled
+segmentation grid. Cellpose labels use YX axes and the projection grid; ImageJ
+ROIs are mapped to world coordinates using the fused image metadata. For this
+mapping, the projection is assigned pixel Z=10. An optional TIFF can be exported
+for the Cellpose GUI.
 
-The fused fiducial image and its maximum-projection Scene retain the
-downsampled segmentation grid. Cellpose labels have YX axes and share the
-projection grid. The datastore retains the original fused 3D spacing, origin,
-and affine for ROI conversion. A maximum projection has no unique Z; the
-existing ROI calculation uses pixel Z=10 when mapping outlines to world space.
-An optional projection TIFF can be written for the Cellpose GUI.
+Processing commands accept either an experiment directory containing
+`qi2labdatastore` or the datastore directory itself.
 
-Processing entry points accept either an experiment directory containing
-`qi2labdatastore` or the datastore directory itself. Existing stores are identified
-by `datastore_state/state.json`; a missing input fails before creating output
-directories.
-Only conversion commands explicitly resolve a new datastore destination.
-
-Public image readers support three modes: `True` returns a read future, `False`
-returns a NumPy array, and `None` returns a lazy backend handle opened through
-yaozarrs. Public image writers finish pixel writes before updating associated
-metadata; `True` returns that completed write handle, while `False` and `None`
-return `None`. The private asynchronous writer can return a pending write handle.
-
-Voxel calibration requires three positive finite values in ZYX microns, including
-after rounding to stored precision. Missing optional JSON metadata returns an
-empty dictionary; malformed or non-object JSON raises an error. Invalid public
-image selections and absent images retain their `None` return convention. Write
-failures propagate and do not update completion-state caches.
+Image readers accept `return_future=True` for a read future, `False` for a NumPy
+array, or `None` for a lazy handle. Image writers complete pixel writes before
+updating metadata; `return_future=True` returns the completed write handle.

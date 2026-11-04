@@ -94,25 +94,16 @@ flowchart TD
     n19@{ shape: procs}
 ```
 
-The qi2lab preprocessing CLI deconvolves both fiducial and readout images by
-default. Pass `--no-decon` to disable readout deconvolution while retaining
-fiducial deconvolution. Fiducial registration stores the affine transform for
-each round relative to round 1. Local affine registration uses the qi2lab GPU
-registration path:
-lateral XY registration on a max-Z projection, followed by XYZ registration.
-When deformable registration is enabled, preprocessing stores a SOFIMA residual
-flow field in the moving fiducial round only when the field improves fiducial
-alignment relative to affine alone. Readout preprocessing saves native
-corrected data, optional deconvolved data, and feature-prediction images. Pixel
-decoding loads those arrays and applies chromatic, affine, and SOFIMA transforms
-in one sampling step.
+The qi2lab preprocessing CLI deconvolves fiducial and readout images by default.
+Use `--no-decon` to disable readout deconvolution while retaining fiducial
+deconvolution. Fiducial rounds are registered to round 1 using affine
+registration and, when enabled, SOFIMA residual flow. The residual is saved only
+when it improves alignment. Readout preprocessing saves corrected images,
+optional deconvolved images, and feature predictions.
 
-Decoding operates on the tile's local round-1 grid. Local translation,
-optional non-rigid refinement, and wavelength-dependent chromatic correction
-align the bits on that grid. After decoding, transcript coordinates are mapped
-to world coordinates using voxel spacing, recorded stage position,
-camera/stage calibration, and the fitted global affine. Zhuang uses these same
-methods; its acquisition-specific settings remain in the example.
+Decoding applies chromatic, affine, and SOFIMA transforms on each tile's round-1
+grid. Transcript coordinates are then mapped to world coordinates using the
+stage position, camera calibration, voxel spacing, and global registration.
 
 ## Global registration and fusion of first fiducial round
 
@@ -146,19 +137,17 @@ flowchart TD
     n8@{ shape: notch-rect}
 ```
 
-Global registration follows the multiview-stitcher registration and fusion
-workflow using the stage positions stored in the datastore as the starting
-geometry. The registration step refines global tile transforms on CPU. The
-fusion step writes directly to OME-Zarr with the CPU backend. Fiducial fusion
-preserves Z spacing and downsamples each lateral axis by
-`round(z_spacing / lateral_spacing, 1)` for the segmentation grid. Its
-maximum-Z projection is stored in `fiducial_projection.ome.zarr`, a separate
-OME-NGFF Scene inside the datastore, with an
-optional TIFF on the same grid. Cellpose labels are associated with the Scene's
-projection image. The fused spacing is used to transform Cellpose pixel ROIs into
-global coordinates. The full global
-stage can be rerun on an existing locally registered datastore with
-`uv run qi2lab-preprocess /path/to/experiment --global-registration-only`.
+Global registration uses multiview-stitcher with the stored stage positions as
+the starting geometry. Fiducial fusion preserves Z spacing and downsamples each
+lateral axis by `round(z_spacing / lateral_spacing, 1)`. The maximum-Z
+projection and Cellpose labels are stored in `fiducial_projection.ome.zarr`;
+the fused grid is used to transform Cellpose ROIs into global coordinates.
+Replacing the projection archives the previous segmentation; run Cellpose again
+after fusion. Rerun the global stage with:
+
+```bash
+uv run qi2lab-preprocess /path/to/experiment --global-registration-only
+```
 
 ## Fuse all channels
 
@@ -173,35 +162,16 @@ uv run qi2lab-fuseall /path/to/experiment \
   --compression-level 1
 ```
 
-The output image is available through `datastore.fused_image_path("full_dataset")`.
 Channel 0 is the first-round fiducial; remaining channels are the codebook bits
-in numeric order.
-MVS composes the stored local-round affine, stage-camera affine, stage position
-and global refinement while sampling native images. Chromatic correction is
-applied during decoding.
-SOFIMA fields are ignored. `--write-ome-tiffs` additionally exports one
-full-resolution OME-TIFF per channel under `qi2labdatastore/fused_tiff/`.
+in numeric order. Fusion applies local and global affine registration; chromatic
+correction is applied during decoding, and SOFIMA fields are not used in fusion.
+Add `--write-ome-tiffs` to export each channel under `qi2labdatastore/fused_tiff/`.
 
-Both this command and `DataRegistration.py` use the same CPU fusion options.
-The shared default codec is lossless Blosc-Zstd with bitshuffle at level 1.
-`--compression blosc-lz4` selects lossless Blosc-LZ4 with bitshuffle for faster
-encoding, with a data-dependent compression ratio. `--compression zstd` selects
-plain Zstd. `--compression-level` accepts 1 through 9, with 1 favoring speed.
-Compression is mandatory and applies to the full-resolution array and every
-pyramid level. Codec changes do not alter fused pixels.
-
-`--output-chunk-zyx` controls both computation and storage chunks. When omitted,
-MVS uses the source chunk shape. Larger chunks reduce scheduling overhead but
-increase each worker's interpolation and blending memory. `--fusion-workers`
-sets the number of CPU worker processes. The example is intended for a machine
-with substantial RAM; choose resources for the machine running the command.
-Progress updates after each batch of four times the worker count, and pyramid
-creation follows full-resolution fusion.
-
-Rerunning the command publishes a new fused image revision; it does not resume a
-partial fusion. Stop any existing fusion process before rerunning with different
-compression settings. Registration metadata and source images are reused, so
-preprocessing does not need to be repeated.
+Fusion uses lossless Blosc-Zstd compression by default. The command also accepts
+`blosc-lz4` and `zstd`, with compression levels from 1 to 9. Choose
+`--output-chunk-zyx` and `--fusion-workers` for the available CPU and memory;
+larger chunks require more memory per worker. Rerunning fusion creates a new
+fused image revision and starts from the beginning.
 
 ## Pixel decoding
 
@@ -241,18 +211,13 @@ flowchart TD
     n9@{ shape: procs}
 ```
 
-Chromatic affine estimation is optional during iterative normalization. When
-enabled, it estimates channel affines from decoded RNA centroids assigned to
-valid nonblank codewords and writes the calibration back to the datastore for
-subsequent decode-time warping.
+Optional chromatic affine estimation during iterative normalization uses decoded
+RNA centroids and saves the calibration for subsequent decoding.
 
 ## Viewer inspection
 
-The read-only `viewer` command opens a Qt controller that can spawn NDV windows
-for local and global datastore views. NDV displays Zarr-backed image channels.
-Transcript points and cell boundaries from datastore decoding, Cellpose, Proseg,
-or Baysor are rendered as sparse VisPy overlays. Local warped views use the stored
-round affine and SOFIMA metadata, with independent controls for each component.
+Use `viewer` to inspect local and global images with transcript and cell boundary
+overlays. Local warped views can display affine and SOFIMA registration.
 
 ## 3D segmentation based on decoded RNA
 

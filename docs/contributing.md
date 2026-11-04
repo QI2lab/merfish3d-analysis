@@ -4,90 +4,30 @@ This is an early project and we welcome all contributions! The easiest way to ge
 
 ## Testing
 
-This package uses unit tests and integration tests only. Do not introduce smoke,
-regression, or API test categories, suites, or names.
+Use unit tests for individual behaviors and integration tests for complete
+workflows. Mark each test with exactly one of `@pytest.mark.unit` or
+`@pytest.mark.integration`; smoke, regression, and API categories are not used.
+Reuse fixtures and the library and upstream APIs
+when creating data and datastores. Use mocks only where needed to isolate a unit.
+Integration tests should exercise real producers and consumers.
 
-- Mark unit tests with `@pytest.mark.unit`. Exercise an isolated component's
-  behavior using known inputs and independently specified expected results.
-  Use public library and upstream APIs for setup and inspection where possible;
-  mock a boundary only when needed to isolate the behavior being tested.
-- Mark integration tests with `@pytest.mark.integration`. Exercise connected
-  workflows through their real producers and consumers, and assert resulting
-  pixels, coordinates and other outputs. Reuse fixtures and public operations to
-  create deterministic inputs and persisted stores, and reopen them where relevant.
-  The published-data matrix requires `--simulation-data-root`; the exhaustive
-  matrix is selected with `--run-simulation-exhaustive`. Missing prerequisites
-  must be reported when claiming a full run.
+Check results against independently specified expectations, including physical
+units, axis order, and appropriate tolerances for scientific calculations.
+Use `tests/test_*.py` for test files.
 
-Every test must have exactly one category; pytest rejects unclassified tests,
-those with both markers, and smoke/regression/API category markers. Keep tests in `tests/test_*.py` files.
-The `simulation_exhaustive` marker identifies the opt-in integration-test matrix
-and is not a separate test category. GitHub CI excludes GPU-marked tests; local
-GPU tests remain available and are run for relevant changes.
+```bash
+uv run pytest tests/test_*.py -m unit
+uv run pytest tests/test_*.py -m integration
+uv run pytest tests/test_*.py
+```
 
-Tests must assert the intended scientific and workflow behavior. Successful
-imports, process startup, or completion alone do not establish correctness.
-Compare pixels, coordinates and metrics against an independent mathematical
-expectation. Another run of the implementation is not a ground-truth oracle.
-State physical units, axis order and any justified numerical tolerance.
-Derive expected values from the documented workflow or a known synthetic input,
-not by copying the implementation under test. Bug fixes extend the relevant unit
-or integration coverage under these same rules.
-
-Core datastore, registration and decoder correctness is established using
-generated ground truth, the published simulations, and the standard qi2lab
-commands. Zhuang tests cover its import and example-specific parameters; they
-do not define core processing behavior.
-
-For example, fiducial fusion unit tests must assert the required downsampled
-output spacing. Full integration tests connect registration and direct fusion,
-the saved maximum projection and its OME calibration, real Cellpose inference,
-label persistence, and ROI coordinates in physical units. Focused tests with
-mocked inference are unit tests; they do not replace the full workflow.
-
-Run `uv run pytest tests/test_*.py -m unit` or
-`uv run pytest tests/test_*.py -m integration` to select a category.
-Run `uv run pytest tests/test_*.py` for both. Listing test files avoids traversing
-generated simulation artifacts under `tests/data`. Tests that require CUDA or the Zenodo
-simulation data retain their existing prerequisites and options; see the
-[simulation example](examples/statphysbio_synthetic.md).
-
-The CPU CI job executes both categories against real Zarr v3 OME-Zarr stores,
-including pixel round trips, write completion, mask scale metadata, fusion
-compression, TIFF calibration, and ROI coordinates. It reads the selected
-requirements from `pyproject.toml` and uses CPU PyTorch. GPU tests, including
-real Cellpose inference, run locally and are excluded from GitHub CI.
-
-Mark tests that execute on a GPU with `@pytest.mark.gpu` in addition to their
-unit or integration category. Mocked GPU operations do not require this marker.
-GPU tests run locally; GitHub CI explicitly excludes them with `-m "not gpu"`.
-The marker is an execution requirement, not a third test category.
-
-Run GPU checks locally with the full project environment and a CUDA device:
+Mark tests requiring CUDA with `@pytest.mark.gpu`. GitHub CI excludes these tests;
+run them locally with a CUDA device:
 
 ```bash
 uv run pytest tests/test_*.py -m gpu
 ```
 
-These checks use generated fiducials and readout volumes to verify physical
-registration shifts, readout warping, decoding thresholds, barcode centroids,
-crop offsets, and intensity sums. External image inputs and model inference are
-mocked in generated-data tests. Persistence tests write generated temporary
-files. Numerical registration, deconvolution, warping, decoding, and
-connected-component extraction run on CUDA. The point-source deconvolution
-test also checks photon conservation and forward-model reconstruction error.
-
-The published simulation F1 matrix additionally needs `--simulation-data-root`.
-A skipped data-dependent matrix is not evidence that its scientific score passed.
-
-To run the standard qi2lab preprocessing and decoding commands on the published
-Nyquist simulation, including persisted transforms and ground-truth F1:
-
-```bash
-uv run pytest tests/test_simulation_example_pipeline.py::test_qi2lab_commands_decode_simulation_ground_truth \
-  --simulation-data-root /path/to/merfish3d_analysis-simulation
-```
-
-This integration test uses real inference and processing on temporary outputs.
-It selects all transcripts for normalization because this simulation has no
-cell segmentation, and supplies the simulation's decoding thresholds explicitly.
+The [simulation example](examples/statphysbio_synthetic.md) describes how to
+run the published-data integration tests. These require `--simulation-data-root`;
+pass `--run-simulation-exhaustive` to include the full simulation matrix.
