@@ -9,22 +9,6 @@ deformable field after affine registration. The field is saved as an
 pixels toward the affine-initialized moving round; the map origin is the
 SOFIMA patch center, not the image corner.
 
-History:
---------
-- **2025/07**:
-    - Implement anistropic downsampling for registration.
-    - Implement RLGC deconvolution.
-    - Implement GPU based pixel-warping strategy.
-    - Implement multi-GPU processing.
-- **2024/12**: Refactor repo structure.
-- **2024/08**:
-    - Switched to qi2labdatastore for data access.
-    - Implemented numba-accelerated downsampling.
-    - Cleaned numpy usage for ryomen tiling.
-- **2024/07**: Integrated pycudadecon and removed Dask usage.
-- **2024/04**: Updated for U-FISH, removed SPOTS3D.
-- **2024/01**: Adjusted for qi2lab MERFISH file format v0.1.
-- **2023/09**: Initial commit.
 """
 
 import multiprocessing as mp

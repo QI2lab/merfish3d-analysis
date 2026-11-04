@@ -1,9 +1,6 @@
 """Run Cellpose and save segmentation outputs in datastore coordinates.
 
-Shepherd 2025/10 - change to CLI.
-Shepherd 2025/07 - refactor for CellposeSAM
-Shepherd 2024/12 - refactor
-Shepherd 2024/11 - created script to run cellpose given determined parameters.
+Contributions: Shepherd.
 """
 
 import os

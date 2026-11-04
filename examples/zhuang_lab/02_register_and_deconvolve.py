@@ -5,7 +5,7 @@ deconvolution and deformable registration disabled. Global registration uses
 the shared DataRegistration workflow and writes downsampled fiducial fusion
 for segmentation.
 
-Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
+Contributor: Shepherd.
 """
 
 from pathlib import Path

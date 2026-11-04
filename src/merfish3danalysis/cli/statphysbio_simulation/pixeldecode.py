@@ -1,8 +1,7 @@
 """
 Decode using qi2lab GPU decoder.
 
-Shepherd 2025/08 - update for new BiFISH simulations.
-Shepherd 2024/12 - create script to run on simulation.
+Contributions: Shepherd.
 """
 
 from pathlib import Path

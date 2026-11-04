@@ -5,8 +5,7 @@ Data found here: https://download.brainimagelibrary.org/cf/1c/cf1c1a431ef8d021/
 Download the "additional_files", "mouse1_sample1_raw", and
 "dataset_metadata.xslx" folders.
 
-Shepherd 2025/01 - rework script to accept parameters
-Shepherd 2024/08 - rework script to utilized qi2labdatastore object.
+Contributor: Shepherd.
 """
 
 import json

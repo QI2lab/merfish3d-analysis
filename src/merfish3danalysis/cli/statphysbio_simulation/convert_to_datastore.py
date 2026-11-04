@@ -6,12 +6,7 @@ object that the qi2lab "merfish3d-analysis" package uses.
 
 Required user parameters for system dependent variables are at end of script.
 
-Shepherd 2025/08 - update for new BiFISH simulations.
-Shepherd 2025/08 - update for v0.7
-Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
-Shepherd 2024/12 - refactor
-Shepherd 2024/11 - rework script to accept parameters.
-Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
+Contributions: Shepherd.
 """
 
 from itertools import compress

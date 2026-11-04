@@ -7,11 +7,7 @@ parameters are automatically extracted from the metadata written by qi2lab
 microscopes. For another microscope, you will need to write new code on how to
 extract the correct parameters.
 
-Shepherd 2025/10 - change to CLI.
-Shepherd 2024/12 - added more NDTIFF metadata extraction for camera and binning.
-Shepherd 2024/12 - refactor
-Shepherd 2024/11 - rework script to accept parameters.
-Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
+Contributions: Shepherd.
 """
 
 import gc

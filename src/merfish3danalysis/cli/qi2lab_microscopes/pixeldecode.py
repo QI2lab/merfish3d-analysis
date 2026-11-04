@@ -1,10 +1,7 @@
 """
 Decode using qi2lab GPU decoder and (re)-segment cells based on decoded RNA.
 
-Shepherd 2025/07 - refactor for multiple GPU support.
-Shepherd 2024/12 - refactor
-Shepherd 2024/11 - modified script to accept parameters with sensible defaults.
-Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
+Contributions: Shepherd.
 """
 
 from pathlib import Path

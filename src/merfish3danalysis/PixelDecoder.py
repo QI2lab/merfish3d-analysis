@@ -4,18 +4,6 @@ Perform pixel-based decoding for qi2lab widefield MERFISH data using GPU acceler
 This module leverages GPU acceleration to decode pixel-based widefield
 MERFISH datasets efficiently.
 
-History:
----------
-- **2026/04**:
-    - Replace pixel-threshold decoding with the exact two-threshold MERFISH caller.
-    - Add blank-fraction transcript filtering as the default downstream filter.
-    - Remove one-bit codewords from the MERFISH decode path.
-- **2025/07**:
-    - Refactor for multiple GPU support.
-    - Switch to cuvs for distance calculations.
-- **2024/12**: Refactor repo structure.
-- **2024/03**: Reworked GPU logic to reduce out-of-memory crashes.
-- **2024/01**: Updated for qi2lab MERFISH file format v1.0.
 """
 
 import ctypes
