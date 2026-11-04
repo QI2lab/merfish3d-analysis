@@ -1,11 +1,11 @@
 import runpy
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
+import numpy as np
 import pytest
+from typer.testing import CliRunner
 
-import merfish3danalysis.DataRegistration as registration_module
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 EXAMPLE_PATH = (
     Path(__file__).resolve().parents[1]
@@ -13,95 +13,49 @@ EXAMPLE_PATH = (
 )
 
 
-@pytest.mark.unit
+@pytest.mark.integration
+@pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
 @pytest.mark.parametrize("datastore_argument", [False, True])
-def test_local_registration_preserves_existing_settings_and_state(
-    tmp_path, monkeypatch, datastore_argument
+def test_global_registration_cli_creates_projection(
+    image_datastore, datastore_argument
 ):
-    datastore_path = tmp_path / "qi2labdatastore"
+    datastore = image_datastore
+    datastore_path = datastore.datastore_path
+    datastore.voxel_size_zyx_um = [1, 1, 1]
+    image = np.zeros((3, 12, 16), dtype=np.uint16)
+    image[:, 2:-2, 2:-2] = np.arange(288).reshape(3, 8, 12) + 1
+    datastore.save_local_corrected_image(image, tile=0, round=0)
+    datastore.save_local_stage_position_zyx_um([10, 20, 30], np.eye(4), tile=0, round=0)
     example = runpy.run_path(str(EXAMPLE_PATH))
-    monkeypatch.setitem(
-        example["local_register_data"].__globals__,
-        "resolve_datastore_path",
-        Mock(return_value=datastore_path),
+    result = CliRunner().invoke(
+        example["app"],
+        [
+            str(datastore_path if datastore_argument else datastore_path.parent),
+            "--global-only",
+        ],
     )
-    datastore = SimpleNamespace(datastore_state={"Calibrations": True})
-    factory = Mock()
-    constructor = Mock(return_value=factory)
-    loader = Mock(return_value=datastore)
-    monkeypatch.setitem(
-        example["local_register_data"].__globals__, "qi2labDataStore", loader
+    assert result.exit_code == 0, result.exception
+    reopened = qi2labDataStore(datastore_path)
+    fused, affine, origin, spacing = reopened.load_global_fiducial_image(False)
+    projection, projection_affine, projection_origin, projection_spacing = (
+        reopened.load_global_fiducial_projection(False)
     )
-    monkeypatch.setattr(registration_module, "DataRegistration", constructor)
-
-    example["local_register_data"](datastore_path if datastore_argument else tmp_path)
-
-    loader.assert_called_once_with(datastore_path)
-    constructor.assert_called_once_with(
-        datastore=datastore,
-        decon_fiducial=False,
-        decon_readout=False,
-        perform_deformable_registration=False,
-        overwrite_outputs=True,
-        crop_yx_decon=2048,
-    )
-    factory.register_all_tiles.assert_called_once_with()
-    assert datastore.datastore_state == {
-        "Calibrations": True,
-        "LocalRegistered": True,
-    }
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("datastore_argument", [False, True])
-@pytest.mark.parametrize("create_projection", [False, True])
-def test_global_registration_uses_shared_workflow(
-    tmp_path, monkeypatch, datastore_argument, create_projection
-):
-    datastore_path = tmp_path / "qi2labdatastore"
-    example = runpy.run_path(str(EXAMPLE_PATH))
-    monkeypatch.setitem(
-        example["global_register_data"].__globals__,
-        "resolve_datastore_path",
-        Mock(return_value=datastore_path),
-    )
-    datastore = Mock()
-    factory = Mock()
-    constructor = Mock(return_value=factory)
-    loader = Mock(return_value=datastore)
-    monkeypatch.setitem(
-        example["global_register_data"].__globals__, "qi2labDataStore", loader
-    )
-    monkeypatch.setattr(registration_module, "DataRegistration", constructor)
-
-    example["global_register_data"](
-        datastore_path if datastore_argument else tmp_path,
-        create_max_proj_tiff=create_projection,
-    )
-
-    loader.assert_called_once_with(datastore_path, validate=False)
-    constructor.assert_called_once_with(
-        datastore=datastore,
-        perform_deformable_registration=False,
-        global_registration=True,
-        global_registration_config=registration_module.GlobalRegistrationConfig(
-            registration_binning_zyx=(1, 3, 3),
-        ),
-    )
-    factory.global_register.assert_called_once_with(
-        create_max_proj_tiff=create_projection
-    )
+    np.testing.assert_array_equal(np.squeeze(fused), image)
+    np.testing.assert_array_equal(projection, image.max(axis=0))
+    np.testing.assert_array_equal(affine, np.eye(4))
+    np.testing.assert_array_equal(origin, [10, 20, 30])
+    np.testing.assert_array_equal(spacing, [1, 1, 1])
+    np.testing.assert_array_equal(projection_affine, affine)
+    np.testing.assert_array_equal(projection_origin, origin)
+    np.testing.assert_array_equal(projection_spacing, spacing)
+    assert reopened.datastore_state["GlobalRegistered"]
+    assert reopened.datastore_state["Fused"]
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("function", ["local_register_data", "global_register_data"])
-def test_registration_rejects_missing_datastore_before_creating_one(
-    tmp_path, monkeypatch, function
-):
+def test_registration_rejects_missing_datastore_before_creating_one(tmp_path, function):
     example = runpy.run_path(str(EXAMPLE_PATH))
-    monkeypatch.setattr(Path, "is_file", Mock(return_value=False))
-    loader = Mock()
-    monkeypatch.setitem(example[function].__globals__, "qi2labDataStore", loader)
     with pytest.raises(FileNotFoundError, match="No qi2lab datastore"):
         example[function](tmp_path)
-    loader.assert_not_called()
+    assert not (tmp_path / "qi2labdatastore").exists()

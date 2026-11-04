@@ -58,7 +58,6 @@ def convert_data(
         are saved in ``flatfield_tile_ids.json`` in the datastore. Estimated CYX
         flatfields are saved to ``root_path / "illuminations.ome.tif"``.
     """
-
     if max_flatfield_images < 1:
         raise ValueError("max_flatfield_images must be at least 1.")
 
@@ -260,7 +259,10 @@ def convert_data(
                 if image_has_signal(image):
                     fiducial_tiles.append(tile)
                 del image
-            (datastore_path / "flatfield_tile_ids.json").write_text(
+            datastore.shading_flatfield_tile_ids_path().parent.mkdir(
+                parents=True, exist_ok=True
+            )
+            datastore.shading_flatfield_tile_ids_path().write_text(
                 json.dumps([datastore.tile_ids[tile] for tile in fiducial_tiles])
             )
             if not fiducial_tiles:

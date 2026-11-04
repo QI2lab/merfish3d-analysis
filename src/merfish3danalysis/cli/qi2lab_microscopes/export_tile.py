@@ -267,6 +267,7 @@ def export_tile(
                         emission_wavelength_um=float(wavelengths[1]),
                         gpu_id=gpu_id,
                         reference_shape=reference_shape,
+                        apply_chromatic=False,
                     )
                 if registered.shape != reference_shape:
                     raise ValueError(

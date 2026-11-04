@@ -21,7 +21,22 @@ if TYPE_CHECKING:
 def _bounded_map[Input, Output](
     function: Callable[[Input], Output], tasks: Iterable[Input], workers: int
 ) -> Iterator[Output]:
-    """Preserve input order while limiting queued work and result memory."""
+    """Preserve input order while limiting queued work and result memory.
+
+    Parameters
+    ----------
+    function : Callable
+        Operation applied to each task.
+    tasks : Iterable
+        Tasks to process.
+    workers : int
+        Number of worker threads; one executes tasks sequentially.
+
+    Yields
+    ------
+    Output
+        Results in task order.
+    """
     if workers == 1:
         yield from map(function, tasks)
         return
@@ -39,6 +54,20 @@ def extract_pixel_rois(
     workers. Each contour operation examines only the corresponding cell crop.
     Labels must contain the sorted nonzero mask IDs. Preserve their order,
     longest external contour, and Cellpose's minimum of five contour vertices.
+
+    Parameters
+    ----------
+    masks : numpy.ndarray
+        Two-dimensional labeled Cellpose mask.
+    labels : numpy.ndarray
+        Sorted nonzero labels present in the mask.
+    workers : int, optional
+        Number of workers used to extract contours.
+
+    Returns
+    -------
+    list of ImagejRoi
+        Pixel-coordinate ROIs in label order, excluding short contours.
     """
     if not labels.size:
         return []
@@ -59,6 +88,20 @@ def extract_pixel_rois(
 def _extract_roi_batch(
     regions: tuple[tuple[int, tuple[slice, slice]], ...], *, masks: np.ndarray
 ) -> list[ImagejRoi]:
+    """Extract the longest external contour from each labeled region.
+
+    Parameters
+    ----------
+    regions : tuple
+        Mask label and YX bounding-box slices for each cell.
+    masks : numpy.ndarray
+        Two-dimensional labeled mask shared by the batch.
+
+    Returns
+    -------
+    list of ImagejRoi
+        Pixel-coordinate contours having at least five vertices.
+    """
     rois = []
     for label, (ys, xs) in regions:
         crop = np.asarray(masks[ys, xs] == label, dtype=np.uint8)
@@ -71,7 +114,20 @@ def _extract_roi_batch(
 
 
 def _polygon_areas(coordinates: np.ndarray, offsets: np.ndarray) -> np.ndarray:
-    """Vectorized shoelace areas for packed XY polygons with exclusive offsets."""
+    """Calculate vectorized shoelace areas for packed XY polygons.
+
+    Parameters
+    ----------
+    coordinates : numpy.ndarray
+        Concatenated XY polygon vertices.
+    offsets : numpy.ndarray
+        Polygon boundaries as exclusive offsets into ``coordinates``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Absolute area for each polygon.
+    """
     # Translate each polygon before products to avoid cancellation at large
     # global origins. Work in float64 on the rounded float32 export coordinates.
     relative = coordinates.astype(np.float64) - np.repeat(
@@ -91,6 +147,26 @@ def _transform_roi_batch(
     affine_zyx_um: np.ndarray,
     min_cell_area_um2: float,
 ) -> list[np.ndarray]:
+    """Transform and filter one batch of projection ROIs.
+
+    Parameters
+    ----------
+    rois : sequence of ImagejRoi
+        Projection-space pixel contours.
+    spacing_zyx_um : numpy.ndarray
+        ZYX projection spacing in microns.
+    origin_zyx_um : numpy.ndarray
+        ZYX projection origin in microns.
+    affine_zyx_um : numpy.ndarray
+        Homogeneous affine from projection coordinates to world ZYX.
+    min_cell_area_um2 : float
+        Minimum retained contour area in square microns.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        Retained world-space XY coordinates in microns.
+    """
     coordinates = [roi.coordinates() for roi in rois]
     offsets = np.concatenate(([0], np.cumsum([len(points) for points in coordinates])))
     points_xy = np.concatenate(coordinates).astype(np.float32)
@@ -126,6 +202,26 @@ def global_rois(
     Array operations run in parallel; the caller can stream ImageJ serialization
     and ZIP writes while subsequent batches are being computed. Rejected cells
     never incur ImageJ ROI construction or serialization.
+
+    Parameters
+    ----------
+    pixel_rois : sequence of ImagejRoi
+        Input contours in projection pixel coordinates.
+    spacing_zyx_um : numpy.ndarray
+        Projection voxel spacing in ZYX order, in microns.
+    origin_zyx_um : numpy.ndarray
+        Projection origin in ZYX order, in microns.
+    affine_zyx_um : numpy.ndarray
+        Homogeneous affine transform from projection coordinates to world ZYX.
+    min_cell_area_um2 : float
+        Minimum retained world-space ROI area in square microns.
+    workers : int, optional
+        Number of workers used to transform ROI batches.
+
+    Yields
+    ------
+    ImagejRoi
+        Retained ROI in global XY coordinates, in microns.
     """
     transform = partial(
         _transform_roi_batch,

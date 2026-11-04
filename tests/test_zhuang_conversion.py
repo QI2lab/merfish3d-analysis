@@ -2,29 +2,22 @@
 
 import json
 import runpy
-import sys
 import weakref
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 from xml.etree import ElementTree
 
 import numpy as np
 import pandas as pd
 import pytest
-from tifffile import TiffFile
+from tifffile import TiffFile, imread, imwrite
 from yaozarrs import open_group
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
 @pytest.fixture
-def zhuang_conversion(tmp_path, monkeypatch):
-    monkeypatch.setitem(
-        sys.modules,
-        "psfmodels",
-        SimpleNamespace(make_psf=Mock(return_value=np.ones((1, 3, 3)))),
-    )
+def zhuang_conversion(tmp_path):
     example = runpy.run_path(
         str(
             Path(__file__).resolve().parents[1]
@@ -35,15 +28,12 @@ def zhuang_conversion(tmp_path, monkeypatch):
     codebook = pd.DataFrame(
         {"id": [1], "name": ["gene1"], **{f"RS{i}": [1] for i in range(38)}}
     )
-    monkeypatch.setattr(
-        pd,
-        "read_csv",
-        Mock(side_effect=[codebook, pd.DataFrame([[0, 1, 2], [3, 4, 5]])]),
-    )
-    monkeypatch.setattr(
-        Path,
-        "glob",
-        Mock(return_value=[tmp_path / "tile0.tif", tmp_path / "tile1.tif"]),
+    additional = tmp_path / "additional_files"
+    positions = additional / "fov_positions"
+    positions.mkdir(parents=True)
+    codebook.to_csv(additional / "codebook.csv", index=False)
+    pd.DataFrame([[0, 1, 2], [3, 4, 5]]).to_csv(
+        positions / "mouse1_sample1.txt", index=False, header=False
     )
     # Raw CZYX is transposed on conversion. After offset/gain correction,
     # channels alternate 46/92 electrons on tile 0 and 92/184 on tile 1.
@@ -54,19 +44,116 @@ def zhuang_conversion(tmp_path, monkeypatch):
     second = raw.copy()
     second[raw == 200] = 300
     second[raw == 300] = 500
-    monkeypatch.setitem(convert.__globals__, "imread", Mock(side_effect=[raw, second]))
-    # Pixel persistence is isolated from the separately tested signal detector.
-    monkeypatch.setitem(
-        convert.__globals__, "image_has_signal", Mock(return_value=True)
-    )
+    images = tmp_path / "mouse1_sample1_raw"
+    images.mkdir()
+    imwrite(images / "tile0.tif", raw, photometric="minisblack")
+    imwrite(images / "tile1.tif", second, photometric="minisblack")
     return convert
 
 
 @pytest.mark.integration
+@pytest.mark.gpu
+def test_zhuang_conversion_estimates_and_applies_real_flatfields(
+    zhuang_conversion, tmp_path
+):
+    """Convert varied TIFF tiles through signal screening and real BaSiC fitting."""
+    cp = pytest.importorskip("cupy")
+    pytest.importorskip("basicpy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() == 0:
+            pytest.skip("requires CUDA")
+    except cp.cuda.runtime.CUDARuntimeError:
+        pytest.skip("requires CUDA")
+
+    signal_tiles = 6
+    num_tiles = signal_tiles + 1
+    positions = np.column_stack(
+        (np.arange(num_tiles) * 10, np.arange(num_tiles) * 20, np.zeros(num_tiles))
+    )
+    pd.DataFrame(positions).to_csv(
+        tmp_path / "additional_files/fov_positions/mouse1_sample1.txt",
+        index=False,
+        header=False,
+    )
+    y, x = np.mgrid[-1:1:64j, -1:1:96j]
+    expected_flatfields = np.stack(
+        [1 - (0.16 + 0.02 * channel) * y**2 - 0.12 * x**2 for channel in range(3)]
+    )
+    expected_flatfields /= expected_flatfields.max(axis=(1, 2), keepdims=True)
+    raw_dir = tmp_path / "mouse1_sample1_raw"
+    for tile in range(num_tiles):
+        raw = np.empty((39, 2, 64, 96), dtype=np.uint16)
+        spot = np.exp(
+            -((y - (-0.45 + 0.15 * tile)) ** 2 + (x - (0.35 - 0.1 * tile)) ** 2)
+            / (2 * 0.045**2)
+        )
+        for channel in range(39):
+            color = 0 if channel == 38 else 1 + channel % 2
+            intensity = 800 + 90 * tile + 15 * (channel % 5)
+            image = intensity * expected_flatfields[color] + 1500 * spot
+            if channel == 38 and tile == signal_tiles:
+                image = np.full((64, 96), intensity)
+            raw[channel, 0] = 100 + 0.7 * image / 0.46
+            raw[channel, 1] = 100 + image / 0.46
+        imwrite(raw_dir / f"tile{tile}.tif", raw, photometric="minisblack")
+
+    output = tmp_path / "qi2labdatastore"
+    with pytest.warns(UserWarning, match="fiducial tiles contain signal"):
+        zhuang_conversion(tmp_path, output_path=output)
+
+    datastore = qi2labDataStore(output)
+    assert datastore.datastore_state["Corrected"] is True
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == list(
+        datastore.tile_ids[:signal_tiles]
+    )
+    with TiffFile(tmp_path / "illuminations.ome.tif") as tif:
+        flatfields = tif.asarray()
+        assert tif.series[0].axes == "CYX"
+    assert flatfields.shape == (3, 96, 64)
+    assert np.all(np.isfinite(flatfields)) and np.all(flatfields > 0)
+    np.testing.assert_allclose(
+        flatfields, expected_flatfields.transpose(0, 2, 1), rtol=0, atol=0.12
+    )
+
+    for tile in (0, signal_tiles):
+        raw = imread(raw_dir / f"tile{tile}.tif")
+        origin, camera = datastore.load_local_stage_position_zyx_um(tile, 0)
+        np.testing.assert_array_equal(origin, positions[tile])
+        np.testing.assert_array_equal(camera, np.eye(4))
+        for kind, index, raw_channel, color in (
+            ("round", 0, 38, 0),
+            ("round", 18, 38, 0),
+            ("bit", 0, 0, 1),
+            ("bit", 1, 1, 2),
+            ("bit", 37, 37, 2),
+        ):
+            selection = {kind: index}
+            camera_corrected = (
+                np.maximum(raw[raw_channel].astype(np.float32) - 100, 0) * 0.46
+            ).astype(np.uint16)
+            expected = (
+                (camera_corrected.swapaxes(1, 2).astype(np.float32) / flatfields[color])
+                .clip(0, 65535)
+                .astype(np.uint16)
+            )
+            actual = datastore.load_local_corrected_image(
+                tile=tile, return_future=False, **selection
+            )
+            np.testing.assert_array_equal(actual, expected)
+            path = datastore.local_image_path(tile, "corrected_data", **selection)
+            metadata = datastore.load_image_metadata(path)
+            assert metadata["gain_correction"] and metadata["shading_correction"]
+            assert metadata["psf_idx"] == color
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("max_images", [1, 2, 100])
 def test_zhuang_illumination_corrects_and_persists_each_channel(
     zhuang_conversion, tmp_path, monkeypatch, max_images
 ):
+    monkeypatch.setitem(
+        zhuang_conversion.__globals__, "image_has_signal", Mock(return_value=True)
+    )
     flatfields = np.ones((3, 4, 3), dtype=np.float32)
     flatfields[0, :, 1:] = 0.5
     flatfields[1, :, 1:] = 0.25
@@ -93,7 +180,7 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
     assert all(image.shape == (2, 4, 3) for channel in samples for image in channel)
 
     datastore = qi2labDataStore(output, validate=False)
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == list(
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == list(
         datastore.tile_ids
     )
     assert datastore.datastore_state["Corrected"] is True
@@ -121,9 +208,10 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
                 assert metadata["psf_idx"] == channel
                 group = open_group(path)
                 assert group.metadata.zarr_format == 3
-                multiscale = group.attrs["ome"]["multiscales"][0]
-                scale = multiscale["datasets"][0]["coordinateTransformations"][0]
-                np.testing.assert_allclose(scale["scale"], [1.5, 0.108, 0.108])
+                multiscale = group.ome_metadata(strict=True).multiscales[0]
+                np.testing.assert_allclose(
+                    multiscale.datasets[0].transform.scale, [1.5, 0.108, 0.108]
+                )
 
     with TiffFile(tmp_path / "illuminations.ome.tif") as tif:
         np.testing.assert_array_equal(tif.asarray(), flatfields)
@@ -134,10 +222,13 @@ def test_zhuang_illumination_corrects_and_persists_each_channel(
             assert pixels.attrib[f"PhysicalSize{axis}Unit"] == "µm"
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_failed_estimation_does_not_mark_conversion_complete(
     zhuang_conversion, tmp_path, monkeypatch
 ):
+    monkeypatch.setitem(
+        zhuang_conversion.__globals__, "image_has_signal", Mock(return_value=True)
+    )
     monkeypatch.setitem(
         zhuang_conversion.__globals__,
         "estimate_shading",
@@ -156,7 +247,7 @@ def test_zhuang_failed_estimation_does_not_mark_conversion_complete(
     assert datastore.datastore_state["Corrected"] is False
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
     zhuang_conversion, tmp_path, monkeypatch
 ):
@@ -178,7 +269,7 @@ def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
     assert [int(images[0][0, 1, 0]) for images in samples] == [92, 92, 184]
     datastore = qi2labDataStore(output, validate=False)
     assert datastore.datastore_state["Corrected"] is True
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == [
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == [
         datastore.tile_ids[1]
     ]
     for tile in range(2):
@@ -187,24 +278,23 @@ def test_zhuang_reuses_signal_fiducial_tiles_for_all_flatfields(
             assert datastore.load_image_metadata(path)["shading_correction"] is True
 
 
-@pytest.mark.integration
-def test_zhuang_no_signal_stops_before_flatfield_fitting(
-    zhuang_conversion, tmp_path, monkeypatch
-):
-    screen = Mock(return_value=False)
-    estimate = Mock()
-    monkeypatch.setitem(zhuang_conversion.__globals__, "image_has_signal", screen)
-    monkeypatch.setitem(zhuang_conversion.__globals__, "estimate_shading", estimate)
+@pytest.mark.unit
+def test_zhuang_no_signal_stops_before_flatfield_fitting(zhuang_conversion, tmp_path):
+    for tile in range(2):
+        imwrite(
+            tmp_path / "mouse1_sample1_raw" / f"tile{tile}.tif",
+            np.full((39, 2, 3, 4), 200, dtype=np.uint16),
+            photometric="minisblack",
+        )
     output = tmp_path / "qi2labdatastore"
     with pytest.raises(ValueError, match="No fiducial tiles"):
         zhuang_conversion(tmp_path, output_path=output, max_flatfield_images=1)
-    assert screen.call_count == 2
-    estimate.assert_not_called()
-    assert json.loads((output / "flatfield_tile_ids.json").read_text()) == []
-    assert qi2labDataStore(output, validate=False).datastore_state["Corrected"] is False
+    datastore = qi2labDataStore(output, validate=False)
+    assert json.loads(datastore.shading_flatfield_tile_ids_path().read_text()) == []
+    assert datastore.datastore_state["Corrected"] is False
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_zhuang_releases_screened_and_sampled_stacks(
     zhuang_conversion, tmp_path, monkeypatch
 ):

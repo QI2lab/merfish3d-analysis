@@ -8,6 +8,7 @@ import pandas as pd
 import typer
 from tifffile import imread
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.metrics import calculate_F1_with_radius
 from merfish3danalysis.utils.spacing import round_pixel_size_um
 
@@ -41,7 +42,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             / Path("data_r0001_tile0000_1")
             / Path("data_r0001_tile0000.tif")
         )
-        metadata = pd.read_csv(top_path / Path(str(z)) / Path("scan_metadata.csv"))
+        metadata = pd.read_csv(
+            top_path / Path(str(z)) / Path("scan_metadata.csv")
+        ).iloc[0]
         print(round_pixel_size_um(metadata["axial_step_size [micron]"]))
         print(round_pixel_size_um(metadata["pixel_size [micron]"]))
         if z == "0.315":
@@ -55,50 +58,29 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
             images.append(temp)
         else:
             temp_filled = np.zeros_like(images[0])
-            if z == "1.0":
-                image_10_voxel = np.array(
-                    [
-                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                    ]
-                )
-                for z_idx in range(temp.shape[1]):
-                    temp_filled[
-                        :,
-                        int(np.floor(z_idx * image_10_voxel[0] / image_0315_voxel[0])),
-                        :,
-                        :,
-                    ] = temp[:, z_idx, :, :]
-            elif z == "1.5":
-                image_15_voxel = np.array(
-                    [
-                        round_pixel_size_um(metadata["axial_step_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                        round_pixel_size_um(metadata["pixel_size [micron]"]),
-                    ]
-                )
-                for z_idx in range(temp.shape[1]):
-                    temp_filled[
-                        :,
-                        int(np.floor(z_idx * image_15_voxel[0] / image_0315_voxel[0])),
-                        :,
-                        :,
-                    ] = temp[:, z_idx, :, :]
+            axial_spacing = round_pixel_size_um(metadata["axial_step_size [micron]"])
+            for z_idx in range(temp.shape[1]):
+                temp_filled[
+                    :,
+                    int(np.floor(z_idx * axial_spacing / image_0315_voxel[0])),
+                    :,
+                    :,
+                ] = temp[:, z_idx, :, :]
             images.append(temp_filled)
 
         gt_spots = pd.read_csv(top_path / Path(str(z)) / Path("GT_spots.csv"))
         codebook = pd.read_csv(top_path / Path(str(z)) / Path("codebook.csv"))
         codebook_genes = codebook["gene_id"].to_numpy()
 
-        decoded_spots = pd.read_parquet(
-            top_path
-            / Path(str(z))
-            / Path("sim_acquisition")
-            / Path("qi2labdatastore")
-            / Path("all_tiles_filtered_decoded_features")
-            / Path("decoded_features.parquet")
-        )
+        datastore_path = top_path / str(z) / "sim_acquisition" / "qi2labdatastore"
+        if not datastore_path.exists():
+            raise FileNotFoundError(f"Datastore not found: {datastore_path}")
+        datastore = qi2labDataStore(datastore_path, validate=False)
+        decoded_spots = datastore.load_global_filtered_decoded_spots()
+        if decoded_spots is None:
+            raise FileNotFoundError(
+                f"Filtered decoded spots not found: {datastore_path}"
+            )
         qi2lab_coords = decoded_spots[["global_z", "global_y", "global_x"]].to_numpy()
         qi2lab_gene_ids = decoded_spots["gene_id"].to_numpy()
         gt_coords = gt_spots[["Z", "X", "Y"]].to_numpy()
@@ -113,20 +95,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
 
         gt_coords = gt_coords + gt_coords_offset
 
-        if z == "0.315":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
-
-        elif z == "1.0":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
-
-        elif z == "1.5":
-            z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
-                qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
-            )
+        z_f1, mq, q_fp, g_fn = calculate_F1_with_radius(
+            qi2lab_coords, qi2lab_gene_ids, gt_coords, gt_gene_ids, 1.0
+        )
 
         # Build one points array + one categorical status property
         z_parts = []

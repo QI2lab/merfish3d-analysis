@@ -713,7 +713,7 @@ def _points_to_vispy_positions(
     """
     if use_3d:
         return _zyx_to_vispy_positions(coords_zyx, spacing_zyx_um)
-    return coords_zyx[:, [2, 1]].astype(np.float32, copy=False)
+    return _zyx_to_vispy_positions(coords_zyx, spacing_zyx_um)[:, :2]
 
 
 def _append_polyline_visual_data(
@@ -803,7 +803,9 @@ def _polyline_positions(
             ]
         )
     else:
-        positions = points[:, [1, 0]]
+        positions = np.column_stack(
+            [points[:, 1] * scale_zyx[2], points[:, 0] * scale_zyx[1]]
+        )
     return positions.astype(np.float32, copy=False)
 
 

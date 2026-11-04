@@ -3,15 +3,12 @@
 import gzip
 import json
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
 import pytest
 from matplotlib import colormaps
 
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.decode_warping import (
     compose_optional_warp_transform_zyx_um,
 )
@@ -38,6 +35,7 @@ from merfish3danalysis.viewer.overlays import (
     cell_boundary_polylines_for_tile,
     global_cell_boundary_geometry,
     global_transcript_index,
+    load_global_image_channels,
     local_datastore_transcript_index,
     local_transcript_index,
 )
@@ -51,81 +49,164 @@ from merfish3danalysis.viewer.warping import selected_warp_label
 
 
 @pytest.mark.unit
-def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines() -> None:
-    datastore = SimpleNamespace(
-        load_global_cellpose_roi_zip=Mock(return_value={}),
-        load_global_cellpose_outlines=Mock(
-            side_effect=AssertionError("must not restore filtered outlines")
-        ),
-        load_global_coord_xforms_um=Mock(
-            return_value=(np.eye(4), np.zeros(3), np.ones(3))
-        ),
+def test_global_viewer_uses_fused_scene_world_coordinates(image_datastore):
+    datastore = image_datastore
+    pixels = np.arange(4 * 5 * 6, dtype=np.uint16).reshape(4, 5, 6)
+    datastore.save_global_fiducial_image(
+        pixels,
+        affine_zyx_um=np.eye(4),
+        origin_zyx_um=[10, 20, 30],
+        spacing_zyx_um=[0.4, 0.2, 0.4],
     )
+
+    result = load_global_image_channels(datastore, include_segmentation=False)
+    np.testing.assert_allclose(result.origin_zyx_um, [10, 20, 30])
+    np.testing.assert_allclose(result.spacing_zyx_um, [0.4, 0.2, 0.4])
+    np.testing.assert_allclose(result.stack.data.coords["z_um"], [10, 10.4, 10.8, 11.2])
+    transcript = pd.DataFrame({"z": [10.4], "y": [20.4], "x": [31.2], "gene": ["G"]})
+    indexed = global_transcript_index(
+        transcript, result.full_shape_zyx, result.origin_zyx_um, result.spacing_zyx_um
+    )
+    np.testing.assert_allclose(indexed.coords_sorted, [[1, 2, 3]], atol=1e-5)
+    np.testing.assert_array_equal(result.stack.data[0, :, :, :], pixels)
+
+
+@pytest.mark.integration
+def test_ndv_transcript_and_boundary_align_with_anisotropic_fused_image(
+    image_datastore, monkeypatch
+):
+    from qtpy import QtWidgets
+
+    from merfish3danalysis.viewer.view import DatastoreNdvView
+
+    monkeypatch.setenv("NDV_GUI_FRONTEND", "qt")
+    monkeypatch.setenv("NDV_CANVAS_BACKEND", "vispy")
+    monkeypatch.setenv("NDV_SYNCHRONOUS", "1")
+    datastore = image_datastore
+    pixels = np.zeros((3, 4, 5), dtype=np.uint16)
+    pixels[1, 2, 3] = 500
+    datastore.save_global_fiducial_image(pixels, np.eye(4), [10, 20, 30], [2, 1, 0.5])
+    result = load_global_image_channels(datastore, include_segmentation=False)
+    transcripts = pd.DataFrame({"z": [12], "y": [22], "x": [31.5], "gene": ["G"]})
+    index = global_transcript_index(
+        transcripts, result.full_shape_zyx, result.origin_zyx_um, result.spacing_zyx_um
+    )
+    np.testing.assert_array_equal(index.coords_sorted, [[1, 2, 3]])
+    points = SparsePointLayer(index, ("G",), 10, tuple(result.spacing_zyx_um), "point")
+    lines = SparseLineLayer(
+        (np.array([[2, 3], [2, 4]], dtype=float),),
+        shape=result.full_shape_zyx,
+        width=1,
+        color="white",
+        spacing_zyx_um=tuple(result.spacing_zyx_um),
+        label="boundary",
+    )
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = DatastoreNdvView()
+    try:
+        view.show_stack(
+            result.stack,
+            spacing_zyx_um=result.spacing_zyx_um,
+            origin_zyx_um=result.origin_zyx_um,
+        )
+        view.set_sparse_payload(SparseOverlayPayload(points=(points,), lines=(lines,)))
+        view._apply_sparse_overlay_update()
+        app.processEvents()
+        canvas = view.array_viewer._canvas
+        image = next(
+            h._visual for h in canvas._elements.values() if hasattr(h, "_visual")
+        )
+        image_position = image.transform.map([3, 2, 0, 1])[:2]
+        marker = view._sparse_overlay._point_visuals[0]
+        marker_position = marker.transform.map([*marker._data["a_position"][0], 1])[:2]
+        np.testing.assert_allclose(marker_position, image_position)
+        boundary = view._sparse_overlay._line_visuals[0]
+        boundary_position = boundary.transform.map([*boundary._pos[0], 0, 1])[:2]
+        np.testing.assert_allclose(boundary_position, image_position)
+        np.testing.assert_array_equal(
+            [
+                view.array_viewer.data_wrapper.coords[axis][0]
+                for axis in ("z_um", "y_um", "x_um")
+            ],
+            [10, 20, 30],
+        )
+
+        local_spacing = np.array([1, 0.6, 0.2])
+        local_transcripts = pd.DataFrame(
+            {"z": [1], "y": [1.2], "x": [0.6], "gene": ["G"]}
+        )
+        local_index = local_transcript_index(
+            local_transcripts,
+            shape_zyx=pixels.shape,
+            affine_zyx_um=np.eye(4),
+            origin_zyx_um=np.zeros(3),
+            spacing_zyx_um=local_spacing,
+        )
+        local_points = SparsePointLayer(
+            local_index, ("G",), 10, tuple(local_spacing), "point"
+        )
+        for reuse_window in (True, False):
+            view.show_stack(
+                ChannelStack(pixels[None], ["local"]),
+                spacing_zyx_um=local_spacing,
+                origin_zyx_um=None,
+                reuse_window=reuse_window,
+            )
+            view.set_sparse_payload(SparseOverlayPayload(points=(local_points,)))
+            view._apply_sparse_overlay_update()
+            app.processEvents()
+            canvas = view.array_viewer._canvas
+            image = next(
+                h._visual for h in canvas._elements.values() if hasattr(h, "_visual")
+            )
+            image_position = image.transform.map([3, 2, 0, 1])[:2]
+            marker = view._sparse_overlay._point_visuals[0]
+            marker_position = marker.transform.map([*marker._data["a_position"][0], 1])[
+                :2
+            ]
+            np.testing.assert_allclose(marker_position, image_position)
+    finally:
+        view.close()
+
+
+@pytest.mark.unit
+def test_empty_cellpose_roi_zip_does_not_restore_legacy_outlines(image_datastore):
+    from roifile import roiwrite
+
+    datastore = image_datastore
+    datastore.save_global_coord_xforms_um(np.eye(4), np.zeros(3), np.ones(3), tile=0)
+    roi_path = datastore.cellpose_global_rois_path()
+    roi_path.parent.mkdir(parents=True, exist_ok=True)
+    roiwrite(roi_path, [], mode="w")
+    outline_path = datastore.cellpose_outlines_path()
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text(
+        json.dumps(
+            {
+                "features": [
+                    {
+                        "properties": {"cell_id": 1},
+                        "geometry": {"coordinates": [[[1, 1], [3, 1], [3, 3], [1, 1]]]},
+                    }
+                ]
+            }
+        )
+    )
+    assert datastore.load_global_cellpose_outlines()
     repository = ViewerDataRepository()
     repository.set_datastore(datastore)
     assert repository.cellpose_boundaries() == {}
-    cell_boundary_polylines_for_tile(datastore, "tile0000", (1, 10, 10))
-    global_cell_boundary_geometry(datastore, (1, 10, 10), np.zeros(3), np.ones(3))
-    datastore.load_global_cellpose_outlines.assert_not_called()
-
-
-class _FakeLutModel:
-    """Minimal LUT model for viewer label tests."""
-
-    def __init__(self) -> None:
-        self.cmap: str | None = None
-        self.clims: tuple[float, float] | None = None
-
-
-class _FakeLutView:
-    """Minimal LUT view for viewer label tests."""
-
-    def __init__(self) -> None:
-        self.channel_name: str | None = None
-
-    def set_channel_name(self, channel_name: str) -> None:
-        """Record the assigned channel name."""
-
-        self.channel_name = channel_name
-
-
-class _FakeLutController:
-    """Minimal LUT controller for viewer label tests."""
-
-    def __init__(self) -> None:
-        self.lut_model = _FakeLutModel()
-        self.lut_views = [_FakeLutView()]
-
-
-class _FakeArrayViewer:
-    """Minimal ArrayViewer object for viewer label tests."""
-
-    def __init__(self, channel_count: int) -> None:
-        self._lut_controllers = {
-            channel_index: _FakeLutController()
-            for channel_index in range(channel_count)
-        }
-        self.data = np.zeros((channel_count, 1, 2, 2), dtype=np.float32)
-
-
-class _FakeViewerDisplayDatastore:
-    """Minimal datastore object for display-model sparse overlay tests."""
-
-    voxel_size_zyx_um = np.ones(3, dtype=np.float32)
-
-    def __init__(self, boundaries: pd.DataFrame | None = None) -> None:
-        self.boundaries = boundaries
-
-    def load_baysor_cell_boundaries_3d(self) -> pd.DataFrame | None:
-        """Return fake Baysor boundaries."""
-
-        return self.boundaries
+    local = cell_boundary_polylines_for_tile(datastore, "tile0000", (1, 10, 10))
+    global_geometry = global_cell_boundary_geometry(
+        datastore, (1, 10, 10), np.zeros(3), np.ones(3)
+    )
+    assert local is not None and not local.polylines_yx
+    assert global_geometry is not None and not global_geometry.polylines_yx
 
 
 @pytest.mark.unit
 def test_lazy_global_channel_data_supports_list_channel_indexing() -> None:
     """Lazy global image stacks support NumPy-style list channel indexing."""
-
     fused = np.arange(4, dtype=np.uint16).reshape(1, 2, 2)
     image_channel = fused + 10
     data = LazyGlobalChannelData(
@@ -141,24 +222,9 @@ def test_lazy_global_channel_data_supports_list_channel_indexing() -> None:
     np.testing.assert_array_equal(selected[1], fused)
 
 
-def _wkb_polygon_xy(points_xy: np.ndarray) -> bytes:
-    """Return little-endian WKB bytes for one polygon exterior ring."""
-
-    import struct
-
-    points = np.asarray(points_xy, dtype=float)
-    output = bytearray()
-    output.extend(struct.pack("<BII", 1, 3, 1))
-    output.extend(struct.pack("<I", points.shape[0]))
-    for x_value, y_value in points:
-        output.extend(struct.pack("<dd", float(x_value), float(y_value)))
-    return bytes(output)
-
-
 @pytest.mark.unit
 def test_warp_chain_labels_and_optional_affine_composition() -> None:
     """Viewer warp-chain labels and affine toggles reflect selected components."""
-
     round_transform = np.eye(4, dtype=np.float32)
     round_transform[1, 3] = 2.0
     chromatic_transform = np.eye(4, dtype=np.float32)
@@ -177,19 +243,16 @@ def test_warp_chain_labels_and_optional_affine_composition() -> None:
     np.testing.assert_allclose(
         full, np.linalg.inv(chromatic_transform) @ round_transform
     )
-    assert warp_chain_label(WarpChainOptions(False, False, False)) == "native"
-    assert warp_chain_label(WarpChainOptions(True, True, True)) == (
-        "affine+chromatic+sofima"
-    )
+    assert warp_chain_label(WarpChainOptions(False, False)) == "native"
+    assert warp_chain_label(WarpChainOptions(True, True)) == "affine+sofima"
     assert selected_warp_label("tile0008", "bit003", WarpChainOptions()) == (
-        "tile0008:bit003 warped affine+chromatic+sofima"
+        "tile0008:bit003 warped affine+sofima"
     )
 
 
 @pytest.mark.unit
 def test_transcript_color_hex_returns_distinct_hex_colors() -> None:
     """Transcript color key values are hex colors and vary by selected value."""
-
     first_color = transcript_color_hex(1, 3)
     second_color = transcript_color_hex(2, 3)
     expected_first_color = "#" + "".join(
@@ -205,29 +268,44 @@ def test_transcript_color_hex_returns_distinct_hex_colors() -> None:
 
 
 @pytest.mark.unit
-def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors() -> None:
+def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors(
+    monkeypatch,
+) -> None:
     """Viewer LUT labels apply only to image-backed NDV channels."""
+    from qtpy import QtWidgets
+
+    from merfish3danalysis.viewer.view import DatastoreNdvView
+
+    monkeypatch.setenv("NDV_GUI_FRONTEND", "qt")
+    monkeypatch.setenv("NDV_CANVAS_BACKEND", "vispy")
+    monkeypatch.setenv("NDV_SYNCHRONOUS", "1")
 
     labels = [
         "global polyDT max projection",
         "global Cellpose mask",
     ]
-    array_viewer = _FakeArrayViewer(len(labels))
-
-    applied = apply_lut_channel_labels(array_viewer, labels)
-
-    controllers = array_viewer._lut_controllers
-    assert applied == len(labels)
-    assert controllers[0].lut_model.cmap == "gray"
-    assert controllers[1].lut_model.cmap == "gray"
-    assert controllers[0].lut_views[0].channel_name == labels[0]
-    assert controllers[1].lut_views[0].channel_name == labels[1]
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = DatastoreNdvView()
+    try:
+        view.show_stack(
+            ChannelStack(np.zeros((2, 1, 2, 2), dtype=np.uint16), labels),
+            spacing_zyx_um=np.ones(3),
+            origin_zyx_um=None,
+        )
+        app.processEvents()
+        controllers = view.array_viewer._lut_controllers
+        assert apply_lut_channel_labels(view.array_viewer, labels) >= len(labels)
+        for index, label in enumerate(labels):
+            assert controllers[index].lut_model.cmap.name == "matlab:gray"
+            assert controllers[index].lut_views[0]._qwidget.visible.text() == label
+    finally:
+        view.close()
+        app.processEvents()
 
 
 @pytest.mark.unit
 def test_lazy_max_projection_image_presents_one_z_plane() -> None:
     """Lazy max projection reads selected YX pixels across all Z planes."""
-
     from merfish3danalysis.viewer.overlays import LazyMaxProjectionImage
 
     image_zyx = np.asarray(
@@ -253,7 +331,6 @@ def test_lazy_max_projection_image_presents_one_z_plane() -> None:
 
 def _write_proseg_run(root: Path) -> None:
     """Write a tiny datastore-like Proseg run."""
-
     root.mkdir(parents=True)
     transcript_table = "transcript_id,qv,x,y,z,gene\n,inf,2.0,4.0,1.0,GeneA\n"
     with gzip.open(
@@ -280,18 +357,15 @@ def _write_proseg_run(root: Path) -> None:
         json.dump(geojson, file)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
-    tmp_path: Path,
+    image_datastore,
 ) -> None:
     """Datastore Proseg discovery finds default and nested 3D run folders."""
-
-    proseg_root = tmp_path / "proseg" / "3D"
+    datastore = image_datastore
+    proseg_root = datastore.datastore_path / "proseg" / "3D"
     _write_proseg_run(proseg_root)
     _write_proseg_run(proseg_root / "fdr.75")
-    datastore = qi2labDataStore.__new__(qi2labDataStore)
-    datastore._datastore_path = tmp_path
-
     runs = datastore.list_proseg_3d_runs()
     polygons = datastore.load_proseg_cell_polygons_3d(run_name=runs[0])
 
@@ -300,10 +374,9 @@ def test_qi2lab_datastore_lists_default_and_nested_proseg_runs(
     assert polygons[7].shape == (3, 2)
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -> None:
     """Proseg transcript coordinates index in global and local coordinate frames."""
-
     run_root = tmp_path / "proseg" / "3D"
     _write_proseg_run(run_root)
     transcripts = pd.read_csv(run_root / "transcript_metadata_3D.csv.gz")
@@ -331,10 +404,9 @@ def test_proseg_transcripts_index_global_and_local_coordinates(tmp_path: Path) -
     assert local_index.genes_sorted.tolist() == ["GeneA"]
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> None:
     """Transcript coordinate indices are independent of selected genes."""
-
     run_root = tmp_path / "proseg" / "3D"
     _write_proseg_run(run_root)
     transcripts = pd.read_csv(run_root / "transcript_metadata_3D.csv.gz")
@@ -353,7 +425,6 @@ def test_indexed_global_transcripts_reuse_transcript_index(tmp_path: Path) -> No
 @pytest.mark.unit
 def test_sparse_point_data_uses_selected_gene_colors() -> None:
     """Sparse point layers return 2D and 3D marker positions for selected genes."""
-
     point_index = PointOverlayIndex.from_points(
         np.asarray([[1.0, 4.0, 2.0], [2.0, 5.0, 3.0]], dtype=float),
         np.asarray(["GeneA", "GeneB"], dtype=object),
@@ -388,7 +459,6 @@ def test_sparse_point_data_uses_selected_gene_colors() -> None:
 @pytest.mark.unit
 def test_sparse_point_data_projects_selected_genes_across_z() -> None:
     """Sparse point layers can project selected transcript positions across Z."""
-
     point_index = PointOverlayIndex.from_points(
         np.asarray([[1.0, 4.0, 2.0], [2.0, 5.0, 3.0]], dtype=float),
         np.asarray(["GeneA", "GeneA"], dtype=object),
@@ -415,7 +485,6 @@ def test_sparse_point_data_projects_selected_genes_across_z() -> None:
 @pytest.mark.unit
 def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
     """Sparse line layers return VisPy segment arrays in 2D and 3D."""
-
     repeated = PolylineGeometry(
         (np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=float),),
         shape=(4, 8, 8),
@@ -482,7 +551,6 @@ def test_sparse_line_data_handles_2d_and_z_aware_lines() -> None:
 @pytest.mark.unit
 def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
     """Sparse Z-aware line layers use pre-binned 2D contours when available."""
-
     surface_stack = np.asarray(
         [
             [[1.0, 100.0, 100.0], [1.0, 100.0, 102.0], [1.0, 102.0, 100.0]],
@@ -518,7 +586,6 @@ def test_sparse_z_indexed_lines_use_current_z_bin() -> None:
 @pytest.mark.unit
 def test_sparse_max_lines_use_projected_boundaries() -> None:
     """Sparse Z-aware line layers can project max boundary outlines."""
-
     z_ring = np.asarray(
         [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.0, 0.0]],
         dtype=float,
@@ -553,7 +620,6 @@ def test_sparse_max_lines_use_projected_boundaries() -> None:
 @pytest.mark.unit
 def test_transcript_refresh_preserves_sparse_cell_boundaries() -> None:
     """Transcript refreshes keep existing sparse boundary layers."""
-
     stack = ChannelStack(
         data=np.zeros((1, 1, 4, 4), dtype=np.uint16),
         labels=["global empty canvas"],
@@ -591,30 +657,23 @@ def test_transcript_refresh_preserves_sparse_cell_boundaries() -> None:
 
 
 @pytest.mark.unit
-def test_local_baysor_boundaries_do_not_require_proseg_run() -> None:
+def test_local_baysor_boundaries_do_not_require_proseg_run(image_datastore) -> None:
     """Local Baysor cell boundaries load even when no Proseg run is selected."""
+    from shapely.geometry import Polygon
 
     boundaries = pd.DataFrame(
         {
             "cell": ["cell1"],
             "layer": ["[0.0, 1.0]"],
-            "geometry": [
-                _wkb_polygon_xy(
-                    np.asarray(
-                        [
-                            [1.0, 1.0],
-                            [3.0, 1.0],
-                            [3.0, 3.0],
-                            [1.0, 1.0],
-                        ],
-                        dtype=float,
-                    )
-                )
-            ],
+            "geometry": [Polygon([(1, 1), (3, 1), (3, 3), (1, 1)]).wkb],
         }
     )
+    # Baysor owns this parquet output; the datastore provides the read API.
+    path = image_datastore.datastore_path / "baysor/3D/cell_boundaries_3d.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    boundaries.to_parquet(path)
     model = ViewerDisplayModel()
-    model.set_datastore(_FakeViewerDisplayDatastore(boundaries))
+    model.set_datastore(image_datastore)
     request = LocalDisplayRequest(
         tile="tile0000",
         fiducial_sources=(),
@@ -643,39 +702,22 @@ def test_local_baysor_boundaries_do_not_require_proseg_run() -> None:
     )
 
     assert [layer.label for layer in payload.lines] == ["Baysor cell boundaries"]
+    assert len(payload.lines[0].max_polylines_yx) == 1
+    np.testing.assert_array_equal(
+        payload.lines[0].max_polylines_yx[0], [[1, 1], [1, 3], [3, 3], [1, 1]]
+    )
 
 
 @pytest.mark.unit
-def test_sparse_overlay_recreates_visuals_when_dimension_changes() -> None:
+def test_sparse_overlay_recreates_visuals_when_dimension_changes(monkeypatch) -> None:
     """Sparse VisPy overlays do not reuse 2D line visuals for 3D data."""
+    from qtpy import QtWidgets
 
-    from vispy import scene
+    from merfish3danalysis.viewer.view import DatastoreNdvView
 
-    class _FakeCamera:
-        def __init__(self) -> None:
-            self.fov = 45.0
-            self.depth_value = 1.0
-
-    class _FakeCanvas:
-        def update(self) -> None:
-            """Accept VisPy canvas update calls."""
-
-    class _FakeCanvasController:
-        def __init__(self) -> None:
-            self._view = type(
-                "View",
-                (),
-                {"scene": scene.Node(), "camera": _FakeCamera()},
-            )()
-            self._canvas = _FakeCanvas()
-            self.ndims: list[int] = []
-
-        def set_ndim(self, ndim: int) -> None:
-            self.ndims.append(ndim)
-
-    class _FakeArrayViewer:
-        def __init__(self) -> None:
-            self._canvas = _FakeCanvasController()
+    monkeypatch.setenv("NDV_GUI_FRONTEND", "qt")
+    monkeypatch.setenv("NDV_CANVAS_BACKEND", "vispy")
+    monkeypatch.setenv("NDV_SYNCHRONOUS", "1")
 
     payload = SparseOverlayPayload(
         lines=(
@@ -689,24 +731,34 @@ def test_sparse_overlay_recreates_visuals_when_dimension_changes() -> None:
             ),
         )
     )
-    overlay = SparseVispyOverlay()
-    overlay.attach(_FakeArrayViewer())
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = DatastoreNdvView()
+    try:
+        view.show_stack(
+            ChannelStack(np.zeros((1, 4, 8, 8), dtype=np.uint16), ["image"]),
+            spacing_zyx_um=np.array([2, 1, 1]),
+            origin_zyx_um=None,
+        )
+        overlay = SparseVispyOverlay()
+        overlay.attach(view.array_viewer)
+        overlay.set_payload(payload)
+        overlay.update(z_index=1, use_3d=False)
+        first_visual = overlay._line_visuals[0]
+        overlay.update(z_index=1, use_3d=True)
 
-    overlay.set_payload(payload)
-    overlay.update(z_index=1, use_3d=False)
-    first_visual = overlay._line_visuals[0]
-    overlay.update(z_index=1, use_3d=True)
-
-    assert overlay._visual_ndim == 3
-    assert overlay._line_visuals[0] is not first_visual
-    assert overlay._array_viewer._canvas._view.camera.fov == 0.0
-    assert overlay._array_viewer._canvas._view.camera.depth_value == 1e6
+        assert overlay._visual_ndim == 3
+        assert overlay._line_visuals[0] is not first_visual
+        assert overlay._array_viewer._canvas._view.camera.fov == 0.0
+        assert overlay._array_viewer._canvas._view.camera.depth_value == 1e6
+        overlay.clear()
+    finally:
+        view.close()
+        app.processEvents()
 
 
 @pytest.mark.unit
 def test_local_datastore_transcripts_index_from_global_coordinates() -> None:
     """Final datastore transcripts index locally from global coordinates."""
-
     datastore_transcripts = pd.DataFrame(
         {
             "global_z": [1.0],
@@ -732,7 +784,7 @@ def test_local_datastore_transcripts_index_from_global_coordinates() -> None:
 
 
 @pytest.mark.integration
-def test_controller_enables_view_mode_after_datastore_load(tmp_path: Path) -> None:
+def test_controller_enables_view_mode_after_datastore_load(image_datastore) -> None:
     """Datastore loading leaves the view-mode selector usable."""
     import os
 
@@ -740,24 +792,12 @@ def test_controller_enables_view_mode_after_datastore_load(tmp_path: Path) -> No
     from qtpy import QtWidgets
 
     from merfish3danalysis.viewer.controller import DatastoreViewerWindow
-    from merfish3danalysis.viewer.datastore import (
-        ViewerDatastoreLoadResult,
-        ViewerDatastoreOptions,
-    )
+    from merfish3danalysis.viewer.datastore import load_datastore_for_viewer
 
     qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = DatastoreViewerWindow()
     try:
-        options = ViewerDatastoreOptions(
-            components={},
-            tile_ids=("tile0000",),
-            round_ids=("round001",),
-            bit_ids=("bit001",),
-            proseg_runs=(),
-            baysor_available=False,
-            transcript_gene_to_bits={},
-        )
-        result = ViewerDatastoreLoadResult(tmp_path, object(), options)
+        result = load_datastore_for_viewer(image_datastore.datastore_path)
 
         window._set_controls_busy(True)
         for row in range(window.view_mode_combo.count()):
@@ -787,8 +827,8 @@ def test_controller_enables_view_mode_after_datastore_load(tmp_path: Path) -> No
 
 
 @pytest.mark.integration
-def test_controller_reenables_controls_before_showing_stack() -> None:
-    """Prepared display results restore controls before NDV setup begins."""
+def test_controller_reenables_controls_after_showing_stack() -> None:
+    """Prepared display results restore controls and open the NDV viewer."""
     import os
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -796,42 +836,8 @@ def test_controller_reenables_controls_before_showing_stack() -> None:
 
     from merfish3danalysis.viewer.controller import DatastoreViewerWindow
 
-    class _ControllerStateCheckingView:
-        """Fake view that checks controller controls before display."""
-
-        def __init__(self, window: DatastoreViewerWindow) -> None:
-            self.window = window
-            self.sparse_payload: SparseOverlayPayload | None = None
-            self.show_stack_called = False
-
-        def show_stack(
-            self,
-            _stack: ChannelStack,
-            *,
-            spacing_zyx_um: np.ndarray,
-            origin_zyx_um: np.ndarray | None,
-            reuse_window: bool = False,
-        ) -> None:
-            """Record display and assert controller interactivity."""
-            assert self.window.open_button.isEnabled()
-            assert self.window.view_mode_combo.isEnabled()
-            assert not self.window.progress_bar.isVisible()
-            assert spacing_zyx_um.shape == (3,)
-            assert origin_zyx_um is None
-            assert not reuse_window
-            self.show_stack_called = True
-
-        def set_sparse_payload(self, payload: SparseOverlayPayload) -> None:
-            """Record sparse overlay payload."""
-            self.sparse_payload = payload
-
-        def close(self) -> None:
-            """Match the real view close API."""
-
     qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = DatastoreViewerWindow()
-    fake_view = _ControllerStateCheckingView(window)
-    window.view = fake_view
     try:
         window.show()
         qt_app.processEvents()
@@ -860,8 +866,10 @@ def test_controller_reenables_controls_before_showing_stack() -> None:
 
         window._finish_display_worker(result)
 
-        assert fake_view.show_stack_called
-        assert fake_view.sparse_payload == SparseOverlayPayload()
+        assert window.view.array_viewer is not None
+        assert window.open_button.isEnabled()
+        assert window.view_mode_combo.isEnabled()
+        assert not window.progress_bar.isVisible()
         assert window.status_label.text() == "Displayed test stack."
     finally:
         window.close()
@@ -878,28 +886,8 @@ def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> 
 
     from merfish3danalysis.viewer.controller import DatastoreViewerWindow
 
-    class _NoopView:
-        """Fake view with the NDV display API."""
-
-        def show_stack(
-            self,
-            _stack: ChannelStack,
-            *,
-            spacing_zyx_um: np.ndarray,
-            origin_zyx_um: np.ndarray | None,
-            reuse_window: bool = False,
-        ) -> None:
-            """Accept stack display calls."""
-
-        def set_sparse_payload(self, _payload: SparseOverlayPayload) -> None:
-            """Accept sparse payload calls."""
-
-        def close(self) -> None:
-            """Match the real view close API."""
-
     qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = DatastoreViewerWindow()
-    window.view = _NoopView()
     try:
         window.show()
         qt_app.processEvents()
@@ -944,7 +932,7 @@ def test_controller_transcript_controls_remain_enabled_after_showing_stack() -> 
 
 
 @pytest.mark.integration
-def test_controller_local_apply_updates_existing_viewer(tmp_path: Path) -> None:
+def test_controller_local_apply_updates_existing_viewer(image_datastore) -> None:
     """Local selection changes enable Apply and reuse the NDV window."""
     import os
 
@@ -952,54 +940,15 @@ def test_controller_local_apply_updates_existing_viewer(tmp_path: Path) -> None:
     from qtpy import QtCore, QtWidgets
 
     from merfish3danalysis.viewer.controller import DatastoreViewerWindow
-    from merfish3danalysis.viewer.datastore import (
-        ViewerDatastoreLoadResult,
-        ViewerDatastoreOptions,
-    )
-
-    class _RecordingView:
-        """Fake view that records whether stack display reuses a window."""
-
-        def __init__(self) -> None:
-            self.reuse_window_values: list[bool] = []
-
-        def show_stack(
-            self,
-            _stack: ChannelStack,
-            *,
-            spacing_zyx_um: np.ndarray,
-            origin_zyx_um: np.ndarray | None,
-            reuse_window: bool = False,
-        ) -> None:
-            """Record reuse-window requests."""
-            assert spacing_zyx_um.shape == (3,)
-            assert origin_zyx_um is None
-            self.reuse_window_values.append(reuse_window)
-
-        def set_sparse_payload(self, _payload: SparseOverlayPayload) -> None:
-            """Accept sparse payload calls."""
-
-        def close(self) -> None:
-            """Match the real view close API."""
+    from merfish3danalysis.viewer.datastore import load_datastore_for_viewer
 
     qt_app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     window = DatastoreViewerWindow()
-    fake_view = _RecordingView()
-    window.view = fake_view
     try:
         window.show()
         qt_app.processEvents()
-        options = ViewerDatastoreOptions(
-            components={},
-            tile_ids=("tile0000",),
-            round_ids=("round001", "round002"),
-            bit_ids=("bit001",),
-            proseg_runs=(),
-            baysor_available=False,
-            transcript_gene_to_bits={},
-        )
         window._finish_datastore_load(
-            ViewerDatastoreLoadResult(tmp_path, object(), options)
+            load_datastore_for_viewer(image_datastore.datastore_path)
         )
         window._finish_progress("Datastore loaded.")
         window.view_mode_combo.setCurrentText("Local native")
@@ -1031,9 +980,11 @@ def test_controller_local_apply_updates_existing_viewer(tmp_path: Path) -> None:
             sparse_payload=SparseOverlayPayload(),
         )
 
+        window.view.show_stack(stack, spacing_zyx_um=spacing, origin_zyx_um=None)
+        existing_viewer = window.view.array_viewer
         window._finish_display_worker(result)
 
-        assert fake_view.reuse_window_values == [True]
+        assert window.view.array_viewer is existing_viewer
         assert not window.apply_local_selection_button.isEnabled()
     finally:
         window.close()

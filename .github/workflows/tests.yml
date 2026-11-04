@@ -21,6 +21,10 @@ jobs:
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.12"
+      - name: Install headless rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libfontconfig1 libglib2.0-0 libx11-6 libxkbcommon0
       - name: Install CPU test dependencies from project declarations
         run: |
           uv venv
@@ -32,7 +36,9 @@ jobs:
           project = tomllib.loads(Path("pyproject.toml").read_text())
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
-              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely", "joblib", "numba",
+              "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely",
+              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "pyarrow",
+              "ndv", "matplotlib", "scikit-image",
           }
           requirements = [
               value for value in project["project"]["dependencies"]
@@ -42,9 +48,12 @@ jobs:
           PY
           uv pip install -r /tmp/cpu-test-requirements.txt pytest
           uv pip install --no-deps -e .
-      - name: Test storage, fusion, segmentation coordinates, and shared helpers
+      - name: Run CPU unit and integration tests
         run: |
           .venv/bin/python -m pytest -q -m "not gpu" \
+            tests/test_scene_storage.py \
+            tests/test_ndtiff_ingestion.py \
+            tests/test_process_ndtiff_positions.py \
             tests/test_datastore_image_io.py \
             tests/test_datastore_public_image_io.py \
             tests/test_datastore_validation.py \
@@ -52,15 +61,29 @@ jobs:
             tests/test_datastore_stage_position.py \
             tests/test_datastore_feature_predictor.py \
             tests/test_data_registration.py \
+            tests/test_dataio.py \
+            tests/test_global_fusion_mode.py \
+            tests/test_multiview_registration.py \
             tests/test_spacing_precision.py \
             tests/test_fiducial_projection.py \
+            tests/test_projection_scene.py \
             tests/test_fusion_compression.py \
+            tests/test_fusion_worker_cleanup.py \
             tests/test_fiducial_downsampling.py \
+            tests/test_fuseall.py \
+            tests/test_fused_viewer.py \
+            tests/test_viewer.py \
+            tests/test_diagnostic_viewer.py \
+            tests/test_datastore_entrypoints.py \
+            tests/test_simulation_figure.py \
             tests/test_illumination_correction.py \
             tests/test_signal_selection.py \
             tests/test_create_datastore_illumination.py \
             tests/test_zhuang_conversion.py \
             tests/test_zhuang_registration.py \
             tests/test_zhuang_segmentation.py \
+            tests/test_preprocess_cli.py \
+            tests/test_export_tile.py \
             tests/test_cellpose_rois.py \
+            tests/test_segment_fiducial.py \
             tests/test_decode_helpers.py

@@ -1,13 +1,11 @@
 """Datastore image coordinates and Zarr v3 persistence contracts."""
 
 import json
-from pathlib import Path
-from unittest.mock import Mock, mock_open
+import os
 
 import numpy as np
 import pytest
 from yaozarrs import open_group
-from yaozarrs.write import v05 as write_v05
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
@@ -36,32 +34,22 @@ def test_incompatible_transform_is_rejected(values):
 
 
 @pytest.mark.unit
-def test_write_future_is_from_writing_pixels_without_readback(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "mkdir", Mock())
-    store = Mock()
-    prepare = Mock(return_value=(tmp_path, {"0": store}))
-    open_image = Mock(side_effect=AssertionError("a write must not read the image"))
-    monkeypatch.setattr(write_v05, "prepare_image", prepare)
-    monkeypatch.setattr("merfish3danalysis.qi2labDataStore.open_group", open_image)
-    pixels = np.ones((3, 4), dtype=np.uint16)
-    result = qi2labDataStore._save_to_zarr_array(pixels, tmp_path / "image", True)
-    assert result is store.write.return_value
-    np.testing.assert_array_equal(store.write.call_args.args[0], pixels)
-    open_image.assert_not_called()
+def test_failed_image_write_propagates_before_success_metadata(image_datastore):
+    scene = image_datastore.tile_scene_path
+    scene.chmod(0o555)
+    try:
+        if os.access(scene, os.W_OK):
+            pytest.skip("read-only permissions are not enforced for this user")
+        with pytest.raises(OSError):
+            image_datastore.save_local_corrected_image(
+                np.ones((3, 4), dtype=np.uint16), tile=0, round=0
+            )
+    finally:
+        scene.chmod(0o755)
+    assert image_datastore.load_local_corrected_image(0, round=0) is None
 
 
 @pytest.mark.unit
-def test_failed_image_write_propagates_before_success_metadata(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "mkdir", Mock())
-    write = Mock(side_effect=OSError("disk full"))
-    monkeypatch.setattr("merfish3danalysis.qi2labDataStore.write_image", write)
-    with pytest.raises(OSError, match="disk full"):
-        qi2labDataStore._save_to_zarr_array(
-            np.ones((3, 4), dtype=np.uint16), tmp_path / "image"
-        )
-
-
-@pytest.mark.integration
 @pytest.mark.parametrize("return_future", [False, True])
 @pytest.mark.parametrize("spacing", [[0.315, 0.081, 0.081], [0.4, 0.2, 0.3]])
 def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, return_future, spacing):
@@ -76,12 +64,12 @@ def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, return_future, spacing):
         assert result is None
     group = open_group(path)
     assert json.loads((path / "zarr.json").read_text())["zarr_format"] == 3
-    assert group.attrs["ome"]["version"] == "0.5"
-    multiscale = group.attrs["ome"]["multiscales"][0]
-    assert [axis["name"] for axis in multiscale["axes"]] == list("zyx")
-    assert all(axis["unit"] == "micrometer" for axis in multiscale["axes"])
-    transforms = multiscale["datasets"][0]["coordinateTransformations"]
-    assert next(t["scale"] for t in transforms if t["type"] == "scale") == spacing
+    model = group.ome_metadata(strict=True)
+    assert model.version == "0.6"
+    multiscale = model.multiscales[0]
+    assert [axis.name for axis in multiscale.axes] == list("zyx")
+    assert all(axis.unit == "micrometer" for axis in multiscale.axes)
+    assert multiscale.datasets[0].transform.scale == spacing
     assert not (path / ".zattrs").exists()
     for mode in (False, True, None):
         loaded = qi2labDataStore._load_from_zarr_array(path, mode)
@@ -92,8 +80,7 @@ def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, return_future, spacing):
         np.testing.assert_array_equal(loaded, pixels[1:] if mode is None else pixels)
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("shape", [(6, 8), (2, 6, 8)])
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "native_spacing, downsampling, expected_spacing",
     [
@@ -103,29 +90,38 @@ def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, return_future, spacing):
     ],
 )
 def test_mask_ome_spacing_matches_saved_downsampling(
-    tmp_path, shape, native_spacing, downsampling, expected_spacing
+    image_datastore, native_spacing, downsampling, expected_spacing
 ):
-    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
+    from yaozarrs import v06
+
+    datastore = image_datastore
     datastore.voxel_size_zyx_um = native_spacing
-    masks = np.arange(np.prod(shape), dtype=np.uint32).reshape(shape)
-    datastore.save_global_cellpose_segmentation_image(masks, downsampling)
-    path = (
-        tmp_path
-        / "qi2labdatastore/segmentation/cellpose/masks_fiducial_iso_zyx.ome.zarr"
+    masks = np.arange(48, dtype=np.uint32).reshape(6, 8)
+    datastore.save_global_fiducial_projection(
+        np.zeros_like(masks), np.eye(4), [0, 0, 0], expected_spacing
     )
-    group = open_group(path)
-    multiscale = group.attrs["ome"]["multiscales"][0]
-    assert [axis["name"] for axis in multiscale["axes"]] == list("zyx"[-len(shape) :])
-    assert all(axis["unit"] == "micrometer" for axis in multiscale["axes"])
-    scale = multiscale["datasets"][0]["coordinateTransformations"][0]["scale"]
-    assert scale == expected_spacing[-len(shape) :]
-    np.testing.assert_allclose(group.attrs["downsampling"], downsampling)
+    datastore.save_global_cellpose_segmentation_image(masks, downsampling)
+    scene = open_group(datastore.fiducial_projection_path()).validate(strict=True)
+    image_path = next(
+        t.input.path
+        for t in scene.ome_metadata().scene.coordinateTransformations
+        if t.input.path is not None
+    )
+    labels = scene[image_path]["labels"]
+    labels_model = labels.ome_metadata(strict=True)
+    assert isinstance(labels_model, v06.LabelsGroup)
+    model = labels[labels_model.labels[0]].ome_metadata(strict=True)
+    assert isinstance(model, v06.LabelImage)
+    multiscale = model.multiscales[0]
+    assert [axis.name for axis in multiscale.axes] == list("yx")
+    assert all(axis.unit == "micrometer" for axis in multiscale.axes)
+    assert multiscale.datasets[0].transform.scale == expected_spacing[1:]
     np.testing.assert_array_equal(
         datastore.load_global_cellpose_segmentation_image(False), masks
     )
 
 
-@pytest.mark.integration
+@pytest.mark.unit
 @pytest.mark.parametrize("spacing", [[0.4, 0.2, 0.3], [0.8, 0.75, 1.25]])
 def test_fused_image_writer_uses_caller_spacing_without_resampling(tmp_path, spacing):
     datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
@@ -138,10 +134,8 @@ def test_fused_image_writer_uses_caller_spacing_without_resampling(tmp_path, spa
         spacing_zyx_um=spacing,
     )
     group = open_group(datastore.fused_image_path())
-    transforms = group.attrs["ome"]["multiscales"][0]["datasets"][0][
-        "coordinateTransformations"
-    ]
-    assert next(t["scale"] for t in transforms if t["type"] == "scale") == spacing
+    multiscale = group.ome_metadata(strict=True).multiscales[0]
+    assert multiscale.datasets[0].transform.scale == spacing
     assert list(group.attrs["spacing_zyx_um"]) == spacing
     loaded, _, _, loaded_spacing = datastore.load_global_fiducial_image(
         return_future=False
@@ -152,128 +146,80 @@ def test_fused_image_writer_uses_caller_spacing_without_resampling(tmp_path, spa
 
 @pytest.mark.unit
 @pytest.mark.parametrize("factors", [[1, 2], [1, 0, 2], [1, -2, 2], [1, np.nan, 2]])
-def test_invalid_mask_downsampling_is_rejected_before_writing(
-    mock_datastore, monkeypatch, factors
-):
-    datastore = mock_datastore
-    write = Mock()
-    monkeypatch.setattr(datastore, "_save_to_zarr_array", write)
-    datastore.voxel_size_zyx_um = [0.4, 0.2, 0.3]
+def test_invalid_mask_downsampling_is_rejected_before_writing(image_datastore, factors):
+    datastore = image_datastore
     with pytest.raises(ValueError, match="Downsampling"):
         datastore.save_global_cellpose_segmentation_image(np.ones((3, 4)), factors)
-    write.assert_not_called()
+    assert not datastore.fiducial_projection_path().exists()
 
 
 @pytest.mark.unit
-def test_missing_optional_json_is_distinct_from_corrupt_json(monkeypatch):
-    path = Path("/mock/attributes.json")
-    monkeypatch.setattr("builtins.open", Mock(side_effect=FileNotFoundError))
+def test_missing_optional_json_is_distinct_from_corrupt_json(tmp_path):
+    path = tmp_path / "attributes.json"
     assert qi2labDataStore._load_from_json(path) == {}
-    monkeypatch.setattr("builtins.open", mock_open(read_data='{"incomplete":'))
+    path.write_text('{"incomplete":')
     with pytest.raises(json.JSONDecodeError):
         qi2labDataStore._load_from_json(path)
 
 
 @pytest.mark.unit
-def test_invalid_metadata_is_rejected_before_opening_output(monkeypatch):
-    open_file = mock_open()
-    monkeypatch.setattr("builtins.open", open_file)
+def test_invalid_metadata_is_rejected_before_opening_output(tmp_path):
+    path = tmp_path / "attributes.json"
     with pytest.raises(TypeError):
-        qi2labDataStore._save_to_json(
-            {"invalid": object()}, Path("/mock/attributes.json")
-        )
-    open_file.assert_not_called()
+        qi2labDataStore._save_to_json({"invalid": object()}, path)
+    assert not path.exists()
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("tile, round_index", [(-1, 0), (2, 0), (0, -1), (0, 2)])
-def test_invalid_tile_or_round_index_returns_none(tile, round_index):
-    datastore = qi2labDataStore.__new__(qi2labDataStore)
-    datastore._num_tiles = 2
-    datastore._num_rounds = 2
-    datastore._tile_ids = ["tile0000", "tile0001"]
-    datastore._round_ids = ["round001", "round002"]
-    assert datastore.load_local_bit_linker(tile, round_index) is None
-
-
-@pytest.mark.integration
-def test_extra_metadata_replacement_preserves_ome_schema(tmp_path):
-    path = tmp_path / "image.ome.zarr"
-    qi2labDataStore._save_to_zarr_array(
-        np.ones((3, 4), dtype=np.uint16),
-        path,
-        ome_scale=[0.2, 0.3],
-        extra_attributes={"old": True},
-    )
-    original_ome = dict(open_group(path).attrs["ome"])
-    qi2labDataStore.save_image_metadata(path, {"new": True}, merge=False)
-    attrs = open_group(path).attrs
-    assert attrs["ome"] == original_ome
-    assert attrs["new"] is True
-    assert "old" not in attrs
-    assert not (path / ".zattrs").exists()
-
-
-@pytest.mark.integration
-def test_public_mask_writer_returns_write_completion(tmp_path):
-    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
-    datastore.voxel_size_zyx_um = [0.4, 0.2, 0.3]
-    masks = np.ones((3, 4), dtype=np.uint16)
-    completed = datastore.save_global_cellpose_segmentation_image(
-        masks, [1, 2, 2], return_future=True
-    )
-    assert completed.result() is None
-    np.testing.assert_array_equal(
-        datastore.load_global_cellpose_segmentation_image(False), masks
-    )
+def test_invalid_tile_or_round_index_returns_none(image_datastore, tile, round_index):
+    assert image_datastore.load_local_bit_linker(tile, round_index) is None
 
 
 @pytest.mark.unit
-def test_public_mask_write_failure_does_not_report_success(mock_datastore, monkeypatch):
-    datastore = mock_datastore
-    datastore.voxel_size_zyx_um = [0.4, 0.2, 0.3]
-    monkeypatch.setattr(
-        datastore, "_save_to_zarr_array", Mock(side_effect=OSError("disk full"))
+@pytest.mark.parametrize(
+    "masks", [np.ones((1, 3, 4), dtype=np.uint16), np.ones((3, 4), dtype=float)]
+)
+def test_invalid_mask_does_not_publish_labels(image_datastore, masks):
+    datastore = image_datastore
+    datastore.save_global_fiducial_projection(
+        np.zeros((3, 4), dtype=np.uint16),
+        np.eye(4),
+        [0, 0, 0],
+        datastore.voxel_size_zyx_um,
     )
-    with pytest.raises(OSError, match="disk full"):
-        datastore.save_global_cellpose_segmentation_image(np.ones((3, 4)), [1, 2, 2])
-    assert datastore.datastore_state["SegmentedCells"] is False
+    with pytest.raises(ValueError, match="integer YX"):
+        datastore.save_global_cellpose_segmentation_image(masks, [1, 1, 1])
+    assert datastore.load_global_cellpose_segmentation_image(False) is None
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("tile, selection", [(-1, 0), (2, 0), (0, -1), (0, 2)])
 @pytest.mark.parametrize("kind", ["round", "bit"])
-def test_local_image_path_rejects_out_of_range_indices(tile, selection, kind):
-    datastore = qi2labDataStore.__new__(qi2labDataStore)
-    datastore._tile_ids = ["tile0000", "tile0001"]
-    datastore._round_ids = ["round001", "round002"]
-    datastore._bit_ids = ["bit001", "bit002"]
+def test_local_image_path_rejects_out_of_range_indices(
+    image_datastore, tile, selection, kind
+):
+    datastore = image_datastore
+    if kind == "bit" and selection == 2:
+        selection = len(datastore.bit_ids)
     with pytest.raises(ValueError, match="Invalid"):
         datastore.local_image_path(tile, "corrected_data", **{kind: selection})
-
-
-@pytest.mark.integration
-def test_image_shape_uses_metadata_without_opening_array_backend(tmp_path, monkeypatch):
-    path = tmp_path / "image.ome.zarr"
-    qi2labDataStore._save_to_zarr_array(np.ones((2, 3, 4), dtype=np.uint16), path)
-    array_type = type(open_group(path)["0"])
-    backend = Mock(side_effect=AssertionError("Shape must come from metadata"))
-    monkeypatch.setattr(array_type, "to_tensorstore", backend)
-    assert qi2labDataStore.image_shape(path) == (2, 3, 4)
-    backend.assert_not_called()
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("index", [0, 1])
 @pytest.mark.parametrize("kind", ["round", "bit"])
-def test_local_image_path_accepts_first_and_last_indices(tmp_path, index, kind):
-    datastore = qi2labDataStore.__new__(qi2labDataStore)
-    datastore._tile_ids = ["tile0000", "tile0001"]
-    datastore._round_ids = ["round001", "round002"]
-    datastore._bit_ids = ["bit001", "bit002"]
-    datastore._fiducial_root_path = tmp_path / "fiducial"
-    datastore._readouts_root_path = tmp_path / "readouts"
+def test_local_image_path_accepts_first_and_last_indices(image_datastore, index, kind):
+    datastore = image_datastore
+    pixels = np.full((2, 3, 4), index + 1, dtype=np.uint16)
+    datastore.save_local_corrected_image(pixels, tile=index, **{kind: index})
     path = datastore.local_image_path(index, "corrected_data", **{kind: index})
-    assert path.parent.parent.name == f"tile{index:04}"
-    assert path.parent.name == f"{kind}{index + 1:03}"
-    assert path.name == "corrected_data.ome.zarr"
+    named_path = datastore.local_image_path(
+        f"tile{index:04}", "corrected_data", **{kind: f"{kind}{index + 1:03}"}
+    )
+    assert path == named_path
+    group = open_group(path)
+    dataset = group.ome_metadata(strict=True).multiscales[0].datasets[0]
+    np.testing.assert_array_equal(
+        group[dataset.path].to_tensorstore().read().result(), pixels
+    )

@@ -9,6 +9,7 @@ coverage to the standard Zenodo F1 integration matrix.
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import time
 from datetime import UTC, datetime
@@ -20,7 +21,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from merfish3danalysis.utils.ufish import DEFAULT_UFISH_MODEL, UFISH_MODEL_ALIASES
+from merfish3danalysis.utils.ufish import DEFAULT_UFISH_MODEL
 
 DEFAULT_TESTS_DATA_DIR = Path(__file__).resolve().parent / "data"
 PERFORMANCE_REPORT_ENV = "MERFISH3D_PERFORMANCE_REPORT"
@@ -38,14 +39,12 @@ DEFAULT_PREPROCESS_MODE = "decon"
 DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 F1_ACCURACY_ALLOWANCE = 0.02
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
-DEFAULT_MAGNITUDE_THRESHOLD = (0.9, 10.0)
-DEFAULT_MINIMUM_PIXELS_2D = 7
-DEFAULT_MINIMUM_PIXELS_3D = 28
-SIMULATION_AXIAL_NYQUIST_STEP_UM = 0.315
-SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
-    3.0: 0.7,
-    5.0: 0.2,
+SIMULATION_MAGNITUDE_THRESHOLDS = {
+    "0.315": (0.9, 10.0),
+    "1.0": (0.7, 10.0),
+    "1.5": (0.2, 10.0),
 }
+SIMULATION_MINIMUM_PIXELS = {"0.315": 28, "1.0": 7, "1.5": 7}
 F1_RADIUS_BY_AXIAL_SPACING_UM = {
     "0.315": 1.0,
     "1.0": 1.0,
@@ -130,44 +129,15 @@ EXHAUSTIVE_EXPECTED_F1_SCORES = {
 }
 
 
-def _nearest_nyquist_multiple(
-    thresholds_by_multiple: dict[float, float],
-    nyquist_multiple: float,
-) -> float:
-    """Return the configured Nyquist multiple nearest to a measured multiple."""
-
-    best_multiple = next(iter(thresholds_by_multiple))
-    best_distance = abs(best_multiple - nyquist_multiple)
-    for multiple in thresholds_by_multiple:
-        distance = abs(multiple - nyquist_multiple)
-        if distance < best_distance:
-            best_multiple = multiple
-            best_distance = distance
-    return best_multiple
-
-
 def _total_seconds(record: dict[str, Any]) -> float:
     """Return elapsed seconds from a performance record."""
-
     return float(record["total_seconds"])
 
 
 def _sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of a file without loading it into memory."""
-
     with path.open("rb") as file_handle:
         return hashlib.file_digest(file_handle, "sha256").hexdigest()
-
-
-def _ufish_label_from_weights_path(weights_path: Path) -> str:
-    """Return a stable test id for a cached U-FISH ONNX weights file."""
-
-    label = weights_path.stem
-    if label.startswith("v1.0.1-"):
-        label = label[len("v1.0.1-") :]
-    if label.endswith("_model"):
-        label = label[: -len("_model")]
-    return label.lower()
 
 
 def _simulation_dataset_case_id(item: tuple[str, str]) -> str:
@@ -184,7 +154,6 @@ def _simulation_dataset_case_id(item: tuple[str, str]) -> str:
     str
         Dataset variant name.
     """
-
     return item[0]
 
 
@@ -202,44 +171,10 @@ def _ufish_model_id(model: tuple[str, str | None]) -> str:
     str
         Model display name.
     """
-
     return model[0]
 
 
-def _available_ufish_models() -> tuple[tuple[str, str | None], ...]:
-    """Return every locally available distinct U-FISH model."""
-
-    models: list[tuple[str, str | None]] = []
-    seen_weights: set[str | None] = set()
-
-    for alias, weights_file in UFISH_MODEL_ALIASES.items():
-        if weights_file is None:
-            continue
-        weights_path = Path.home() / ".ufish" / weights_file
-        if not weights_path.exists():
-            continue
-        resolved = str(weights_path)
-        if resolved in seen_weights:
-            continue
-        models.append((alias, resolved))
-        seen_weights.add(resolved)
-
-    finetune_dir = Path.home() / ".ufish" / "finetune_models"
-    if finetune_dir.exists():
-        for weights_path in sorted(finetune_dir.glob("*.onnx")):
-            resolved = str(weights_path)
-            if resolved in seen_weights:
-                continue
-            models.append((_ufish_label_from_weights_path(weights_path), resolved))
-            seen_weights.add(resolved)
-
-    return tuple(models)
-
-
-UFISH_MODELS = _available_ufish_models()
-DEFAULT_UFISH_MODELS = tuple(
-    model for model in UFISH_MODELS if model[0] == DEFAULT_UFISH_MODEL
-)
+DEFAULT_UFISH_MODELS = ((DEFAULT_UFISH_MODEL, DEFAULT_UFISH_MODEL),)
 EXHAUSTIVE_SIMULATION_MATRIX = tuple(
     {
         "dataset_variant": dataset_variant,
@@ -282,101 +217,27 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
 @pytest.fixture(scope="session")
 def simulation_dataset_root(pytestconfig: pytest.Config) -> Path:
     """Resolve the simulation dataset root passed to pytest."""
-
     configured_root = pytestconfig.getoption("--simulation-data-root")
     if not configured_root:
         pytest.skip("Pass --simulation-data-root with the extracted Zenodo dataset.")
     root = Path(configured_root).expanduser().resolve()
-    if not root.exists():
-        pytest.skip(f"Local simulation dataset root does not exist: {root}")
-    return _normalize_dataset_root(root)
+    if not root.is_dir():
+        pytest.fail(f"Simulation dataset root is not a directory: {root}")
+    return root
 
 
 @pytest.fixture(scope="session")
 def simulation_dataset_dirs(simulation_dataset_root: Path) -> dict[str, Path]:
-    """Resolve local dataset directories for the simulation matrix."""
-
-    resolved_dirs: dict[str, Path] = {}
-    missing_variants: list[str] = []
-    for variant, dataset_dir in SIMULATION_DATASET_DIRS.items():
-        candidate = simulation_dataset_root / dataset_dir
-        if candidate.exists():
-            resolved_dirs[variant] = candidate
-        else:
-            missing_variants.append(f"{variant}:{dataset_dir}")
-
-    if missing_variants:
-        pytest.skip(
-            "Missing required simulation dataset directories under "
-            f"{simulation_dataset_root}: {missing_variants}"
-        )
-
-    fingerprint_errors: list[str] = []
-    for (
-        variant,
-        axial_spacing_um,
-    ), expected_hash in ZENODO_ALIGNED_IMAGE_SHA256.items():
-        image_path = resolved_dirs[variant] / axial_spacing_um / "aligned_1.tiff"
-        if not image_path.exists():
-            fingerprint_errors.append(f"missing {image_path}")
-            continue
-        actual_hash = _sha256_file(image_path)
-        if actual_hash != expected_hash:
-            fingerprint_errors.append(
-                f"{image_path}: expected {expected_hash}, got {actual_hash}"
-            )
-
-    if fingerprint_errors:
-        pytest.fail(
-            "Simulation data do not match Zenodo record 17274305:\n"
-            + "\n".join(fingerprint_errors)
-        )
-
-    return resolved_dirs
-
-
-def _normalize_dataset_root(root: Path) -> Path:
-    """Normalize the configured local simulation dataset root."""
-
-    example_dir = root / "example_16bit_flat"
-    if not example_dir.exists():
-        pytest.skip(
-            f"Could not find 'example_16bit_flat' under dataset root: {root}. "
-            "Pass --simulation-data-root with the extracted Zenodo dataset."
-        )
-
-    return root
-
-
-def _default_minimum_pixels_per_rna(axial_spacing_um: str) -> int:
-    """Return the default minimum-pixel threshold for a simulation spacing."""
-
-    if axial_spacing_um == "0.315":
-        return DEFAULT_MINIMUM_PIXELS_3D
-    return DEFAULT_MINIMUM_PIXELS_2D
-
-
-def _default_standard_magnitude_threshold(
-    axial_spacing_um: str,
-) -> tuple[float, float]:
-    """Return the sampling-aware default magnitude threshold for simulations."""
-
-    if axial_spacing_um == "0.315":
-        return DEFAULT_MAGNITUDE_THRESHOLD
-
-    nyquist_multiple = float(axial_spacing_um) / SIMULATION_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = _nearest_nyquist_multiple(
-        SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST,
-        nyquist_multiple,
-    )
-    lower_threshold = SIMULATION_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST[nearest_multiple]
-    return (lower_threshold, DEFAULT_MAGNITUDE_THRESHOLD[1])
+    """Resolve variant paths; each selected case validates only its inputs."""
+    return {
+        variant: simulation_dataset_root / directory
+        for variant, directory in SIMULATION_DATASET_DIRS.items()
+    }
 
 
 @pytest.fixture(scope="session")
 def simulation_api() -> dict[str, Any]:
     """Import callable APIs used by the former notebook workflow."""
-
     from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
         calculate_F1,
     )
@@ -405,7 +266,6 @@ def simulation_api() -> dict[str, Any]:
 @pytest.fixture(scope="session")
 def performance_records() -> list[dict[str, Any]]:
     """Collect and persist runtime/performance records across all approaches."""
-
     records: list[dict[str, Any]] = []
     yield records
 
@@ -453,7 +313,6 @@ def performance_records() -> list[dict[str, Any]]:
 
 def _link_or_copy(src: Path, dst: Path) -> None:
     """Use symlinks for large files when possible, with copy fallback."""
-
     try:
         dst.symlink_to(src.resolve())
     except OSError:
@@ -462,15 +321,28 @@ def _link_or_copy(src: Path, dst: Path) -> None:
 
 def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
     """Create an isolated workspace with only files needed for this pipeline."""
-
     missing_files = [
         filename
         for filename in REQUIRED_SIMULATION_FILES
-        if not (source_case_dir / filename).exists()
+        if not (source_case_dir / filename).is_file()
     ]
     if missing_files:
-        pytest.skip(
+        pytest.fail(
             f"Missing required simulation files in {source_case_dir}: {missing_files}"
+        )
+
+    variant = next(
+        name
+        for name, directory in SIMULATION_DATASET_DIRS.items()
+        if directory == source_case_dir.parent.name
+    )
+    image_path = source_case_dir / "aligned_1.tiff"
+    expected_hash = ZENODO_ALIGNED_IMAGE_SHA256[(variant, source_case_dir.name)]
+    actual_hash = _sha256_file(image_path)
+    if actual_hash != expected_hash:
+        pytest.fail(
+            "Simulation data do not match Zenodo record 17274305: "
+            f"{image_path}: expected {expected_hash}, got {actual_hash}"
         )
 
     case_root = work_root / source_case_dir.name
@@ -480,16 +352,6 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
         _link_or_copy(source_case_dir / filename, case_root / filename)
 
     return case_root
-
-
-def _calculate_f1_from_datastore(
-    case_root: Path, simulation_api: dict[str, Any], search_radius: float = 1.0
-) -> dict[str, float]:
-    """Calculate f1 from datastore."""
-    return simulation_api["calculate_F1"](
-        case_root,
-        search_radius=search_radius,
-    )
 
 
 def _run_simulation_preprocess(
@@ -588,7 +450,6 @@ def _prepare_preprocessed_magnitude_case(
     run_calibration_decode: bool = True,
 ) -> dict[str, Any]:
     """Prepare one simulation case once before decode-only magnitude sweeps."""
-
     dataset_variant = case_spec["dataset_variant"]
     axial_spacing_um = case_spec["axial_spacing_um"]
     ufish_model_name = case_spec["ufish_model_name"]
@@ -607,20 +468,13 @@ def _prepare_preprocessed_magnitude_case(
     )
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
-    if not source_case_dir.exists():
-        pytest.skip(
-            f"Dataset case missing for {dataset_variant} at {axial_spacing_um} um."
-        )
-
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:
         pytest.skip(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
@@ -638,7 +492,7 @@ def _prepare_preprocessed_magnitude_case(
         synthetic_chromatic_aberration=synthetic_chromatic_aberration,
     )
     if run_calibration_decode:
-        default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
+        default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
         calibration_label = f"{case_label}-calibration"
         calibration_start = time.perf_counter()
         print(f"[{calibration_label}] decode_pixels: start", flush=True)
@@ -709,7 +563,7 @@ def _run_simulation_decode_and_f1(
 
     start = time.perf_counter()
     print(f"[{case_label}] calculate_f1: start", flush=True)
-    f1_results = _calculate_f1_from_datastore(case_root, simulation_api, search_radius)
+    f1_results = simulation_api["calculate_F1"](case_root, search_radius=search_radius)
     timings_seconds["calculate_f1"] = time.perf_counter() - start
     print(
         f"[{case_label}] calculate_f1: done ({timings_seconds['calculate_f1']:.2f}s) -> {f1_results}",
@@ -799,7 +653,6 @@ def simulation_standard_dataset_case(
     tuple[str, str]
         Dataset variant name and cached dataset directory name.
     """
-
     return request.param
 
 
@@ -820,7 +673,6 @@ def simulation_standard_axial_spacing_um(
     str
         Axial spacing in microns.
     """
-
     return request.param
 
 
@@ -841,7 +693,6 @@ def simulation_standard_ufish_model(
     tuple[str, str | None]
         Model display name and optional local weights path.
     """
-
     return request.param
 
 
@@ -867,13 +718,11 @@ def simulation_standard_chromatic_case(
     tuple[str, bool, bool]
         Case label, synthetic aberration flag, and estimator flag.
     """
-
     return request.param
 
 
 def _assert_standard_result_valid(result: dict[str, Any]) -> None:
     """Validate stored outputs and independently calculate metrics from counts."""
-
     datastore_path = result["case_root"] / "sim_acquisition" / "qi2labdatastore"
     assert datastore_path.exists()
     assert isinstance(result["f1_results"], dict)
@@ -903,7 +752,6 @@ def _run_standard_simulation_case(
     work_root: Path,
 ) -> dict[str, Any]:
     """Run one standard simulation pipeline case."""
-
     dataset_variant, _ = dataset_case
     ufish_model_name, ufish_model = ufish_model_case
     chromatic_mode, synthetic_chromatic_aberration, estimate_chromatic_affines = (
@@ -915,20 +763,13 @@ def _run_standard_simulation_case(
     feature_predictor_threshold = DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
-    if not source_case_dir.exists():
-        pytest.skip(
-            f"Dataset case missing for {dataset_variant} at {axial_spacing_um} um."
-        )
-
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
     if search_radius is None:
         pytest.skip(
             f"No F1 search radius configured for axial spacing {axial_spacing_um}."
         )
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     case_root = _prepare_case_workspace(source_case_dir, work_root)
     case_label = (
@@ -995,8 +836,128 @@ def _run_standard_simulation_case(
 
 @pytest.mark.integration
 @pytest.mark.gpu
-def test_qi2lab_commands_decode_simulation_ground_truth(
+def test_zhuang_local_registration_on_published_simulation(
     simulation_dataset_dirs, simulation_api, tmp_path
+):
+    """Run the Zhuang example's local registration on a real acquisition."""
+    case_root = _prepare_case_workspace(
+        simulation_dataset_dirs["uniform"] / "0.315", tmp_path
+    )
+    simulation_api["convert_simulation"](case_root)
+    acquisition_root = case_root / "sim_acquisition"
+    simulation_api["convert_data"](acquisition_root)
+    example = runpy.run_path(
+        str(
+            Path(__file__).resolve().parents[1]
+            / "examples/zhuang_lab/02_register_and_deconvolve.py"
+        )
+    )
+    result = CliRunner().invoke(example["app"], [str(acquisition_root), "--local-only"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for round_id in datastore.round_ids:
+        transform = datastore.load_local_round_transform_zyx_um(0, round_id)
+        assert transform is not None and np.isfinite(transform).all()
+        assert (
+            datastore.load_local_deconvolved_fiducial_image(0, round_id, None) is None
+        )
+    for bit in datastore.bit_ids:
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+    assert datastore.load_global_fiducial_projection(False) is None
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+def test_qi2lab_fiducial_only_then_no_decon_preprocessing(
+    simulation_dataset_dirs, simulation_api, tmp_path
+):
+    """Exercise both preprocessing modes on the published acquisition."""
+    from merfish3danalysis.cli.qi2lab_microscopes import preprocess
+
+    case_root = _prepare_case_workspace(
+        simulation_dataset_dirs["uniform"] / "0.315", tmp_path
+    )
+    simulation_api["convert_simulation"](case_root)
+    acquisition_root = case_root / "sim_acquisition"
+    simulation_api["convert_data"](acquisition_root)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        preprocess.app, [str(acquisition_root), "--fiducial-registration-only"]
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert not datastore.datastore_state["LocalRegistered"]
+    for round_id in datastore.round_ids:
+        assert datastore.load_local_round_transform_zyx_um(0, round_id) is not None
+        assert (
+            datastore.load_local_deconvolved_fiducial_image(0, round_id, None)
+            is not None
+        )
+    assert datastore.load_global_fiducial_projection(False) is not None
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+        assert datastore.load_local_feature_predictor_image(0, bit, None) is None
+        assert datastore.load_local_feature_predictor_spots(0, bit) is None
+
+    result = runner.invoke(preprocess.app, [str(acquisition_root), "--no-decon"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_deconvolved_readout_image(0, bit, None) is None
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+
+    first_bit = datastore.bit_ids[0]
+    original_prediction = datastore.load_local_feature_predictor_image(
+        0, first_bit, False
+    )
+    original_spots = datastore.load_local_feature_predictor_spots(0, first_bit)
+    result = runner.invoke(
+        preprocess.app, [str(acquisition_root), "--fiducial-registration-only"]
+    )
+    assert result.exit_code == 0, (result.output, result.exception)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        assert datastore.load_local_feature_predictor_image(0, bit, None) is not None
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+    np.testing.assert_array_equal(
+        datastore.load_local_feature_predictor_image(0, first_bit, False),
+        original_prediction,
+    )
+    import pandas as pd
+
+    pd.testing.assert_frame_equal(
+        datastore.load_local_feature_predictor_spots(0, first_bit), original_spots
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize(
+    "decode_run_key,normalization_features,check_exclusions",
+    [
+        pytest.param(None, "all", False, id="default-run-all-features"),
+        pytest.param("integration_run", None, False, id="named-run-default-features"),
+        pytest.param("exclusion_baseline", None, True, id="excluded-cells"),
+    ],
+)
+def test_qi2lab_commands_decode_simulation_ground_truth(
+    simulation_dataset_dirs,
+    simulation_api,
+    tmp_path,
+    decode_run_key,
+    normalization_features,
+    check_exclusions,
 ):
     """Run the standard qi2lab commands on the published Nyquist acquisition."""
     from merfish3danalysis.cli.qi2lab_microscopes import pixeldecode, preprocess
@@ -1023,22 +984,53 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
     np.testing.assert_allclose(origin, [0, -10.37, -10.37])
     np.testing.assert_allclose(spacing, [0.315, 0.081, 0.081])
     assert datastore.datastore_state["LocalRegistered"]
+    for bit in datastore.bit_ids:
+        corrected = datastore.load_local_corrected_image(0, bit=bit, return_future=None)
+        deconvolved = datastore.load_local_deconvolved_readout_image(0, bit, None)
+        prediction = datastore.load_local_feature_predictor_image(0, bit, None)
+        assert deconvolved is not None and deconvolved.shape == corrected.shape
+        assert prediction is not None and prediction.shape == corrected.shape
+        assert datastore.load_local_feature_predictor_spots(0, bit) is not None
 
-    result = runner.invoke(
-        pixeldecode.app,
-        [
-            str(acquisition_root),
-            "--normalization-features",
-            "all",
-            "--minimum-pixels-per-RNA",
-            "28",
-            "--magnitude-threshold",
-            "0.9",
-            "10",
-        ],
-    )
+    arguments = [
+        str(acquisition_root),
+        "--minimum-pixels-per-RNA",
+        "28",
+        "--magnitude-threshold",
+        "0.9",
+        "10",
+    ]
+    if normalization_features is not None:
+        arguments.extend(["--normalization-features", normalization_features])
+    if decode_run_key is not None:
+        arguments.extend(["--decode-run-key", decode_run_key])
+    result = runner.invoke(pixeldecode.app, arguments)
     assert result.exit_code == 0, (result.output, result.exception)
-    scores = _calculate_f1_from_datastore(case_root, simulation_api)
+    datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
+    assert (
+        datastore.load_local_decoded_spots(tile=0, decode_run_key=decode_run_key)
+        is not None
+    )
+    assert (
+        datastore.load_global_filtered_decoded_spots(decode_run_key=decode_run_key)
+        is not None
+    )
+    other_run = "integration_run" if decode_run_key is None else None
+    assert datastore.load_local_decoded_spots(tile=0, decode_run_key=other_run) is None
+    assert (
+        datastore.load_global_filtered_decoded_spots(decode_run_key=other_run) is None
+    )
+    for kind in ("global", "iterative"):
+        normalization, background = datastore.load_decode_normalization_vectors(
+            decode_run_key, kind
+        )
+        assert normalization is not None
+        assert background is not None
+        metadata = datastore.load_decode_normalization_metadata(decode_run_key, kind)
+        assert metadata["normalization_features"] == (normalization_features or "cells")
+    scores = simulation_api["calculate_F1"](
+        case_root, search_radius=1.0, decode_run_key=decode_run_key
+    )
     tp, fp, fn = (
         scores[key] for key in ("True Positives", "False Positives", "False Negatives")
     )
@@ -1050,6 +1042,137 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         STANDARD_EXPECTED_F1_SCORES[("uniform", "0.315", "no-chromatic")]
         - F1_ACCURACY_ALLOWANCE
     )
+
+    if decode_run_key is None:
+        first_bit = datastore.bit_ids[0]
+        deconvolved = datastore.load_local_deconvolved_readout_image(
+            0, first_bit, False
+        )
+        result = runner.invoke(
+            preprocess.app, [str(acquisition_root), "--no-decon", "--no-overwrite"]
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+        datastore = simulation_api["qi2labDataStore"](
+            acquisition_root / "qi2labdatastore"
+        )
+        assert not pixeldecode._readouts_are_deconvolved(datastore)
+        for bit in datastore.bit_ids:
+            corrected = datastore.load_local_corrected_image(
+                0, bit=bit, return_future=False
+            )
+            np.testing.assert_array_equal(
+                datastore.load_local_readout_image(0, bit, False), corrected
+            )
+            assert (
+                datastore.load_local_image_metadata(
+                    0, bit=bit, image_names=("feature_predictor_data",)
+                )["source_image"]
+                == "corrected_data"
+            )
+            assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+        np.testing.assert_array_equal(
+            datastore.load_local_fusion_image(0, bit=first_bit)[:],
+            datastore.load_local_corrected_image(0, bit=first_bit, return_future=False),
+        )
+        np.testing.assert_array_equal(
+            datastore.load_local_deconvolved_readout_image(0, first_bit, False),
+            deconvolved,
+        )
+
+        no_decon_run = "no_decon_run"
+        result = runner.invoke(
+            pixeldecode.app, [*arguments, "--decode-run-key", no_decon_run]
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+        scores = simulation_api["calculate_F1"](
+            case_root, search_radius=1.0, decode_run_key=no_decon_run
+        )
+        assert scores["F1 Score"] >= (
+            EXHAUSTIVE_EXPECTED_F1_SCORES[("uniform", "0.315", "no-decon")]
+            - F1_ACCURACY_ALLOWANCE
+        )
+
+    if check_exclusions:
+        import pandas as pd
+        from roifile import ImagejRoi, roiwrite
+        from shapely.geometry import Point, Polygon
+
+        from merfish3danalysis.PixelDecoder import PixelDecoder
+
+        # Reuse the real first optimization iteration to select an abundant,
+        # nonblank gene and a cell ROI containing only part of the field.
+        baseline = pd.read_parquet(
+            datastore.decoded_temporary_dir(decode_run_key, iteration=0)
+            / "tile000_temp_decoded.parquet"
+        )
+        genes = baseline["gene_id"].astype("string")
+        excluded_gene = (
+            genes[~genes.str.lower().str.startswith("blank")].value_counts().index[0]
+        )
+        x_min, x_max = (
+            baseline["global_x"].min() - 1,
+            baseline["global_x"].quantile(0.75),
+        )
+        y_min, y_max = baseline["global_y"].min() - 1, baseline["global_y"].max() + 1
+        roi = ImagejRoi.frompoints(
+            np.array([[x_min, y_min], [x_max, y_min], [x_max, y_max], [x_min, y_max]])
+        )
+        roiwrite(datastore.cellpose_global_rois_path(), [roi], mode="w")
+        polygon = Polygon(next(iter(datastore.load_global_cellpose_roi_zip().values())))
+
+        run = "excluded_cells"
+        decoder = PixelDecoder(
+            datastore,
+            merfish_bits=datastore.num_bits,
+            num_gpus=1,
+            verbose=0,
+            decode_run_key=run,
+            normalization_features="cells",
+        )
+        decoder.optimize_normalization_by_decoding(
+            n_random_tiles=1,
+            n_iterations=1,
+            minimum_pixels=28,
+            magnitude_threshold=(0.9, 10),
+            excluded_gene_ids=[excluded_gene, excluded_gene],
+        )
+
+        optimization = pd.read_parquet(
+            datastore.decoded_temporary_dir(run, iteration=0)
+            / "tile000_temp_decoded.parquet"
+        )
+        assert (genes == excluded_gene).any()
+        assert not (optimization["gene_id"] == excluded_gene).any()
+        inside = np.array(
+            [
+                polygon.covers(Point(x, y))
+                for x, y in zip(
+                    optimization["global_x"], optimization["global_y"], strict=True
+                )
+            ]
+        )
+        assert inside.any() and (~inside).any()
+        pd.testing.assert_frame_equal(
+            decoder._df_barcodes_loaded.reset_index(drop=True),
+            optimization.loc[inside].reset_index(drop=True),
+        )
+        metadata = datastore.load_decode_normalization_metadata(run, "iterative")
+        assert metadata["excluded_gene_ids"] == [excluded_gene]
+        assert metadata["normalization_features"] == "cells"
+        global_cells, _ = datastore.load_decode_normalization_vectors(run, "global")
+        global_all, _ = datastore.load_decode_normalization_vectors(
+            decode_run_key, "global"
+        )
+        assert not np.allclose(global_cells, global_all)
+
+        # Exclusions apply to fitting only; the final decoder still calls that gene.
+        decoder.decode_one_tile(
+            tile_idx=0,
+            minimum_pixels=28,
+            magnitude_threshold=(0.9, 10),
+            normalization_method="iterative",
+        )
+        assert (decoder.decoded_barcodes["gene_id"] == excluded_gene).any()
 
 
 @pytest.mark.integration
@@ -1065,7 +1188,6 @@ def test_simulation_standard_matrix(
     tmp_path: Path,
 ) -> None:
     """Require ground-truth accuracy for both affine and SOFIMA processing."""
-
     affine_result = _run_standard_simulation_case(
         simulation_dataset_dirs,
         simulation_api,
@@ -1103,15 +1225,11 @@ def test_simulation_standard_matrix(
 
     affine_f1 = round(affine_result["performance_metrics"]["f1_score"], 3)
     sofima_f1 = round(sofima_result["performance_metrics"]["f1_score"], 3)
-    if sofima_f1 < affine_f1:
-        pytest.exit(
-            (
-                "SOFIMA standard simulation integration failure: "
-                f"{sofima_result['case_label']} F1={sofima_f1:.3f} "
-                f"is lower than {affine_result['case_label']} F1={affine_f1:.3f}."
-            ),
-            returncode=1,
-        )
+    assert sofima_f1 >= affine_f1, (
+        "SOFIMA standard simulation integration failure: "
+        f"{sofima_result['case_label']} F1={sofima_f1:.3f} "
+        f"is lower than {affine_result['case_label']} F1={affine_f1:.3f}."
+    )
 
 
 @pytest.fixture(
@@ -1129,7 +1247,6 @@ def test_simulation_standard_matrix(
 )
 def simulation_exhaustive_case_spec(request: pytest.FixtureRequest) -> dict[str, Any]:
     """Parametrize the exhaustive local simulation base cases."""
-
     return request.param
 
 
@@ -1141,7 +1258,6 @@ def simulation_full_preprocessed_case(
     tmp_path: Path,
 ) -> dict[str, Any]:
     """Prepare one exhaustive simulation case before decoding."""
-
     return _prepare_preprocessed_magnitude_case(
         simulation_dataset_dirs,
         simulation_api,
@@ -1158,7 +1274,6 @@ def simulation_full_case_result(
     simulation_full_preprocessed_case: dict[str, Any],
 ) -> dict[str, Any]:
     """Decode and score one exhaustive simulation case."""
-
     case_root = simulation_full_preprocessed_case["case_root"]
     case_spec = simulation_full_preprocessed_case["case_spec"]
     case_label = simulation_full_preprocessed_case["case_label"]
@@ -1174,10 +1289,8 @@ def simulation_full_case_result(
     chromatic_mode = case_spec["chromatic_mode"]
     synthetic_chromatic_aberration = case_spec["synthetic_chromatic_aberration"]
     estimate_chromatic_affines = case_spec["estimate_chromatic_affines"]
-    default_minimum_pixels = _default_minimum_pixels_per_rna(axial_spacing_um)
-    default_magnitude_threshold = _default_standard_magnitude_threshold(
-        axial_spacing_um
-    )
+    default_minimum_pixels = SIMULATION_MINIMUM_PIXELS[axial_spacing_um]
+    default_magnitude_threshold = SIMULATION_MAGNITUDE_THRESHOLDS[axial_spacing_um]
 
     f1_results, decode_timings, performance_metrics = _run_simulation_decode_and_f1(
         case_root,
@@ -1245,7 +1358,6 @@ def test_simulation_exhaustive_matrix(
     simulation_full_case_result: dict[str, Any],
 ) -> None:
     """Run the exhaustive simulation matrix with package-default settings."""
-
     _assert_standard_result_valid(simulation_full_case_result)
     performance_metrics = simulation_full_case_result["performance_metrics"]
 

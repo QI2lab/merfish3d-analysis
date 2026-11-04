@@ -25,7 +25,7 @@ dependencies = [
     "ryomen",
     "numpy",
     "scipy",
-    "pandas",
+    "pandas>=3",
     "cupy-cuda12x[ctk]>=14.1.1; sys_platform == 'linux'",
     "cucim-cu12==26.6.*; sys_platform == 'linux'",
     "pylibraft-cu12==26.6.*; sys_platform == 'linux'",
@@ -50,10 +50,12 @@ dependencies = [
     "rtree",
     "numba",
     "zarr",
-    "fastparquet",
+    "pyarrow",
+    "filelock",
     "joblib",
     "matplotlib",
-    "yaozarrs[write-tensorstore,io] @ git+https://github.com/dpshepherd/yaozarrs.git@fix-v3-extra-attributes-location",
+    # NGFF 0.6 support is unreleased; pin upstream for the storage migration.
+    "yaozarrs[write-tensorstore,io] @ git+https://github.com/imaging-formats/yaozarrs.git@8ea2166bb0fcf58f55c2caebe367913ce990fdbf",
 ]
 
 [tool.uv.sources]
@@ -86,6 +88,10 @@ sources = ["src"]
 [tool.uv]
 default-groups = []
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".*", "build", "dist", "data"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -100,8 +106,7 @@ select = [
     "E", # style errors
     "W", # style warnings
     "F", # flakes
-    # "D",    # pydocstyle
-    "D417", # Missing argument descriptions in Docstrings
+    "D",    # NumPy-style docstrings
     "I",    # isort
     "UP",   # pyupgrade
     "C4",   # flake8-comprehensions

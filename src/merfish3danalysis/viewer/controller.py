@@ -160,27 +160,21 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.warp_preset_combo = QtWidgets.QComboBox()
         self.warp_preset_combo.addItems(
             [
-                "Decode-equivalent",
+                "Full",
                 "Native",
                 "Affine only",
-                "Affine + chromatic",
-                "Full",
             ]
         )
         self.warp_preset_combo.currentTextChanged.connect(self._apply_warp_preset)
         self._add_control_row(
             control_layout, self.warp_preset_label, self.warp_preset_combo
         )
-        self.chromatic_checkbox = QtWidgets.QCheckBox("Chromatic affine")
         self.stage_affine_checkbox = QtWidgets.QCheckBox("Stage / round affine")
         self.sofima_checkbox = QtWidgets.QCheckBox("SOFIMA residual")
-        self.chromatic_checkbox.setChecked(True)
         self.stage_affine_checkbox.setChecked(True)
         self.sofima_checkbox.setChecked(True)
-        self.chromatic_checkbox.toggled.connect(self._mark_local_selection_pending)
         self.stage_affine_checkbox.toggled.connect(self._mark_local_selection_pending)
         self.sofima_checkbox.toggled.connect(self._mark_local_selection_pending)
-        control_layout.addWidget(self.chromatic_checkbox)
         control_layout.addWidget(self.stage_affine_checkbox)
         control_layout.addWidget(self.sofima_checkbox)
 
@@ -583,7 +577,6 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         for widget in (
             self.warp_preset_label,
             self.warp_preset_combo,
-            self.chromatic_checkbox,
             self.stage_affine_checkbox,
             self.sofima_checkbox,
             self.gpu_label,
@@ -1120,16 +1113,13 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
             Preset name from the combo box.
         """
         options = {
-            "Decode-equivalent": (True, True, True),
-            "Native": (False, False, False),
-            "Affine only": (False, True, False),
-            "Affine + chromatic": (True, True, False),
-            "Full": (True, True, True),
+            "Native": (False, False),
+            "Affine only": (True, False),
+            "Full": (True, True),
         }.get(preset)
         if options is None:
             return
-        chromatic, stage_affine, sofima = options
-        self.chromatic_checkbox.setChecked(chromatic)
+        stage_affine, sofima = options
         self.stage_affine_checkbox.setChecked(stage_affine)
         self.sofima_checkbox.setChecked(sofima)
         self._mark_local_selection_pending()
@@ -1186,9 +1176,8 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
     def _warp_options(self) -> WarpChainOptions:
         """Return selected local warp-chain options."""
         if self.view_mode_combo.currentText() == "Local native":
-            return WarpChainOptions(False, False, False)
+            return WarpChainOptions(False, False)
         return WarpChainOptions(
-            chromatic=self.chromatic_checkbox.isChecked(),
             stage_affine=self.stage_affine_checkbox.isChecked(),
             sofima=self.sofima_checkbox.isChecked(),
         )

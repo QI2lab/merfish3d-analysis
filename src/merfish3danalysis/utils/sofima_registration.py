@@ -38,7 +38,13 @@ class SofimaRegistrationConfig:
     mesh_final_cap: float = 10.0
 
     def as_metadata(self) -> dict[str, Any]:
-        """Return JSON-compatible config metadata."""
+        """Return JSON-compatible config metadata.
+
+        Returns
+        -------
+        dict
+            Configuration values with tuples converted to lists.
+        """
         metadata = asdict(self)
         metadata["patch_size_zyx"] = [int(v) for v in self.patch_size_zyx]
         metadata["subpixel_offsets"] = [float(v) for v in self.subpixel_offsets]
@@ -335,6 +341,28 @@ def _refine_flow_vectors_subpixel(
         batch_indices_zyx: jnp.ndarray,
         batch_vectors_xyz: jnp.ndarray,
     ) -> jnp.ndarray:
+        """Select subpixel flow offsets with normalized patch matching.
+
+        Parameters
+        ----------
+        pre_image, post_image : jax.Array
+            Moving and fixed image data in ZYX order, respectively.
+        patch_grid_zyx : jax.Array
+            Coordinates within each ZYX patch.
+        candidate_offsets : jax.Array
+            Candidate subpixel offsets in ZYX order.
+        step : jax.Array
+            Flow lattice stride in ZYX order.
+        batch_indices_zyx : jax.Array
+            Lattice indices for the flow vectors in this batch.
+        batch_vectors_xyz : jax.Array
+            Initial XYZ displacement vectors in pixels.
+
+        Returns
+        -------
+        jax.Array
+            Refined XYZ displacement vectors in pixels.
+        """
         post_starts = batch_indices_zyx.astype(jnp.float32) * step
         batch_vectors_zyx = batch_vectors_xyz[:, [2, 1, 0]]
         base_pre_starts = post_starts + batch_vectors_zyx

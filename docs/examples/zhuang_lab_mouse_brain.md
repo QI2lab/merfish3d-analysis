@@ -51,9 +51,6 @@ zhuang-data/
             └── spots_mouse1sample1.csv
 ```
 
-The scripts accept paths as command-line inputs. They do not contain
-machine-specific data paths.
-
 ## Determine image and stage orientation
 
 Microscope acquisition packages differ in their camera-axis and stage-axis
@@ -107,14 +104,6 @@ last two image axes:
 ```python
 flipped_image = np.swapaxes(raw_image, axes=(-2, -1))
 ```
-
-The equivalent operation on stage positions would be:
-
-```python
-stage_positions_um = np.swapaxes(stage_positions_um, axes=(-2, -1))
-```
-
-Only one of these transformations should be applied.
 
 ## Understand the acquisition parameters
 
@@ -179,16 +168,10 @@ uv run python examples/zhuang_lab/02_register_and_deconvolve.py \
 The default invocation performs both local and global stages. Use
 `--local-only` or `--global-only` when resuming one stage.
 
-The Zhuang script calls the shared `DataRegistration.global_register()` method
-with ZYX binning `(1, 3, 3)`, keeping the native axial sampling for this dataset.
-The same registration, transform storage, and fusion code serves the qi2lab
-workflow. Fusion preserves the 1.5 µm Z
-spacing and downsamples Y/X by `round(1.5 / 0.108, 1) = 13.9`, giving
-1.501 µm lateral spacing after calibration rounding. The fused fiducial
-OME-Zarr and `segmentation/cellpose/fiducial_max_projection.ome.tiff` carry
-this spacing; Cellpose uses it when transforming pixel ROIs into global
-coordinates and records the actual downsampling in the mask metadata.
-To regenerate global transforms and the fused fiducial image, run:
+Global registration uses ZYX binning `(1, 3, 3)`. Fiducial fusion retains the
+1.5 µm Z spacing and downsamples Y/X by `round(1.5 / 0.108, 1) = 13.9`, giving
+1.501 µm lateral spacing. The fused image and projection retain this spacing for
+the Cellpose ROI coordinates. To regenerate global transforms and fusion, run:
 
 ```bash
 uv run python examples/zhuang_lab/02_register_and_deconvolve.py \
@@ -220,11 +203,9 @@ The example uses normalization percentiles `[0.5, 99.5]`, flow threshold
 preserves the original sign convention: dictionary `cellprob_threshold=1.0`
 passes `-1.0` to Cellpose. Inference runs in 2D (`do_3D=False`).
 
-The example loads the saved maximum-Z TIFF when available, otherwise computes
-it from the fused volume. It saves masks with the actual fused-to-native spacing
-ratio, exports pixel-space ImageJ ROIs, and uses the fused spacing, origin, and
-affine to write global ROIs. The shared `qi2lab-segment` CLI remains available
-separately with its own options and defaults.
+The example saves Cellpose masks as labels on the maximum-Z projection and
+exports ImageJ ROIs in pixel and global coordinates. The shared
+`qi2lab-segment` CLI is also available with its own options and defaults.
 
 ## Decode transcripts
 

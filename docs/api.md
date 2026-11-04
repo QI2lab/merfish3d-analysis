@@ -1,312 +1,125 @@
 # Current API notes
 
-This page summarizes the current processing defaults and recent API behavior.
-Use the API reference for full signatures, and use this page for the practical
-defaults that affect most pipelines.
+See the [API reference](reference/index.md) for full signatures and the
+[workflow](workflow.md) for the processing commands.
 
 ## U-FISH model selection
 
 `DataRegistration` uses the `simfish` U-FISH weights when `ufish_model=None`.
+Other aliases include `merfish`, `seqfish`, `deepspot`, and `exseq`. You can
+also supply a local `.onnx` or `.pth` path.
 
 ```python
 from merfish3danalysis.DataRegistration import DataRegistration
 
-registration = DataRegistration(
-    datastore=datastore,
-    decon_readout=False,
-    ufish_model=None,  # uses simfish weights
-)
+registration = DataRegistration(datastore=datastore, ufish_model=None)
 ```
 
-Known aliases include `simfish`, `merfish`, `seqfish`, `deepspot`, and `exseq`.
-A local `.onnx` or `.pth` path can also be supplied.
-
-## RLGC deconvolution
-
-The public RLGC API is now the non-accelerated reference-style implementation:
+## RLGC deconvolution and PSFs
 
 ```python
 from merfish3danalysis.utils.rlgc import chunked_rlgc
 
-deconvolved = chunked_rlgc(
-    image=image_zyx,
-    psf=psf_zyx,
-    gpu_id=0,
-    crop_yx=2048,
-)
+deconvolved = chunked_rlgc(image=image_zyx, psf=psf_zyx, gpu_id=0, crop_yx=2048)
 ```
 
-Current behavior:
+`crop_yx` sets the lateral tile size; Z is processed as a full stack. RLGC
+reduces the tile size if a GPU allocation fails and normalizes the PSF unless
+`normalize_psf=False`. Datastore creation generates a 3D PSF for each channel,
+including for experiments decoded in 2D.
 
-- Biggs-Andrews acceleration has been removed from the public API.
-- `crop_yx` controls the retained lateral tile size.
-- `crop_z` is no longer supported. Z is processed as a full stack.
-- If a GPU memory allocation fails, RLGC retries with `crop_yx` reduced by
-  `128` pixels until the tile fits or the PSF support is reached.
-- `DataRegistration` remembers the successful fallback `crop_yx` inside the
-  worker, so later deconvolutions do not repeatedly start from a too-large tile.
-- PSFs are normalized to unit sum inside RLGC unless `normalize_psf=False` is
-  passed for diagnostics.
+## Preprocessing
 
-## Datastore PSFs
+The preprocessing CLI deconvolves fiducial and readout images and enables
+SOFIMA registration by default. Use `--no-decon` to disable readout
+deconvolution. When using `DataRegistration` directly, `decon_readout=False`
+is the default.
 
-Datastore creation writes a 3D PSF for each channel. The PSF z-size follows the
-stored image z-size. This is true even when the datastore is marked as a `2D`
-experiment for downstream pixel decoding.
-
-The `2D` or `3D` microscope designation controls downstream decoding policy; it
-does not force the deconvolution PSF to be a single plane.
-
-## Preprocessing CLI
-
-The preprocessing command intentionally exposes only high-level controls:
+To rerun global registration and fusion without repeating local preprocessing:
 
 ```bash
-uv run qi2lab-preprocess \
-  /path/to/experiment \
-  --num-gpus 2
+uv run qi2lab-preprocess /path/to/experiment --global-registration-only --overwrite
 ```
 
-The preprocessing CLI enables fiducial and readout deconvolution by default,
-writes feature prediction for every readout bit, and enables SOFIMA residual
-registration. To deconvolve only the fiducial channel, pass `--no-decon`;
-this disables readout deconvolution without changing fiducial deconvolution:
+To recompute local fiducial registration and SOFIMA fields before global
+registration and fusion, while retaining readout outputs:
 
 ```bash
-uv run qi2lab-preprocess \
-  /path/to/experiment \
-  --num-gpus 2 \
-  --no-decon
+uv run qi2lab-preprocess /path/to/experiment --fiducial-registration-only --overwrite
 ```
 
-This differs from constructing `DataRegistration` directly, where
-`decon_readout=False` is the default. Fiducial rounds are
-registered laterally on a max-Z projection and then in XYZ. SOFIMA flow fields
-are estimated after affine fiducial alignment and are accepted only when they
-improve the fiducial alignment error compared with affine alone. Readout and
-fiducial image arrays remain in their native local storage; decode and viewer
-paths apply the selected transform chain when they need aligned data.
+## Pixel decoding
 
-Global registration follows the multiview-stitcher registration and fusion
-workflow. Stage metadata initializes the tile geometry, CPU registration
-refines the global tile transforms, and the fused fiducial OME-Zarr is written
-directly to disk with the multiview-stitcher CPU fusion backend. Both fiducial
-fusion and `qi2lab-fuseall` use lossless Blosc-Zstd with bitshuffle at level 1 by
-default. The all-channel command also accepts `--compression blosc-lz4` or
-`--compression zstd` and `--compression-level` from 1 through 9. All pyramid
-levels remain compressed; see the [fusion workflow](workflow.md#fuse-all-channels).
+Use `--decode-mode auto|2d|3d` to select decoding policy. `auto` follows the
+datastore microscope type. The `--normalization-features cells|all` option
+selects features used for normalization; `cells` is the default and uses all
+features if segmentation is absent. An empty segmentation selects no features.
+Rerun optimization when changing this setting; `--reprocess-existing` only
+refilters saved decoding.
 
-To rerun the global registration and fusion stage on an existing datastore
-without redoing local preprocessing:
+Chromatic affine estimation during iterative normalization is optional:
 
 ```bash
-uv run qi2lab-preprocess \
-  /path/to/experiment \
-  --num-gpus 2 \
-  --global-registration-only \
-  --overwrite
+uv run qi2lab-decode /path/to/experiment --estimate-chromatic-affines
 ```
 
-To regenerate the complete fiducial registration chain while preserving
-existing readout deconvolution and U-FISH outputs, run:
+To exclude known failed codewords from iterative optimization, supply a UTF-8
+file containing one codebook `gene_id` per line. Blank lines and lines starting
+with `#` are ignored.
 
 ```bash
-uv run qi2lab-preprocess \
-  /path/to/experiment \
-  --num-gpus 1 \
-  --fiducial-registration-only \
-  --overwrite
+uv run qi2lab-decode /path/to/experiment --optimization-exclusions-file bad_codewords.txt
 ```
 
-This recomputes every local affine transform and SOFIMA field, then reruns
-global registration and global fiducial fusion.
+Relative paths are resolved in the datastore directory. Excluded codewords remain
+in the codebook and final decoding output. Use `--filter-method blank_fraction|lr`
+to select the transcript filter.
 
-Registration-specific tuning is kept in the Python API rather than exposed as
-routine CLI flags.
+## Cellpose segmentation
 
-## Pixel Decoding CLI
-
-Use `--decode-mode auto|2d|3d` to control decoding policy. `auto` follows the
-datastore microscope type; explicit modes also select the matching default
-minimum-pixel, magnitude, and feature-predictor thresholds.
-
-Use `--normalization-features all|cells` to choose the features used to fit
-global and iterative normalization:
-
-```bash
-uv run qi2lab-decode /path/to/experiment --normalization-features all
-uv run qi2lab-decode /path/to/experiment --normalization-features cells
-```
-
-The default `cells` uses features inside the saved Cellpose outlines, including
-their boundaries. Global percentile estimation samples the corresponding tile
-pixels across Z; iterative fitting uses decoded feature positions in global XY.
-If no segmentation exists, it uses all features. An existing empty segmentation
-selects no features. `all` bypasses the cell-mask restriction entirely.
-
-This setting controls normalization fitting, including optional chromatic
-estimation during optimization; it does not spatially filter the final decoded
-feature export. Both GPU worker paths receive the selection. When switching
-feature modes, rerun optimization (omit `--skip-optimization`): cached iterative
-vectors from the other mode are rejected, and global vectors are recalculated.
-`--reprocess-existing` only refilters saved decoding and does not refit normalization.
-
-Chromatic affine estimation is opt-in during iterative normalization:
-
-```bash
-uv run qi2lab-decode \
-  /path/to/experiment \
-  --num-gpus 2 \
-  --estimate-chromatic-affines
-```
-
-The estimator uses decoded RNA on-bit centroids from valid codewords only.
-Blank codewords are excluded before pairing transcripts across wavelengths.
-The fitting thresholds, RANSAC settings, and centroid support are exposed as
-`--chromatic-*` flags and map directly to
-`ChromaticAffineEstimationConfig`.
-
-Codewords with known biochemical failures can be suppressed while fitting the
-iterative normalization vectors. Put a UTF-8 text file in the qi2lab datastore
-directory with one codebook `gene_id` per line; blank lines and lines beginning
-with `#` are ignored:
-
-```text
-# failed probes
-GeneA
-GeneB
-```
-
-```bash
-uv run qi2lab-decode \
-  /path/to/experiment \
-  --optimization-exclusions-file bad_codewords.txt
-```
-
-Relative filenames are resolved inside the datastore directory. Absolute paths
-remain supported. The full codebook remains in the nearest-neighbor search so
-excluded signal is not reassigned to another gene. The exclusion applies only
-to iterative optimization; final tile decoding still reports these codewords.
-
-Transcript filtering now uses either the blank-fraction filter or the logistic
-regression filter selected by `--filter-method blank_fraction|lr`. The removed
-enriched blank-barcode filtering path and its options are no longer part of the
-CLI flow.
-
-## Cellpose Segmentation CLI
-
-`qi2lab-segment` defaults to `cpsam_v2`, matching the current Cellpose-SAM v2
-GUI model. The default diameter is `None`, so the command does not force a cell
-size unless `--diameter` is explicitly provided. The fused fiducial max
-projection is passed to Cellpose without rescaling to 8-bit; Cellpose handles
-normalization through the supplied percentile settings.
-
-Use `--min-cell-area-um2` to exclude small outlines from the global ImageJ ROI
-ZIP used for Cellpose boundaries in the viewer and downstream decoding. The
-cutoff is the enclosed XY polygon area in square microns, after applying the
-fused image spacing and global transform. Outlines at the cutoff are retained;
-the default `0` disables this filter. Cellpose's `--min-size` remains a separate
-minimum mask size in pixels during inference.
-
-For example, to exclude outlines smaller than 20 µm² during segmentation:
+`qi2lab-segment` defaults to the `cpsam_v2` model and leaves diameter unset.
+Use `--min-cell-area-um2` to exclude small outlines from the global Cellpose
+boundaries. This is separate from `--min-size`, the minimum mask size in pixels.
 
 ```bash
 uv run qi2lab-segment /path/to/experiment --min-cell-area-um2 20
 ```
 
-To apply or adjust the cutoff on existing extracted outlines without rerunning
-Cellpose or loading the fused image:
+To change the cutoff without rerunning Cellpose:
 
 ```bash
 uv run qi2lab-segment /path/to/experiment --outlines-only --min-cell-area-um2 20
 ```
 
-This regenerates `segmentation/cellpose/imagej_rois/global_coords_rois.zip`
-from the saved `pixel_spacing_rois.zip` and fused-image transform metadata.
-Raw masks and pixel-space ROIs are retained so the cutoff can be lowered later.
-The command reports the retained and removed counts. Reload the viewer to see
-the new boundaries; rerun decoding if existing cell assignments or normalization
-need to reflect the filtered outlines. Exported cell IDs are renumbered in ROI
-order when the retained set changes.
+This recreates `cell_boundaries/cell_rois.zip` from the saved pixel ROIs. Cell
+IDs may change when the retained outlines change. Reload the viewer and rerun
+decoding if cell assignments or normalization need to reflect the updated
+outlines. Use `--roi-workers` to set the number of ROI workers or
+`--no-roi-multiprocessing` to use one worker.
 
-ROI extraction uses each label's bounding box and shares the mask across CPU
-workers. Global transforms and polygon areas are computed in vectorized batches,
-and retained outlines stream into the ZIP. Normal segmentation reuses the
-extracted pixel ROIs in memory for global export. Both modes use up to eight CPU
-workers by default; set `--roi-workers 4` to choose a worker count or
-`--no-roi-multiprocessing` to run with one worker.
-
-## Viewer CLI
-
-Use the `viewer` entry point for read-only datastore inspection:
+## Viewer
 
 ```bash
 uv run viewer /path/to/experiment
 ```
 
-The controller exposes three view modes:
+See the [viewer guide](viewer.md) for the available views and overlays.
 
-- `Local native` shows stored local images without alignment claims.
-- `Local warped` applies user-selected chromatic, stage/round affine, and
-  SOFIMA transform components before display.
-- `Global fused` opens the fused Zarr image lazily and overlays selected sparse
-  data.
+## Tile export
 
-NDV displays image channels. Transcript points and cell boundaries from the
-datastore, Proseg, Cellpose, or Baysor are rendered as sparse VisPy overlays so
-changing transcript selections does not require rebuilding image arrays.
-
-## Tile Export CLI
-
-Export every corrected fiducial round and readout bit for one tile, together
-with its local decoded spots annotated using the final global spots table:
+Export corrected fiducial rounds and readout bits, registered images, and local
+decoded spots annotated with their global filtering results:
 
 ```bash
 uv run qi2lab-export-tile /path/to/experiment --tile-id tile0000
 ```
 
-The input can also be an existing datastore directory. The default output is
-`tile_exports/tile0000/` beside the datastore, containing:
+The default output is `tile_exports/tile0000/` beside the datastore. Registered
+images use the first round's local grid and the stored affine and SOFIMA
+transforms; nonidentity warps require CUDA. Chromatic correction is applied
+during decoding. The CSV contains `passes_global_filter` and columns from the
+global table. Its local coordinates overlay the registered images. The local
+and global decoding outputs must belong to the same run.
 
-```text
-native/fiducial_round001.tif   # one TIFF per fiducial round
-native/bit001.tif             # one TIFF per readout bit
-registered/fiducial_round001.tif
-registered/bit001.tif
-decoded_spots.csv.gz
-```
-
-Only corrected images are used, even when deconvolved data exist. Native TIFFs
-preserve the source dtype. Registered TIFFs contain float32 intensities on the
-round-1 local grid, using its shape and the datastore voxel spacing. All TIFFs
-are OME-TIFF stacks with spatial axes and physical pixel sizes in microns;
-large stacks use BigTIFF. Singleton Z planes may be displayed as YX by readers.
-
-Registration reuses the decoder's stored round affine transforms, available
-SOFIMA deformation fields, and readout chromatic calibration. Round 1's
-fiducial is unchanged; round-1 bits still receive chromatic correction. Missing
-chromatic calibration uses the datastore's identity fallback. Missing SOFIMA
-fields use affine-only registration, and recorded SOFIMA identity fallbacks
-are respected. Nonidentity warps require CUDA, with device selection through
-`--gpu-id` (default `0`).
-
-The CSV preserves all local rows, coordinates, and statistics. Its boolean
-`passes_global_filter` is true exactly when the local spot occurs in the final
-global table for that tile; false includes both quality-filtered spots and
-removed duplicates. Matching uses `tile_idx`, `gene_id`, `barcode_id`, and exact
-local `z`, `y`, `x` coordinates, not DataFrame indices or proximity. Ambiguous
-keys or global spots without a local match cause an error.
-
-All non-key global columns are appended. Columns already present locally are
-copied under `global_file_<column>` so both versions survive; conflicting output
-names cause an error. Unmatched rows have empty global-derived fields. Local
-coordinates overlay the registered images; they do not generally overlay the
-native images. The exporter reads the default local and global decoding outputs,
-which must come from the same decoding run.
-
-Use `--output-dir /path/to/tile-export` to select the exact tile directory,
-`--overwrite` to replace existing export files, and `--verbose 0` to suppress
-routine progress. Output must be outside the datastore. Images are processed
-one at a time and staged alongside the destination before publication, so a
-failed load or warp does not replace an existing export. Missing corrected
-images, required affine transforms, wavelengths, or spot tables cause an error.
+Use `--output-dir` to select an output directory outside the datastore and
+`--overwrite` to replace existing exports.

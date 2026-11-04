@@ -90,6 +90,27 @@ def image_has_signal(
     An optional YX mask restricts both background estimation and accepted signal.
     This is an intensity-contrast screen, not a calibrated significance test.
     Empty images/masks return False; invalid dimensions or nonfinite data raise.
+
+    Parameters
+    ----------
+    image : ArrayLike
+        Image in YX or ZYX order.
+    mask : ArrayLike or None, optional
+        YX mask limiting the background and signal regions.
+    background_sigma : float, optional
+        Multiplier for the MAD-based background noise estimate.
+    minimum_pixels : int, optional
+        Minimum size of a connected foreground region.
+
+    Returns
+    -------
+    bool
+        Whether a connected region passes the signal threshold.
+
+    Raises
+    ------
+    ValueError
+        The image is not YX or ZYX, or its projection has nonfinite values.
     """
     from scipy.ndimage import label, median_filter
 

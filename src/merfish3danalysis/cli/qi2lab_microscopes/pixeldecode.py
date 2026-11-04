@@ -150,7 +150,7 @@ def _default_qi2lab_magnitude_threshold(
 
 def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     """
-    Return whether registered readout data were saved after deconvolution.
+    Return whether the feature predictor used deconvolved readout data.
 
     Parameters
     ----------
@@ -160,7 +160,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     Returns
     -------
     bool
-        True if the first registered readout records deconvolution metadata.
+        True if the first readout selects deconvolved pixels.
     """
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
@@ -171,12 +171,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     if not tile_ids or not bit_ids:
         return False
 
-    attributes = datastore.load_local_image_metadata(
-        tile_ids[0],
-        bit=bit_ids[0],
-        image_names=("decon_data",),
-    )
-    return bool(attributes.get("deconvolution", False))
+    return datastore.local_readout_image_name(tile_ids[0], bit_ids[0]) == "decon_data"
 
 
 def _default_qi2lab_feature_predictor_threshold(
@@ -325,6 +320,7 @@ def decode_pixels(
     chromatic_centroid_weight_epsilon: float = 1e-6,
     reprocess_existing: bool = False,
     decode_mode: Literal["auto", "2d", "3d"] = "auto",
+    decode_run_key: str | None = None,
     normalization_features: Annotated[
         Literal["all", "cells"],
         typer.Option(
@@ -421,6 +417,8 @@ def decode_pixels(
     decode_mode : {"auto", "2d", "3d"}, default "auto"
         Decode mode. ``auto`` follows the datastore microscope type; explicit
         values control connected-component extraction and default thresholds.
+    decode_run_key : str or None, default None
+        Optional run name used to isolate normalization and decoded output.
     normalization_features : {"all", "cells"}, default "cells"
         Use all features or only features inside Cellpose outlines to estimate
         global and iterative normalization. With no segmentation, ``cells``
@@ -485,6 +483,7 @@ def decode_pixels(
         num_gpus=num_gpus,
         verbose=1,
         decode_mode=decode_mode,
+        decode_run_key=decode_run_key,
         normalization_features=normalization_features,
         estimate_chromatic_affines=estimate_chromatic_affines,
         chromatic_affine_config=ChromaticAffineEstimationConfig(
