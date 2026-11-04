@@ -73,8 +73,8 @@ def global_register_data(
         path to experiment
 
     create_max_proj_tiff: bool or None
-        create max projection tiff in the segmentation/cellpose directory.
-        Default = True
+        Also write a maximum-projection TIFF in the fiducial_projection_tiff
+        directory. The projection Scene is always created. Default = True.
     """
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path)
@@ -95,37 +95,35 @@ def global_register_data(
         tile=0,
     )
 
+    fiducial_fused = datastore.load_local_fiducial_image(
+        tile=0, round=0, return_future=False
+    )
     datastore.save_global_fiducial_image(
-        fused_image=datastore.load_local_fiducial_image(
-            tile=0, round=0, return_future=False
-        ),
+        fused_image=fiducial_fused,
         affine_zyx_um=affine_zyx_px,
         origin_zyx_um=origin,
         spacing_zyx_um=spacing,
     )
 
-    # write max projection OME-TIFF for cellpose GUI
-    if create_max_proj_tiff:
-        # load downsampled, fused fiducial image and coordinates
-        fiducial_fused, _, _, spacing_zyx_um = datastore.load_global_fiducial_image(
-            return_future=False
-        )
+    fiducial_max_projection = (
+        np.max(fiducial_fused, axis=0) if fiducial_fused.ndim == 3 else fiducial_fused
+    )
+    datastore.save_global_fiducial_projection(
+        fiducial_max_projection,
+        affine_zyx_um=affine_zyx_px,
+        origin_zyx_um=origin,
+        spacing_zyx_um=spacing,
+    )
+    del fiducial_fused
 
-        # create max projection
-        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-        del fiducial_fused
+    # Write a TIFF for the Cellpose GUI when requested.
+    if create_max_proj_tiff:
+        spacing_zyx_um = spacing
 
         filename = "fiducial_max_projection.ome.tiff"
-        cellpose_path = (
-            datastore.datastore_path / Path("segmentation") / Path("cellpose")
-        )
-        cellpose_path.mkdir(exist_ok=True)
-        filename_path = (
-            datastore.datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path(filename)
-        )
+        cellpose_path = datastore.fiducial_projection_tiff_path()
+        cellpose_path.mkdir(parents=True, exist_ok=True)
+        filename_path = cellpose_path / filename
         with TiffWriter(filename_path, bigtiff=True) as tif:
             metadata = {
                 "axes": "YX",

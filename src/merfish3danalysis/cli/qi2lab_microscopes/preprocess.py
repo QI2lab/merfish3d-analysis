@@ -101,10 +101,10 @@ def local_register_data(
         process_readouts=not fiducial_registration_only
     )
 
-    # update datastore state
-    datastore_state = datastore.datastore_state.copy()
-    datastore_state.update({"LocalRegistered": True})
-    datastore.datastore_state = datastore_state
+    # LocalRegistered also requires complete readout prediction outputs during
+    # datastore validation. Fiducial-only runs preserve the previous state.
+    if not fiducial_registration_only:
+        datastore.datastore_state = {"LocalRegistered": True}
 
 
 def main() -> None:

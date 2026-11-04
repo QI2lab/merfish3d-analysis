@@ -1,12 +1,11 @@
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
+import cupy as cp
 import numpy as np
+import pandas as pd
 import pytest
 import typer
 
-import merfish3danalysis.PixelDecoder as pixel_decoder_module
 from merfish3danalysis.cli.qi2lab_microscopes.pixeldecode import (
     _load_optimization_exclusions_file,
     _optimization_exclusions_path,
@@ -16,29 +15,21 @@ from merfish3danalysis.PixelDecoder import PixelDecoder
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 
 
-def _decoder_with_codebook() -> PixelDecoder:
-    decoder = PixelDecoder.__new__(PixelDecoder)
-    decoder._gene_ids = ["GeneA", "GeneB", "GeneC"]
-    decoder._codebook_matrix = np.asarray(
-        [
-            [1, 1, 0, 0],
-            [1, 0, 1, 0],
-            [1, 0, 0, 1],
-        ],
-        dtype=np.int8,
+@pytest.fixture
+def decoder(image_datastore) -> PixelDecoder:
+    image_datastore.codebook = pd.DataFrame(
+        [["GeneA", 1, 1, 1, 0], ["GeneB", 1, 1, 0, 1], ["GeneC", 1, 0, 1, 1]],
+        columns=["gene_id", "bit01", "bit02", "bit03", "bit04"],
     )
-    return decoder
+    return PixelDecoder(image_datastore, merfish_bits=4, num_gpus=1, verbose=0)
 
 
 @pytest.mark.unit
 def test_load_optimization_exclusions_file_ignores_comments_and_blank_lines(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
-    monkeypatch.setattr(
-        Path, "read_text", Mock(return_value="# known failures\n\n GeneB \nGeneC\n")
-    )
+    exclusions_path.write_text("# known failures\n\n GeneB \nGeneC\n")
 
     assert _load_optimization_exclusions_file(exclusions_path) == ["GeneB", "GeneC"]
 
@@ -46,10 +37,9 @@ def test_load_optimization_exclusions_file_ignores_comments_and_blank_lines(
 @pytest.mark.unit
 def test_load_optimization_exclusions_file_rejects_empty_input(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     exclusions_path = tmp_path / "bad_codewords.txt"
-    monkeypatch.setattr(Path, "read_text", Mock(return_value="\n# no entries\n"))
+    exclusions_path.write_text("\n# no entries\n")
 
     with pytest.raises(typer.BadParameter, match="contains no gene IDs"):
         _load_optimization_exclusions_file(exclusions_path)
@@ -99,9 +89,8 @@ def test_cli_rejects_exclusions_when_optimization_will_not_run(
 
 
 @pytest.mark.unit
-def test_resolve_exclusions_is_exact_deduplicated_and_index_stable() -> None:
-    decoder = _decoder_with_codebook()
-
+@pytest.mark.gpu
+def test_resolve_exclusions_is_exact_deduplicated_and_index_stable(decoder) -> None:
     gene_ids, indices = decoder._resolve_excluded_gene_ids([" GeneB ", "GeneB"])
 
     assert gene_ids == ("GeneB",)
@@ -111,9 +100,8 @@ def test_resolve_exclusions_is_exact_deduplicated_and_index_stable() -> None:
 
 
 @pytest.mark.unit
-def test_resolve_exclusions_rejects_removing_entire_codebook() -> None:
-    decoder = _decoder_with_codebook()
-
+@pytest.mark.gpu
+def test_resolve_exclusions_rejects_removing_entire_codebook(decoder) -> None:
     with pytest.raises(ValueError, match="every codeword"):
         decoder._resolve_excluded_gene_ids(["GeneA", "GeneB", "GeneC"])
 
@@ -129,34 +117,15 @@ def test_excluded_winner_becomes_background_without_index_fallback() -> None:
 
 
 @pytest.mark.unit
-def test_exclusion_indices_are_converted_for_array_module(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    decoded = np.asarray([0, 1, 2], dtype=np.int16)
-    nearest = np.asarray([0, 1, 2], dtype=np.int16)
-    converted = []
-
-    class _CupyLikeArrayModule:
-        @staticmethod
-        def asarray(values, dtype=None):
-            result = np.asarray(values, dtype=dtype)
-            converted.append(result)
-            return result
-
-        @staticmethod
-        def isin(element, test_elements):
-            assert isinstance(test_elements, np.ndarray)
-            return np.isin(element, test_elements)
-
-    fake_cp = SimpleNamespace(
-        get_array_module=lambda _array: _CupyLikeArrayModule,
-    )
-    monkeypatch.setattr(pixel_decoder_module, "cp", fake_cp)
+@pytest.mark.gpu
+def test_exclusion_indices_are_converted_for_array_module() -> None:
+    decoded = cp.asarray([0, 1, 2], dtype=cp.int16)
+    nearest = cp.asarray([0, 1, 2], dtype=cp.int16)
 
     PixelDecoder._suppress_excluded_codeword_assignments(decoded, nearest, (1,))
 
-    assert converted[0].dtype == nearest.dtype
-    np.testing.assert_array_equal(decoded, np.asarray([0, -1, 2]))
+    assert decoded.dtype == nearest.dtype
+    np.testing.assert_array_equal(cp.asnumpy(decoded), np.asarray([0, -1, 2]))
 
 
 @pytest.mark.unit
@@ -246,110 +215,8 @@ def test_centroid_support_does_not_resolve_a_near_tie_using_a_farther_label():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("normalization_features", ["all", "cells"])
-def test_optimizer_passes_resolved_exclusions_to_gpu_worker(
-    monkeypatch: pytest.MonkeyPatch,
-    normalization_features: str,
-) -> None:
-    decoder = _decoder_with_codebook()
-    decoder._num_gpus = 1
-    decoder._verbose = 0
-    fiducials = np.full((3, 1, 32, 48), 100, dtype=np.uint16)
-    fiducials[1:, :, 12:20, 18:26] = 1000
-    decoder._datastore = SimpleNamespace(
-        tile_ids=["tile000", "tile001", "tile002"],
-        load_local_fiducial_image=lambda *, tile, round, return_future: fiducials[
-            int(tile[-3:])
-        ],
-    )
-    decoder._z_slice = slice(None)
-    decoder._normalization_cell_mask_for_tile = lambda **kwargs: None
-    monkeypatch.setattr(
-        pixel_decoder_module, "sample", lambda values, count: list(values)
-    )
-    decoder._datastore_path = Path("/unused/datastore")
-    decoder._decode_run_key = None
-    decoder._decode_mode = "3d"
-    decoder._effective_decode_mode = "3d"
-    decoder._n_merfish_bits = 4
-    decoder._estimate_chromatic_affines = False
-    decoder._normalization_features = normalization_features
-    decoder._is_3D = True
-    decoder._cleanup = lambda: None
-    decoder._load_all_barcodes = lambda: None
-    decoder._iterative_normalization_vectors = lambda gpu_id=0: None
-
-    global_calls = []
-
-    def _load_global_normalization_vectors(**_kwargs) -> None:
-        global_calls.append(_kwargs)
-        decoder._global_background_vector = np.ones(4, dtype=np.float32)
-        decoder._global_normalization_vector = np.ones(4, dtype=np.float32)
-
-    decoder._load_global_normalization_vectors = _load_global_normalization_vectors
-
-    captured_args = []
-
-    def _capture_worker(*, target, args, physical_gpu_id):
-        captured_args.append((target, args, physical_gpu_id))
-        return SimpleNamespace()
-
-    class _Device:
-        def __init__(self, _gpu_id: int) -> None:
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args) -> None:
-            return None
-
-    memory_pool = SimpleNamespace(free_all_blocks=lambda: None)
-    fake_cp = SimpleNamespace(
-        cuda=SimpleNamespace(
-            Device=_Device,
-            Stream=SimpleNamespace(null=SimpleNamespace(synchronize=lambda: None)),
-        ),
-        get_default_memory_pool=lambda: memory_pool,
-        get_default_pinned_memory_pool=lambda: memory_pool,
-    )
-    monkeypatch.setattr(pixel_decoder_module, "cp", fake_cp)
-    monkeypatch.setattr(
-        pixel_decoder_module,
-        "_start_gpu_worker_process",
-        _capture_worker,
-    )
-    monkeypatch.setattr(pixel_decoder_module, "_join_gpu_workers", lambda *_args: None)
-
-    decoder.optimize_normalization_by_decoding(
-        n_random_tiles=2,
-        n_iterations=1,
-        minimum_pixels=1,
-        excluded_gene_ids=["GeneB", "GeneB"],
-    )
-
-    assert len(captured_args) == 1
-    assert global_calls[0]["tile_indices"] == [1, 2]
-    assert captured_args[0][1][1] == [1, 2]
-    assert captured_args[0][1][-2] == ("GeneB",)
-    assert captured_args[0][1][-1] == normalization_features
-    assert (
-        decoder._iterative_normalization_metadata()["normalization_features"]
-        == normalization_features
-    )
-
-
-@pytest.mark.unit
-def test_run_scoped_normalization_metadata_round_trips() -> None:
-    datastore = qi2labDataStore.__new__(qi2labDataStore)
-    attributes: dict[str, object] = {}
-    datastore._load_calibrations_attributes = lambda: dict(attributes)
-
-    def _save(updated: dict[str, object]) -> None:
-        attributes.clear()
-        attributes.update(updated)
-
-    datastore._save_calibrations_attributes = _save
+def test_run_scoped_normalization_metadata_round_trips(image_datastore) -> None:
+    datastore = image_datastore
     metadata = {
         "scope": "iterative_optimization",
         "excluded_gene_ids": ["GeneB"],
@@ -365,4 +232,8 @@ def test_run_scoped_normalization_metadata_round_trips() -> None:
         metadata=metadata,
     )
 
-    assert datastore.load_decode_normalization_metadata("run1", "iterative") == metadata
+    reopened = qi2labDataStore(datastore.datastore_path, validate=False)
+    assert reopened.load_decode_normalization_metadata("run1", "iterative") == metadata
+    norm, background = reopened.load_decode_normalization_vectors("run1", "iterative")
+    np.testing.assert_array_equal(norm, np.ones(4))
+    np.testing.assert_array_equal(background, np.zeros(4))

@@ -30,7 +30,7 @@ from tifffile import imread
 from tqdm import tqdm
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.dataio import read_metadatafile
+from merfish3danalysis.utils.dataio import read_metadatafile, resolve_datastore_path
 from merfish3danalysis.utils.imageprocessing import (
     estimate_shading,
     image_has_signal,
@@ -458,11 +458,14 @@ def convert_data(
     # initialize datastore
     if output_path is None:
         root_path = root_path.expanduser().resolve()
-        datastore_path = (
-            root_path
-            if (root_path / "datastore_state.json").is_file()
-            else root_path / "qi2labdatastore"
-        )
+        try:
+            datastore_path = resolve_datastore_path(root_path)
+        except FileNotFoundError:
+            datastore_path = (
+                root_path
+                if root_path.name == "qi2labdatastore"
+                else root_path / "qi2labdatastore"
+            )
     else:
         datastore_path = output_path
     existing_store = datastore_path.exists()
@@ -671,7 +674,10 @@ def convert_data(
             if image_has_signal(image):
                 fiducial_tiles.append(tile_idx)
             del image
-        (datastore_path / "flatfield_tile_ids.json").write_text(
+        datastore.shading_flatfield_tile_ids_path().parent.mkdir(
+            parents=True, exist_ok=True
+        )
+        datastore.shading_flatfield_tile_ids_path().write_text(
             json.dumps([datastore.tile_ids[tile] for tile in fiducial_tiles])
         )
         if not fiducial_tiles:

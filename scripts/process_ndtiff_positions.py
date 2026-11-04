@@ -496,10 +496,10 @@ def load_default_ufish(gpu_id: int) -> Any:
     """Load the repository's default simfish U-FISH model."""
     from ufish.api import UFish
 
-    from merfish3danalysis.utils.chromatic import _load_ufish_model
+    from merfish3danalysis.utils.ufish import load_ufish_model
 
     ufish = UFish(device=f"cuda:{gpu_id}")
-    _load_ufish_model(ufish, None)
+    load_ufish_model(ufish)
     return ufish
 
 

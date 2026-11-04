@@ -52,13 +52,12 @@ Use local warped mode to compare fiducial rounds and readout bits in the
 round-1 reference frame. The warp controls expose independent transform
 components:
 
-- Chromatic affine
 - Stage / round affine
 - SOFIMA residual
 
-The preset menu includes native, affine-only, affine plus chromatic, and full
-decode-equivalent chains. If a selected transform component is unavailable, the
-viewer skips that component, reports a warning in the controller status, and
+The preset menu includes native, affine-only, and full local registration chains.
+Chromatic correction is applied during decoding. If a selected transform component
+is unavailable, the viewer skips it, reports a warning in the controller status, and
 renders the available chain.
 
 After changing selected local images or warp options, click **Apply** to update
@@ -70,18 +69,21 @@ Global fused mode opens the fused image Zarr lazily. Use **Fused polyDT image**
 when you want the image background; otherwise sparse overlays can be shown on an
 empty black canvas.
 
+Fusion resamples each tile, including its camera orientation, onto an axis-aligned
+world grid. The image and its overlays use that shared grid.
+
 Transcript sources are mutually exclusive:
 
 - Datastore transcripts from filtered decoded features
 - Proseg transcripts from `proseg/3D` run folders
-- Baysor transcripts from `segmentation/baysor/3D/molecules.parquet`
+- Baysor transcripts from `baysor/3D/molecules.parquet`
 
 Cell boundaries can be displayed from:
 
 - Cellpose
 - Proseg refined cell boundaries
 - Baysor cell boundaries from
-  `segmentation/baysor/3D/cell_boundaries_3d.parquet`
+  `baysor/3D/cell_boundaries_3d.parquet`
 
 The Proseg run selector detects `proseg/3D` outputs, including nested run
 folders such as `fdr.75`.

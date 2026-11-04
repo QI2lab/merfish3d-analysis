@@ -1,45 +1,18 @@
-from types import SimpleNamespace
-from unittest.mock import Mock
-
 import numpy as np
 import pytest
 
 from merfish3danalysis.DataRegistration import DataRegistration
 
 
-def _registration_with_transforms(
-    transforms: dict[str, np.ndarray | None],
-) -> DataRegistration:
-    registration = DataRegistration.__new__(DataRegistration)
-    registration._tile_ids = list(transforms)
-    registration._verbose = 0
-    registration._datastore = SimpleNamespace(
-        load_global_coord_xforms_um=lambda *, tile: (
-            transforms[tile],
-            None,
-            None,
-        )
-    )
-    return registration
-
-
 @pytest.mark.unit
-def test_global_transforms_available_requires_every_tile() -> None:
+def test_global_transforms_available_requires_every_tile(image_datastore) -> None:
+    registration = DataRegistration(image_datastore, verbose=0)
     identity = np.eye(4, dtype=np.float32)
-    complete = _registration_with_transforms(
-        {"tile0000": identity, "tile0001": identity}
-    )
-    partial = _registration_with_transforms({"tile0000": identity, "tile0001": None})
-
-    assert complete._global_transforms_available()
-    assert not partial._global_transforms_available()
-
-
-@pytest.mark.unit
-def test_global_fusion_registers_when_stored_transforms_are_missing() -> None:
-    registration = _registration_with_transforms({"tile0000": None, "tile0001": None})
-    registration.global_register = Mock()
-
-    registration.fuse_global_registered(create_max_proj_tiff=True)
-
-    registration.global_register.assert_called_once_with(create_max_proj_tiff=True)
+    assert not registration._global_transforms_available()
+    for tile in image_datastore.tile_ids:
+        image_datastore.save_global_coord_xforms_um(
+            identity, [0, 0, 0], image_datastore.voxel_size_zyx_um, tile=tile
+        )
+        assert registration._global_transforms_available() == (
+            tile == image_datastore.tile_ids[-1]
+        )

@@ -34,8 +34,8 @@ class LazyGlobalChannelData:
         return np.dtype(dtype)
 
     @property
-    def shape(self) -> tuple[int, int, int, int]:
-        """Return channel, Z, Y, X shape."""
+    def shape(self) -> tuple[int, ...]:
+        """Return the channel and image dimensions."""
         zyx_shape = tuple(int(value) for value in self.fused_zyx.shape)
         return (1 + len(self.image_channels), *zyx_shape)
 
@@ -45,9 +45,9 @@ class LazyGlobalChannelData:
         return len(self.shape)
 
     @property
-    def dims(self) -> tuple[str, str, str, str]:
+    def dims(self) -> tuple[str, ...]:
         """Return NDV dimension names."""
-        return ("c", "z_um", "y_um", "x_um")
+        return tuple(self.coords)
 
     def with_image_channel(self, image_zyx: Any) -> "LazyGlobalChannelData":
         """
@@ -246,7 +246,13 @@ class DisplayContext:
     refresh_only: bool = False
 
     def as_refresh(self) -> "DisplayContext":
-        """Return this context marked as an overlay-only refresh."""
+        """Return this context marked as an overlay-only refresh.
+
+        Returns
+        -------
+        DisplayContext
+            Copy with ``refresh_only`` enabled.
+        """
         return replace(self, refresh_only=True)
 
 
@@ -336,7 +342,6 @@ class TranscriptRefreshRequest:
 class WarpChainOptions:
     """Viewer-selected local warp-chain components."""
 
-    chromatic: bool = True
     stage_affine: bool = True
     sofima: bool = True
 
@@ -350,7 +355,7 @@ class WarpChainOptions:
         bool
             True when the viewer should display stored native coordinates.
         """
-        return not (self.chromatic or self.stage_affine or self.sofima)
+        return not (self.stage_affine or self.sofima)
 
 
 def warp_chain_label(options: WarpChainOptions) -> str:
@@ -370,8 +375,6 @@ def warp_chain_label(options: WarpChainOptions) -> str:
     pieces: list[str] = []
     if options.stage_affine:
         pieces.append("affine")
-    if options.chromatic:
-        pieces.append("chromatic")
     if options.sofima:
         pieces.append("sofima")
     return "+".join(pieces) if pieces else "native"

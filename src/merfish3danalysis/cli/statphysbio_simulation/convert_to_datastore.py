@@ -14,14 +14,6 @@ Shepherd 2024/11 - rework script to accept parameters.
 Shepherd 2024/08 - rework script to utilize qi2labdatastore object.
 """
 
-import warnings
-
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.simplefilter("ignore", category=FutureWarning)
-import multiprocessing as mp
-
-mp.set_start_method("spawn", force=True)
-
 from itertools import compress
 from pathlib import Path
 

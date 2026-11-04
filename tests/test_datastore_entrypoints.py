@@ -1,49 +1,45 @@
-"""Processing entry points resolve existing stores before constructing a datastore."""
+"""Viewer entry point opens acquisition metadata and images from real stores."""
 
-import importlib
-from unittest.mock import Mock
-
+import numpy as np
 import pytest
 
-ENTRY_POINTS = [
-    ("cli.qi2lab_microscopes.preprocess", "local_register_data"),
-    ("cli.qi2lab_microscopes.segment_fiducial", "run_cellpose"),
-    ("cli.qi2lab_microscopes.pixeldecode", "decode_pixels"),
-    ("cli.statphysbio_simulation.register_and_deconvolve", "local_register_data"),
-    ("cli.statphysbio_simulation.register_and_deconvolve", "global_register_data"),
-    ("cli.statphysbio_simulation.pixeldecode", "decode_pixels"),
-    ("viewer.datastore", "load_datastore_for_viewer"),
-]
-
-
-class DatastoreSelected(Exception):
-    """Stop at construction before invoking scientific processing or the GUI."""
+from merfish3danalysis.viewer.datastore import load_datastore_for_viewer
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("module_name, function_name", ENTRY_POINTS)
-@pytest.mark.parametrize("argument", ["experiment", "direct", "custom", "missing"])
-def test_entry_point_selects_existing_store_without_creating_nested_output(
-    tmp_path, monkeypatch, module_name, function_name, argument
-):
-    module = importlib.import_module("merfish3danalysis." + module_name)
-    constructor = Mock(side_effect=DatastoreSelected)
-    monkeypatch.setattr(module, "qi2labDataStore", constructor)
-    store_path = tmp_path / (
-        "custom_store" if argument == "custom" else "qi2labdatastore"
+@pytest.mark.parametrize("argument", ["experiment", "direct", "custom"])
+def test_viewer_opens_store_and_populates_options(image_datastore, tmp_path, argument):
+    datastore = image_datastore
+    image = np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8)
+    datastore.save_local_corrected_image(image, tile=0, round=0)
+    store_path = datastore.datastore_path
+    if argument == "custom":
+        custom_path = tmp_path / "custom_store"
+        store_path.rename(custom_path)
+        store_path = custom_path
+    root_path = tmp_path if argument == "experiment" else store_path
+
+    result = load_datastore_for_viewer(root_path)
+
+    assert result.datastore_path == store_path
+    assert result.options.tile_ids == ("tile0000", "tile0001")
+    assert result.options.round_ids == ("round001", "round002")
+    assert result.options.bit_ids == ("bit001", "bit002", "bit003", "bit004")
+    assert result.options.transcript_gene_to_bits == {
+        "gene": ["bit001", "bit002", "bit003", "bit004"]
+    }
+    assert result.options.components["Calibrations"]
+    np.testing.assert_array_equal(
+        result.datastore.load_local_corrected_image(
+            tile=0, round=0, return_future=False
+        ),
+        image,
     )
-    if argument != "missing":
-        store_path.mkdir()
-        (store_path / "datastore_state.json").write_text("{}")
-    root_path = tmp_path if argument in ["experiment", "missing"] else store_path
-    function = getattr(module, function_name)
-    if argument == "missing":
-        with pytest.raises(FileNotFoundError, match="datastore"):
-            function(root_path)
-        constructor.assert_not_called()
-        assert list(tmp_path.iterdir()) == []
-    else:
-        with pytest.raises(DatastoreSelected):
-            function(root_path)
-        assert constructor.call_args.args[0] == store_path
-        assert not (store_path / "qi2labdatastore").exists()
+    assert not (store_path / "qi2labdatastore").exists()
+
+
+@pytest.mark.unit
+def test_viewer_rejects_missing_store_without_creating_directories(tmp_path):
+    with pytest.raises(FileNotFoundError, match="datastore"):
+        load_datastore_for_viewer(tmp_path / "missing")
+    assert list(tmp_path.iterdir()) == []

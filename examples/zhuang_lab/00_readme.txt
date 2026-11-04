@@ -7,8 +7,9 @@ Keep microscope_type="2D" and decode_mode="2d"
 transcript's own plane and preserve Z. Retain the 1.5 micron Z spacing for
 physical coordinates. Global tile registration uses the shared DataRegistration
 workflow with ZYX binning (1, 3, 3). The fit estimates offsets in Z as well as YX.
-Fiducial fusion and its maximum-Z TIFF use the downsampled segmentation grid.
-The saved spacing is used to transform Cellpose pixel ROIs to global coordinates.
+Fiducial fusion and its maximum-Z projection Scene use the downsampled
+segmentation grid. The saved spacing is used to transform Cellpose pixel ROIs
+to global coordinates.
 
 Run every script through the project's uv environment and pass its data root as
 the positional argument. Provided time estimates are for a single workstation

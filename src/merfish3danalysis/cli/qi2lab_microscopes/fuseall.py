@@ -3,7 +3,6 @@
 import gc
 import json
 import multiprocessing as mp
-import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -11,62 +10,55 @@ from typing import Annotated, Any
 import numpy as np
 import typer
 import xarray as xr
-from multiview_stitcher import fusion, misc_utils, msi_utils
+from multiview_stitcher import misc_utils, msi_utils
 from multiview_stitcher import spatial_image_utils as si_utils
 from tqdm import tqdm
 
 from merfish3danalysis.DataRegistration import (
     _direct_zarr_fusion_kwargs,
-    _local_fiducial_path,
+    _fuse_views_to_scene,
     _read_fiducial_sim,
 )
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
 from merfish3danalysis.utils.dataio import resolve_datastore_path
-from merfish3danalysis.utils.decode_warping import (
-    compose_decode_warp_transform_zyx_um,
-    load_bit_round_transform_zyx_um,
-)
+from merfish3danalysis.utils.decode_warping import load_bit_round_transform_zyx_um
 from merfish3danalysis.utils.spacing import round_pixel_size_um, round_spacing_um
-
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.simplefilter("ignore", category=FutureWarning)
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
 
 
 def export_ome_tiffs(
-    ome_zarr_path: Path,
+    datastore: qi2labDataStore,
     output_directory: Path,
     channel_ids: list[str],
-    fused_metadata: dict[str, list[Any]],
 ) -> None:
     """Export each full-resolution fused channel as a tiled OME-TIFF.
 
     Parameters
     ----------
-    ome_zarr_path : pathlib.Path
-        Path to the multichannel OME-Zarr v0.5 image.
+    datastore : qi2labDataStore
+        Datastore containing the multichannel fused image.
     output_directory : pathlib.Path
         Directory in which to write the channel OME-TIFF files.
     channel_ids : list[str]
         Ordered channel names matching the OME-Zarr channel axis.
-    fused_metadata : dict[str, list[Any]]
-        Fused affine, origin, and spacing metadata in physical Z, Y, X order.
+
     Returns
     -------
     None
         One tiled OME-TIFF is written for each channel.
     """
     from tifffile import TiffWriter
-    from yaozarrs import open_group
 
-    group = open_group(ome_zarr_path)
-    scale0_path = group.attrs["ome"]["multiscales"][0]["datasets"][0]["path"]
-    array = group[scale0_path].to_zarr_python()
-    dims = tuple(str(dim) for dim in array.metadata.dimension_names)
+    fused_image = datastore.load_global_fused_image("all_channels", return_future=None)
+    if fused_image is None:
+        raise RuntimeError("The multichannel fused image was not published.")
+    array, fused_metadata = fused_image
+    dims = tuple(array.domain.labels)
     axes = {dim: dims.index(dim) for dim in dims}
     shape_zyx = tuple(int(array.shape[axes[dim]]) for dim in "zyx")
+    dtype = np.dtype(array.dtype.numpy_dtype)
     origin = tuple(map(float, fused_metadata["origin_zyx_um"]))
     spacing = tuple(round_spacing_um(fused_metadata["spacing_zyx_um"]))
     stage_transform_key = "stage_metadata"
@@ -96,20 +88,15 @@ def export_ome_tiffs(
                     selection[axes["z"]] = z_index
                     selection[axes["y"]] = slice(y_start, y_stop)
                     selection[axes["x"]] = slice(x_start, x_stop)
-                    source = np.asarray(array[tuple(selection)])
-                    tile = np.zeros((tile_y, tile_x), dtype=array.dtype)
+                    source = array[tuple(selection)].read().result()
+                    tile = np.zeros((tile_y, tile_x), dtype=dtype)
                     tile[: source.shape[0], : source.shape[1]] = source
                     yield tile
 
     for channel_index, name in enumerate(tqdm(channel_ids, desc="ome-tiff")):
         chain = [stage_transform_key]
         if channel_index:
-            chain.extend(
-                [
-                    "chromatic_affine_transforms_zyx_um",
-                    "local_round_transform_zyx_um",
-                ]
-            )
+            chain.append("local_round_transform_zyx_um")
         chain.append(global_transform_key)
         with TiffWriter(
             output_directory / f"{name}.ome.tiff", bigtiff=True, ome=True
@@ -117,7 +104,7 @@ def export_ome_tiffs(
             tif.write(
                 data=tiles(channel_index),
                 shape=shape_zyx,
-                dtype=array.dtype,
+                dtype=dtype,
                 tile=(1024, 1024),
                 resolution=(1e4 / spacing[2], 1e4 / spacing[1]),
                 compression="zlib",
@@ -127,7 +114,7 @@ def export_ome_tiffs(
                 resolutionunit="CENTIMETER",
                 metadata={
                     "axes": "ZYX",
-                    "SignificantBits": int(np.dtype(array.dtype).itemsize * 8),
+                    "SignificantBits": int(dtype.itemsize * 8),
                     "PhysicalSizeX": spacing[2],
                     "PhysicalSizeXUnit": "\N{MICRO SIGN}m",
                     "PhysicalSizeY": spacing[1],
@@ -167,17 +154,15 @@ def _channel_global_transforms_zyx_um(
 ) -> np.ndarray:
     """Compose native channel coordinates into the refined world frame.
 
-    The stored chromatic affine maps a native readout channel to its reference
-    wavelength. The stored local-round affine has the opposite direction: it
-    maps round-1 reference coordinates to the moving round. Consequently, the
-    forward native-to-round-1 channel transform is ``inverse(local) @
-    chromatic``. The known stage-camera affine is used as stored, followed by
-    the multiview-stitcher global refinement. SOFIMA fields are not loaded.
+    The stored local-round affine maps round-1 reference coordinates to the
+    moving round, so native-to-reference uses its inverse. The known stage-camera
+    affine is used as stored, followed by global refinement. Chromatic correction
+    is applied only in decoding; SOFIMA fields are not loaded here.
 
     Parameters
     ----------
     datastore : qi2labDataStore
-        Datastore containing local and chromatic transform metadata.
+        Datastore containing local transform metadata.
     tile_id : str
         Tile identifier.
     bit_ids : list[str]
@@ -208,54 +193,12 @@ def _channel_global_transforms_zyx_um(
             tile=tile_id,
             bit_id=bit_id,
         )
-        wavelengths = datastore.load_local_wavelengths_um(
-            tile=tile_id,
-            bit=bit_id,
-        )
-        if wavelengths is None:
-            raise RuntimeError(f"Missing wavelengths for tile={tile_id} bit={bit_id}.")
-        chromatic_transform = datastore.load_chromatic_affine_transform_zyx_um(
-            wavelength_um=float(wavelengths[1])
-        )
-        reference_to_native = compose_decode_warp_transform_zyx_um(
-            round_transform_zyx_um=round_transform,
-            chromatic_transform_zyx_um=chromatic_transform,
-        )
-        native_to_reference = np.linalg.inv(reference_to_native)
+        native_to_reference = np.linalg.inv(round_transform)
         channel_transforms.append(
             global_stage @ tile_origin @ native_to_reference @ inverse_tile_origin
         )
 
     return np.asarray(channel_transforms, dtype=np.float32)
-
-
-def _local_readout_path(
-    datastore: qi2labDataStore,
-    tile_id: str,
-    bit_id: str,
-) -> Path:
-    """
-    Locate the best available native readout OME-Zarr image.
-
-    Parameters
-    ----------
-    datastore : qi2labDataStore
-        Datastore containing the readout images.
-    tile_id : str
-        Tile identifier.
-    bit_id : str
-        Readout-bit identifier.
-
-    Returns
-    -------
-    pathlib.Path
-        Deconvolved image path when present; otherwise the corrected image
-        path.
-    """
-    decon_path = datastore.local_image_path(tile_id, "decon_data", bit=bit_id)
-    if decon_path.exists():
-        return decon_path
-    return datastore.local_image_path(tile_id, "corrected_data", bit=bit_id)
 
 
 def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
@@ -335,10 +278,23 @@ def _load_tile_multichannel_msim(
         reference_round,
     )
     channel_ids = [datastore.fiducial_folder_name, *bit_ids]
-    channel_paths = [
-        _local_fiducial_path(datastore, tile_id, reference_round),
-        *[_local_readout_path(datastore, tile_id, bit_id) for bit_id in bit_ids],
+    channel_arrays = [
+        datastore.load_local_fusion_image(tile_id, round=reference_round),
+        *[datastore.load_local_fusion_image(tile_id, bit=bit_id) for bit_id in bit_ids],
     ]
+    from merfish3danalysis.storage.mvs import shared_mvs_chunks
+
+    chunks = shared_mvs_chunks(channel_arrays)
+    if chunks is not None:
+        channel_arrays = [
+            datastore.load_local_fusion_image(
+                tile_id, round=reference_round, chunks=chunks
+            ),
+            *[
+                datastore.load_local_fusion_image(tile_id, bit=bit_id, chunks=chunks)
+                for bit_id in bit_ids
+            ],
+        ]
     translation = dict(
         zip(
             "zyx",
@@ -347,14 +303,9 @@ def _load_tile_multichannel_msim(
         )
     )
     channel_sims = []
-    for channel_id, input_path in zip(channel_ids, channel_paths, strict=True):
-        if not input_path.exists():
-            raise FileNotFoundError(
-                f"Missing fusion input for tile={tile_id} channel={channel_id}: "
-                f"{input_path}"
-            )
+    for channel_id, array in zip(channel_ids, channel_arrays, strict=True):
         channel_sim = _read_fiducial_sim(
-            input_path=input_path,
+            array=array,
             scale={
                 axis: round_pixel_size_um(value)
                 for axis, value in spacing_zyx_um.items()
@@ -400,40 +351,6 @@ def _load_tile_multichannel_msim(
         transform_key="global_registered",
     )
     return msim
-
-
-def _read_fused_metadata(
-    fused_msim: Any,
-    *,
-    transform_key: str,
-) -> dict[str, list[Any]]:
-    """
-    Read physical-coordinate metadata from a fused multiscale image.
-
-    Parameters
-    ----------
-    fused_msim : Any
-        Fused MultiscaleSpatialImage returned by multiview-stitcher.
-    transform_key : str
-        MVS coordinate-system key containing the fused affine.
-
-    Returns
-    -------
-    dict[str, list[Any]]
-        Affine, origin, and spacing values serialized as Python lists.
-    """
-    affine = msi_utils.get_transform_from_msim(
-        fused_msim,
-        transform_key=transform_key,
-    ).data.squeeze()
-    fused_sim = msi_utils.get_sim_from_msim(fused_msim)
-    origin = si_utils.get_origin_from_sim(fused_sim, asarray=True)
-    spacing = si_utils.get_spacing_from_sim(fused_sim, asarray=True)
-    return {
-        "affine_zyx_um": np.asarray(affine, dtype=np.float32).tolist(),
-        "origin_zyx_um": np.asarray(origin, dtype=np.float32).tolist(),
-        "spacing_zyx_um": round_spacing_um(spacing).tolist(),
-    }
 
 
 def _bit_number(bit_id: str) -> int:
@@ -494,8 +411,8 @@ def fuse_all_channels(
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
     Each tile is represented as one lazy multichannel spatial image. Channel-
-    dependent multiview-stitcher affines compose chromatic correction, local
-    round registration, the known stage-camera affine, stage location, and the
+    dependent multiview-stitcher affines compose local round registration,
+    the known stage-camera affine, stage location, and the
     stored global refinement. SOFIMA fields are intentionally ignored. One CPU
     fusion writes fiducial first, followed by numerically ordered codebook bits.
 
@@ -521,9 +438,8 @@ def fuse_all_channels(
     Returns
     -------
     None
-        The multiscale image is written to
-        ``qi2labdatastore/fused/full_dataset.ome.zarr``. Optional
-        TIFFs are written beside it.
+        The multiscale image is published in the datastore Scene. Optional
+        TIFFs are written to ``qi2labdatastore/fused_tiff``.
     """
     output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
     try:
@@ -557,49 +473,36 @@ def fuse_all_channels(
         )
         for tile_id in tqdm(datastore.tile_ids, desc="tile")
     ]
-    output_directory = datastore.fused_image_path().parent
-    output_directory.mkdir(parents=True, exist_ok=True)
-    final_output = datastore.fused_image_path("full_dataset")
-    fusion_call_kwargs: dict[str, Any] = {}
-    if output_chunksize is not None:
-        fusion_call_kwargs["output_chunksize"] = output_chunksize
-    fused_msim = fusion.fuse(
-        images=tile_msims,
-        transform_key=global_transform_key,
+    _fuse_views_to_scene(
+        datastore,
+        tile_msims,
+        fusion_type="all_channels",
         output_spacing=output_spacing,
-        output_zarr_url=str(final_output),
-        **fusion_call_kwargs,
-        **fusion_options,
-    )
-    fused_metadata = _read_fused_metadata(
-        fused_msim,
-        transform_key=global_transform_key,
-    )
-    datastore.save_image_metadata(
-        image_path=final_output,
+        output_chunksize=output_chunksize,
+        batch_options=fusion_options["batch_options"],
+        compression=compression,
+        compression_level=compression_level,
         extra_attributes={
-            **fused_metadata,
             "channel_names": channels,
             "registration_provenance": {
                 "stage_transform_key": stage_transform_key,
-                "chromatic_transform": "chromatic_affine_transforms_zyx_um",
                 "local_transform": "local_round_transform_zyx_um",
                 "global_transform_key": global_transform_key,
                 "sofima_applied": False,
             },
         },
-        merge=True,
     )
 
     if write_ome_tiffs:
+        output_directory = datastore.fused_tiff_path()
+        output_directory.mkdir(parents=True, exist_ok=True)
         export_ome_tiffs(
-            final_output,
+            datastore,
             output_directory,
             channels,
-            fused_metadata,
         )
 
-    del fused_msim, tile_msims
+    del tile_msims
     gc.collect()
 
 

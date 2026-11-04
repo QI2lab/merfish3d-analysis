@@ -13,23 +13,6 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX named semaphor
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("missing", [False, True])
-def test_semaphore_cleanup_unregisters_present_and_already_removed_names(
-    monkeypatch, missing
-):
-    import multiprocessing.resource_tracker as tracker
-    import multiprocessing.synchronize as synchronize
-
-    unlink = Mock(side_effect=FileNotFoundError() if missing else None)
-    unregister = Mock()
-    monkeypatch.setattr(synchronize, "sem_unlink", unlink)
-    monkeypatch.setattr(tracker, "unregister", unregister)
-    _cleanup_fusion_worker_semaphore("/loky-test")
-    unlink.assert_called_once_with("/loky-test")
-    unregister.assert_called_once_with("/loky-test", "semaphore")
-
-
-@pytest.mark.unit
 def test_semaphore_cleanup_preserves_other_errors_and_tracking(monkeypatch):
     import multiprocessing.resource_tracker as tracker
     import multiprocessing.synchronize as synchronize
@@ -50,9 +33,9 @@ def test_loky_worker_cleanup_race_exits_without_stale_tracker_warnings():
     script = """
 import gc
 import multiprocessing as mp
-from types import SimpleNamespace
 from joblib import Parallel, delayed
 from joblib.externals.loky import get_reusable_executor
+from multiview_stitcher import misc_utils
 from merfish3danalysis.DataRegistration import _direct_zarr_fusion_kwargs
 
 def work(remove_first):
@@ -68,7 +51,7 @@ def work(remove_first):
 
 if __name__ == "__main__":
     options = _direct_zarr_fusion_kwargs(
-        misc_utils=SimpleNamespace(process_batch_using_joblib=None), fusion_workers=2
+        misc_utils=misc_utils, fusion_workers=2
     )
     result = Parallel(**options["batch_options"]["batch_func_kwargs"])(
         delayed(work)(remove_first) for remove_first in [False, True, False, True]

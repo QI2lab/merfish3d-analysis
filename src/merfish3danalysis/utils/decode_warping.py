@@ -11,6 +11,147 @@ from typing import Any
 
 import numpy as np
 
+_OPTIMIZER_ESTIMATORS = {
+    "decoded_rna_on_bit_weighted_centroid_z_translation_yx_affine_graph",
+    "decoded_rna_on_bit_weighted_centroid_yx_affine_graph",
+}
+
+
+def optimizer_calibration_is_applicable(calibration: Any) -> bool:
+    """Identify corrections produced by the iterative decoder.
+
+    Parameters
+    ----------
+    calibration : Any
+        Calibration metadata to inspect.
+
+    Returns
+    -------
+    bool
+        Whether the metadata identifies an iterative decoder estimator.
+    """
+    return (
+        isinstance(calibration, Mapping)
+        and calibration.get("estimator") in _OPTIMIZER_ESTIMATORS
+    )
+
+
+def select_chromatic_affine(
+    calibration: Mapping[str, Any],
+    *,
+    channel_name: str | None = None,
+    channel_index: int | None = None,
+    wavelength_um: float | None = None,
+) -> np.ndarray | None:
+    """Select a chromatic affine using the datastore's channel priority.
+
+    Parameters
+    ----------
+    calibration : Mapping
+        Calibration metadata containing channel transforms.
+    channel_name : str or None, optional
+        Channel name to match first.
+    channel_index : int or None, optional
+        Channel index to match after the name.
+    wavelength_um : float or None, optional
+        Emission wavelength in microns to match last.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Selected affine as float32, or None if no match contains an affine.
+    """
+    channels = calibration.get("channels", {})
+    if not isinstance(channels, Mapping):
+        return None
+
+    candidates = []
+    if channel_name is not None:
+        channel = channels.get(str(channel_name))
+        if isinstance(channel, Mapping):
+            candidates.append(channel)
+    if channel_index is not None:
+        for channel in channels.values():
+            if isinstance(channel, Mapping) and int(
+                channel.get("channel_index", -1)
+            ) == int(channel_index):
+                candidates.append(channel)
+    if wavelength_um is not None:
+        wavelength = float(wavelength_um)
+        for channel in channels.values():
+            if not isinstance(channel, Mapping):
+                continue
+            stored = channel.get("wavelength_um")
+            if stored is not None and np.isclose(float(stored), wavelength):
+                candidates.append(channel)
+
+    for channel in candidates:
+        affine = channel.get("affine_zyx_um")
+        if affine is not None:
+            return np.asarray(affine, dtype=np.float32)
+    return None
+
+
+def validate_chromatic_affine(affine: Any) -> np.ndarray | None:
+    """Validate a chromatic affine for Scene publication and decoding.
+
+    Parameters
+    ----------
+    affine : Any
+        Candidate homogeneous affine transform.
+
+    Returns
+    -------
+    numpy.ndarray or None
+        Finite, invertible 4-by-4 float32 affine, or None if invalid.
+    """
+    if affine is None:
+        return None
+    affine = np.asarray(affine, dtype=np.float32)
+    if (
+        affine.shape != (4, 4)
+        or not np.isfinite(affine).all()
+        or not np.allclose(affine[3], [0, 0, 0, 1])
+        or abs(np.linalg.det(affine[:3, :3])) < 1e-12
+    ):
+        return None
+    return affine
+
+
+def load_optimizer_chromatic_affine(
+    datastore: Any, *, wavelength_um: float
+) -> np.ndarray:
+    """Load an applicable iterative optimizer estimate, or identity.
+
+    Parameters
+    ----------
+    datastore : Any
+        Datastore providing chromatic calibration metadata and transforms.
+    wavelength_um : float
+        Emission wavelength in microns.
+
+    Returns
+    -------
+    numpy.ndarray
+        Validated float32 affine, or identity when no applicable estimate exists.
+    """
+    identity = np.eye(4, dtype=np.float32)
+    load_metadata = getattr(datastore, "load_chromatic_affine_transforms_zyx_um", None)
+    if load_metadata is None:
+        return identity
+    calibration = load_metadata()
+    if not optimizer_calibration_is_applicable(calibration):
+        return identity
+    try:
+        affine = validate_chromatic_affine(
+            select_chromatic_affine(calibration, wavelength_um=wavelength_um)
+        )
+        if affine is None:
+            return identity
+    except (TypeError, ValueError, np.linalg.LinAlgError):
+        return identity
+    return affine
+
 
 def load_bit_round_transform_zyx_um(
     datastore: Any,
@@ -199,6 +340,7 @@ def warp_bit_image_to_reference(
     emission_wavelength_um: float,
     gpu_id: int = 0,
     reference_shape: Sequence[int] | None = None,
+    apply_chromatic: bool = True,
 ) -> np.ndarray:
     """
     Warp one native bit image into the round-1 local reference frame.
@@ -220,6 +362,8 @@ def warp_bit_image_to_reference(
         CUDA device ID used for interpolation.
     reference_shape : Sequence[int] or None, default=None
         Optional round-1 output Z, Y, X shape.
+    apply_chromatic : bool, default=True
+        Apply an applicable optimizer estimate. Set False for non-decoding uses.
 
     Returns
     -------
@@ -231,8 +375,10 @@ def warp_bit_image_to_reference(
         tile=tile,
         bit_id=bit_id,
     )
-    chromatic_transform_zyx_um = datastore.load_chromatic_affine_transform_zyx_um(
-        wavelength_um=emission_wavelength_um,
+    chromatic_transform_zyx_um = (
+        load_optimizer_chromatic_affine(datastore, wavelength_um=emission_wavelength_um)
+        if apply_chromatic
+        else np.eye(4, dtype=np.float32)
     )
     transform_zyx_um = compose_decode_warp_transform_zyx_um(
         round_transform_zyx_um=round_transform_zyx_um,
@@ -321,6 +467,8 @@ __all__ = [
     "compose_decode_warp_transform_zyx_um",
     "compose_optional_warp_transform_zyx_um",
     "load_bit_round_transform_zyx_um",
+    "load_optimizer_chromatic_affine",
+    "optimizer_calibration_is_applicable",
     "warp_bit_image_to_reference",
     "warp_image_to_reference_frame",
     "warp_image_with_sofima_metadata",

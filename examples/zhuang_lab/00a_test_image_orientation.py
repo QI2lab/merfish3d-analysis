@@ -1,3 +1,5 @@
+"""Create tile overviews to check Zhuang acquisition orientation."""
+
 import json
 from pathlib import Path
 
@@ -33,7 +35,6 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
     n_tiles: int, default 2
         number of tiles to load
     """
-
     # Load n_tiles
     tiles = []
     for tile_idx in tqdm(range(n_tiles), desc="loading tiles"):

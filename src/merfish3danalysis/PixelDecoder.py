@@ -18,16 +18,10 @@ History:
 - **2024/01**: Updated for qi2lab MERFISH file format v1.0.
 """
 
-import multiprocessing as mp
-
-from merfish3danalysis.utils.dataio import time_stamp
-from merfish3danalysis.utils.imageprocessing import image_has_signal
-
-mp.set_start_method("spawn", force=True)
-
 import ctypes
 import gc
 import hashlib
+import multiprocessing as mp
 import operator
 import os
 import shutil
@@ -40,7 +34,11 @@ from pathlib import Path
 from random import sample
 from typing import Literal
 
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.imageprocessing import image_has_signal
+
 _CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+_SPAWN_CONTEXT = mp.get_context("spawn")
 
 
 @dataclass(frozen=True)
@@ -117,7 +115,6 @@ from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
 from cucim.skimage.morphology import remove_small_objects
 from cupyx.scipy.ndimage import gaussian_filter
 from cuvs.distance import pairwise_distance
-from roifile import roiread
 from scipy.spatial import cKDTree
 from shapely.geometry import Point, Polygon
 from skimage.draw import polygon as rasterize_polygon
@@ -125,7 +122,10 @@ from skimage.measure import regionprops_table
 from tqdm.auto import tqdm, trange
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
+from merfish3danalysis.utils.decode_warping import (
+    optimizer_calibration_is_applicable,
+    warp_bit_image_to_reference,
+)
 from merfish3danalysis.utils.spacing import round_spacing_um
 
 DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
@@ -169,7 +169,7 @@ def _start_gpu_worker_process(
     previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
     try:
-        process = mp.Process(target=target, args=args)
+        process = _SPAWN_CONTEXT.Process(target=target, args=args)
         process.start()
     finally:
         if previous_visible_devices is None:
@@ -219,6 +219,7 @@ def decode_tiles_worker(
     minimum_pixels: float,
     feature_predictor_threshold: float,
     normalization_method: Literal["iterative", "global", "none"],
+    decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
@@ -249,6 +250,8 @@ def decode_tiles_worker(
         Minimum feature-predictor probability passed to tile decoding.
     normalization_method : Literal['iterative', 'global', 'none']
         Normalization source used for pixel traces.
+    decode_run_key : str or None
+        Optional run whose normalization and decoded outputs the worker uses.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
 
@@ -280,6 +283,7 @@ def decode_tiles_worker(
         num_gpus=1,
         verbose=0,
         decode_mode=decode_mode,
+        decode_run_key=decode_run_key,
         normalization_features=normalization_features,
     )
 
@@ -339,6 +343,7 @@ def _optimize_norm_worker(
     feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
     excluded_gene_ids: Sequence[str],
+    decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
     """
@@ -374,6 +379,8 @@ def _optimize_norm_worker(
     excluded_gene_ids : Sequence[str]
         Codebook gene IDs whose winning pixel assignments are suppressed during
         iterative optimization.
+    decode_run_key : str or None
+        Optional run whose normalization vectors the worker loads and updates.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
     """
@@ -395,6 +402,7 @@ def _optimize_norm_worker(
         verbose=0,
         decode_mode=decode_mode,
         excluded_gene_ids=excluded_gene_ids,
+        decode_run_key=decode_run_key,
         normalization_features=normalization_features,
     )
 
@@ -430,8 +438,7 @@ def _optimize_norm_worker(
 
 
 class PixelDecoder:
-    """
-    Retrieve and process one tile from qi2lab 3D widefield zarr structure.
+    """Retrieve and decode tiles from a qi2lab datastore.
 
     Normalize the MERFISH codebook and image data, perform
     plane-by-plane voxel decoding with the exact two-threshold caller,
@@ -439,19 +446,19 @@ class PixelDecoder:
 
     Parameters
     ----------
-    datastore: qi2labDataStore
-        qi2labDataStore object
-    merfish_bits: int, default 16
-        number of merfish bits. Assumes that in codebook, MERFISH rounds are [0,merfish_bits].
-    num_gpus: int, default 1
-        number of GPUs to use for decoding. If > 1, will split decoding across GPUs.
-    verbose: int, default 1
-        control verbosity. 0 - no output, 1 - tqdm bars, 2 - diagnostic outputs
-    use_mask: bool, default False
-        use mask stored in fiducial directory
-    z_range: Sequence[int], default None
-        z range to analyze. In integer indices from [0,N] where N is number of
-        z planes.
+    datastore : qi2labDataStore
+        Datastore containing preprocessed images, transforms, and the codebook.
+    merfish_bits : int, default 16
+        Number of MERFISH readout bits.
+    num_gpus : int, default 1
+        Number of GPUs to use for decoding.
+    verbose : int, default 1
+        Progress verbosity: 0 suppresses routine output, 1 shows progress,
+        and 2 includes diagnostic output.
+    use_mask : bool or None, default False
+        Masked decoding is not implemented; this must be False or None.
+    z_range : Sequence[int] or None, default None
+        Half-open Z-index range to decode. None selects all planes.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
         Connected-component and filtering mode. ``auto`` follows the datastore
         microscope type.
@@ -459,6 +466,17 @@ class PixelDecoder:
         If True, estimate chromatic affine transforms during iterative
         normalization. If False, use existing datastore calibration metadata
         with identity fallback.
+    chromatic_affine_config : ChromaticAffineEstimationConfig or None, default None
+        Parameters for RNA-derived chromatic affine estimation.
+    excluded_gene_ids : Sequence[str] or None, default None
+        Codebook gene IDs whose winning pixel assignments should be suppressed.
+        The full codebook remains in the nearest-neighbor search.
+    normalization_features : {'all', 'cells'}, default 'cells'
+        Fit normalization using all features or only those inside Cellpose
+        outlines. Without segmentation, ``cells`` falls back to all features.
+        This does not spatially filter the final decoded output.
+    decode_run_key : str or None, default None
+        Optional run name used to isolate normalization and decoded output.
     """
 
     def __init__(
@@ -474,44 +492,12 @@ class PixelDecoder:
         chromatic_affine_config: ChromaticAffineEstimationConfig | None = None,
         excluded_gene_ids: Sequence[str] | None = None,
         normalization_features: Literal["all", "cells"] = "cells",
+        decode_run_key: str | None = None,
     ) -> None:
-        """
-        Initialize the object.
+        """Initialize the decoding workflow."""
+        if use_mask:
+            raise NotImplementedError("Masked decoding is not implemented.")
 
-        Parameters
-        ----------
-        datastore : qi2labDataStore
-            Datastore containing preprocessed images, transforms, codebook, and
-            decoded output groups.
-        merfish_bits : int
-            Number of MERFISH readout bits.
-        num_gpus : int
-            Number of GPUs to use for decoding.
-        verbose : int
-            Progress verbosity.
-        use_mask : bool | None
-            If True, use the stored fiducial mask during decoding.
-        z_range : Sequence[int] | None
-            Z-index range to decode. If None, decode all planes.
-        decode_mode : Literal['auto', '2d', '3d']
-            Connected-component and filtering mode.
-        estimate_chromatic_affines : bool
-            If True, iterative normalization estimates chromatic affine
-            transforms from decoded on-bit centroids. If False, decoding uses
-            existing datastore chromatic calibration metadata with identity
-            fallback.
-        chromatic_affine_config : ChromaticAffineEstimationConfig or None
-            Explicit RNA-derived chromatic affine estimation parameters.
-        excluded_gene_ids : Sequence[str] or None
-            Codebook gene IDs whose winning pixel assignments should be
-            suppressed. The full codebook remains in the nearest-neighbor
-            search so excluded signal cannot fall through to another codeword.
-        normalization_features : Literal['all', 'cells']
-            Fit global and iterative normalization with all features or only
-            features inside Cellpose outlines. Without segmentation, ``cells``
-            falls back to all features. This does not spatially filter the
-            final decoded output.
-        """
         self._datastore_path = Path(datastore.datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
@@ -543,7 +529,7 @@ class PixelDecoder:
             self._is_3D = False
         else:
             self._is_3D = True
-        self._decode_run_key = None
+        self._decode_run_key = datastore._validate_decode_run_key(decode_run_key)
         if z_range is None:
             self._z_crop = False
             self._z_range = [0, None]
@@ -554,21 +540,12 @@ class PixelDecoder:
 
         self._load_codebook()
         (
-            self._excluded_gene_ids,
+            self._optimization_excluded_gene_ids,
             self._excluded_codeword_indices,
         ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
-        self._optimization_excluded_gene_ids = self._excluded_gene_ids
-        self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
-        self._decoding_matrix = self._decoding_matrix_no_errors.copy()
+        self._decoding_matrix = self._normalize_codebook(include_errors=False)
         self._barcode_count = self._decoding_matrix.shape[0]
-        self._bit_count = self._decoding_matrix.shape[1]
 
-        if use_mask:
-            self._load_mask()  # TO DO: implement
-        else:
-            self._mask_image = None
-
-        self._codebook_style = 1
         self._optimize_normalization_weights = False
         self._collect_chromatic_centroids = False
         self._global_normalization_loaded = False
@@ -592,39 +569,15 @@ class PixelDecoder:
             return cached
 
         outlines = None
-        segmentation_root = getattr(self._datastore, "_segmentation_root_path", None)
-        if segmentation_root is not None:
-            cellpose_root = Path(segmentation_root) / Path("cellpose")
-            roi_path = cellpose_root / Path("imagej_rois/global_coords_rois.zip")
-            outline_path = cellpose_root / Path("cell_outlines.json")
-            segmentation_geometry_exists = roi_path.exists() or outline_path.exists()
-        else:
-            segmentation_geometry_exists = callable(
-                getattr(self._datastore, "load_global_cellpose_roi_zip", None)
-            ) or callable(
-                getattr(self._datastore, "load_global_cellpose_outlines", None)
-            )
+        segmentation_geometry_exists = (
+            self._datastore.cellpose_global_rois_path().exists()
+            or self._datastore.cellpose_outlines_path().exists()
+        )
 
         if segmentation_geometry_exists:
-            load_roi_zip = getattr(
-                self._datastore,
-                "load_global_cellpose_roi_zip",
-                None,
-            )
-            if callable(load_roi_zip):
-                outlines = load_roi_zip()
-                if outlines is not None:
-                    segmentation_geometry_exists = True
+            outlines = self._datastore.load_global_cellpose_roi_zip()
             if outlines is None:
-                load_outlines = getattr(
-                    self._datastore,
-                    "load_global_cellpose_outlines",
-                    None,
-                )
-                if callable(load_outlines):
-                    outlines = load_outlines()
-                    if outlines is not None:
-                        segmentation_geometry_exists = True
+                outlines = self._datastore.load_global_cellpose_outlines()
 
         polygons = []
         for coordinates in (outlines or {}).values():
@@ -926,26 +879,24 @@ class PixelDecoder:
             normalized codebook
         """
         with cp.cuda.Device(gpu_id):
-            self._barcode_set = cp.asarray(
-                self._codebook_matrix[:, 0 : self._n_merfish_bits]
-            )
-            magnitudes = cp.linalg.norm(self._barcode_set, axis=1, keepdims=True)
+            barcode_set = cp.asarray(self._codebook_matrix[:, 0 : self._n_merfish_bits])
+            magnitudes = cp.linalg.norm(barcode_set, axis=1, keepdims=True)
             magnitudes[magnitudes == 0] = 1
 
             if not include_errors:
                 # Normalize directly using broadcasting
-                normalized_barcodes = self._barcode_set / magnitudes
+                normalized_barcodes = barcode_set / magnitudes
                 return cp.asnumpy(normalized_barcodes)
             else:
                 # Pre-compute the normalized barcodes
-                normalized_barcodes = self._barcode_set / magnitudes
+                normalized_barcodes = barcode_set / magnitudes
 
                 # Initialize an empty list to hold all barcodes with single errors
                 barcodes_with_single_errors = [normalized_barcodes]
 
                 # Generate single-bit errors
-                for bit_index in range(self._barcode_set.shape[1]):
-                    flipped_barcodes = self._barcode_set.copy()
+                for bit_index in range(barcode_set.shape[1]):
+                    flipped_barcodes = barcode_set.copy()
                     flipped_barcodes[:, bit_index] = 1 - flipped_barcodes[:, bit_index]
                     flipped_magnitudes = cp.sqrt(
                         cp.sum(flipped_barcodes**2, axis=1, keepdims=True)
@@ -989,13 +940,10 @@ class PixelDecoder:
         """
         self._global_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
-            normalization_vector, background_vector = (
+            normalization_vector, background_vector, metadata = (
                 self._datastore.load_decode_normalization_vectors(
-                    self._decode_run_key, "global"
+                    self._decode_run_key, "global", include_metadata=True
                 )
-            )
-            metadata = self._datastore.load_decode_normalization_metadata(
-                self._decode_run_key, "global"
             )
             if (
                 not recalculate
@@ -1268,8 +1216,10 @@ class PixelDecoder:
         """
         self._iterative_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
-            metadata = self._datastore.load_decode_normalization_metadata(
-                self._decode_run_key, "iterative"
+            normalization_vector, background_vector, metadata = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "iterative", include_metadata=True
+                )
             )
             expected_fingerprint = (
                 metadata.get("codebook_sha256") if isinstance(metadata, dict) else None
@@ -1282,12 +1232,6 @@ class PixelDecoder:
                     "Cached iterative normalization vectors were fitted with a "
                     "different active codebook. Re-run iterative optimization."
                 )
-            normalization_vector, background_vector = (
-                self._datastore.load_decode_normalization_vectors(
-                    self._decode_run_key, "iterative"
-                )
-            )
-
             if normalization_vector is not None and background_vector is not None:
                 if not self._normalization_features_match_metadata(metadata):
                     raise ValueError(
@@ -1314,6 +1258,11 @@ class PixelDecoder:
                 self._iterative_background_vector = cp.asarray(background_vector)
                 self._iterative_normalization_loaded = True
             else:
+                if getattr(self, "_df_barcodes_loaded", None) is None:
+                    raise ValueError(
+                        "Iterative normalization is not available for this decode "
+                        "run. Run iterative optimization before decoding."
+                    )
                 self._iterative_normalization_vectors(gpu_id=gpu_id)
 
             cp.cuda.Stream.null.synchronize()
@@ -1559,7 +1508,7 @@ class PixelDecoder:
         }
         previous_chromatic_affines = {}
         previous_calibration = self._datastore.load_chromatic_affine_transforms_zyx_um()
-        if isinstance(previous_calibration, dict):
+        if optimizer_calibration_is_applicable(previous_calibration):
             for channel in previous_calibration.get("channels", {}).values():
                 if not isinstance(channel, dict):
                     continue
@@ -1606,7 +1555,9 @@ class PixelDecoder:
                 ]
                 if not all(col in barcode_table.columns for col in center_cols):
                     continue
-                centers = barcode_table[center_cols].to_numpy(dtype=np.float64)
+                centers = barcode_table[center_cols].to_numpy(
+                    dtype=np.float64, copy=not self._is_3D
+                )
                 if not self._is_3D:
                     centers[:, 0] = 0.0
                 intensity_col = f"bit{bit:02d}_intensity_sum"
@@ -1866,6 +1817,9 @@ class PixelDecoder:
         None
             Identity channel transforms are written to datastore metadata.
         """
+        existing = self._datastore.load_chromatic_affine_transforms_zyx_um()
+        if optimizer_calibration_is_applicable(existing):
+            return
         bit_ids = self._datastore.bit_ids[0 : self._n_merfish_bits]
         reference_tile = self._datastore.tile_ids[0]
         wavelengths = []
@@ -1940,7 +1894,6 @@ class PixelDecoder:
             iterable_bits = self._datastore.bit_ids[0 : self._n_merfish_bits]
 
         images = []
-        self._em_wvl = []
         for bit_id in iterable_bits:
             readout_image = self._datastore.load_local_readout_image(
                 tile=self._tile_idx,
@@ -1972,7 +1925,6 @@ class PixelDecoder:
             )
             images.append(warped_data[self._z_slice, :, :])
             del feature_predictor_array, readout_array
-            self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)
         if self._decode_mode == "3d" and self._image_data.shape[1] < 2:
@@ -4137,42 +4089,15 @@ class PixelDecoder:
             if self._verbose >= 1:
                 print("Insufficient Blank barcodes called for filtering.")
 
-    @staticmethod
-    def _roi_to_shapely(roi):  # noqa
-        """
-        Convert an ImageJ ROI boundary to the cell-assignment polygon.
-
-        Parameters
-        ----------
-        roi : Any
-            ImageJ ROI containing subpixel boundary coordinates.
-
-        Returns
-        -------
-        Any
-            Shapely polygon with the ROI coordinate columns reversed for cell assignment.
-        """
-        return Polygon(roi.subpixel_coordinates[:, ::-1])
-
     def _assign_cells(self) -> None:
         """Assign cells to barcodes using Cellpose ROIs."""
-        cellpose_roi_path = (
-            self._datastore.datastore_path
-            / Path("segmentation")
-            / Path("cellpose")
-            / Path("imagej_rois")
-            / Path("global_coords_rois.zip")
-        )
-
-        try:
-            rois = roiread(cellpose_roi_path)
-        except (OSError, FileNotFoundError, ValueError) as e:
-            print(f"Failed to read ROIs: {e}")
+        rois = self._datastore.load_global_cellpose_roi_zip()
+        if rois is None:
             return
 
         shapely_polygons = []
-        for roi in rois:
-            shapely_polygon = self._roi_to_shapely(roi)
+        for coordinates in rois.values():
+            shapely_polygon = Polygon(np.asarray(coordinates)[:, ::-1])
             if shapely_polygon:
                 shapely_polygons.append(shapely_polygon)
 
@@ -4779,6 +4704,7 @@ class PixelDecoder:
                         feature_predictor_threshold,
                         run_chromatic_estimation,
                         self._optimization_excluded_gene_ids,
+                        self._decode_run_key,
                         getattr(self, "_normalization_features", "cells"),
                     ),
                     physical_gpu_id=gpu,
@@ -4867,6 +4793,14 @@ class PixelDecoder:
             target_gross_misid_rate=float(target_gross_misid_rate),
             lr_fdr_target=float(lr_fdr_target),
         )
+        # All workers share one run's cached vectors. Calculate them once
+        # before spawning workers so they cannot race to replace the cache.
+        if normalization_method != "none":
+            self._load_global_normalization_vectors(
+                gpu_id=0, lowpass_sigma=lowpass_sigma
+            )
+        if normalization_method == "iterative":
+            self._load_iterative_normalization_vectors(gpu_id=0)
         all_tiles = list(range(len(self._datastore.tile_ids)))
         chunk_size = (len(all_tiles) + self._num_gpus - 1) // self._num_gpus
 
@@ -4891,6 +4825,7 @@ class PixelDecoder:
                     minimum_pixels,
                     feature_predictor_threshold,
                     normalization_method,
+                    self._decode_run_key,
                     getattr(self, "_normalization_features", "cells"),
                 ),
                 physical_gpu_id=gpu,

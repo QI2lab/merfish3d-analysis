@@ -89,21 +89,36 @@ def test_one_empty_spot_set_has_zero_precision_recall_and_f1(
 @pytest.mark.integration
 @pytest.mark.parametrize("world_mapping", [False, True])
 def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
-    monkeypatch, world_mapping
+    image_datastore, tmp_path, world_mapping
 ):
     import importlib
 
     import pandas as pd
+
+    from merfish3danalysis.cli.statphysbio_simulation.sweep_f1 import (
+        calculate_F1 as calculate_sweep_f1,
+    )
 
     command = importlib.import_module(
         "merfish3danalysis.cli.statphysbio_simulation.calculate_F1"
     )
     # The 3x8x10 image spans Z centers 1, 3, 5 um. Centered ground-truth
     # X,Y columns correspond to image Y,X, with offsets 1.75 and 1.125 um.
-    datastore = Mock(voxel_size_zyx_um=[2.0, 0.5, 0.25])
-    datastore.load_codebook_parsed.return_value = (["A", "B"], None)
-    datastore.load_local_corrected_image.return_value = np.zeros((3, 8, 10))
-    datastore.load_global_filtered_decoded_spots.return_value = pd.DataFrame(
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [2.0, 0.5, 0.25]
+    datastore.codebook = pd.DataFrame(
+        {
+            "gene_id": ["A", "B"],
+            "bit01": [1, 0],
+            "bit02": [0, 1],
+            "bit03": [1, 0],
+            "bit04": [0, 1],
+        }
+    )
+    datastore.save_local_corrected_image(
+        np.zeros((3, 8, 10), dtype=np.uint16), tile=0, round=0
+    )
+    spots = pd.DataFrame(
         {
             "global_z": [0.0, 2.0, 0.0, 4.0],
             "global_y": [1.5, 2.0, 0.0, 3.0],
@@ -120,15 +135,15 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
         affine = np.array([[1, 0, 0, 3], [0, 0, -1, 4], [0, 1, 0, 5], [0, 0, 0, 1]])
         # Independently calculated world coordinates after stage position,
         # camera Y reflection, then global XY rotation and translation.
-        datastore.load_global_filtered_decoded_spots.return_value[
-            ["global_z", "global_y", "global_x"]
-        ] = [[10, 4.25, 5.5], [12, 3.75, 5], [10, 5.25, 7], [14, 3.25, 4]]
-    datastore.load_global_coord_xforms_um.return_value = (
-        affine,
-        origin,
-        [2, 0.5, 0.25],
-    )
-    datastore.load_local_stage_position_zyx_um.return_value = (origin, camera)
+        spots[["global_z", "global_y", "global_x"]] = [
+            [10, 4.25, 5.5],
+            [12, 3.75, 5],
+            [10, 5.25, 7],
+            [14, 3.25, 4],
+        ]
+    datastore.save_global_filtered_decoded_spots(spots)
+    datastore.save_local_stage_position_zyx_um(origin, camera, tile=0, round=0)
+    datastore.save_global_coord_xforms_um(affine, origin, [2, 0.5, 0.25], tile=0)
     truth = pd.DataFrame(
         {
             "Z": [1.0, 3.0, 5.0, 0.5, 5.5],
@@ -137,24 +152,14 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
             "Gene_label": [1, 2, 1, 1, 1],
         }
     )
-    monkeypatch.setattr(command, "qi2labDataStore", Mock(return_value=datastore))
-    monkeypatch.setattr(
-        command, "resolve_datastore_path", Mock(return_value=Path("/mock/store"))
+    truth.to_csv(tmp_path / "GT_spots.csv", index=False)
+    acquisition = tmp_path / "sim_acquisition"
+    acquisition.mkdir()
+    (acquisition / "qi2labdatastore").symlink_to(
+        datastore.datastore_path, target_is_directory=True
     )
-    monkeypatch.setattr(command.pd, "read_csv", Mock(return_value=truth))
-    to_numpy = pd.DataFrame.to_numpy
-
-    def read_only_numpy(frame, *args, **kwargs):
-        values = to_numpy(frame, *args, **kwargs)
-        values.setflags(write=False)
-        return values
-
-    monkeypatch.setattr(pd.DataFrame, "to_numpy", read_only_numpy)
-    original_spots = datastore.load_global_filtered_decoded_spots.return_value.copy()
-    result = command.calculate_F1(Path("/mock"), search_radius=0.01)
-    pd.testing.assert_frame_equal(
-        datastore.load_global_filtered_decoded_spots.return_value, original_spots
-    )
+    result = command.calculate_F1(tmp_path, search_radius=0.01)
+    pd.testing.assert_frame_equal(datastore.load_global_filtered_decoded_spots(), spots)
     # Two exact same-gene matches, two unmatched detections, one missed truth;
     # the two truth points outside the acquired Z support are excluded.
     assert result["True Positives"] == 2
@@ -163,3 +168,10 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     assert result["Precision"] == pytest.approx(1 / 2)
     assert result["Recall"] == pytest.approx(2 / 3)
     assert result["F1 Score"] == pytest.approx(4 / 7)
+
+    # The sweep can use an alternate ground-truth file, independent of the
+    # default CSV. Both entry points must use the same coordinate conventions.
+    alternate_truth = tmp_path / "alternate_ground_truth.csv"
+    truth.to_csv(alternate_truth, index=False)
+    truth.iloc[0:0].to_csv(tmp_path / "GT_spots.csv", index=False)
+    assert calculate_sweep_f1(tmp_path, alternate_truth, search_radius=0.01) == result

@@ -354,8 +354,7 @@ def main(
         "May be passed multiple times. Applied after normalization.",
     ),
 ) -> None:
-    # Validate second dataset arguments
-    """
+    r"""
     Run the bulk RNA-seq correlation CLI.
 
     Parameters
@@ -393,6 +392,7 @@ def main(
     drop_prefix : list[str]
         Remove any genes whose name begins with this prefix (case-insensitive). May be passed multiple times. Applied after normalization.
     """
+    # Validate second dataset arguments
     if file1b is not None and gene_col1b is None:
         typer.secho(
             "ERROR: --file1b was provided but --gene-col1b is missing.",

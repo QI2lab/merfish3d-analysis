@@ -20,7 +20,31 @@ def generate_qi2lab_psf(
     na: float = QI2LAB_DEFAULT_NA,
     immersion_ri: float = QI2LAB_DEFAULT_IMMERSION_RI,
 ) -> np.ndarray:
-    """Generate a normalized vectorial PSF with qi2lab microscope parameters."""
+    """Generate a normalized vectorial PSF with qi2lab microscope parameters.
+
+    Parameters
+    ----------
+    z_depth : int
+        Number of axial samples in the PSF.
+    voxel_size_zyx_um : tuple of float
+        Z, Y, X sample spacing in microns. Y spacing sets the lateral sampling.
+    emission_wavelength_um : float
+        Emission wavelength in microns.
+    na : float, optional
+        Objective numerical aperture.
+    immersion_ri : float, optional
+        Immersion medium refractive index.
+
+    Returns
+    -------
+    numpy.ndarray
+        Sum-normalized float32 PSF in ZYX order.
+
+    Raises
+    ------
+    ValueError
+        The Z depth is not positive or the generated PSF has an invalid sum.
+    """
     from psfmodels import make_psf
 
     if z_depth < 1:

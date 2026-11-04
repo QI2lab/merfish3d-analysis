@@ -17,52 +17,18 @@ from pathlib import Path
 import numpy as np
 import typer
 from cellpose import io, models
-from roifile import ImagejRoi, roiread, roiwrite
+from roifile import roiread, roiwrite
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.cellpose_rois import global_rois
 from merfish3danalysis.utils.dataio import resolve_datastore_path
 from merfish3danalysis.utils.spacing import round_spacing_um
 
 app = typer.Typer(pretty_exceptions_enable=False)
 
 
-def warp_point(
-    pixel_space_point: np.ndarray,
-    spacing: np.ndarray,
-    origin: np.ndarray,
-    affine: np.ndarray,
-) -> np.ndarray:
-    """Warp point from pixel space to global space using known transforms.
-
-    Parameters
-    ----------
-    pixel_space_point : np.ndarray
-        point in the image coordinate system, zyx order
-    spacing: np.ndarray
-        pixel size in microns, zyx order
-    origin: np.ndarray
-        world coordinate origin (um), zyx order
-    affine: np.ndarray
-        4x4 affine matrix (um), zyx order
-
-    Returns
-    -------
-    registered_space_point: np.ndarray
-        point in the world coordinate system (um), zyx order
-
-    """
-
-    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
-    physical_space_point = pixel_space_point * spacing + origin
-    registered_space_point = (
-        np.array(affine) @ np.array([*list(physical_space_point), 1])
-    )[:-1]
-
-    return registered_space_point
-
-
 def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
-    """Run cellpose and save ROIs
+    """Run cellpose and save ROIs.
 
     Parameters
     ----------
@@ -71,32 +37,15 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     cellpose_parameters: dict
         dictionary of cellpose parameters
     """
-
     # initialize datastore
     datastore_path = resolve_datastore_path(root_path)
     datastore = qi2labDataStore(datastore_path)
 
-    # load the saved downsampled projection and its fused coordinates
-    max_projection_path = (
-        datastore_path
-        / "segmentation"
-        / "cellpose"
-        / "fiducial_max_projection.ome.tiff"
-    )
-    if max_projection_path.exists():
-        fused_image_path = datastore.fused_image_path()
-        attributes = datastore.load_image_metadata(fused_image_path)
-        affine_zyx_um = np.asarray(attributes["affine_zyx_um"], dtype=np.float32)
-        origin_zyx_um = np.asarray(attributes["origin_zyx_um"], dtype=np.float32)
-        spacing_zyx_um = round_spacing_um(attributes["spacing_zyx_um"])
-        fiducial_max_projection = io.imread_2D(str(max_projection_path))
-    else:
-        # create max projection if the TIFF has not been saved
-        fiducial_fused, affine_zyx_um, origin_zyx_um, spacing_zyx_um = (
-            datastore.load_global_fiducial_image(return_future=False)
-        )
-        fiducial_max_projection = np.max(np.squeeze(fiducial_fused), axis=0)
-        del fiducial_fused
+    # Load the saved downsampled projection and its fused coordinates.
+    projection = datastore.load_global_fiducial_projection(return_future=False)
+    if projection is None:
+        raise FileNotFoundError("Fused fiducial projection Scene not found.")
+    fiducial_max_projection, affine_zyx_um, origin_zyx_um, spacing_zyx_um = projection
 
     # initialize cellpose model and options
     model = models.CellposeModel(gpu=True)
@@ -125,51 +74,30 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
     )
 
     # save pixel spaced ROIs
-    imagej_roi_path_dir = (
-        datastore_path / Path("segmentation") / Path("cellpose") / Path("imagej_rois")
-    )
-    if not (imagej_roi_path_dir.exists()):
-        imagej_roi_path_dir.mkdir()
-    imagej_roi_path = imagej_roi_path_dir / Path("pixel_spacing")
+    cellpose_roi_path = datastore.cellpose_pixel_rois_path()
+    cellpose_roi_path.parent.mkdir(parents=True, exist_ok=True)
+    imagej_roi_path = cellpose_roi_path.with_name("pixel")
     if np.any(masks):
         io.save_rois(masks, str(imagej_roi_path))
     else:
-        roiwrite(imagej_roi_path_dir / "pixel_spacing_rois.zip", [], mode="w")
+        roiwrite(cellpose_roi_path, [], mode="w")
 
     # load pixel spaced ROIs
-    cellpose_roi_path = imagej_roi_path_dir / Path("pixel_spacing_rois.zip")
     pixel_spacing_rois = roiread(cellpose_roi_path)
 
-    # warp ROIs into global coordinates
-    # the ROIs are in (x,y) format. So we have to (1) fake a z dimension,
-    # (2) flip xy to yx, (3) warp, (4) remove the z, (5) flip back to (x,y)
-    # When we load to check if RNA are in an ROI, need to remember to flip
-    # back to (y,x).
-    global_spacing_rois = []
-    for cell_idx, pixel_spaced_roi in enumerate(pixel_spacing_rois):
-        pixel_coordinates = pixel_spaced_roi.coordinates().astype(np.float32)
-        padding = np.full((pixel_coordinates.shape[0], 1), 10)
-        padded_pixel_coordinates = np.hstack((padding, pixel_coordinates[:, ::-1]))
-        global_coordinates_padded = np.zeros_like(
-            padded_pixel_coordinates, dtype=np.float32
+    global_spacing_rois = list(
+        global_rois(
+            pixel_spacing_rois,
+            spacing_zyx_um,
+            origin_zyx_um,
+            affine_zyx_um,
+            min_cell_area_um2=0,
+            workers=1,
         )
-        for pt_idx, pts in enumerate(padded_pixel_coordinates):
-            global_coordinates_padded[pt_idx, :] = warp_point(
-                pts.copy().astype(np.float32),
-                spacing_zyx_um,
-                origin_zyx_um,
-                affine_zyx_um,
-            )
-        global_coordinates = global_coordinates_padded[:, 1:]
-        roi = ImagejRoi.frompoints(
-            np.round(global_coordinates[:, ::-1], 2).astype(np.float32)
-        )
-        roi.name = "cell_" + str(cell_idx).zfill(7)
-        global_spacing_rois.append(roi)
-        del roi
+    )
 
     # write global coordinate ROIs
-    global_roi_path = imagej_roi_path_dir / Path("global_coords_rois.zip")
+    global_roi_path = datastore.cellpose_global_rois_path()
     roiwrite(global_roi_path, global_spacing_rois, mode="w")
 
     # update datastore state
