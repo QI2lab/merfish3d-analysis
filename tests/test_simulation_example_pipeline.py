@@ -1043,6 +1043,55 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         - F1_ACCURACY_ALLOWANCE
     )
 
+    if decode_run_key is None:
+        first_bit = datastore.bit_ids[0]
+        deconvolved = datastore.load_local_deconvolved_readout_image(
+            0, first_bit, False
+        )
+        result = runner.invoke(
+            preprocess.app, [str(acquisition_root), "--no-decon", "--no-overwrite"]
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+        datastore = simulation_api["qi2labDataStore"](
+            acquisition_root / "qi2labdatastore"
+        )
+        assert not pixeldecode._readouts_are_deconvolved(datastore)
+        for bit in datastore.bit_ids:
+            corrected = datastore.load_local_corrected_image(
+                0, bit=bit, return_future=False
+            )
+            np.testing.assert_array_equal(
+                datastore.load_local_readout_image(0, bit, False), corrected
+            )
+            assert (
+                datastore.load_local_image_metadata(
+                    0, bit=bit, image_names=("feature_predictor_data",)
+                )["source_image"]
+                == "corrected_data"
+            )
+            assert datastore.load_local_feature_predictor_spots(0, bit) is not None
+        np.testing.assert_array_equal(
+            datastore.load_local_fusion_image(0, bit=first_bit)[:],
+            datastore.load_local_corrected_image(0, bit=first_bit, return_future=False),
+        )
+        np.testing.assert_array_equal(
+            datastore.load_local_deconvolved_readout_image(0, first_bit, False),
+            deconvolved,
+        )
+
+        no_decon_run = "no_decon_run"
+        result = runner.invoke(
+            pixeldecode.app, [*arguments, "--decode-run-key", no_decon_run]
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+        scores = simulation_api["calculate_F1"](
+            case_root, search_radius=1.0, decode_run_key=no_decon_run
+        )
+        assert scores["F1 Score"] >= (
+            EXHAUSTIVE_EXPECTED_F1_SCORES[("uniform", "0.315", "no-decon")]
+            - F1_ACCURACY_ALLOWANCE
+        )
+
     if check_exclusions:
         import pandas as pd
         from roifile import ImagejRoi, roiwrite

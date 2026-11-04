@@ -129,6 +129,124 @@ def test_fiducial_deconvolution_restores_generated_point_source(
     )
 
 
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize("image_datastore", ["one_tile"], indirect=True)
+def test_readout_processing_switches_from_deconvolved_to_corrected_images(
+    image_datastore,
+):
+    from scipy.signal import fftconvolve
+    from ufish.api import UFish
+    from yaozarrs import open_group
+
+    from merfish3danalysis.utils.psf import generate_qi2lab_psf
+    from merfish3danalysis.utils.ufish import load_ufish_model
+
+    datastore = image_datastore
+    shape = (9, 96, 96)
+    rng = np.random.default_rng(12)
+    spots = np.zeros(shape, dtype=np.float32)
+    for z, y, x in rng.integers([1, 8, 8], [8, 88, 88], size=(24, 3)):
+        spots[z, y, x] += 12000
+    psf = generate_qi2lab_psf(
+        z_depth=shape[0],
+        voxel_size_zyx_um=tuple(datastore.voxel_size_zyx_um),
+        emission_wavelength_um=0.58,
+    )
+    image = rng.poisson(5 + np.maximum(fftconvolve(spots, psf, mode="same"), 0)).astype(
+        np.uint16
+    )
+    datastore.channel_psfs = np.stack([psf] * 3)
+    for round_index in range(datastore.num_rounds):
+        datastore.save_local_corrected_image(
+            image, tile=0, round=round_index, psf_idx=0
+        )
+        datastore.save_local_stage_position_zyx_um(
+            [0, 0, 0], np.eye(4), tile=0, round=round_index
+        )
+    for bit in range(datastore.num_bits):
+        datastore.save_local_corrected_image(image + bit, tile=0, bit=bit, psf_idx=0)
+
+    registration = DataRegistration(
+        datastore,
+        decon_fiducial=False,
+        decon_readout=True,
+        perform_deformable_registration=False,
+        overwrite_outputs=True,
+        num_gpus=1,
+        verbose=0,
+    )
+    registration.register_all_tiles()
+    old_deconvolved = datastore.load_local_deconvolved_readout_image(0, 0, False)
+    assert old_deconvolved is not None
+    assert not np.array_equal(old_deconvolved, image)
+
+    products = open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
+    decon_revision = products["tile0000/bit001/decon_data"]["revision"]
+    model = UFish(device="cuda:0")
+    load_ufish_model(model)
+    corrected_spots, expected_prediction = model.predict(
+        image, axes="zyx", blend_3d=False, batch_size=1
+    )
+    datastore.save_local_feature_predictor_image(
+        expected_prediction, tile=0, bit=0, source_image="corrected_data"
+    )
+    datastore.save_local_feature_predictor_spots(corrected_spots, tile=0, bit=0)
+    registration.overwrite_outputs = False
+    registration.register_all_tiles()
+    products = open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
+    assert products["tile0000/bit001/decon_data"]["revision"] == decon_revision
+    assert (
+        datastore.load_local_image_metadata(
+            0, bit=0, image_names=("feature_predictor_data",)
+        )["source_image"]
+        == "decon_data"
+    )
+
+    registration = DataRegistration(
+        datastore,
+        decon_fiducial=False,
+        decon_readout=False,
+        perform_deformable_registration=False,
+        overwrite_outputs=False,
+        num_gpus=1,
+        verbose=0,
+    )
+    registration.register_all_tiles()
+    np.testing.assert_allclose(
+        datastore.load_local_feature_predictor_image(0, 0, False),
+        expected_prediction,
+        atol=1e-5,
+    )
+    for bit in range(datastore.num_bits):
+        corrected = datastore.load_local_corrected_image(
+            0, bit=bit, return_future=False
+        )
+        np.testing.assert_array_equal(
+            datastore.load_local_readout_image(0, bit, False), corrected
+        )
+        np.testing.assert_array_equal(
+            datastore.load_local_fusion_image(0, bit=bit)[:], corrected
+        )
+        assert (
+            datastore.load_local_image_metadata(
+                0, bit=bit, image_names=("feature_predictor_data",)
+            )["source_image"]
+            == "corrected_data"
+        )
+    np.testing.assert_array_equal(
+        datastore.load_local_deconvolved_readout_image(0, 0, False), old_deconvolved
+    )
+    products_before = dict(
+        open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
+    )
+    registration.register_all_tiles()
+    assert (
+        open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
+        == products_before
+    )
+
+
 @pytest.fixture
 def registration(image_datastore):
     return DataRegistration(
@@ -165,6 +283,7 @@ def test_complete_local_tiles_still_run_requested_global_registration(
 
     registration._global_registration = global_registration
     registration._perform_deformable_registration = False
+    registration._decon_readout = True
     registration._num_gpus = 0
     image = np.ones((2, 3, 4), dtype=np.uint16)
     for tile in range(registration.datastore.num_tiles):
@@ -187,7 +306,7 @@ def test_complete_local_tiles_still_run_requested_global_registration(
                     image, tile=tile, bit=bit
                 )
                 registration.datastore.save_local_feature_predictor_image(
-                    image, tile=tile, bit=bit
+                    image, tile=tile, bit=bit, source_image="decon_data"
                 )
                 registration.datastore.save_local_feature_predictor_spots(
                     pd.DataFrame({"z": [0], "y": [0], "x": [0]}), tile=tile, bit=bit
@@ -436,10 +555,16 @@ def test_single_tile_global_metadata_preserves_origin_without_baking_in_camera(
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "requested, present", [(False, False), (True, False), (True, True)]
+    "requested, present, expected",
+    [
+        (False, False, True),
+        (False, True, False),
+        (True, False, False),
+        (True, True, True),
+    ],
 )
 def test_tile_completion_requires_requested_readout_deconvolution(
-    registration, requested, present
+    registration, requested, present, expected
 ):
     registration._decon_fiducial = False
     registration._perform_deformable_registration = False
@@ -453,17 +578,59 @@ def test_tile_completion_requires_requested_readout_deconvolution(
         )
     for bit in range(4):
         registration.datastore.save_local_corrected_image(image, tile=0, bit=bit)
-        registration.datastore.save_local_feature_predictor_image(
-            image, tile=0, bit=bit
-        )
-        registration.datastore.save_local_feature_predictor_spots(
-            pd.DataFrame({"z": [0], "y": [0], "x": [0]}), tile=0, bit=bit
-        )
         if present:
             registration.datastore.save_local_deconvolved_readout_image(
                 image, tile=0, bit=bit
             )
-    assert registration._is_tile_complete("tile0000") == (not requested or present)
+        registration.datastore.save_local_feature_predictor_image(
+            image,
+            tile=0,
+            bit=bit,
+            source_image="decon_data" if present else "corrected_data",
+        )
+        registration.datastore.save_local_feature_predictor_spots(
+            pd.DataFrame({"z": [0], "y": [0], "x": [0]}), tile=0, bit=bit
+        )
+    assert registration._is_tile_complete("tile0000") == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("source", ["corrected_data", "decon_data"])
+def test_predictor_completion_requires_current_input_revision(registration, source):
+    import pandas as pd
+
+    datastore = registration.datastore
+    image = np.ones((2, 3, 4), dtype=np.uint16)
+    datastore.save_local_corrected_image(image, tile=0, bit=0)
+    if source == "decon_data":
+        datastore.save_local_deconvolved_readout_image(image * 2, tile=0, bit=0)
+    datastore.save_local_feature_predictor_image(
+        image, tile=0, bit=0, source_image=source
+    )
+    datastore.save_local_feature_predictor_spots(
+        pd.DataFrame({"z": [0], "y": [0], "x": [0]}), tile=0, bit=0
+    )
+    registration._decon_readout = source == "decon_data"
+    assert registration._has_valid_feature_predictor_outputs("tile0000", "bit001")
+    if source == "decon_data":
+        datastore.save_local_deconvolved_readout_image(image * 3, tile=0, bit=0)
+    else:
+        datastore.save_local_corrected_image(image * 3, tile=0, bit=0)
+    assert not registration._has_valid_feature_predictor_outputs("tile0000", "bit001")
+
+
+@pytest.mark.unit
+def test_predictor_completion_reprocesses_unspecified_input(registration):
+    import pandas as pd
+
+    datastore = registration.datastore
+    image = np.ones((2, 3, 4), dtype=np.uint16)
+    datastore.save_local_corrected_image(image, tile=0, bit=0)
+    datastore.save_local_feature_predictor_image(image, tile=0, bit=0)
+    datastore.save_local_feature_predictor_spots(
+        pd.DataFrame({"z": [0], "y": [0], "x": [0]}), tile=0, bit=0
+    )
+    assert not registration._has_valid_feature_predictor_outputs("tile0000", "bit001")
 
 
 @pytest.mark.integration

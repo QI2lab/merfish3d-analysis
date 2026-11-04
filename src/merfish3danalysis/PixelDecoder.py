@@ -540,12 +540,10 @@ class PixelDecoder:
 
         self._load_codebook()
         (
-            self._excluded_gene_ids,
+            self._optimization_excluded_gene_ids,
             self._excluded_codeword_indices,
         ) = self._resolve_excluded_gene_ids(excluded_gene_ids)
-        self._optimization_excluded_gene_ids = self._excluded_gene_ids
-        self._decoding_matrix_no_errors = self._normalize_codebook(include_errors=False)
-        self._decoding_matrix = self._decoding_matrix_no_errors.copy()
+        self._decoding_matrix = self._normalize_codebook(include_errors=False)
         self._barcode_count = self._decoding_matrix.shape[0]
 
         self._optimize_normalization_weights = False
@@ -881,26 +879,24 @@ class PixelDecoder:
             normalized codebook
         """
         with cp.cuda.Device(gpu_id):
-            self._barcode_set = cp.asarray(
-                self._codebook_matrix[:, 0 : self._n_merfish_bits]
-            )
-            magnitudes = cp.linalg.norm(self._barcode_set, axis=1, keepdims=True)
+            barcode_set = cp.asarray(self._codebook_matrix[:, 0 : self._n_merfish_bits])
+            magnitudes = cp.linalg.norm(barcode_set, axis=1, keepdims=True)
             magnitudes[magnitudes == 0] = 1
 
             if not include_errors:
                 # Normalize directly using broadcasting
-                normalized_barcodes = self._barcode_set / magnitudes
+                normalized_barcodes = barcode_set / magnitudes
                 return cp.asnumpy(normalized_barcodes)
             else:
                 # Pre-compute the normalized barcodes
-                normalized_barcodes = self._barcode_set / magnitudes
+                normalized_barcodes = barcode_set / magnitudes
 
                 # Initialize an empty list to hold all barcodes with single errors
                 barcodes_with_single_errors = [normalized_barcodes]
 
                 # Generate single-bit errors
-                for bit_index in range(self._barcode_set.shape[1]):
-                    flipped_barcodes = self._barcode_set.copy()
+                for bit_index in range(barcode_set.shape[1]):
+                    flipped_barcodes = barcode_set.copy()
                     flipped_barcodes[:, bit_index] = 1 - flipped_barcodes[:, bit_index]
                     flipped_magnitudes = cp.sqrt(
                         cp.sum(flipped_barcodes**2, axis=1, keepdims=True)
@@ -944,13 +940,10 @@ class PixelDecoder:
         """
         self._global_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
-            normalization_vector, background_vector = (
+            normalization_vector, background_vector, metadata = (
                 self._datastore.load_decode_normalization_vectors(
-                    self._decode_run_key, "global"
+                    self._decode_run_key, "global", include_metadata=True
                 )
-            )
-            metadata = self._datastore.load_decode_normalization_metadata(
-                self._decode_run_key, "global"
             )
             if (
                 not recalculate
@@ -1223,8 +1216,10 @@ class PixelDecoder:
         """
         self._iterative_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
-            metadata = self._datastore.load_decode_normalization_metadata(
-                self._decode_run_key, "iterative"
+            normalization_vector, background_vector, metadata = (
+                self._datastore.load_decode_normalization_vectors(
+                    self._decode_run_key, "iterative", include_metadata=True
+                )
             )
             expected_fingerprint = (
                 metadata.get("codebook_sha256") if isinstance(metadata, dict) else None
@@ -1237,12 +1232,6 @@ class PixelDecoder:
                     "Cached iterative normalization vectors were fitted with a "
                     "different active codebook. Re-run iterative optimization."
                 )
-            normalization_vector, background_vector = (
-                self._datastore.load_decode_normalization_vectors(
-                    self._decode_run_key, "iterative"
-                )
-            )
-
             if normalization_vector is not None and background_vector is not None:
                 if not self._normalization_features_match_metadata(metadata):
                     raise ValueError(
@@ -1905,7 +1894,6 @@ class PixelDecoder:
             iterable_bits = self._datastore.bit_ids[0 : self._n_merfish_bits]
 
         images = []
-        self._em_wvl = []
         for bit_id in iterable_bits:
             readout_image = self._datastore.load_local_readout_image(
                 tile=self._tile_idx,
@@ -1937,7 +1925,6 @@ class PixelDecoder:
             )
             images.append(warped_data[self._z_slice, :, :])
             del feature_predictor_array, readout_array
-            self._em_wvl.append(em_wvl)
 
         self._image_data = np.stack(images, axis=0)
         if self._decode_mode == "3d" and self._image_data.shape[1] < 2:

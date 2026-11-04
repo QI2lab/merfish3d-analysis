@@ -378,7 +378,7 @@ def test_scene_preserves_acquisition_channel_order(image_datastore):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("name", ["num_rounds", "num_tiles"])
+@pytest.mark.parametrize("name", ["num_rounds", "num_tiles", "num_bits"])
 def test_scene_preserves_acquisition_counts(image_datastore, name):
     datastore = image_datastore
     count = getattr(datastore, name)
@@ -391,6 +391,59 @@ def test_scene_preserves_acquisition_counts(image_datastore, name):
         setattr(datastore, name, count + 1)
     assert getattr(datastore, name) == count
     assert path.read_bytes() == original_metadata
+    if name == "num_bits":
+        from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+        reopened = qi2labDataStore(datastore.datastore_path)
+        assert reopened.num_bits == count
+        assert reopened.bit_ids == datastore.bit_ids
+
+
+@pytest.mark.unit
+def test_setting_bit_count_before_scene_updates_bit_ids(tmp_path):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
+    datastore.num_bits = 2
+    assert datastore.bit_ids == ["bit001", "bit002"]
+    datastore.num_bits = 3
+    assert datastore.bit_ids == ["bit001", "bit002", "bit003"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "invalid_order, mismatch",
+    [
+        ([[1, 1, 3], [2, 2, 4], [3, 5, 6]], "rounds"),
+        ([[1, 1, 3], [2, 2, 5]], "bits"),
+    ],
+)
+def test_rejected_experiment_order_preserves_acquisition(
+    tmp_path, invalid_order, mismatch
+):
+    import pandas as pd
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = qi2labDataStore(tmp_path / "qi2labdatastore")
+    datastore.channels_in_data = ["fiducial", "readout1", "readout2"]
+    datastore.experiment_order = np.array([[1, 1, 3], [2, 2, 4]])
+    original = datastore.experiment_order.copy()
+    path = (
+        datastore.datastore_path
+        / "acquisition/experiment_order/experiment_order.parquet"
+    )
+    original_bytes = path.read_bytes()
+
+    with pytest.raises(AssertionError, match=f"Number of {mismatch}"):
+        datastore.experiment_order = np.asarray(invalid_order)
+
+    pd.testing.assert_frame_equal(datastore.experiment_order, original)
+    assert path.read_bytes() == original_bytes
+    assert datastore.num_rounds == 2
+    assert datastore.num_bits == 4
+    assert datastore.round_ids == ["round001", "round002"]
+    assert datastore.bit_ids == ["bit001", "bit002", "bit003", "bit004"]
 
 
 @pytest.mark.unit

@@ -150,7 +150,7 @@ def _default_qi2lab_magnitude_threshold(
 
 def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     """
-    Return whether registered readout data were saved after deconvolution.
+    Return whether the feature predictor used deconvolved readout data.
 
     Parameters
     ----------
@@ -160,7 +160,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     Returns
     -------
     bool
-        True if the first registered readout records deconvolution metadata.
+        True if the first readout selects deconvolved pixels.
     """
     tile_ids = datastore.tile_ids
     bit_ids = datastore.bit_ids
@@ -171,12 +171,7 @@ def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
     if not tile_ids or not bit_ids:
         return False
 
-    attributes = datastore.load_local_image_metadata(
-        tile_ids[0],
-        bit=bit_ids[0],
-        image_names=("decon_data",),
-    )
-    return bool(attributes.get("deconvolution", False))
+    return datastore.local_readout_image_name(tile_ids[0], bit_ids[0]) == "decon_data"
 
 
 def _default_qi2lab_feature_predictor_threshold(

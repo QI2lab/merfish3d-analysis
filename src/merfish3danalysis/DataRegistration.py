@@ -1177,7 +1177,13 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             )
 
             # deconvolution
-            if dr._decon_readout:
+            if dr._decon_readout and decon_on_disk and not dr._overwrite_outputs:
+                predictor_input_image = (
+                    dr._datastore.load_local_deconvolved_readout_image(
+                        tile=dr._tile_id, bit=bit_id, return_future=False
+                    )
+                )
+            elif dr._decon_readout:
                 start_time = timeit.default_timer()
                 metadata = dr._datastore.load_image_metadata(
                     dr._datastore.local_image_path(
@@ -1298,7 +1304,10 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
 
             # save results
             dr._datastore.save_local_feature_predictor_image(
-                feature_predictor_data, tile=dr._tile_id, bit=bit_id
+                feature_predictor_data,
+                tile=dr._tile_id,
+                bit=bit_id,
+                source_image="decon_data" if dr._decon_readout else "corrected_data",
             )
             dr._datastore.save_local_feature_predictor_spots(
                 feature_predictor_loc, tile=dr._tile_id, bit=bit_id
@@ -1514,7 +1523,7 @@ class DataRegistration:
         Returns
         -------
         bool
-            True when ``decon_data`` exists and matches the corrected image shape.
+            True when ``decon_data`` matches the current corrected image and shape.
         """
         if round_id is None:
             raise ValueError("round_id is required for fiducial images.")
@@ -1526,7 +1535,14 @@ class DataRegistration:
         decon_shape = self._datastore.image_shape(
             self._datastore.local_image_path(tile_id, "decon_data", round=round_id)
         )
-        return corrected_shape is not None and decon_shape == corrected_shape
+        return (
+            corrected_shape is not None
+            and decon_shape == corrected_shape
+            and self._datastore.local_deconvolution_source_is_current(
+                tile_id, round=round_id
+            )
+            is True
+        )
 
     def _has_valid_deconvolved_readout_image(
         self,
@@ -1546,7 +1562,7 @@ class DataRegistration:
         Returns
         -------
         bool
-            True when ``decon_data`` exists and matches the corrected image shape.
+            True when ``decon_data`` matches the current corrected image and shape.
         """
         tile_id = self._tile_id if tile_id is None else tile_id
         if bit_id is None:
@@ -1558,7 +1574,14 @@ class DataRegistration:
         readout_shape = self._datastore.image_shape(
             self._datastore.local_image_path(tile_id, "decon_data", bit=bit_id)
         )
-        return corrected_shape is not None and readout_shape == corrected_shape
+        return (
+            corrected_shape is not None
+            and readout_shape == corrected_shape
+            and self._datastore.local_deconvolution_source_is_current(
+                tile_id, bit=bit_id
+            )
+            is True
+        )
 
     def _has_valid_feature_predictor_outputs(
         self,
@@ -1587,19 +1610,30 @@ class DataRegistration:
         corrected_shape = self._datastore.image_shape(
             self._datastore.local_image_path(tile_id, "corrected_data", bit=bit_id)
         )
-        feature_shape = self._datastore.image_shape(
-            self._datastore.local_image_path(
-                tile_id,
-                f"{self._datastore.feature_predictor_folder_name}_data",
-                bit=bit_id,
-            )
+        feature_path = self._datastore.local_image_path(
+            tile_id,
+            f"{self._datastore.feature_predictor_folder_name}_data",
+            bit=bit_id,
         )
+        feature_shape = self._datastore.image_shape(feature_path)
         spots_path = self._datastore.local_feature_predictor_spots_path(tile_id, bit_id)
-        return (
-            corrected_shape is not None
-            and feature_shape == corrected_shape
-            and spots_path.exists()
-        )
+        if (
+            corrected_shape is None
+            or feature_shape != corrected_shape
+            or not spots_path.exists()
+            or not self._datastore.local_feature_predictor_spots_are_current(
+                tile_id, bit_id
+            )
+        ):
+            return False
+        expected = "decon_data" if self._decon_readout else "corrected_data"
+        attributes = self._datastore.load_image_metadata(feature_path)
+        if attributes.get("source_image") != expected:
+            return False
+        try:
+            return self._datastore.local_readout_image_name(tile_id, bit_id) == expected
+        except ValueError:
+            return False
 
     def _is_tile_complete(
         self,

@@ -53,6 +53,9 @@ class qi2labDataStore:
         "fiducial": "fused/fiducial",
         "all_channels": "fused/full_dataset",
     }
+    _FEATURE_PREDICTOR_REVISION_KEY: ClassVar[bytes] = (
+        b"merfish3d.feature_predictor_revision"
+    )
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
         """
@@ -283,10 +286,10 @@ class qi2labDataStore:
     ) -> Any:
         """Return the native Zarr handle required by MVS direct-Zarr fusion.
 
-        Deconvolved pixels take precedence when present, matching global
-        registration and fusion's existing input selection. Other datastore
-        array access uses TensorStore. ``chunks`` requests a compatible lazy
-        chunk view when mixing products with different storage layouts.
+        Fiducials use current deconvolved pixels when available. Readouts use their
+        feature predictor's input when recorded. Other datastore array access
+        uses TensorStore. ``chunks`` requests a compatible lazy chunk view
+        when mixing products with different storage layouts.
 
         Parameters
         ----------
@@ -305,9 +308,23 @@ class qi2labDataStore:
         zarr.Array
             Lazy array accepted by multiview-stitcher.
         """
-        for image_name in ("decon_data", "corrected_data"):
+        if (round is None) == (bit is None):
+            raise ValueError("Provide exactly one of round or bit.")
+        image_names = (
+            (self.local_readout_image_name(tile, bit),)
+            if bit is not None
+            else ("decon_data", "corrected_data")
+        )
+        for image_name in image_names:
             path = self.local_image_path(tile, image_name, round=round, bit=bit)
             if path.exists():
+                if (
+                    round is not None
+                    and image_name == "decon_data"
+                    and self.local_deconvolution_source_is_current(tile, round=round)
+                    is False
+                ):
+                    continue
                 from merfish3danalysis.storage.mvs import mvs_array
 
                 group = open_group(path)
@@ -316,6 +333,100 @@ class qi2labDataStore:
         raise FileNotFoundError(
             f"Missing fusion input for tile={tile} round={round} bit={bit}."
         )
+
+    def local_readout_image_name(self, tile: int | str, bit: int | str) -> str:
+        """Select the readout image used by U-FISH.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or identifier.
+        bit : int or str
+            Readout bit index or identifier.
+
+        Returns
+        -------
+        str
+            ``"corrected_data"`` or ``"decon_data"``. Untracked predictions
+            use the available current deconvolution, falling back to corrected data.
+
+        Raises
+        ------
+        ValueError
+            A recorded predictor source is invalid or no longer current.
+        """
+        predictor = self.local_image_path(tile, "feature_predictor_data", bit=bit)
+        if predictor.exists():
+            attributes = self.load_image_metadata(predictor)
+            source = attributes.get("source_image")
+            if source is not None:
+                if source not in {"corrected_data", "decon_data"}:
+                    raise ValueError(f"Invalid feature predictor source: {source}")
+                tile_id = self._tile_ids[tile] if isinstance(tile, int) else tile
+                bit_id = self._bit_ids[bit] if isinstance(bit, int) else bit
+                products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+                current = products.get(f"{tile_id}/{bit_id}/{source}")
+                if current is None or current["revision"] != attributes.get(
+                    "source_revision"
+                ):
+                    raise ValueError(
+                        f"Feature predictor input for {tile_id}/{bit_id} changed; "
+                        "rerun readout preprocessing."
+                    )
+                if (
+                    source == "decon_data"
+                    and self.local_deconvolution_source_is_current(tile, bit=bit)
+                    is False
+                ):
+                    raise ValueError(
+                        f"Deconvolved input for {tile_id}/{bit_id} changed; "
+                        "rerun readout preprocessing."
+                    )
+                return source
+        if (
+            self.local_image_path(tile, "decon_data", bit=bit).exists()
+            and self.local_deconvolution_source_is_current(tile, bit=bit) is not False
+        ):
+            return "decon_data"
+        return "corrected_data"
+
+    def local_deconvolution_source_is_current(
+        self,
+        tile: int | str,
+        *,
+        round: int | str | None = None,
+        bit: int | str | None = None,
+    ) -> bool | None:
+        """Compare deconvolution provenance with the corrected Scene revision.
+
+        Parameters
+        ----------
+        tile : int or str
+            Tile index or identifier.
+        round : int or str or None
+            Fiducial round index or identifier; excludes bit.
+        bit : int or str or None
+            Readout bit index or identifier; excludes round.
+
+        Returns
+        -------
+        bool or None
+            Whether the source is current, or None when the image or its source
+            revision is absent.
+        """
+        path = self.local_image_path(tile, "decon_data", round=round, bit=bit)
+        if not path.exists():
+            return None
+        revision = self.load_image_metadata(path).get("source_revision")
+        if revision is None:
+            return None
+        tile_id = self._tile_ids[tile] if isinstance(tile, int) else tile
+        ids = self._round_ids if round is not None else self._bit_ids
+        selection = round if round is not None else bit
+        entity_id = ids[selection] if isinstance(selection, int) else selection
+        products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+        source = products.get(f"{tile_id}/{entity_id}/corrected_data")
+        return source is not None and source["revision"] == revision
 
     def local_feature_predictor_spots_path(self, tile: str, bit: str) -> Path:
         """Return the localization table path for a tile and readout identifier.
@@ -338,6 +449,43 @@ class qi2labDataStore:
             self._feature_predictor_localizations_root_path / tile / (bit + ".parquet")
         )
 
+    def local_feature_predictor_spots_are_current(
+        self, tile: str, bit: str
+    ) -> bool | None:
+        """Check whether a spot table belongs to the current predictor image.
+
+        Parameters
+        ----------
+        tile : str
+            Stored tile identifier.
+        bit : str
+            Stored readout bit identifier.
+
+        Returns
+        -------
+        bool or None
+            Whether the table records the current predictor image revision;
+            None means the table does not record a revision.
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        path = self.local_feature_predictor_spots_path(tile, bit)
+        try:
+            metadata = pq.read_metadata(path).metadata or {}
+        except (OSError, pa.ArrowException):
+            return False
+        revision = metadata.get(self._FEATURE_PREDICTOR_REVISION_KEY)
+        if revision is None:
+            return None
+        products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+        predictor = products.get(
+            f"{tile}/{bit}/{self.feature_predictor_folder_name}_data"
+        )
+        return predictor is not None and revision == predictor["revision"].encode(
+            "utf-8"
+        )
+
     def load_local_image_metadata(
         self,
         tile: int | str,
@@ -357,7 +505,8 @@ class qi2labDataStore:
         bit : int or str or None
             Readout bit index or identifier; excludes round.
         image_names : Sequence[str] or None
-            Image names to inspect, in metadata precedence order.
+            Image names to inspect, in metadata precedence order. By default,
+            corrected-image attributes take precedence over derived images.
 
         Returns
         -------
@@ -458,16 +607,9 @@ class qi2labDataStore:
                 f"Calibration attributes not found: {attributes_path}"
             )
         attributes = self._load_from_json(attributes_path)
-        for path in (
-            self._datastore_path / "camera/camera_metadata/camera.json",
-            self._datastore_path / "shading/shading_metadata/shading.json",
-            self._datastore_path / "codewords/normalization/default.json",
-        ):
-            if path.is_file():
-                attributes.update(self._load_from_json(path))
-        manifest_path = self._datastore_path / "psfs/psf_metadata/manifest.json"
-        if manifest_path.is_file():
-            attributes["psf_manifest"] = self._load_from_json(manifest_path)
+        camera_path = self._datastore_path / "camera/camera_metadata/camera.json"
+        if camera_path.is_file():
+            attributes.update(self._load_from_json(camera_path))
         for key, path in (
             (
                 "exp_order",
@@ -514,18 +656,8 @@ class qi2labDataStore:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._save_to_json(self._to_json_compatible(value), path)
             return
-        if key in {"camera_model", "e_per_ADU", "noise_map_path"}:
+        if key in {"camera_model", "e_per_ADU"}:
             path = self._datastore_path / "camera/camera_metadata/camera.json"
-        elif key == "shading_maps_path":
-            path = self._datastore_path / "shading/shading_metadata/shading.json"
-        elif key in {
-            "global_normalization_vector",
-            "global_background_vector",
-            "iterative_normalization_vector",
-            "iterative_background_vector",
-            "decode_normalization_metadata",
-        }:
-            path = self._datastore_path / "codewords/normalization/default.json"
         else:
             path = self._calibrations_attributes_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -714,8 +846,14 @@ class qi2labDataStore:
         value : int
             Number of bits.
         """
+        state = open_group(self._tile_scene_path).attrs["qi2lab"]
+        if state.get("tile_ids") and value != int(
+            np.max(np.asarray(state["experiment_order"])[:, 1:])
+        ):
+            raise ValueError("Number of bits does not match the tile Scene.")
         self._num_bits = value
         self._set_calibration_attribute("num_bits", value)
+        self._bit_ids = ["bit" + str(bit_idx + 1).zfill(3) for bit_idx in range(value)]
 
     @property
     def num_tiles(self) -> int | None:
@@ -931,9 +1069,7 @@ class qi2labDataStore:
                 else None,
             },
         )
-        self._set_calibration_attribute(
-            "noise_map_path", "camera/camera_noise.ome.zarr"
-        )
+        (self._datastore_path / "camera/camera_metadata").mkdir(exist_ok=True)
         self._noise_map = value
 
     @property
@@ -981,9 +1117,7 @@ class qi2labDataStore:
                 "channel_indices": list(range(shading_maps.shape[0])),
             },
         )
-        self._set_calibration_attribute(
-            "shading_maps_path", "shading/shading_maps.ome.zarr"
-        )
+        (self._datastore_path / "shading/shading_metadata").mkdir(exist_ok=True)
         self._shading_maps = shading_maps
 
     @property
@@ -999,7 +1133,9 @@ class qi2labDataStore:
         psfs = getattr(self, "_psfs", None)
         if psfs is None:
             try:
-                manifest = self._load_calibrations_attributes().get("psf_manifest", {})
+                manifest = self._load_from_json(
+                    self._datastore_path / "psfs/psf_metadata/manifest.json"
+                )
                 psf_root = self._datastore_path / "psfs/images"
                 if manifest:
                     psfs = [
@@ -1064,10 +1200,7 @@ class qi2labDataStore:
                 return_future=False,
                 extra_attributes={"calibration_type": "psf", "psf_idx": psf_idx},
             )
-            psf_manifest[str(psf_idx)] = {
-                "id": psf_id,
-                "shape_zyx": list(psf_array.shape),
-            }
+            psf_manifest[str(psf_idx)] = {"id": psf_id}
 
         self._set_calibration_attribute("psf_manifest", psf_manifest)
         self._psfs = psf_list
@@ -1081,18 +1214,7 @@ class qi2labDataStore:
         experiment_order : pd.DataFrame
             Round and bit order.
         """
-        experiment_order = getattr(self, "_experiment_order", None)
-        if experiment_order is not None:
-            return experiment_order
-
-        legacy_experiment_order = getattr(self, "_exp_order", None)
-        if legacy_experiment_order is None:
-            return None
-
-        self._experiment_order = self._coerce_experiment_order_dataframe(
-            legacy_experiment_order
-        )
-        return self._experiment_order
+        return getattr(self, "_experiment_order", None)
 
     def _coerce_experiment_order_dataframe(
         self, value: ArrayLike | pd.DataFrame
@@ -1127,24 +1249,24 @@ class qi2labDataStore:
         """
         order = self._coerce_experiment_order_dataframe(value)
         self._validate_scene_experiment_order(order)
-        self._experiment_order = order
         value = order.to_numpy()
-
-        self._set_calibration_attribute("exp_order", self._experiment_order)
-
-        if self.num_rounds is None:
-            self.num_rounds = int(value[-1, 0])
-        else:
-            assert self.num_rounds == int(value[-1, 0]), (
+        num_rounds = int(value[-1, 0])
+        num_bits = int(np.max(value[:, 1:]))
+        if self.num_rounds is not None:
+            assert self.num_rounds == num_rounds, (
                 "Number of rounds does not match experiment order file."
             )
-
-        if self.num_bits is None:
-            self.num_bits = int(np.max(value[:, 1:]))
-        else:
-            assert self.num_bits == int(np.max(value[:, 1:])), (
+        if self.num_bits is not None:
+            assert self.num_bits == num_bits, (
                 "Number of bits does not match experiment order file."
             )
+
+        self._experiment_order = order
+        self._set_calibration_attribute("exp_order", self._experiment_order)
+        if self.num_rounds is None:
+            self.num_rounds = num_rounds
+        if self.num_bits is None:
+            self.num_bits = num_bits
 
         self._round_ids = []
         for round_idx in range(self.num_rounds):
@@ -1242,20 +1364,10 @@ class qi2labDataStore:
         global_normalization_vector : ArrayLike
             Global normalization vector.
         """
-        value = getattr(self, "_global_normalization_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-
-            try:
-                value = np.asarray(
-                    calib_attrs["global_normalization_vector"], dtype=np.float32
-                )
-                return value
-            except KeyError:
-                print("Global normalization vector not calculated.")
-                return None
-        else:
-            return value
+        value = self._load_from_json(self._decode_normalization_path(None)).get(
+            "global_normalization_vector"
+        )
+        return None if value is None else np.asarray(value, dtype=np.float32)
 
     @global_normalization_vector.setter
     def global_normalization_vector(self, value: ArrayLike) -> None:
@@ -1266,10 +1378,8 @@ class qi2labDataStore:
         value : ArrayLike
             New global normalization vector.
         """
-        self._global_normalization_vector = np.asarray(value, dtype=np.float32)
-        self._set_calibration_attribute(
-            "global_normalization_vector",
-            self._global_normalization_vector,
+        self._update_decode_normalization(
+            None, {"global_normalization_vector": np.asarray(value, dtype=np.float32)}
         )
 
     @property
@@ -1281,19 +1391,10 @@ class qi2labDataStore:
         global_background_vector : ArrayLike
             Global background vector.
         """
-        value = getattr(self, "_global_background_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-            try:
-                value = np.asarray(
-                    calib_attrs["global_background_vector"], dtype=np.float32
-                )
-                return value
-            except KeyError:
-                print("Global background vector not calculated.")
-                return None
-        else:
-            return value
+        value = self._load_from_json(self._decode_normalization_path(None)).get(
+            "global_background_vector"
+        )
+        return None if value is None else np.asarray(value, dtype=np.float32)
 
     @global_background_vector.setter
     def global_background_vector(self, value: ArrayLike) -> None:
@@ -1304,10 +1405,8 @@ class qi2labDataStore:
         value : ArrayLike
             New global background vector.
         """
-        self._global_background_vector = np.asarray(value, dtype=np.float32)
-        self._set_calibration_attribute(
-            "global_background_vector",
-            self._global_background_vector,
+        self._update_decode_normalization(
+            None, {"global_background_vector": np.asarray(value, dtype=np.float32)}
         )
 
     @property
@@ -1319,23 +1418,10 @@ class qi2labDataStore:
         iterative_normalization_vector : ArrayLike
             Iterative normalization vector.
         """
-        value = getattr(self, "_iterative_normalization_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-            try:
-                value = np.asarray(
-                    calib_attrs["iterative_normalization_vector"], dtype=np.float32
-                )
-            except KeyError:
-                value = None
-
-            if value is None:
-                print("Iterative normalization vector not calculated.")
-                return None
-
-            return value
-        else:
-            return value
+        value = self._load_from_json(self._decode_normalization_path(None)).get(
+            "iterative_normalization_vector"
+        )
+        return None if value is None else np.asarray(value, dtype=np.float32)
 
     @iterative_normalization_vector.setter
     def iterative_normalization_vector(self, value: ArrayLike) -> None:
@@ -1346,10 +1432,9 @@ class qi2labDataStore:
         value : ArrayLike
             New iterative normalization vector.
         """
-        self._iterative_normalization_vector = value
-        self._set_calibration_attribute(
-            "iterative_normalization_vector",
-            self._iterative_normalization_vector,
+        self._update_decode_normalization(
+            None,
+            {"iterative_normalization_vector": np.asarray(value, dtype=np.float32)},
         )
 
     @property
@@ -1361,22 +1446,10 @@ class qi2labDataStore:
         iterative_background_vector : ArrayLike
             Iterative background vector.
         """
-        value = getattr(self, "_iterative_background_vector", None)
-        if value is None:
-            calib_attrs = self._load_calibrations_attributes()
-            try:
-                value = np.asarray(
-                    calib_attrs["iterative_background_vector"], dtype=np.float32
-                )
-            except KeyError:
-                value = None
-            if value is None:
-                print("Iterative background vector not calculated.")
-                return None
-
-            return value
-        else:
-            return value
+        value = self._load_from_json(self._decode_normalization_path(None)).get(
+            "iterative_background_vector"
+        )
+        return None if value is None else np.asarray(value, dtype=np.float32)
 
     @iterative_background_vector.setter
     def iterative_background_vector(self, value: ArrayLike) -> None:
@@ -1387,10 +1460,8 @@ class qi2labDataStore:
         value : ArrayLike
             New iterative background vector.
         """
-        self._iterative_background_vector = value
-        self._set_calibration_attribute(
-            "iterative_background_vector",
-            self._iterative_background_vector,
+        self._update_decode_normalization(
+            None, {"iterative_background_vector": np.asarray(value, dtype=np.float32)}
         )
 
     @staticmethod
@@ -1444,6 +1515,39 @@ class qi2labDataStore:
         root = self._datastore_path / "codewords/normalization"
         key = self._validate_decode_run_key(decode_run_key)
         return root / "default.json" if key is None else root / "runs" / f"{key}.json"
+
+    def _update_decode_normalization(
+        self,
+        decode_run_key: str | None,
+        updates: Mapping[str, Any],
+        *,
+        kind: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Serialize and atomically publish normalization updates across workers."""
+        import os
+        from tempfile import TemporaryDirectory
+
+        from filelock import FileLock
+
+        path = self._decode_normalization_path(decode_run_key).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with FileLock(str(path.with_name(f".{path.name}.lock"))):
+            attributes = self._load_from_json(path)
+            attributes.update(updates)
+            if metadata is not None:
+                if decode_run_key is None:
+                    all_metadata = dict(
+                        attributes.get("decode_normalization_metadata", {})
+                    )
+                    all_metadata[kind] = dict(metadata)
+                    attributes["decode_normalization_metadata"] = all_metadata
+                else:
+                    attributes[f"{kind}_metadata"] = dict(metadata)
+            with TemporaryDirectory(prefix=f".{path.name}.", dir=path.parent) as temp:
+                candidate = Path(temp) / path.name
+                self._save_to_json(self._to_json_compatible(attributes), candidate)
+                os.replace(candidate, path)
 
     def decoded_temporary_dir(
         self,
@@ -1499,7 +1603,12 @@ class qi2labDataStore:
         self,
         decode_run_key: str | None,
         kind: str,
-    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        *,
+        include_metadata: bool = False,
+    ) -> (
+        tuple[np.ndarray | None, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray | None, dict[str, Any] | None]
+    ):
         """
         Load run-scoped normalization and background vectors.
 
@@ -1509,23 +1618,19 @@ class qi2labDataStore:
             Optional decoded-output run key. None reads the default vectors.
         kind : {'global', 'iterative'}
             Normalization vector kind.
+        include_metadata : bool, default False
+            Return provenance from the same persisted snapshot as the vectors.
 
         Returns
         -------
-        tuple[numpy.ndarray or None, numpy.ndarray or None]
-            Normalization and background vectors.
+        tuple
+            Normalization and background vectors, optionally followed by their
+            provenance dictionary or None.
         """
         if kind == "global":
-            if decode_run_key is None:
-                return self.global_normalization_vector, self.global_background_vector
             norm_key = "global_normalization_vector"
             background_key = "global_background_vector"
         elif kind == "iterative":
-            if decode_run_key is None:
-                return (
-                    self.iterative_normalization_vector,
-                    self.iterative_background_vector,
-                )
             norm_key = "iterative_normalization_vector"
             background_key = "iterative_background_vector"
         else:
@@ -1537,12 +1642,26 @@ class qi2labDataStore:
         )
         normalization_vector = run_attrs.get(norm_key)
         background_vector = run_attrs.get(background_key)
-        if normalization_vector is None or background_vector is None:
-            return None, None
-        return (
-            np.asarray(normalization_vector, dtype=np.float32),
-            np.asarray(background_vector, dtype=np.float32),
+        if decode_run_key is not None and (
+            normalization_vector is None or background_vector is None
+        ):
+            normalization_vector = background_vector = None
+        vectors = (
+            None
+            if normalization_vector is None
+            else np.asarray(normalization_vector, dtype=np.float32),
+            None
+            if background_vector is None
+            else np.asarray(background_vector, dtype=np.float32),
         )
+        if not include_metadata:
+            return vectors
+        metadata = (
+            run_attrs.get("decode_normalization_metadata", {}).get(kind)
+            if decode_run_key is None
+            else run_attrs.get(f"{kind}_metadata")
+        )
+        return (*vectors, dict(metadata) if isinstance(metadata, Mapping) else None)
 
     def save_decode_normalization_vectors(
         self,
@@ -1572,58 +1691,23 @@ class qi2labDataStore:
             Additional provenance for these normalization vectors.
         """
         if kind == "global":
-            if decode_run_key is None:
-                self.global_normalization_vector = normalization_vector
-                self.global_background_vector = background_vector
-                self._save_default_decode_normalization_metadata(
-                    kind, metadata, decode_mode
-                )
-                return
             norm_key = "global_normalization_vector"
             background_key = "global_background_vector"
         elif kind == "iterative":
-            if decode_run_key is None:
-                self.iterative_normalization_vector = normalization_vector
-                self.iterative_background_vector = background_vector
-                self._save_default_decode_normalization_metadata(
-                    kind, metadata, decode_mode
-                )
-                return
             norm_key = "iterative_normalization_vector"
             background_key = "iterative_background_vector"
         else:
             raise ValueError("kind must be one of 'global' or 'iterative'.")
 
-        decode_run_key = self._validate_decode_run_key(decode_run_key)
-        path = self._decode_normalization_path(decode_run_key)
-        run_attrs = self._load_from_json(path)
+        updates = {
+            norm_key: np.asarray(normalization_vector, dtype=np.float32),
+            background_key: np.asarray(background_vector, dtype=np.float32),
+        }
         if decode_mode is not None:
-            run_attrs["decode_mode"] = str(decode_mode)
-        if metadata is not None:
-            run_attrs[f"{kind}_metadata"] = dict(metadata)
-        run_attrs[norm_key] = np.asarray(normalization_vector, dtype=np.float32)
-        run_attrs[background_key] = np.asarray(background_vector, dtype=np.float32)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._save_to_json(self._to_json_compatible(run_attrs), path)
-
-    def _save_default_decode_normalization_metadata(
-        self,
-        kind: str,
-        metadata: Mapping[str, Any] | None,
-        decode_mode: str | None,
-    ) -> None:
-        """Save optional provenance and decode mode for default normalization."""
-        if metadata is None and decode_mode is None:
-            return
-        path = self._decode_normalization_path(None)
-        attributes = self._load_from_json(path)
-        if metadata is not None:
-            all_metadata = dict(attributes.get("decode_normalization_metadata", {}))
-            all_metadata[kind] = dict(metadata)
-            attributes["decode_normalization_metadata"] = all_metadata
-        if decode_mode is not None:
-            attributes["decode_mode"] = str(decode_mode)
-        self._save_to_json(self._to_json_compatible(attributes), path)
+            updates["decode_mode"] = str(decode_mode)
+        self._update_decode_normalization(
+            decode_run_key, updates, kind=kind, metadata=metadata
+        )
 
     def load_decode_normalization_metadata(
         self,
@@ -1982,9 +2066,9 @@ class qi2labDataStore:
         merged: dict[str, Any] = {}
 
         default_images = (
-            "corrected_data",
-            "decon_data",
             f"{self.feature_predictor_folder_name}_data",
+            "decon_data",
+            "corrected_data",
         )
         candidate_names = image_names if image_names is not None else default_images
         for image_name in candidate_names:
@@ -2593,7 +2677,6 @@ class qi2labDataStore:
             self._e_per_ADU = attributes["e_per_ADU"]
             self._na = attributes["na"]
             self._ri = attributes["ri"]
-            self._exp_order = attributes["exp_order"]
             self._codebook = attributes["codebook"]
             self._num_bits = attributes["num_bits"]
             self._microscope_type = attributes["microscope_type"]
@@ -2602,9 +2685,9 @@ class qi2labDataStore:
                 attributes["voxel_size_zyx_um"]
             )
 
-            if getattr(self, "_exp_order", None) is not None:
+            if attributes["exp_order"] is not None:
                 self._experiment_order = self._coerce_experiment_order_dataframe(
-                    self._exp_order
+                    attributes["exp_order"]
                 )
 
             if getattr(self, "_num_tiles", None) is not None:
@@ -3837,7 +3920,7 @@ class qi2labDataStore:
             self._validate_core_image_shape(
                 entity_root_path=entity_root, image_name="corrected_data", image=image
             )
-            attributes = self._load_entity_attributes(entity_root)
+            attributes = self._load_entity_attributes(entity_root, image_names=())
             attributes.update(
                 {
                     "gain_correction": bool(gain_correction),
@@ -4328,7 +4411,7 @@ class qi2labDataStore:
     ) -> "np.ndarray | Future | TensorStore | None":
         """Load the best available native-frame fiducial image.
 
-        Deconvolved fiducial data are returned when ``decon_data`` exists;
+        Deconvolved fiducial data are returned when available and current;
         otherwise corrected fiducial data are returned.
 
         Parameters
@@ -4346,13 +4429,14 @@ class qi2labDataStore:
         numpy.ndarray or tensorstore.Future or tensorstore.TensorStore or None
             Deconvolved fiducial image if available, otherwise corrected image.
         """
-        image = self.load_local_deconvolved_fiducial_image(
-            tile=tile,
-            round=round,
-            return_future=return_future,
-        )
-        if image is not None:
-            return image
+        if self.local_deconvolution_source_is_current(tile, round=round) is not False:
+            image = self.load_local_deconvolved_fiducial_image(
+                tile=tile,
+                round=round,
+                return_future=return_future,
+            )
+            if image is not None:
+                return image
         return self.load_local_corrected_image(
             tile=tile,
             round=round,
@@ -4438,8 +4522,13 @@ class qi2labDataStore:
                 image_name="decon_data",
                 image=image,
             )
-            attributes = self._load_entity_attributes(entity_root)
-            attributes["deconvolution"] = True
+            attributes = self._load_entity_attributes(
+                entity_root, image_names=("corrected_data",)
+            )
+            products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+            source = products.get(f"{tile_id}/{round_id}/corrected_data")
+            if source is not None:
+                attributes["source_revision"] = source["revision"]
             write_future = self._save_to_zarr_array(
                 image,
                 decon_path,
@@ -4531,8 +4620,8 @@ class qi2labDataStore:
     ) -> "np.ndarray | Future | TensorStore | None":
         """Load the best available native-frame readout bit image.
 
-        Deconvolved readout data are returned when ``decon_data`` exists;
-        otherwise corrected readout data are returned.
+        When recorded, use the image supplied to the feature predictor.
+        Otherwise prefer deconvolved data and fall back to corrected data.
 
         Parameters
         ----------
@@ -4547,19 +4636,14 @@ class qi2labDataStore:
         Returns
         -------
         numpy.ndarray or tensorstore.Future or tensorstore.TensorStore or None
-            Deconvolved readout image if available, otherwise corrected image.
+            The feature predictor input, or the best available readout image.
         """
-        image = self.load_local_deconvolved_readout_image(
-            tile=tile,
-            bit=bit,
-            return_future=return_future,
-        )
-        if image is not None:
-            return image
+        if self.local_readout_image_name(tile, bit) == "decon_data":
+            return self.load_local_deconvolved_readout_image(
+                tile=tile, bit=bit, return_future=return_future
+            )
         return self.load_local_corrected_image(
-            tile=tile,
-            bit=bit,
-            return_future=return_future,
+            tile=tile, bit=bit, return_future=return_future
         )
 
     def save_local_deconvolved_readout_image(
@@ -4637,8 +4721,13 @@ class qi2labDataStore:
                 image_name="decon_data",
                 image=image,
             )
-            attributes = self._load_entity_attributes(entity_root)
-            attributes["deconvolution"] = True
+            attributes = self._load_entity_attributes(
+                entity_root, image_names=("corrected_data",)
+            )
+            products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+            source = products.get(f"{tile_id}/{bit_id}/corrected_data")
+            if source is not None:
+                attributes["source_revision"] = source["revision"]
             write_future = self._save_to_zarr_array(
                 image,
                 readout_path,
@@ -4737,6 +4826,7 @@ class qi2labDataStore:
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
+        source_image: str | None = None,
     ) -> "WriteFutures | None":
         """Save feature_predictor prediction image.
 
@@ -4754,6 +4844,9 @@ class qi2labDataStore:
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
+        source_image : str or None
+            Actual predictor input: ``corrected_data`` or ``decon_data``.
+            None leaves the input unspecified for manually supplied predictions.
 
         Returns
         -------
@@ -4806,7 +4899,22 @@ class qi2labDataStore:
             round_id = self._round_ids[
                 self.load_local_round_linker(tile_id, local_id) - 1
             ]
-            attributes = self._load_entity_attributes(entity_root)
+            attributes = self._load_entity_attributes(
+                entity_root, image_names=("corrected_data",)
+            )
+            if source_image is not None:
+                if source_image not in {"corrected_data", "decon_data"}:
+                    raise ValueError(
+                        f"Invalid feature predictor source: {source_image}"
+                    )
+                products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+                source = products.get(f"{tile_id}/{local_id}/{source_image}")
+                if source is None:
+                    raise ValueError(
+                        f"Feature predictor input is missing: {source_image}"
+                    )
+                attributes["source_image"] = source_image
+                attributes["source_revision"] = source["revision"]
             write_future = self._save_to_zarr_array(
                 feature_predictor_image,
                 current_local_zarr_path,
@@ -4843,6 +4951,11 @@ class qi2labDataStore:
         -------
         feature_predictor_localizations : pandas.DataFrame or None
             feature_predictor localizations and features for one tile.
+
+        Raises
+        ------
+        ValueError
+            The predictor image or its input changed after the table was written.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4886,6 +4999,20 @@ class qi2labDataStore:
             print("feature_predictor localizations not found.")
             return None
         else:
+            products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+            predictor = products.get(
+                f"{tile_id}/{bit_id}/{self.feature_predictor_folder_name}_data"
+            )
+            if predictor is not None:
+                self.local_readout_image_name(tile_id, bit_id)
+                if (
+                    self.local_feature_predictor_spots_are_current(tile_id, bit_id)
+                    is False
+                ):
+                    raise ValueError(
+                        f"Feature predictor image for {tile_id}/{bit_id} changed; "
+                        "rerun readout preprocessing."
+                    )
             feature_predictor_localizations = self._load_from_parquet(
                 current_feature_predictor_localizations_path
             )
@@ -4898,6 +5025,10 @@ class qi2labDataStore:
         bit: int | str,
     ) -> None:
         """Save feature_predictor localizations and features.
+
+        When a predictor image exists, record its Scene revision in the Parquet
+        metadata so stale localizations can be detected. Publish atomically to
+        retain an existing table if writing fails.
 
         Parameters
         ----------
@@ -4949,12 +5080,29 @@ class qi2labDataStore:
             bit_id + ".parquet"
         )
 
-        try:
-            self._save_to_parquet(spot_df, current_feature_predictor_localizations_path)
-        except OSError as e:
-            print(e)
-            print("Error saving feature_predictor localizations.")
-            return None
+        import os
+        from tempfile import TemporaryDirectory
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.Table.from_pandas(spot_df, preserve_index=False)
+        products = open_group(self._tile_scene_path).attrs["qi2lab"]["products"]
+        predictor = products.get(
+            f"{tile_id}/{bit_id}/{self.feature_predictor_folder_name}_data"
+        )
+        if predictor is not None:
+            metadata = dict(table.schema.metadata or {})
+            metadata[self._FEATURE_PREDICTOR_REVISION_KEY] = predictor[
+                "revision"
+            ].encode("utf-8")
+            table = table.replace_schema_metadata(metadata)
+        with TemporaryDirectory(
+            prefix=f".{bit_id}.", dir=tile_localizations_path
+        ) as temp:
+            candidate = Path(temp) / current_feature_predictor_localizations_path.name
+            pq.write_table(table, candidate)
+            os.replace(candidate, current_feature_predictor_localizations_path)
 
     def load_global_coord_xforms_um(
         self,

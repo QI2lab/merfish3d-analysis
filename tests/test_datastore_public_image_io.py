@@ -80,6 +80,88 @@ def test_global_and_iterative_normalization_are_preserved_per_run(image_datastor
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("kind", ["global", "iterative"])
+def test_normalization_updates_are_visible_across_datastore_instances(
+    image_datastore, kind
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    first = image_datastore
+    first.save_decode_normalization_vectors(
+        None, kind, np.ones(4), np.zeros(4), metadata={"revision": 1}
+    )
+    second = qi2labDataStore(first.datastore_path)
+    second.save_decode_normalization_vectors(
+        None, kind, np.full(4, 2), np.full(4, 0.5), metadata={"revision": 2}
+    )
+
+    foreground, background = first.load_decode_normalization_vectors(None, kind)
+    np.testing.assert_array_equal(foreground, np.full(4, 2))
+    np.testing.assert_array_equal(background, np.full(4, 0.5))
+    foreground, background, metadata = first.load_decode_normalization_vectors(
+        None, kind, include_metadata=True
+    )
+    np.testing.assert_array_equal(foreground, np.full(4, 2))
+    np.testing.assert_array_equal(background, np.full(4, 0.5))
+    assert metadata == {"revision": 2}
+    np.testing.assert_array_equal(
+        getattr(first, f"{kind}_normalization_vector"), foreground
+    )
+    np.testing.assert_array_equal(
+        getattr(first, f"{kind}_background_vector"), background
+    )
+
+    setattr(second, f"{kind}_background_vector", np.full(4, 0.25))
+    np.testing.assert_array_equal(
+        getattr(first, f"{kind}_background_vector"), np.full(4, 0.25)
+    )
+
+
+@pytest.mark.integration
+def test_concurrent_normalization_writers_preserve_both_updates(image_datastore):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    first = image_datastore
+    second = qi2labDataStore(first.datastore_path)
+    first.save_decode_normalization_vectors(
+        None, "iterative", np.ones(4), np.zeros(4), metadata={"source": "iterative"}
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        for value in range(1, 11):
+            writes = (
+                executor.submit(
+                    first.save_decode_normalization_vectors,
+                    None,
+                    "global",
+                    np.full(4, value),
+                    np.full(4, value / 10),
+                    metadata={"revision": value},
+                ),
+                executor.submit(
+                    setattr, second, "iterative_background_vector", np.full(4, value)
+                ),
+            )
+            for write in writes:
+                write.result()
+
+    reopened = qi2labDataStore(first.datastore_path)
+    foreground, background, metadata = reopened.load_decode_normalization_vectors(
+        None, "global", include_metadata=True
+    )
+    np.testing.assert_array_equal(foreground, np.full(4, 10))
+    np.testing.assert_array_equal(background, np.ones(4))
+    assert metadata == {"revision": 10}
+    foreground, background, metadata = reopened.load_decode_normalization_vectors(
+        None, "iterative", include_metadata=True
+    )
+    np.testing.assert_array_equal(foreground, np.ones(4))
+    np.testing.assert_array_equal(background, np.full(4, 10))
+    assert metadata == {"source": "iterative"}
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("run", [None, "named"])
 @pytest.mark.parametrize("kind", ["global", "iterative"])
 @pytest.mark.parametrize("metadata", [None, {"source": "test"}])
@@ -119,6 +201,12 @@ def test_decode_normalization_preserves_decode_mode_and_other_vectors(
     np.testing.assert_array_equal(other_normalization, np.full(4, 3))
     np.testing.assert_allclose(other_background, np.full(4, 0.3))
     assert reopened.load_decode_normalization_metadata(run, kind) == metadata
+    snapshot_normalization, snapshot_background, snapshot_metadata = (
+        reopened.load_decode_normalization_vectors(run, kind, include_metadata=True)
+    )
+    np.testing.assert_array_equal(snapshot_normalization, normalization)
+    np.testing.assert_array_equal(snapshot_background, background)
+    assert snapshot_metadata == metadata
     assert reopened.load_decode_normalization_metadata(run, other_kind) == {
         "source": "previous"
     }
@@ -375,6 +463,186 @@ def test_native_images_are_published_in_the_acquisition_scene(
         assert compressor["configuration"]["clevel"] == 3
         assert compressor["configuration"]["shuffle"] == "shuffle"
         assert sum(p.is_file() for p in (path / dataset / "c").rglob("*")) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["round", "bit"])
+def test_image_metadata_preserves_corrected_and_derived_provenance(
+    image_datastore, kind
+):
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = image_datastore
+    selection = {kind: 0}
+    pixels = np.ones((2, 3, 4), dtype=np.uint16)
+    datastore.save_local_corrected_image(
+        pixels, tile=0, psf_idx=0, shading_correction=False, **selection
+    )
+    if kind == "round":
+        datastore.save_local_deconvolved_fiducial_image(pixels, tile=0, round=0)
+    else:
+        datastore.save_local_deconvolved_readout_image(pixels, tile=0, bit=0)
+        datastore.save_local_feature_predictor_image(pixels, tile=0, bit=0)
+    datastore.save_local_corrected_image(
+        pixels, tile=0, psf_idx=1, shading_correction=True, **selection
+    )
+
+    reopened = qi2labDataStore(datastore.datastore_path)
+    corrected = reopened.load_image_metadata(
+        reopened.local_image_path(0, "corrected_data", **selection)
+    )
+    deconvolved = reopened.load_image_metadata(
+        reopened.local_image_path(0, "decon_data", **selection)
+    )
+    assert corrected["psf_idx"] == 1
+    assert corrected["shading_correction"] is True
+    assert "deconvolution" not in corrected
+    assert deconvolved["psf_idx"] == 0
+    assert deconvolved["shading_correction"] is False
+    assert "deconvolution" not in deconvolved
+    if kind == "bit":
+        predictor = reopened.load_image_metadata(
+            reopened.local_image_path(0, "feature_predictor_data", **selection)
+        )
+        assert predictor["psf_idx"] == 0
+        assert predictor["shading_correction"] is False
+        assert "deconvolution" not in predictor
+    metadata = reopened.load_local_image_metadata(0, **selection)
+    assert metadata["psf_idx"] == 1
+    assert metadata["shading_correction"] is True
+    assert "deconvolution" not in metadata
+    assert (
+        reopened.load_local_image_metadata(
+            0, image_names=("corrected_data", "decon_data"), **selection
+        )["psf_idx"]
+        == 0
+    )
+    assert (
+        reopened.load_local_image_metadata(
+            0, image_names=("decon_data", "corrected_data"), **selection
+        )["psf_idx"]
+        == 1
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["round", "bit"])
+def test_stale_deconvolution_is_not_selected_after_corrected_image_changes(
+    image_datastore, kind
+):
+    from merfish3danalysis.DataRegistration import DataRegistration
+    from merfish3danalysis.qi2labDataStore import qi2labDataStore
+
+    datastore = image_datastore
+    selection = {kind: 0}
+    corrected = np.ones((2, 3, 4), dtype=np.uint16)
+    deconvolved = 2 * corrected
+    datastore.save_local_corrected_image(corrected, tile=0, **selection)
+    if kind == "round":
+        datastore.save_local_deconvolved_fiducial_image(deconvolved, tile=0, round=0)
+    else:
+        import pandas as pd
+
+        datastore.save_local_deconvolved_readout_image(deconvolved, tile=0, bit=0)
+        datastore.save_local_feature_predictor_image(
+            corrected, tile=0, bit=0, source_image="decon_data"
+        )
+        spots = pd.DataFrame({"z": [0.0], "y": [1.0], "x": [2.0]})
+        datastore.save_local_feature_predictor_spots(spots, tile=0, bit=0)
+    assert datastore.local_deconvolution_source_is_current(0, **selection) is True
+
+    replacement = 9 * corrected
+    datastore.save_local_corrected_image(replacement, tile=0, **selection)
+    reopened = qi2labDataStore(datastore.datastore_path)
+    assert reopened.local_deconvolution_source_is_current(0, **selection) is False
+    registration = DataRegistration(reopened, num_gpus=0, verbose=0)
+    if kind == "round":
+        np.testing.assert_array_equal(
+            reopened.load_local_deconvolved_fiducial_image(0, 0, False), deconvolved
+        )
+        np.testing.assert_array_equal(
+            reopened.load_local_fiducial_image(0, 0, False), replacement
+        )
+        np.testing.assert_array_equal(
+            reopened.load_local_fusion_image(0, round=0)[:], replacement
+        )
+        assert not registration._has_valid_deconvolved_fiducial_image(
+            tile_id="tile0000", round_id="round001"
+        )
+    else:
+        np.testing.assert_array_equal(
+            reopened.load_local_deconvolved_readout_image(0, 0, False), deconvolved
+        )
+        assert not registration._has_valid_deconvolved_readout_image(
+            tile_id="tile0000", bit_id="bit001"
+        )
+        with pytest.raises(ValueError, match="rerun readout preprocessing"):
+            reopened.load_local_readout_image(0, 0, False)
+        with pytest.raises(ValueError, match="rerun readout preprocessing"):
+            reopened.load_local_fusion_image(0, bit=0)
+        with pytest.raises(ValueError, match="rerun readout preprocessing"):
+            reopened.load_local_feature_predictor_spots(0, 0)
+        reopened.save_local_feature_predictor_image(
+            replacement, tile=0, bit=0, source_image="corrected_data"
+        )
+        reopened.save_local_feature_predictor_spots(spots, tile=0, bit=0)
+        pd.testing.assert_frame_equal(
+            reopened.load_local_feature_predictor_spots(0, 0), spots
+        )
+        np.testing.assert_array_equal(
+            reopened.load_local_readout_image(0, 0, False), replacement
+        )
+        np.testing.assert_array_equal(
+            reopened.load_local_fusion_image(0, bit=0)[:], replacement
+        )
+
+
+@pytest.mark.unit
+def test_stale_decon_without_predictor_falls_back_to_corrected(image_datastore):
+    datastore = image_datastore
+    corrected = np.ones((2, 3, 4), dtype=np.uint16)
+    datastore.save_local_corrected_image(corrected, tile=0, bit=0)
+    datastore.save_local_deconvolved_readout_image(2 * corrected, tile=0, bit=0)
+    datastore.save_local_corrected_image(3 * corrected, tile=0, bit=0)
+
+    np.testing.assert_array_equal(
+        datastore.load_local_readout_image(0, 0, False), 3 * corrected
+    )
+    np.testing.assert_array_equal(
+        datastore.load_local_fusion_image(0, bit=0)[:], 3 * corrected
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["round", "bit"])
+def test_untracked_deconvolution_remains_readable_but_does_not_satisfy_resume(
+    image_datastore, kind
+):
+    from merfish3danalysis.DataRegistration import DataRegistration
+
+    datastore = image_datastore
+    pixels = np.ones((2, 3, 4), dtype=np.uint16)
+    if kind == "round":
+        datastore.save_local_deconvolved_fiducial_image(pixels, tile=0, round=0)
+    else:
+        datastore.save_local_deconvolved_readout_image(pixels, tile=0, bit=0)
+    datastore.save_local_corrected_image(2 * pixels, tile=0, **{kind: 0})
+    assert datastore.local_deconvolution_source_is_current(0, **{kind: 0}) is None
+    registration = DataRegistration(datastore, num_gpus=0, verbose=0)
+    if kind == "round":
+        np.testing.assert_array_equal(
+            datastore.load_local_fiducial_image(0, 0, False), pixels
+        )
+        assert not registration._has_valid_deconvolved_fiducial_image(
+            tile_id="tile0000", round_id="round001"
+        )
+    else:
+        np.testing.assert_array_equal(
+            datastore.load_local_readout_image(0, 0, False), pixels
+        )
+        assert not registration._has_valid_deconvolved_readout_image(
+            tile_id="tile0000", bit_id="bit001"
+        )
 
 
 @pytest.mark.unit
@@ -888,3 +1156,64 @@ def test_public_readers_return_none_for_absent_images(
     shape,
 ):
     assert getattr(image_datastore, reader)(**selection, return_future=False) is None
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("source", ["corrected_data", "decon_data", None])
+def test_predictor_source_selects_readout_for_decoding_and_fusion(
+    image_datastore, source
+):
+    datastore = image_datastore
+    corrected = np.full((3, 8, 10), 11, dtype=np.uint16)
+    deconvolved = np.full_like(corrected, 23)
+    datastore.save_local_corrected_image(corrected, tile=0, bit=0)
+    datastore.save_local_deconvolved_readout_image(deconvolved, tile=0, bit=0)
+    datastore.save_local_feature_predictor_image(
+        np.full(corrected.shape, 0.5, dtype=np.float32),
+        tile=0,
+        bit=0,
+        source_image=source,
+    )
+
+    expected = corrected if source == "corrected_data" else deconvolved
+    np.testing.assert_array_equal(
+        datastore.load_local_readout_image(0, 0, return_future=False), expected
+    )
+    np.testing.assert_array_equal(
+        datastore.load_local_fusion_image(0, bit=0)[:], expected
+    )
+    assert (
+        datastore.load_local_image_metadata(
+            0, bit=0, image_names=("feature_predictor_data",)
+        ).get("source_image")
+        == source
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("source", ["corrected_data", "decon_data"])
+def test_replacing_predictor_input_rejects_stale_prediction(image_datastore, source):
+    datastore = image_datastore
+    image = np.ones((3, 8, 10), dtype=np.uint16)
+    datastore.save_local_corrected_image(image, tile=0, bit=0)
+    datastore.save_local_deconvolved_readout_image(image * 2, tile=0, bit=0)
+    datastore.save_local_feature_predictor_image(
+        image, tile=0, bit=0, source_image=source
+    )
+    writer = (
+        datastore.save_local_corrected_image
+        if source == "corrected_data"
+        else datastore.save_local_deconvolved_readout_image
+    )
+    writer(image * 3, tile=0, bit=0)
+
+    with pytest.raises(ValueError, match="rerun readout preprocessing"):
+        datastore.load_local_readout_image(0, 0, return_future=False)
+    with pytest.raises(ValueError, match="rerun readout preprocessing"):
+        datastore.load_local_fusion_image(0, bit=0)
+    reader = (
+        datastore.load_local_corrected_image
+        if source == "corrected_data"
+        else datastore.load_local_deconvolved_readout_image
+    )
+    np.testing.assert_array_equal(reader(0, bit=0, return_future=False), image * 3)
