@@ -15,9 +15,8 @@ import typer
 from merfish3danalysis.cli.statphysbio_simulation.calculate_F1 import (
     calculate_F1 as _calculate_simulation_f1,
 )
-from merfish3danalysis.PixelDecoder import PixelDecoder, time_stamp
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.dataio import resolve_datastore_path
+from merfish3danalysis.utils.dataio import resolve_datastore_path, time_stamp
 from merfish3danalysis.utils.metrics import (
     calculate_F1_with_radius as _match_transcripts,
 )
@@ -98,6 +97,8 @@ def decode_pixels(
     minimum_pixels: float
         The minimum pixel threshold.
     """
+    from merfish3danalysis.PixelDecoder import PixelDecoder
+
     datastore_path = resolve_datastore_path(root_path / "sim_acquisition")
     datastore = qi2labDataStore(datastore_path)
     merfish_bits = datastore.num_bits
