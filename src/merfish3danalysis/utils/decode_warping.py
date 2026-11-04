@@ -144,9 +144,7 @@ def load_optimizer_chromatic_affine(
         return identity
     try:
         affine = validate_chromatic_affine(
-            datastore.load_chromatic_affine_transform_zyx_um(
-                wavelength_um=wavelength_um
-            )
+            select_chromatic_affine(calibration, wavelength_um=wavelength_um)
         )
         if affine is None:
             return identity
