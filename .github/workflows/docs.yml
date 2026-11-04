@@ -1,17 +1,34 @@
 name: Documentation
 
 on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
   push:
     branches:
       - main
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "README.md"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: github-pages
-  cancel-in-progress: true
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
 
 jobs:
   build:
@@ -36,18 +53,21 @@ jobs:
         run: uv sync --only-group docs
 
       - name: Configure GitHub Pages
+        if: github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
 
       - name: Build documentation
         run: uv run --no-sync mkdocs build --clean --strict
 
       - name: Upload GitHub Pages artifact
+        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4
         with:
           path: site
 
   deploy:
     name: Deploy documentation
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
 

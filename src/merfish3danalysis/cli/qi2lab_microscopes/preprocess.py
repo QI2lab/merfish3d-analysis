@@ -3,10 +3,7 @@ Perform registration on qi2labdatastore. By default creates a max.
 
 projection downsampled fiducial OME-TIFF for cellpose parameter optimization.
 
-Shepherd 2025/10 - change to CLI.
-Shepherd 2025/07 - rework for multiple GPU support.
-Shepherd 2024/11 - rework script to accept parameters.
-Shepherd 2024/08 - rework script to use qi2labdatastore object.
+Contributions: Shepherd.
 """
 
 from pathlib import Path

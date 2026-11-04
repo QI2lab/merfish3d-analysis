@@ -4,8 +4,7 @@ Calculate F1-score between qi2lab filtered decoded spots assigned to cells and M
 We preserve the existing qi2lab coordinate swap when assembling the qi2lab
 coordinate array so the comparison stays aligned with MERLIN output.
 
-Shepherd 2025/01 - create script.
-Codex 2026/05 - switch qi2lab input to filtered decoded features within cells.
+Contributors: Shepherd, Codex.
 """
 
 from pathlib import Path
