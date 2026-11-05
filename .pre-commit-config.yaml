@@ -6,7 +6,7 @@ ci:
 
 repos:
   - repo: https://github.com/abravalheri/validate-pyproject
-    rev: '0.26'
+    rev: 'v0.27'
     hooks:
       - id: validate-pyproject
 
@@ -17,13 +17,13 @@ repos:
         args: ["-ignore", 'label ".+" is unknown']
 
   - repo: https://github.com/adhtruong/mirrors-typos
-    rev: v1.50.3
+    rev: v1.51.1
     hooks:
       - id: typos
         args: ["--force-exclude", "--write-changes"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.10
+    rev: v0.17.3
     hooks:
       - id: ruff-check
         args: ["--fix", "--show-fixes"]
