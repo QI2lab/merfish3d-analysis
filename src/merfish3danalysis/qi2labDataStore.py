@@ -5,11 +5,6 @@ This module provides methods and attributes to create or interact with
 the qi2lab MERFISH datastore. The filestore structure is further described
 in the merfish3d-analysis documentation.
 
-History:
----------
-- **2024/12**: Refactored repo structure.
-- **2024/12**: Updated docstrings and exception types.
-- **2024/07**: Initial commit.
 """
 
 import gzip

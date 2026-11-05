@@ -7,8 +7,7 @@ for red, yellow, blue channels in a given round, then repeat for the next round.
 
 Required user parameters for system dependent variables are at end of script.
 
-Shepherd 2025/08 - update for new BiFISH simulations.
-Shepherd 2024/12 - create script based on metadata from Max in statphysbio lab.
+Contributions: Shepherd; acquisition metadata from Max at the StatPhysBio lab.
 """
 
 import shutil
