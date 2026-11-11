@@ -4050,9 +4050,7 @@ class PixelDecoder:
             )
 
             if self._verbose > 1:
-                print("generating synthetic samples for class balance")
-            # SMOTE(random_state=42)
-            # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+                print("preparing training samples")
             X_train_resampled = X_train.copy()
             y_train_resampled = y_train.copy()
 
@@ -4993,7 +4991,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        assign_to_cells : bool, default False
+        assign_to_cells : bool, default True
             Assign barcodes to cells.
         duplicate_radius_xy : float, optional
             Override XY radius, in microns, for within-tile duplicate collapse.

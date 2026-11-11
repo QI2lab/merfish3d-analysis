@@ -1089,7 +1089,6 @@ def test_controller_local_apply_updates_existing_viewer(image_datastore) -> None
             base_sparse_lines=(),
             shape_zyx=(1, 2, 2),
             spacing_zyx_um=spacing,
-            tile="tile0000",
         )
         result = ViewerBuildResult(
             stack=stack,

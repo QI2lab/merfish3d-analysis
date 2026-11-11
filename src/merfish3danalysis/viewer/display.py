@@ -88,7 +88,6 @@ class ViewerDisplayModel:
             shape_zyx=shape_zyx,
             origin_zyx_um=global_stack.origin_zyx_um,
             spacing_zyx_um=global_stack.spacing_zyx_um,
-            full_shape_zyx=global_stack.full_shape_zyx,
         )
         return ViewerBuildResult(
             stack=stack,
@@ -137,7 +136,6 @@ class ViewerDisplayModel:
             base_stack=stack,
             base_sparse_lines=sparse_payload.lines,
             shape_zyx=shape_zyx,
-            tile=request.tile,
             spacing_zyx_um=np.asarray(datastore.voxel_size_zyx_um),
             tile_transform=tile_transform,
         )

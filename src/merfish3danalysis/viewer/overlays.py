@@ -111,14 +111,11 @@ class PolylineGeometry:
         Canvas dimensions in Z, Y, X order.
     line_thickness : int
         Outline width in display pixels.
-    value : int, default=1
-        Overlay value carried with the geometry.
     """
 
     polylines_yx: tuple[np.ndarray, ...]
     shape: tuple[int, int, int]
     line_thickness: int
-    value: int = 1
 
 
 @dataclass(frozen=True)
@@ -137,8 +134,6 @@ class ZPolylineGeometry:
         Y, X outline vertices grouped by integer Z plane, or None if not indexed.
     max_polylines_yx : tuple[numpy.ndarray, ...]
         Y, X outlines for maximum-projection display.
-    value : int, default=1
-        Overlay value carried with the geometry.
     """
 
     polylines: tuple[Any, ...]
@@ -146,7 +141,6 @@ class ZPolylineGeometry:
     line_thickness: int
     z_polylines_by_index: dict[int, tuple[np.ndarray, ...]] | None = None
     max_polylines_yx: tuple[np.ndarray, ...] = ()
-    value: int = 1
 
 
 @dataclass(frozen=True)

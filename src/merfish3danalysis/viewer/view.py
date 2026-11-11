@@ -145,7 +145,7 @@ class DatastoreNdvView(QtCore.QObject):
             self._enable_scale_bar(spacing_zyx_um)
             return
         self.close()
-        self._reset_array_viewer(data, self.channel_labels, spacing_zyx_um)
+        self._reset_array_viewer(data, spacing_zyx_um)
         apply_lut_channel_labels(self.array_viewer, self.channel_labels)
         self._enable_scale_bar(spacing_zyx_um)
 
@@ -231,9 +231,7 @@ class DatastoreNdvView(QtCore.QObject):
             return False
         return super().eventFilter(watched, event)
 
-    def _reset_array_viewer(
-        self, data: Any, labels: list[str], spacing_zyx_um: Any
-    ) -> None:
+    def _reset_array_viewer(self, data: Any, spacing_zyx_um: Any) -> None:
         """
         Replace NDV's viewer to avoid stale axis/channel state.
 
@@ -241,8 +239,6 @@ class DatastoreNdvView(QtCore.QObject):
         ----------
         data : Any
             NDV-compatible image data.
-        labels : list[str]
-            Channel labels.
         spacing_zyx_um : ArrayLike
             Z, Y, X voxel spacing used by the image and sparse overlays.
         """

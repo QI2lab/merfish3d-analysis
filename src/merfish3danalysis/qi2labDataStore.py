@@ -1727,7 +1727,6 @@ class qi2labDataStore:
         if decode_run_key is None:
             metadata = calib_attrs.get("decode_normalization_metadata", {}).get(kind)
         else:
-            decode_run_key = self._validate_decode_run_key(decode_run_key)
             metadata = calib_attrs.get(f"{kind}_metadata")
         return dict(metadata) if isinstance(metadata, Mapping) else None
 
@@ -2123,7 +2122,6 @@ class qi2labDataStore:
             entity.update(payload)
             metadata[key] = entity
             state["entity_metadata"] = metadata
-            state["generation"] = int(state["generation"]) + 1
             attributes["qi2lab"] = state
             return scene, attributes
 
@@ -3242,7 +3240,6 @@ class qi2labDataStore:
             state.update(
                 products=products,
                 round_links=links,
-                generation=int(state["generation"]) + 1,
             )
             attributes["qi2lab"] = state
             return scene.model_copy(

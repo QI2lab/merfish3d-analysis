@@ -505,7 +505,6 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
 
     def _update_view_options(self) -> None:
         """Update visible controls for the selected view mode."""
-        self._enable_view_mode_selection()
         mode = self.view_mode_combo.currentText()
         local_mode = mode in {"Local native", "Local warped"}
         warped_mode = mode == "Local warped"
@@ -525,7 +524,6 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self._set_transcript_option_states(mode_selected, transcript_source_selected)
         self._set_boundary_option_states(mode_selected)
         self._set_option_state(self.display_button, mode_selected)
-        self.display_button.setEnabled(mode_selected)
         self._enable_view_mode_selection()
 
     def _set_mode_style(self, mode: str) -> None:

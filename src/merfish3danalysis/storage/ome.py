@@ -262,7 +262,6 @@ def initialize_scene(path: str | Path) -> Path:
             "qi2lab": {
                 "schema_version": "0.7",
                 "dataset_id": uuid4().hex,
-                "generation": 0,
                 "products": {},
                 "transform_status": {},
                 "transform_versions": {},
@@ -352,7 +351,6 @@ def publish_acquisition_scene(
                 for bit in bits:
                     round_links.setdefault(f"{tile}/{bit}", round_id)
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=dict.fromkeys(statuses, 0),
             reference_round=next(iter(bits_by_round)),
@@ -498,7 +496,6 @@ def publish_transforms(
             }
         )
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=versions,
             transform_provenance=provenance_by_transform,
@@ -603,7 +600,6 @@ def update_chromatic_metadata(
                 versions[transform.name] = int(versions.get(transform.name, 0)) + 1
             transforms.append(replacement)
         state.update(
-            generation=int(state["generation"]) + 1,
             readout_wavelengths_um=wavelengths,
             transform_status=statuses,
             transform_versions=versions,
@@ -819,7 +815,6 @@ def publish_sofima_field(
         statuses[expected.name] = "calculated"
         versions[expected.name] = expected_revision + 1
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=versions,
         )
@@ -1030,7 +1025,7 @@ def publish_completed_image(
             "edge": edge_name,
             "frame": frame,
         }
-        state.update(generation=int(state["generation"]) + 1, products=products)
+        state["products"] = products
         attributes["qi2lab"] = state
         return candidate, attributes
 

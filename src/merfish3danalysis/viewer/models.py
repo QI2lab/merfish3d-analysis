@@ -295,10 +295,6 @@ class DisplayContext:
         Voxel spacing in Z, Y, X microns.
     origin_zyx_um : numpy.ndarray | None, default=None
         Canvas origin in Z, Y, X microns, or None for local views.
-    full_shape_zyx : tuple[int, int, int] | None, default=None
-        Unprojected global canvas dimensions in Z, Y, X order.
-    tile : str | None, default=None
-        Local tile identifier, or None for a global view.
     tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] | None, default=None
         Tile affine, origin, and spacing in Z, Y, X microns for global overlays.
     refresh_only : bool, default=False
@@ -311,8 +307,6 @@ class DisplayContext:
     shape_zyx: tuple[int, int, int]
     spacing_zyx_um: np.ndarray
     origin_zyx_um: np.ndarray | None = None
-    full_shape_zyx: tuple[int, int, int] | None = None
-    tile: str | None = None
     tile_transform: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
     refresh_only: bool = False
 
