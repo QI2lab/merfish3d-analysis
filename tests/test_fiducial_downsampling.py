@@ -580,11 +580,7 @@ def test_two_tile_registration_fuses_directly_to_zarr(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("return_future", [False, True])
-def test_single_tile_fiducial_publication_preserves_world_grid(
-    image_datastore, return_future
-):
-    from tensorstore import WriteFutures
+def test_single_tile_fiducial_publication_preserves_world_grid(image_datastore):
     from yaozarrs import v06
 
     datastore = image_datastore
@@ -593,14 +589,7 @@ def test_single_tile_fiducial_publication_preserves_world_grid(
     fiducial = datastore.load_local_fiducial_image(tile=0, round=0, return_future=False)
     origin = [10, 20, 30]
     spacing = datastore.voxel_size_zyx_um
-    completion = datastore.save_global_fiducial_image(
-        fiducial, np.eye(4), origin, spacing, return_future=return_future
-    )
-    if return_future:
-        assert isinstance(completion, WriteFutures)
-        completion.result()
-    else:
-        assert completion is None
+    datastore.save_global_fiducial_image(fiducial, np.eye(4), origin, spacing)
 
     path = datastore.fused_image_path()
     image = open_group(path).validate(strict=True).ome_metadata(strict=True)

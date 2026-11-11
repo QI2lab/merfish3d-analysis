@@ -54,8 +54,8 @@ dependencies = [
     "filelock",
     "joblib",
     "matplotlib",
-    # NGFF 0.6 support is unreleased; pin upstream for the storage migration.
-    "yaozarrs[write-tensorstore,io] @ git+https://github.com/imaging-formats/yaozarrs.git@8ea2166bb0fcf58f55c2caebe367913ce990fdbf",
+    # Pin the upstream NGFF 0.6 implementation for reproducible storage behavior.
+    "yaozarrs[write-tensorstore,io] @ git+https://github.com/imaging-formats/yaozarrs.git@89291804971b4165c5963d21a7379a80c0ae35cd",
 ]
 
 [tool.uv.sources]

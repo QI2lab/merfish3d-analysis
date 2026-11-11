@@ -28,7 +28,7 @@ from merfish3danalysis.utils.spacing import (
 )
 
 if TYPE_CHECKING:
-    from tensorstore import Future, TensorStore, WriteFutures
+    from tensorstore import Future, TensorStore
 
 
 class qi2labDataStore:
@@ -1055,7 +1055,6 @@ class qi2labDataStore:
         self._save_to_zarr_array(
             value,
             current_local_zarr_path,
-            return_future=False,
             axes="cyx" if np.ndim(value) == 3 else "yx",
             extra_attributes={
                 "calibration_type": "camera_noise",
@@ -1105,7 +1104,6 @@ class qi2labDataStore:
         self._save_to_zarr_array(
             shading_maps,
             current_local_zarr_path,
-            return_future=False,
             axes="cyx",
             extra_attributes={
                 "calibration_type": "channel_shading",
@@ -1192,7 +1190,6 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 psf_array,
                 current_psf_path,
-                return_future=False,
                 extra_attributes={"calibration_type": "psf", "psf_idx": psf_idx},
             )
             psf_manifest[str(psf_idx)] = {"id": psf_id}
@@ -2339,7 +2336,6 @@ class qi2labDataStore:
     def _save_to_zarr_array(
         array: ArrayLike,
         image_path: Path | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
@@ -2351,7 +2347,7 @@ class qi2labDataStore:
         scene_selection: str | None = None,
         scene_frame: str | None = None,
         scene_affine: ArrayLike | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save image data using yaozarrs and its TensorStore backend.
 
         Parameters
@@ -2372,18 +2368,10 @@ class qi2labDataStore:
             Additional image metadata.
         axes : str or None
             Array axes when the default spatial layout does not apply.
-        return_future : bool or None
-            Return the write-completion handle (True), or wait for the write
-            to finish and return None (False or None).
         scene_path, scene_selection, scene_frame : Path or str or None
             Publish a native image in the Scene, when all three are supplied.
         scene_affine : ArrayLike or None
             Optional physical ZYX affine from the image to its Scene frame.
-
-        Returns
-        -------
-        write_future : tensorstore.WriteFutures or None
-            Pixel-write completion handle when return_future is True.
 
         Raises
         ------
@@ -2408,67 +2396,6 @@ class qi2labDataStore:
             ome_translation, image_array.ndim, 0.0
         )
 
-        if scene_path is not None:
-            from merfish3danalysis.storage.ome import publish_image
-
-            if not scene_selection or not scene_frame:
-                raise ValueError("A Scene image needs a selection and a frame.")
-            axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
-            if len(axis_names) != image_array.ndim:
-                raise ValueError(
-                    "The number of axes must match the array dimensionality."
-                )
-            model = v06.Image(
-                multiscales=[
-                    v06.Multiscale.from_dims(
-                        [
-                            DimSpec(
-                                name=axis,
-                                size=size,
-                                scale=round_pixel_size_um(step)
-                                if axis in "zyx"
-                                else step,
-                                translation=offset,
-                                unit="micrometer"
-                                if axis in "zyx"
-                                else ("second" if axis == "t" else None),
-                            )
-                            for axis, size, step, offset in zip(
-                                axis_names,
-                                image_array.shape,
-                                scale,
-                                translation,
-                                strict=True,
-                            )
-                        ]
-                    )
-                ]
-            )
-            products = open_group(scene_path).attrs["qi2lab"]["products"]
-            previous = products.get(scene_selection)
-            published = publish_image(
-                scene_path,
-                scene_selection,
-                scene_frame,
-                model,
-                image_array,
-                expected_revision=None if previous is None else previous["revision"],
-                chunks=chunks,
-                shards=shards,
-                extra_attributes=extra_attributes,
-                return_write_future=bool(return_future),
-                affine_zyx_um=scene_affine,
-                missing_z_origin_um=(
-                    float(ome_translation[-3])
-                    if image_array.ndim == 2
-                    and ome_translation is not None
-                    and len(ome_translation) >= 3
-                    else 0
-                ),
-            )
-            return published[1] if return_future else None
-
-        image_path.parent.mkdir(parents=True, exist_ok=True)
         axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
         if len(axis_names) != image_array.ndim:
             raise ValueError("The number of axes must match the array dimensionality.")
@@ -2496,7 +2423,35 @@ class qi2labDataStore:
                 )
             ]
         )
+        if scene_path is not None:
+            from merfish3danalysis.storage.ome import publish_image
 
+            if not scene_selection or not scene_frame:
+                raise ValueError("A Scene image needs a selection and a frame.")
+            products = open_group(scene_path).attrs["qi2lab"]["products"]
+            previous = products.get(scene_selection)
+            publish_image(
+                scene_path,
+                scene_selection,
+                scene_frame,
+                image_metadata,
+                image_array,
+                expected_revision=None if previous is None else previous["revision"],
+                chunks=chunks,
+                shards=shards,
+                extra_attributes=extra_attributes,
+                affine_zyx_um=scene_affine,
+                missing_z_origin_um=(
+                    float(ome_translation[-3])
+                    if image_array.ndim == 2
+                    and ome_translation is not None
+                    and len(ome_translation) >= 3
+                    else 0
+                ),
+            )
+            return
+
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         chunk_spec = tuple(int(c) for c in chunks)
         write_options = {
             "extra_attributes": qi2labDataStore._to_json_compatible(extra_attributes)
@@ -2508,28 +2463,12 @@ class qi2labDataStore:
             "shards": tuple(shards) if shards is not None else None,
             "compression": "blosc-zstd",
         }
-        if return_future:
-            from yaozarrs.write.v06 import prepare_image
-
-            # yaozarrs creates the complete OME-Zarr v3 structure. Its write_image
-            # API is synchronous; writing the prepared array is necessary to
-            # preserve the datastore's TensorStore write-completion handle.
-            _, arrays = prepare_image(
-                dest=str(image_path),
-                image=image_metadata,
-                datasets=(image_array.shape, image_array.dtype),
-                **write_options,
-            )
-            return arrays[image_metadata.multiscales[0].datasets[0].path].write(
-                image_array
-            )
         write_image(
             dest=str(image_path),
             image=image_metadata,
             datasets=image_array,
             **write_options,
         )
-        return None
 
     @staticmethod
     def _load_from_parquet(parquet_path: Path | str) -> pd.DataFrame:
@@ -3809,11 +3748,10 @@ class qi2labDataStore:
         psf_idx: int = 0,
         round: int | str | None = None,
         bit: int | str | None = None,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save gain and offset corrected image.
 
         Parameters
@@ -3834,18 +3772,10 @@ class qi2labDataStore:
             Round index or round id.
         bit : int or str or None
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -3925,10 +3855,9 @@ class qi2labDataStore:
                 }
             )
             selection = f"{tile_id}/{local_id}/corrected_data"
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 entity_root / "corrected_data",
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -3937,7 +3866,6 @@ class qi2labDataStore:
                 scene_selection=selection,
                 scene_frame=frame,
             )
-            return write_future
         except (OSError, TimeoutError, ValueError) as e:
             print(e)
             print("Error saving corrected image.")
@@ -4179,8 +4107,7 @@ class qi2labDataStore:
         moving_shape_zyx_px: Sequence[int],
         sofima_status: str = "ok",
         valid_flow_vectors: int | None = None,
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save the SOFIMA flow field for one local fiducial round.
 
@@ -4220,15 +4147,7 @@ class qi2labDataStore:
             Status reported by the SOFIMA estimator.
         valid_flow_vectors : int or None, default=None
             Number of valid local vectors before missing-vector fill.
-        return_future : bool or None, default=False
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile or round selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4316,7 +4235,7 @@ class qi2labDataStore:
                 if t.name == name
             )
             state = group.attrs["qi2lab"]
-            return publish_sofima_field(
+            publish_sofima_field(
                 self._tile_scene_path,
                 previous,
                 sofima_flow_field_xyz_px,
@@ -4326,7 +4245,6 @@ class qi2labDataStore:
                 expected_status=state["transform_status"][name],
                 expected_revision=state["transform_versions"][name],
                 extra_attributes=attributes,
-                return_write_future=bool(return_future),
             )
         except (OSError, TimeoutError):
             print("Error saving SOFIMA flow field.")
@@ -4443,11 +4361,10 @@ class qi2labDataStore:
         image: ArrayLike,
         tile: int | str,
         round: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save a native-frame deconvolved fiducial image.
 
@@ -4462,18 +4379,10 @@ class qi2labDataStore:
             Tile index or tile id.
         round : int or str
             Round index or round id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4524,10 +4433,9 @@ class qi2labDataStore:
             source = products.get(f"{tile_id}/{round_id}/corrected_data")
             if source is not None:
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 decon_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4536,7 +4444,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{round_id}/decon_data",
                 scene_frame=frame,
             )
-            return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved fiducial image.")
             raise
@@ -4646,11 +4553,10 @@ class qi2labDataStore:
         image: ArrayLike,
         tile: int | str,
         bit: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save a native-frame deconvolved readout bit image.
 
@@ -4665,18 +4571,10 @@ class qi2labDataStore:
             Tile index or tile id.
         bit : int or str
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4723,10 +4621,9 @@ class qi2labDataStore:
             source = products.get(f"{tile_id}/{bit_id}/corrected_data")
             if source is not None:
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 readout_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4735,7 +4632,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{bit_id}/decon_data",
                 scene_frame=f"{tile_id}/{round_id}/{bit_id}/native",
             )
-            return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved readout image.")
             raise
@@ -4817,12 +4713,11 @@ class qi2labDataStore:
         feature_predictor_image: ArrayLike,
         tile: int | str,
         bit: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
         source_image: str | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save feature_predictor prediction image.
 
         Parameters
@@ -4833,9 +4728,6 @@ class qi2labDataStore:
             Tile index or tile id.
         bit : int or str
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
@@ -4843,11 +4735,6 @@ class qi2labDataStore:
             Actual predictor input: ``corrected_data`` or ``decon_data``.
             None leaves the input unspecified for manually supplied predictions.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4910,10 +4797,9 @@ class qi2labDataStore:
                     )
                 attributes["source_image"] = source_image
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 feature_predictor_image,
                 current_local_zarr_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4922,7 +4808,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{local_id}/{self.feature_predictor_folder_name}_data",
                 scene_frame=f"{tile_id}/{round_id}/{local_id}/native",
             )
-            return write_future
         except (OSError, ValueError) as e:
             print(e)
             print("Error saving feature_predictor image.")
@@ -5264,8 +5149,7 @@ class qi2labDataStore:
         affine_zyx_um: ArrayLike,
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Publish the fused YX projection in its own NGFF 0.6 Scene.
 
         The projection has no measured Z. Its world link uses the existing ROI
@@ -5286,13 +5170,7 @@ class qi2labDataStore:
             Original fused-grid origin in ZYX micrometers.
         spacing_zyx_um : ArrayLike
             Original fused-grid spacing in ZYX micrometers.
-        return_future : bool or None
-            Return the completed TensorStore pixel-write handle when True.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed write handle when requested; otherwise None.
         """
         import os
         from tempfile import TemporaryDirectory
@@ -5347,8 +5225,8 @@ class qi2labDataStore:
         }
         path = self.fiducial_projection_path()
 
-        def publish(dest: Path, expected_revision: str | None) -> Any:
-            return publish_image(
+        def publish(dest: Path, expected_revision: str | None) -> None:
+            publish_image(
                 dest,
                 "projection/fiducial",
                 "world",
@@ -5356,7 +5234,6 @@ class qi2labDataStore:
                 pixels,
                 expected_revision=expected_revision,
                 extra_attributes=attrs,
-                return_write_future=bool(return_future),
                 affine_zyx_um=affine,
                 missing_z_origin_um=float(origin[0] + 10 * spacing[0]),
             )
@@ -5370,7 +5247,7 @@ class qi2labDataStore:
                 ) as temp:
                     candidate = Path(temp) / path.name
                     initialize_scene(candidate)
-                    published = publish(candidate, None)
+                    publish(candidate, None)
                     open_group(candidate).validate(strict=True)
                     with _scene_lock(path.resolve()):
                         if path.exists():
@@ -5422,7 +5299,7 @@ class qi2labDataStore:
                                     target.parent.mkdir(parents=True, exist_ok=True)
                                     source.replace(target)
                                     moved.append((source, target))
-                        published = publish(path, revision)
+                        publish(path, revision)
                     except Exception:
                         current = (
                             open_group(path)
@@ -5439,7 +5316,6 @@ class qi2labDataStore:
                                 os.replace(backup, self._datastore_state_json_path)
                                 self._datastore_state = state
                         raise
-        return published[1] if return_future else None
 
     def load_global_fiducial_projection(
         self, return_future: bool | None = True
@@ -5554,8 +5430,7 @@ class qi2labDataStore:
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
         fusion_type: str = "fiducial",
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save downsampled, fused fiducial image.
 
         The caller selects the fusion grid. This method stores the supplied
@@ -5573,15 +5448,7 @@ class qi2labDataStore:
             Caller-selected fused voxel spacing in Z, Y, X microns.
         fusion_type : str
             Type of fusion (fiducial or all_channels).
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None.
         """
         scene_path = self._ensure_fused_scene(fusion_type)
         current_local_zarr_path = scene_path / "image"
@@ -5593,10 +5460,9 @@ class qi2labDataStore:
         }
         fused_array = np.asarray(fused_image)
         try:
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 fused_array.astype(np.uint16),
                 current_local_zarr_path,
-                return_future,
                 ome_scale=metadata_attrs["spacing_zyx_um"],
                 ome_translation=metadata_attrs["origin_zyx_um"],
                 extra_attributes=metadata_attrs,
@@ -5606,7 +5472,6 @@ class qi2labDataStore:
                 scene_frame="world",
                 scene_affine=affine_zyx_um,
             )
-            return write_future
         except (OSError, TimeoutError):
             print("Error saving fused image.")
             raise
@@ -6068,8 +5933,7 @@ class qi2labDataStore:
         self,
         cellpose_image: ArrayLike,
         downsampling: Sequence[float],
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save Cellpose max projection, downsampled segmentation image.
 
         The caller runs segmentation and selects its image grid. This method
@@ -6084,15 +5948,7 @@ class qi2labDataStore:
             Caller-selected Z, Y, X factors: segmentation spacing divided by
             native voxel spacing. Two-dimensional masks use the resulting YX
             physical scale while retaining all three factors in metadata.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None.
         """
         downsampling = np.asarray(downsampling, dtype=np.float64)
         if (
@@ -6115,8 +5971,7 @@ class qi2labDataStore:
             raise ValueError("Label downsampling must match the projection grid.")
         from merfish3danalysis.storage.ome import publish_projection_labels
 
-        return publish_projection_labels(
+        publish_projection_labels(
             self.fiducial_projection_path(),
             cellpose_image,
-            return_write_future=bool(return_future),
         )

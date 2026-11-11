@@ -18,7 +18,7 @@ def test_decode_samples_persisted_round_chromatic_and_deformable_transforms(
 
     z, y, x = np.indices((8, 10, 12), dtype=np.float32)
     image = 100 * z + 10 * y + x
-    datastore.save_local_corrected_image(image, tile=0, bit=1, return_future=False)
+    datastore.save_local_corrected_image(image, tile=0, bit=1)
     round_transform = np.array(
         [[1, 0, 0, 2], [0, 0, -1, 5], [0, 1, 0, 1], [0, 0, 0, 1]],
         dtype=np.float32,
@@ -58,7 +58,6 @@ def test_decode_samples_persisted_round_chromatic_and_deformable_transforms(
         reference_shape_zyx_px=image.shape,
         moving_shape_zyx_px=image.shape,
         sofima_status="ok",
-        return_future=False,
     )
 
     datastore = qi2labDataStore(datastore_path, validate=False)

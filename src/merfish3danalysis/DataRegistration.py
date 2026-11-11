@@ -872,7 +872,6 @@ def _process_sofima_rounds_on_gpu(
                 moving_shape_zyx_px=warped.shape,
                 sofima_status=metadata.get("status", "ok"),
                 valid_flow_vectors=metadata.get("valid_flow_vectors"),
-                return_future=False,
             )
             _registration_diag(
                 "fiducial_sofima_done "

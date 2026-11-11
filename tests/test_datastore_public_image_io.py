@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from tensorstore import Future, TensorStore, WriteFutures
+from tensorstore import Future, TensorStore
 from yaozarrs import open_group
 
 
@@ -411,12 +411,7 @@ def test_native_images_are_published_in_the_acquisition_scene(
         if sharded
         else {}
     )
-    completion = getattr(datastore, writer)(
-        pixels, tile=0, return_future=sharded, **selection, **options
-    )
-    if sharded:
-        assert isinstance(completion, WriteFutures)
-        assert completion.result() is None
+    getattr(datastore, writer)(pixels, tile=0, **selection, **options)
 
     reopened = qi2labDataStore(datastore.datastore_path, validate=False)
     path = reopened.local_image_path(0, image_name, **selection)
@@ -906,7 +901,6 @@ NATIVE_WRITERS = {
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("return_future", [False, True, None])
 @pytest.mark.parametrize(
     "writer, reader, selection, options, relative_path, shape", IMAGE_CASES
 )
@@ -918,7 +912,6 @@ def test_public_image_write_and_read_modes(
     options,
     relative_path,
     shape,
-    return_future,
 ):
     datastore = image_datastore
     dtype = (
@@ -935,14 +928,7 @@ def test_public_image_write_and_read_modes(
             spacing_zyx_um=np.asarray(datastore.voxel_size_zyx_um)
             * options["downsampling"],
         )
-    completion = getattr(datastore, writer)(
-        pixels, **selection, **options, return_future=return_future
-    )
-    if return_future:
-        assert isinstance(completion, WriteFutures)
-        assert completion.result() is None
-    else:
-        assert completion is None
+    getattr(datastore, writer)(pixels, **selection, **options)
     if writer == "save_local_sofima_flow_field":
         from yaozarrs import v06
 

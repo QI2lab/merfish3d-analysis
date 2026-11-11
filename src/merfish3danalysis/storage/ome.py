@@ -10,12 +10,10 @@ import numpy as np
 from yaozarrs import ZarrGroup, open_group, v06
 from yaozarrs.write.v06 import write_image, write_scene
 
-from merfish3danalysis.storage._scene_update import ensure_scene_group, update_scene
+from merfish3danalysis.storage._scene_update import update_scene
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
-
-    from tensorstore import WriteFutures
 
 
 class ConcurrentSceneUpdateError(RuntimeError):
@@ -558,8 +556,7 @@ def publish_sofima_field(
     expected_status: str = "pending",
     expected_revision: int = 0,
     extra_attributes: Mapping[str, Any] | None = None,
-    return_write_future: bool = False,
-) -> WriteFutures | None:
+) -> None:
     """Store the existing XYZ-pixel field using NGFF displacement models.
 
     Parameters
@@ -582,13 +579,7 @@ def publish_sofima_field(
         Previously read transform revision.
     extra_attributes : Mapping[str, Any] or None
         Additional metadata stored with the field image.
-    return_write_future : bool
-        Return the completed TensorStore write handle when True.
 
-    Returns
-    -------
-    tensorstore.WriteFutures or None
-        Completed field-write handle when requested; otherwise None.
     """
     if not expected.name or not expected.name.endswith("/deformable"):
         raise ValueError("A SOFIMA field must replace a deformable relationship.")
@@ -681,25 +672,15 @@ def publish_sofima_field(
             )
         ]
     )
-    ensure_scene_group(path, "coordinateTransformations")
+    from yaozarrs.write._common._groups import _ensure_parent_groups
+
     relative_path = f"coordinateTransformations/field_{uuid4().hex}"
+    _ensure_parent_groups(Path(path), relative_path)
     options = {
         "writer": "tensorstore",
         "extra_attributes": dict(extra_attributes) if extra_attributes else None,
     }
-    if return_write_future:
-        from yaozarrs.write.v06 import prepare_image
-
-        _, arrays = prepare_image(
-            Path(path) / relative_path,
-            image,
-            (field.shape, field.dtype),
-            **options,
-        )
-        completion = arrays[dataset_path].write(field)
-        completion.result()
-    else:
-        write_image(Path(path) / relative_path, image, field, **options)
+    write_image(Path(path) / relative_path, image, field, **options)
     spacing_xyz = spacing[::-1]
     to_pixels = v06.SequenceTransformation(
         name=to_pixels_name,
@@ -771,7 +752,6 @@ def publish_sofima_field(
         ), attributes
 
     update_scene(path, update)
-    return completion if return_write_future else None
 
 
 def publish_image(
@@ -785,10 +765,9 @@ def publish_image(
     chunks: Sequence[int] | None = None,
     shards: Sequence[int] | None = None,
     extra_attributes: Mapping[str, Any] | None = None,
-    return_write_future: bool = False,
     affine_zyx_um: Any | None = None,
     missing_z_origin_um: float = 0,
-) -> str | tuple[str, WriteFutures]:
+) -> str:
     """Publish an image only after its TensorStore write has completed.
 
     Parameters
@@ -811,8 +790,6 @@ def publish_image(
         Shard shape, or None for unsharded storage.
     extra_attributes : Mapping[str, Any] or None
         Additional image metadata.
-    return_write_future : bool
-        Return the completed TensorStore pixel-write handle when True.
     affine_zyx_um : Any or None
         Optional 3D affine from the image coordinates to its Scene frame.
     missing_z_origin_um : float
@@ -820,8 +797,8 @@ def publish_image(
 
     Returns
     -------
-    str or tuple of (str, tensorstore.WriteFutures)
-        Published revision, optionally with its completed write handle.
+    str
+        Published revision.
     """
     if not selection:
         raise ValueError("An image selection is required.")
@@ -839,17 +816,7 @@ def publish_image(
         "shards": tuple(shards) if shards is not None else None,
         "extra_attributes": dict(extra_attributes) if extra_attributes else None,
     }
-    if return_write_future:
-        from yaozarrs.write.v06 import prepare_image
-
-        array = np.asarray(pixels)
-        _, arrays = prepare_image(
-            Path(path) / relative_path, image, (array.shape, array.dtype), **options
-        )
-        completion = arrays[image.multiscales[0].datasets[0].path].write(array)
-        completion.result()
-    else:
-        write_image(Path(path) / relative_path, image, pixels, **options)
+    write_image(Path(path) / relative_path, image, pixels, **options)
 
     publish_completed_image(
         path,
@@ -861,7 +828,7 @@ def publish_image(
         affine_zyx_um=affine_zyx_um,
         missing_z_origin_um=missing_z_origin_um,
     )
-    return (revision, completion) if return_write_future else revision
+    return revision
 
 
 def publish_completed_image(
@@ -978,9 +945,7 @@ def publish_completed_image(
     update_scene(path, update)
 
 
-def publish_projection_labels(
-    path: str | Path, labels: Any, *, return_write_future: bool = False
-) -> WriteFutures | None:
+def publish_projection_labels(path: str | Path, labels: Any) -> None:
     """Stage labels before publication because yaozarrs lists them before writing.
 
     Parameters
@@ -989,18 +954,13 @@ def publish_projection_labels(
         Fiducial projection Scene path.
     labels : Any
         Integer YX labels on the projection grid.
-    return_write_future : bool
-        Return the completed TensorStore pixel-write handle when True.
 
-    Returns
-    -------
-    tensorstore.WriteFutures or None
-        Completed label-write handle when requested; otherwise None.
     """
     import os
     import shutil
-    from tempfile import NamedTemporaryFile, TemporaryDirectory
+    from tempfile import TemporaryDirectory
 
+    from yaozarrs.write._common._groups import _update_zarr3_group
     from yaozarrs.write.v06 import LabelsBuilder
 
     from merfish3danalysis.storage._scene_update import _scene_lock
@@ -1037,10 +997,7 @@ def publish_projection_labels(
                 (staged_image / child.name).symlink_to(child.resolve())
         staged_labels = staged_image / "labels"
         builder = LabelsBuilder(staged_labels, writer="tensorstore")
-        builder.add_label(name, label_model, (masks.shape, masks.dtype))
-        _, arrays = builder.prepare()
-        completion = arrays[f"{name}/{dataset.path}"].write(masks)
-        completion.result()
+        builder.write_label(name, label_model, masks)
         open_group(staged_image).validate(strict=True)
 
         with _scene_lock(path.resolve()):
@@ -1067,54 +1024,38 @@ def publish_projection_labels(
                     if not item.startswith("cellpose_")
                 ]
                 names.append(name)
-                attrs = dict(existing.attrs)
-                attrs["ome"] = v06.LabelsGroup(labels=names).model_dump(mode="json")
-                metadata = existing.metadata.model_copy(update={"attributes": attrs})
                 os.rename(staged_labels / name, target / name)
-                with NamedTemporaryFile(
-                    mode="w", dir=target, prefix=".zarr-", delete=False
-                ) as stream:
-                    temporary = Path(stream.name)
-                    stream.write(metadata.model_dump_json(exclude_none=True))
-                    stream.flush()
+                _update_zarr3_group(target, v06.LabelsGroup(labels=names))
+                with (target / "zarr.json").open("rb") as stream:
                     os.fsync(stream.fileno())
-                os.replace(temporary, target / "zarr.json")
-    return completion if return_write_future else None
-
-
-def _apply_affine_transform(
-    points: np.ndarray, transform: v06.CoordinateTransformation
-) -> np.ndarray:
-    """Evaluate NGFF transforms because yaozarrs models but does not apply them."""
-    if isinstance(transform, v06.IdentityTransformation):
-        return points
-    if isinstance(transform, v06.ScaleTransformation):
-        return points * np.asarray(transform.scale, dtype=np.float64)
-    if isinstance(transform, v06.TranslationTransformation):
-        return points + np.asarray(transform.translation, dtype=np.float64)
-    if isinstance(transform, v06.AffineTransformation) and transform.affine is not None:
-        affine = np.asarray(transform.affine, dtype=np.float64)
-        if affine.shape != (3, 4):
-            raise ValueError("Expected a 3D affine matrix with shape (3, 4).")
-        return points @ affine[:, :3].T + affine[:, 3]
-    if isinstance(transform, v06.SequenceTransformation):
-        for step in transform.transformations:
-            points = _apply_affine_transform(points, step)
-        return points
-    raise NotImplementedError(f"Unsupported affine transform type {transform.type!r}.")
+                directory = os.open(target, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
 
 
 def _axis_aligned_grid(
     dataset: v06.Dataset, ndim: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Extract the regular physical grid required by sampling and display."""
-    samples = _apply_affine_transform(
-        np.concatenate([np.zeros((1, ndim)), np.eye(ndim)]), dataset.transform
+    """Read the dataset grid through yaozarrs and require valid sampling spacing."""
+    scale = dataset.scale_transform
+    translation = dataset.translation_transform
+    spacing = (
+        np.ones(ndim) if scale is None else np.asarray(scale.scale, dtype=np.float64)
     )
-    origin = samples[0]
-    matrix = samples[1:] - origin
-    spacing = np.diag(matrix)
-    if not np.allclose(matrix, np.diag(spacing)) or np.any(spacing <= 0):
+    origin = (
+        np.zeros(ndim)
+        if translation is None
+        else np.asarray(translation.translation, dtype=np.float64)
+    )
+    if (
+        spacing.shape != (ndim,)
+        or origin.shape != (ndim,)
+        or not np.all(np.isfinite(spacing))
+        or not np.all(np.isfinite(origin))
+        or np.any(spacing <= 0)
+    ):
         raise ValueError("Expected a positive axis-aligned image grid.")
     return spacing, origin
 

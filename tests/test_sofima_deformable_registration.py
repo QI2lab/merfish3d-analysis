@@ -490,7 +490,6 @@ def test_sofima_flow_field_datastore_roundtrip_preserves_warp(
         moving_shape_zyx_px=image.shape,
         sofima_status="ok",
         valid_flow_vectors=int(np.prod(flow_field_xyz_px.shape[1:])),
-        return_future=False,
     )
 
     loaded = datastore.load_local_sofima_flow_field(

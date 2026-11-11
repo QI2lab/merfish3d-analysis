@@ -277,5 +277,5 @@ Processing commands accept either an experiment directory containing
 `qi2labdatastore` or the datastore directory itself.
 
 Image readers accept `return_future=True` for a read future, `False` for a NumPy
-array, or `None` for a lazy handle. Image writers complete pixel writes before
-updating metadata; `return_future=True` returns the completed write handle.
+array, or `None` for a lazy handle. Image writers run synchronously through
+yaozarrs and complete pixel writes before publishing metadata.
