@@ -20,14 +20,28 @@ from merfish3danalysis.viewer.models import (
 
 @dataclass(frozen=True)
 class _PreparedWarp:
-    """Prepared affine and optional SOFIMA data for one local image."""
+    """Prepared affine and optional SOFIMA data for one local image.
+
+    Parameters
+    ----------
+    transform_zyx_um : numpy.ndarray
+        Selected local affine in physical Z, Y, X coordinates.
+    loaded_flow_field : Any
+        Loaded SOFIMA field with its origin and stride, or None when disabled.
+    """
 
     transform_zyx_um: np.ndarray
     loaded_flow_field: Any
 
 
 def _as_zyx(image: Any) -> np.ndarray:
-    """Convert a loaded 2D or 3D image to a Z, Y, X NumPy array."""
+    """Convert a loaded 2D or 3D image to a Z, Y, X NumPy array.
+
+    Parameters
+    ----------
+    image : Any
+        Loaded image data.
+    """
     array = np.asarray(image)
     array = np.squeeze(array)
     if array.ndim == 2:
@@ -67,7 +81,19 @@ def _native_after_warp_failure(
     warnings: list[str],
     exc: Exception,
 ) -> np.ndarray:
-    """Record the warp warning and return the native image as float32."""
+    """Record the warp warning and return the native image as float32.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Native image.
+    label : str
+        Channel label used in the warning.
+    warnings : list[str]
+        Warning list updated in place.
+    exc : Exception
+        Warp failure exception.
+    """
     warnings.append(f"{label} displayed native; warp failed: {exc}")
     return np.asarray(image, dtype=np.float32)
 
@@ -79,7 +105,19 @@ def _load_sofima_flow_field(
     round_id: str | None,
     enabled: bool,
 ) -> Any:
-    """Load the requested moving-round SOFIMA field through the datastore."""
+    """Load the requested moving-round SOFIMA field through the datastore.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_id : str or None
+        Moving fiducial round identifier.
+    enabled : bool
+        Whether SOFIMA should be used.
+    """
     if not enabled or round_id is None:
         return None
     return datastore.load_local_sofima_flow_field(
@@ -96,7 +134,19 @@ def _prepare_bit_warp(
     bit_id: str,
     options: WarpChainOptions,
 ) -> _PreparedWarp:
-    """Prepare the selected Z, Y, X micron affine and SOFIMA field for a bit."""
+    """Prepare the selected Z, Y, X micron affine and SOFIMA field for a bit.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    bit_id : str
+        Readout bit identifier.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    """
     round_id, stored_round_transform_zyx_um = load_bit_round_transform_zyx_um(
         datastore,
         tile=tile,
@@ -120,7 +170,15 @@ def _prepare_bit_warp(
 
 
 def _fiducial_moving_round(datastore: Any, round_id: str) -> str | None:
-    """Return None for the reference fiducial round, otherwise the round ID."""
+    """Return None for the reference fiducial round, otherwise the round ID.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    round_id : str
+        Fiducial round identifier.
+    """
     fiducial_round_ids = list(datastore.round_ids or [])
     reference_round_id = fiducial_round_ids[0] if fiducial_round_ids else None
     return round_id if round_id != reference_round_id else None
@@ -134,7 +192,21 @@ def _load_fiducial_round_transform(
     moving_round: str | None,
     enabled: bool,
 ) -> np.ndarray | None:
-    """Load a requested moving fiducial affine in physical Z, Y, X coordinates."""
+    """Load a requested moving fiducial affine in physical Z, Y, X coordinates.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_id : str
+        Fiducial round identifier.
+    moving_round : str or None
+        Moving fiducial round identifier.
+    enabled : bool
+        Whether the affine transform should be loaded.
+    """
     if not enabled or moving_round is None:
         return None
     round_transform_zyx_um = datastore.load_local_round_transform_zyx_um(
@@ -155,7 +227,19 @@ def _prepare_fiducial_warp(
     round_id: str,
     options: WarpChainOptions,
 ) -> _PreparedWarp:
-    """Prepare the selected affine and SOFIMA field for a fiducial round."""
+    """Prepare the selected affine and SOFIMA field for a fiducial round.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_id : str
+        Fiducial round identifier.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    """
     moving_round = _fiducial_moving_round(datastore, round_id)
     round_transform_zyx_um = _load_fiducial_round_transform(
         datastore,
@@ -185,7 +269,19 @@ def _apply_prepared_warp(
     spacing_zyx_um: Any,
     gpu_id: int,
 ) -> np.ndarray:
-    """Warp a Z, Y, X image with its prepared affine and optional SOFIMA field."""
+    """Warp a Z, Y, X image with its prepared affine and optional SOFIMA field.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Native image in Z, Y, X order.
+    prepared_warp : _PreparedWarp
+        Prepared affine and optional flow field.
+    spacing_zyx_um : Any
+        Z, Y, X voxel spacing in microns.
+    gpu_id : int
+        CUDA device ID.
+    """
     return warp_image_to_reference_frame(
         image,
         transform_zyx_um=prepared_warp.transform_zyx_um,
@@ -205,7 +301,25 @@ def _warp_bit_for_viewer(
     gpu_id: int,
     warnings: list[str],
 ) -> np.ndarray:
-    """Warp a readout bit for display, retaining native data if warping fails."""
+    """Warp a readout bit for display, retaining native data if warping fails.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Native bit image.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    bit_id : str
+        Readout bit identifier.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    warnings : list[str]
+        Warning list updated in place.
+    """
     if options.is_native:
         return np.asarray(image, dtype=np.float32)
 
@@ -241,7 +355,25 @@ def _warp_fiducial_for_viewer(
     gpu_id: int,
     warnings: list[str],
 ) -> np.ndarray:
-    """Warp a fiducial for display, retaining native data if warping fails."""
+    """Warp a fiducial for display, retaining native data if warping fails.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Native fiducial image.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_id : str
+        Fiducial round identifier.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    warnings : list[str]
+        Warning list updated in place.
+    """
     if options.is_native:
         return np.asarray(image, dtype=np.float32)
 
@@ -281,7 +413,33 @@ def _append_local_viewer_channel(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """Append the selected native or warped image and its display label."""
+    """Append the selected native or warped image and its display label.
+
+    Parameters
+    ----------
+    channels : list[numpy.ndarray]
+        Destination image channel list.
+    labels : list[str]
+        Destination channel label list.
+    warnings : list[str]
+        Warning list updated in place.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    local_id : str
+        Bit or fiducial round identifier.
+    channel_kind : str
+        Either ``"fiducial"`` or ``"bit"``.
+    image : Any
+        Loaded image data.
+    label : str
+        Display channel label.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    """
     if image is None:
         return
     image_zyx = _as_zyx(image)
@@ -320,7 +478,19 @@ def _load_fiducial_source_image(
     round_id: str,
     source: str,
 ) -> tuple[Any, str] | None:
-    """Load a selected fiducial source and its display suffix, or return None."""
+    """Load a selected fiducial source and its display suffix, or return None.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_id : str
+        Fiducial round identifier.
+    source : str
+        Fiducial source name.
+    """
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
@@ -345,7 +515,19 @@ def _load_bit_source_image(
     bit_id: str,
     source: str,
 ) -> tuple[Any, str] | None:
-    """Load a selected readout source and its display suffix, or return None."""
+    """Load a selected readout source and its display suffix, or return None.
+
+    Parameters
+    ----------
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    bit_id : str
+        Readout bit identifier.
+    source : str
+        Bit source name.
+    """
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
@@ -383,7 +565,31 @@ def _append_source_channel(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """Load and append one selected fiducial or readout source."""
+    """Load and append one selected fiducial or readout source.
+
+    Parameters
+    ----------
+    channels : list[numpy.ndarray]
+        Destination image channel list.
+    labels : list[str]
+        Destination channel label list.
+    warnings : list[str]
+        Warning list updated in place.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    local_id : str
+        Bit or fiducial round identifier.
+    source : str
+        Image source name.
+    channel_kind : str
+        Either ``"fiducial"`` or ``"bit"``.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    """
     if channel_kind == "fiducial":
         loaded = _load_fiducial_source_image(
             datastore,
@@ -430,7 +636,29 @@ def _append_fiducial_channels(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """Append the selected fiducial rounds and image sources."""
+    """Append the selected fiducial rounds and image sources.
+
+    Parameters
+    ----------
+    channels : list[numpy.ndarray]
+        Destination image channel list.
+    labels : list[str]
+        Destination channel label list.
+    warnings : list[str]
+        Warning list updated in place.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    round_ids : list[str]
+        Selected fiducial round identifiers.
+    sources : list[str]
+        Selected fiducial source names.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    """
     for round_id in round_ids:
         for source in sources:
             _append_source_channel(
@@ -459,7 +687,29 @@ def _append_bit_channels(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """Append the selected readout bits and image sources."""
+    """Append the selected readout bits and image sources.
+
+    Parameters
+    ----------
+    channels : list[numpy.ndarray]
+        Destination image channel list.
+    labels : list[str]
+        Destination channel label list.
+    warnings : list[str]
+        Warning list updated in place.
+    datastore : Any
+        qi2lab datastore-like object.
+    tile : str
+        Tile identifier.
+    bit_ids : list[str]
+        Selected readout bit identifiers.
+    sources : list[str]
+        Selected bit source names.
+    options : WarpChainOptions
+        Selected transform-chain components.
+    gpu_id : int
+        CUDA device ID.
+    """
     for bit_id in bit_ids:
         for source in sources:
             _append_source_channel(
@@ -480,7 +730,15 @@ def _stack_local_channels(
     channels: list[np.ndarray],
     labels: list[str],
 ) -> ChannelStack:
-    """Validate and stack selected image channels along the channel axis."""
+    """Validate and stack selected image channels along the channel axis.
+
+    Parameters
+    ----------
+    channels : list[numpy.ndarray]
+        Selected image channels.
+    labels : list[str]
+        Channel labels.
+    """
     if not channels:
         raise ValueError("No selected image channels were available to display.")
     shape = channels[0].shape

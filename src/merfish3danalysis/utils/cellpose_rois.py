@@ -26,6 +26,15 @@ def _bounded_map[Input, Output](
 
     Python 3.12's Executor.map submits eagerly; batches bound result memory.
     One worker executes tasks sequentially.
+
+    Parameters
+    ----------
+    function : Callable
+        Operation applied to each task.
+    tasks : Iterable
+        Tasks to process.
+    workers : int
+        Number of worker threads; one executes tasks sequentially.
     """
     if workers == 1:
         yield from map(function, tasks)
@@ -82,6 +91,13 @@ def _extract_roi_batch(
 
     ``regions`` contains label IDs and bounding-box slices. Retain each
     label's longest external contour.
+
+    Parameters
+    ----------
+    regions : tuple
+        Mask label and YX bounding-box slices for each cell.
+    masks : numpy.ndarray
+        Two-dimensional labeled mask shared by the batch.
     """
     rois = []
     for label, (ys, xs) in regions:

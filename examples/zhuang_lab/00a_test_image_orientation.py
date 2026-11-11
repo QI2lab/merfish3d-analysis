@@ -30,9 +30,9 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to root data directory
-    n_tiles: int, default 2
+    n_tiles : int, default 2
         number of tiles to load
     """
     # Load n_tiles
@@ -192,7 +192,15 @@ def create_overview_image(root_path: Path, n_tiles: int = 2) -> None:
 
 @app.command()
 def main(root_path: Path, n_tiles: int = 2) -> None:
-    """Display an overview of the selected Zhuang tiles."""
+    """Display an overview of the selected Zhuang tiles.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment directory.
+    n_tiles : int, default=2
+        Number of tiles to include in the overview.
+    """
     root_path = root_path.expanduser().resolve()
     create_overview_image(root_path, n_tiles)
 

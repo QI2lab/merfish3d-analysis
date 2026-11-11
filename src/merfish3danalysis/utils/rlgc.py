@@ -399,7 +399,15 @@ def kl_div(p: cp.ndarray, q: cp.ndarray, mask: cp.ndarray | None = None) -> floa
 
 
 def _child_log_prefix(base_prefix: str, suffix: str) -> str:
-    """Append a space-separated suffix to the RLGC log prefix."""
+    """Append a space-separated suffix to the RLGC log prefix.
+
+    Parameters
+    ----------
+    base_prefix : str
+        Existing structured log prefix, or an empty string.
+    suffix : str
+        Suffix to append as a separate token.
+    """
     return suffix if not base_prefix else f"{base_prefix} {suffix}"
 
 
@@ -440,7 +448,15 @@ def _resolve_tiled_axis_geometry(
 
 
 def _axis_retained_bounds(retained_size: int, image_size: int) -> list[tuple[int, int]]:
-    """Return half-open tile bounds covering [0, image_size) without overlap."""
+    """Return half-open tile bounds covering [0, image_size) without overlap.
+
+    Parameters
+    ----------
+    retained_size : int
+        Number of output samples retained from each tile along the axis.
+    image_size : int
+        Full image size along the axis.
+    """
     if retained_size <= 0:
         raise ValueError("retained_size must be greater than 0.")
     bounds = []
@@ -716,7 +732,13 @@ def rlgc(
 
 
 def _is_gpu_memory_error(exc: BaseException) -> bool:
-    """Identify GPU or host allocation failures that trigger chunk fallback."""
+    """Identify GPU or host allocation failures that trigger chunk fallback.
+
+    Parameters
+    ----------
+    exc : BaseException
+        Exception raised during an RLGC attempt.
+    """
     if isinstance(exc, MemoryError):
         return True
     if isinstance(exc, cp.cuda.memory.OutOfMemoryError):

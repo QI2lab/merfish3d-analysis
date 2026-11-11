@@ -11,7 +11,25 @@ from merfish3danalysis.utils.dataio import resolve_datastore_path
 
 @dataclass(frozen=True)
 class ViewerDatastoreOptions:
-    """Datastore-derived options needed by the viewer controller."""
+    """Datastore-derived options needed by the viewer controller.
+
+    Parameters
+    ----------
+    components : dict[str, bool]
+        Datastore component names mapped to availability flags.
+    tile_ids : tuple[str, ...]
+        Available datastore tile identifiers.
+    round_ids : tuple[str, ...]
+        Available fiducial round identifiers.
+    bit_ids : tuple[str, ...]
+        Available readout bit identifiers.
+    proseg_runs : tuple[str, ...]
+        Available Proseg run names.
+    baysor_available : bool
+        Whether Baysor outputs are available.
+    transcript_gene_to_bits : dict[str, list[str]]
+        Codebook gene identifiers mapped to their active datastore bit IDs.
+    """
 
     components: dict[str, bool]
     tile_ids: tuple[str, ...]
@@ -24,7 +42,17 @@ class ViewerDatastoreOptions:
 
 @dataclass(frozen=True)
 class ViewerDatastoreLoadResult:
-    """Opened datastore and controller options for one path."""
+    """Opened datastore and controller options for one path.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Resolved datastore directory.
+    datastore : qi2labDataStore
+        Opened datastore used by the viewer.
+    options : ViewerDatastoreOptions
+        Selector options derived from the opened datastore.
+    """
 
     datastore_path: Path
     datastore: qi2labDataStore

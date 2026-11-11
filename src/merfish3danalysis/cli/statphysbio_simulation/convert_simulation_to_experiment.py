@@ -30,7 +30,7 @@ def convert_simulation(root_path: Path) -> None:
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to simulation
     """
     # load metadata

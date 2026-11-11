@@ -27,11 +27,11 @@ def decode_pixels(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 7.
-    magnitude_threshold: tuple[float,float], default = (0.2, 10.0)
+    magnitude_threshold : tuple[float,float], default = (0.2, 10.0)
         lower and upper magnitude threshold to accept a spot.
     """
     # initialize datastore
@@ -122,7 +122,13 @@ def decode_pixels(
 
 @app.command()
 def main(root_path: Path) -> None:
-    """Decode and compare one Zhuang tile with MERLIN."""
+    """Decode and compare one Zhuang tile with MERLIN.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment or datastore directory used for the single-tile comparison.
+    """
     root_path = root_path.expanduser().resolve()
     decode_pixels(root_path=root_path)
 

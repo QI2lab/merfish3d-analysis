@@ -196,19 +196,19 @@ def convert_data(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to dataset
-    channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
+    channel_names : list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    hot_pixel_image_path: Path or None, default None
+    hot_pixel_image_path : Path or None, default None
         path to hot pixel map. Default of `None` will set it to all zeros.
-    output_path: Path or None, default None
+    output_path : Path or None, default None
         path to output directory. Default of `None` and will be created
         within the root_path
-    codebook_path: Path or None, default None
+    codebook_path : Path or None, default None
         path to codebook. Default of `None` assumes the file is in
         the root_path.
-    bit_order_path: Path or None, default None
+    bit_order_path : Path or None, default None
         path to bit order file. This file defines what bits are present in each
         imaging round, in channel order. Default of `None` assumes
         the file is in the root_path.

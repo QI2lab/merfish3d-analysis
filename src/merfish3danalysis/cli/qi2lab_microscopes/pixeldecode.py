@@ -176,7 +176,13 @@ def _validate_filter_arguments(
 
 
 def _load_optimization_exclusions_file(path: Path) -> list[str]:
-    """Load one codebook gene ID per line from a UTF-8 text file."""
+    """Load one codebook gene ID per line from a UTF-8 text file.
+
+    Parameters
+    ----------
+    path : Path
+        UTF-8 file containing one excluded codebook gene ID per line.
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -201,7 +207,15 @@ def _load_optimization_exclusions_file(path: Path) -> list[str]:
 
 
 def _optimization_exclusions_path(datastore_path: Path, path: Path) -> Path:
-    """Resolve a relative exclusions filename inside the datastore directory."""
+    """Resolve a relative exclusions filename inside the datastore directory.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Datastore directory used to resolve relative filenames.
+    path : Path
+        Absolute exclusions path or filename relative to the datastore.
+    """
     if path.is_absolute():
         return path
     return datastore_path / path

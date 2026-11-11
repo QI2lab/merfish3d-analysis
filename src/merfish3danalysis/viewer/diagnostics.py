@@ -132,7 +132,13 @@ def show_diagnostic_images(
     visuals = [scene.visuals.Markers(parent=view.scene) for _ in points]
 
     def update_points(*_args: object) -> None:
-        """Draw points from the currently selected Z plane."""
+        """Draw points from the currently selected Z plane.
+
+        Parameters
+        ----------
+        *_args : object
+            NDV index-change event arguments; the selected Z plane is read from the model.
+        """
         z_index = int(viewer.display_model.current_index.get("z", 0))
         for visual, (_name, coords, color, symbol) in zip(
             visuals, points, strict=False

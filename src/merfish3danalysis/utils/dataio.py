@@ -50,12 +50,12 @@ def read_metadatafile(fname: str | Path) -> dict:
 
     Parameters
     ----------
-    fname: str or Path
-        filename
+    fname : str or Path
+        Acquisition CSV path containing a header and one metadata row.
 
     Returns
     -------
-    metadata: Dict
+    metadata : Dict
         metadata dictionary
     """
     return pd.read_csv(fname, nrows=1).iloc[0].to_dict()
@@ -66,12 +66,12 @@ def read_config_file(config_path: Path | str) -> dict:
 
     Parameters
     ----------
-    config_path: Path
-        Location of configuration file
+    config_path : Path or str
+        Headerless, two-column CSV path containing configuration keys and values.
 
     Returns
     -------
-    dict_from_csv: dict
+    dict_from_csv : dict
         instrument configuration metadata
     """
     dict_from_csv = (
@@ -86,10 +86,10 @@ def write_metadata(data_dict: dict, save_path: str | Path) -> None:
 
     Parameters
     ----------
-    data_dict: dict
-        metadata dictionary
-    save_path: str or Path
-        path for file
+    data_dict : dict
+        Metadata field names and values written as one CSV row.
+    save_path : str or Path
+        Destination CSV path.
     """
     pd.DataFrame([data_dict]).to_csv(save_path, index=False)
 
@@ -99,7 +99,7 @@ def time_stamp() -> str:
 
     Returns
     -------
-    timestamp: str
+    timestamp : str
         timestamp formatted as string
     """
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -115,14 +115,15 @@ def write_sparse_mtx(
 
     Parameters
     ----------
-    output_dir_path: Path or str
-        Path to output directory
-    matrix: ArrayLike
-        Sparse matrix
-    cells: Sequence[str]
-        Cell names
-    features: Sequence[str]
-        Feature names
+    output_dir_path : Path or str
+        Existing directory receiving the compressed matrix and TSV files.
+    matrix : ArrayLike
+        Count matrix written to Matrix Market format without transposition.
+    cells : Sequence[str]
+        Ordered cell IDs written to barcodes.tsv.gz with a ``cell_`` prefix.
+    features : Sequence[str]
+        Ordered feature IDs written to features.tsv.gz. IDs starting with
+        ``Blank`` receive the ``Blank Codeword`` feature type.
     """
     output_dir_path = Path(output_dir_path)
     with gzip.open(output_dir_path / "matrix.mtx.gz", "wb", compresslevel=6) as stream:

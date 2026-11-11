@@ -17,7 +17,18 @@ __all__ = [module.name for module in iter_modules(__path__)]
 
 
 def __getattr__(name: str) -> ModuleType:
-    """Import and cache a submodule on first access."""
+    """Import and cache a submodule on first access.
+
+    Parameters
+    ----------
+    name : str
+        Child module name.
+
+    Returns
+    -------
+    module : types.ModuleType
+        Imported submodule.
+    """
     if name not in __all__:
         raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
     try:
@@ -32,5 +43,11 @@ def __getattr__(name: str) -> ModuleType:
 
 
 def __dir__() -> list[str]:
-    """List package attributes and available submodules."""
+    """List package attributes and available submodules.
+
+    Returns
+    -------
+    names : list[str]
+        Package attributes and available submodule names.
+    """
     return sorted(set(globals()) | set(__all__))

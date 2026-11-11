@@ -283,7 +283,15 @@ class ViewerDataRepository:
     def _filter_table_by_genes(
         table: "pd.DataFrame | None", selected_genes: tuple[str, ...]
     ) -> "pd.DataFrame | None":
-        """Filter the transcript table by gene_id or gene when genes are selected."""
+        """Filter the transcript table by gene_id or gene when genes are selected.
+
+        Parameters
+        ----------
+        table : pandas.DataFrame or None
+            Transcript table.
+        selected_genes : tuple[str, ...]
+            Selected transcript genes.
+        """
         if table is None or len(selected_genes) == 0:
             return table
         column = "gene_id" if "gene_id" in table.columns else "gene"
@@ -293,7 +301,13 @@ class ViewerDataRepository:
 
     @staticmethod
     def _array_key(values: ArrayLike | None) -> tuple[float, ...] | None:
-        """Flatten numeric values into a cache key, preserving None."""
+        """Flatten numeric values into a cache key, preserving None.
+
+        Parameters
+        ----------
+        values : Any
+            Numeric values or ``None``.
+        """
         if values is None:
             return None
         return tuple(float(value) for value in np.asarray(values, dtype=float).ravel())
@@ -309,7 +323,13 @@ class ViewerDataRepository:
         ]
         | None
     ):
-        """Return cache keys for the tile affine, origin, and spacing."""
+        """Return cache keys for the tile affine, origin, and spacing.
+
+        Parameters
+        ----------
+        tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] or None
+            Tile affine, origin, and spacing.
+        """
         if tile_transform is None:
             return None
         affine, origin, spacing = tile_transform

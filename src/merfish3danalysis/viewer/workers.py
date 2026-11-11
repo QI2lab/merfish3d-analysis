@@ -127,7 +127,15 @@ class WorkerCoordinator(QtCore.QObject):
 
     @QtCore.Slot(int, object)
     def _finish_worker(self, generation: int, result: object) -> None:
-        """Emit the result if it belongs to the active worker."""
+        """Emit the result if it belongs to the active worker.
+
+        Parameters
+        ----------
+        generation : int
+            Worker generation token.
+        result : object
+            Worker result object.
+        """
         if generation != self._generation:
             return
         self._worker = None
@@ -135,7 +143,15 @@ class WorkerCoordinator(QtCore.QObject):
 
     @QtCore.Slot(int, str)
     def _fail_worker(self, generation: int, message: str) -> None:
-        """Emit the error if it belongs to the active worker."""
+        """Emit the error if it belongs to the active worker.
+
+        Parameters
+        ----------
+        generation : int
+            Worker generation token.
+        message : str
+            Error message.
+        """
         if generation != self._generation:
             return
         self._worker = None

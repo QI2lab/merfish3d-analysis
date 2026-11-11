@@ -37,7 +37,7 @@ def local_register_data(root_path: Path) -> None:
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
     """
     # initialize datastore
@@ -68,10 +68,10 @@ def global_register_data(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
 
-    create_max_proj_tiff: bool or None
+    create_max_proj_tiff : bool or None
         Also write a maximum-projection TIFF in the fiducial_projection_tiff
         directory. The projection Scene is always created. Default = True.
     """

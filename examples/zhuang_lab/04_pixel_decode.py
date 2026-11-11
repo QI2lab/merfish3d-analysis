@@ -20,7 +20,15 @@ app = typer.Typer(pretty_exceptions_enable=False)
 
 @app.command()
 def main(root_path: Path, reprocess_existing: bool = False) -> None:
-    """Decode the Zhuang experiment using its dataset-specific parameters."""
+    """Decode the Zhuang experiment using its dataset-specific parameters.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment or datastore directory.
+    reprocess_existing : bool, default=False
+        Reprocess existing decoded outputs using the selected parameters.
+    """
     root_path = root_path.expanduser().resolve()
     decode_pixels(root_path=root_path, reprocess_existing=reprocess_existing)
 

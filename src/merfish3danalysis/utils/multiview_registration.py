@@ -11,13 +11,27 @@ from merfish3danalysis.utils.spacing import round_spacing_um
 
 
 def _diag(message: str, *, enabled: bool) -> None:
-    """Print a multiview registration diagnostic when enabled."""
+    """Print a multiview registration diagnostic when enabled.
+
+    Parameters
+    ----------
+    message : str
+        Diagnostic message body.
+    enabled : bool
+        If True, print the diagnostic message.
+    """
     if enabled:
         print(f"[multiview-registration] {message}", flush=True)
 
 
 def _clear_cupy_memory(cp: Any) -> None:
-    """Synchronize and release CuPy allocations and FFT plans."""
+    """Synchronize and release CuPy allocations and FFT plans.
+
+    Parameters
+    ----------
+    cp : Any
+        Imported ``cupy`` module.
+    """
     cp.cuda.Stream.null.synchronize()
     try:
         cp.fft.config.get_plan_cache().clear()
@@ -29,7 +43,15 @@ def _clear_cupy_memory(cp: Any) -> None:
 
 
 def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
-    """Return a GPU YX maximum projection of the ZYX image."""
+    """Return a GPU YX maximum projection of the ZYX image.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input image in Z, Y, X order.
+    cp : Any
+        Imported ``cupy`` module.
+    """
     image_gpu = cp.asarray(image, dtype=cp.float32)
     projection = cp.max(image_gpu, axis=0)
     del image_gpu

@@ -17,14 +17,26 @@ if TYPE_CHECKING:
 
 
 def _local_scene_path(dest: str | PathLike) -> Path:
-    """Restrict atomic publication to local POSIX paths and canonicalize aliases."""
+    """Restrict atomic publication to local POSIX paths and canonicalize aliases.
+
+    Parameters
+    ----------
+    dest : str or os.PathLike
+        Existing local Scene directory, which may be reached through a symlink.
+    """
     if os.name != "posix" or "://" in str(dest):
         raise ValueError("Scene updates require a local POSIX filesystem.")
     return Path(dest).resolve(strict=True)
 
 
 def _scene_lock(path: Path) -> FileLock:
-    """Serialize independent workers updating the same Scene."""
+    """Serialize independent workers updating the same Scene.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Canonical local Scene path whose metadata updates must be serialized.
+    """
     return FileLock(str(path.parent / f".{path.name}.metadata.lock"))
 
 

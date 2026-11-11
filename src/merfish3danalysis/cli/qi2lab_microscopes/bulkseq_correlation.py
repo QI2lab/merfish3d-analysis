@@ -107,11 +107,17 @@ def _load_file2_txt(path: str, sep_override: str) -> pd.DataFrame:
 
 
 def _drop_gene_prefixes(s: pd.Series, prefixes: list[str]) -> pd.Series:
-    """
-    Mark genes whose names begin with any prefix in `prefixes` as NaN.
+    """Mark genes whose names begin with any prefix in `prefixes` as NaN.
 
     This returns a Series with the SAME index/length as the input,
     so it can be used safely for boolean indexing via .notna().
+
+    Parameters
+    ----------
+    s : pandas.Series
+        Gene names to filter, retaining the original index.
+    prefixes : list[str]
+        Case-insensitive gene-name prefixes to replace with missing values.
     """
     if not prefixes:
         return s
@@ -123,8 +129,12 @@ def _drop_gene_prefixes(s: pd.Series, prefixes: list[str]) -> pd.Series:
 
 
 def _strip_trailing_dash_number(s: pd.Series) -> pd.Series:
-    """
-    Remove trailing -1, -2, -3, ... from gene names.
+    """Remove trailing -1, -2, -3, ... from gene names.
+
+    Parameters
+    ----------
+    s : pandas.Series
+        Gene names from which trailing numeric dash suffixes are removed.
 
     Examples
     --------
@@ -146,10 +156,30 @@ def _counts_vs_fpkm(
     label_for_errors: str,
     drop_prefix: list[str],
 ) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Return merged counts-vs-FPKM table and genes in file1 not found in file2.
+    """Return merged counts-vs-FPKM table and genes in file1 not found in file2.
 
     Both sides are normalized by stripping trailing -1/-2/... from gene names.
+
+    Parameters
+    ----------
+    df1 : pandas.DataFrame
+        Decoded transcript rows to count by gene.
+    df2 : pandas.DataFrame
+        Bulk-sequencing table containing gene names and FPKM values.
+    gene_col1 : str
+        Gene-name column in the decoded transcript table.
+    gene_col2 : str
+        Gene-name column in the bulk-sequencing table.
+    fpkm_col : str
+        FPKM column in the bulk-sequencing table.
+    only_pos_cell : bool
+        Restrict transcript counts to positive cell IDs when True.
+    cell_col : str
+        Decoded transcript column containing cell IDs.
+    label_for_errors : str
+        Decoded-table name included in validation messages.
+    drop_prefix : list[str]
+        Case-insensitive gene-name prefixes to exclude from both tables.
     """
     if gene_col1 not in df1.columns:
         typer.secho(

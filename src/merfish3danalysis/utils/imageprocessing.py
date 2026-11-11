@@ -26,16 +26,17 @@ def replace_hot_pixels(
 
     Parameters
     ----------
-    noise_map: ArrayLike
-        darkfield image collected at long exposure time to get hot pixels
-    data: ArrayLike
-        ND data [broadcast_dim,z,y,x]
-    threshold: float, default = 375.0
-        threshold to determine hot pixel
+    noise_map : ArrayLike
+        YX camera darkfield or maximum projection identifying hot pixels.
+    data : ArrayLike
+        Image stack in ZYX order with the same YX shape as ``noise_map``.
+    threshold : float, default = 375.0
+        Hot-pixel cutoff in noise-map intensity units. Pixels above this value
+        are replaced by their plane's 3-by-3 median.
 
     Returns
     -------
-    data: ArrayLike
+    data : ArrayLike
         hotpixel corrected data
     """
     # GPU
@@ -133,13 +134,13 @@ def estimate_shading(images: "Iterable[Future]") -> ArrayLike:
 
     Parameters
     ----------
-    images: Iterable[Future]
+    images : Iterable[Future]
         Read futures yielding ZYX images. Pass a generator to load one stack at
         a time. Only YX maximum projections are retained for fitting.
 
     Returns
     -------
-    shading_image: ArrayLike
+    shading_image : ArrayLike
         estimated shading image
     """
     # GPU

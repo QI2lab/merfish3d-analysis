@@ -333,7 +333,15 @@ class DatastoreNdvView(QtCore.QObject):
             return False
 
     def _display_model(self, data: Any, z_size: int) -> Any | None:
-        """Keep lazy fused-image display limits tied to the intensity dtype."""
+        """Keep lazy fused-image display limits tied to the intensity dtype.
+
+        Parameters
+        ----------
+        data : Any
+            NDV-compatible image data.
+        z_size : int
+            Number of Z planes.
+        """
         if not isinstance(data, LazyGlobalChannelData):
             return None
         from ndv.models import ArrayDisplayModel, LUTModel

@@ -313,7 +313,13 @@ def _load_tile_multichannel_msim(
 
 
 def _bit_number(bit_id: str) -> int:
-    """Return the numeric suffix of a stored bit identifier."""
+    """Return the numeric suffix of a stored bit identifier.
+
+    Parameters
+    ----------
+    bit_id : str
+        Datastore bit identifier whose numeric suffix determines channel order.
+    """
     return int(bit_id[3:])
 
 

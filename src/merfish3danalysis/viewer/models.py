@@ -10,7 +10,15 @@ from merfish3danalysis.utils.spacing import round_spacing_um
 
 @dataclass(frozen=True)
 class ChannelStack:
-    """Channel-stacked image data and labels for display."""
+    """Channel-stacked image data and labels for display.
+
+    Parameters
+    ----------
+    data : Any
+        Image data with channel, Z, Y, X dimensions.
+    labels : list[str]
+        Display labels in image channel order.
+    """
 
     data: Any
     labels: list[str]
@@ -22,6 +30,15 @@ class LazyGlobalChannelData:
 
     NDV's native TensorStore wrapper uses pixel indices for coordinates, while
     TensorStore stacks require a common dtype for intensity images and labels.
+
+    Parameters
+    ----------
+    fused_zyx : Any
+        Base intensity image in Z, Y, X order, opened lazily or held in memory.
+    image_channels : tuple[Any, ...]
+        Additional Z, Y, X image channels, retaining their individual dtypes.
+    coords : dict[str, Any]
+        Dimension names mapped to channel labels or physical coordinate arrays.
     """
 
     fused_zyx: Any
@@ -107,11 +124,27 @@ class LazyGlobalChannelData:
         )
 
     def __array_function__(self, *_args: Any, **_kwargs: Any) -> Any:
-        """Decline NumPy operations without materializing the full fused image."""
+        """Decline NumPy operations without materializing the full fused image.
+
+        Parameters
+        ----------
+        *_args : Any
+            NumPy protocol positional arguments.
+        **_kwargs : Any
+            NumPy protocol keyword arguments.
+        """
         return NotImplemented
 
     def _read_channel(self, channel_index: int, zyx_key: tuple[Any, ...]) -> np.ndarray:
-        """Read one selected channel in Z, Y, X order."""
+        """Read one selected channel in Z, Y, X order.
+
+        Parameters
+        ----------
+        channel_index : int
+            Channel index.
+        zyx_key : tuple[Any, ...]
+            Z, Y, X index.
+        """
         image = (
             self.fused_zyx
             if channel_index == 0
@@ -125,7 +158,19 @@ class LazyGlobalChannelData:
 
 @dataclass(frozen=True)
 class GlobalChannelStack:
-    """Global channel stack with micron coordinate metadata."""
+    """Global channel stack with micron coordinate metadata.
+
+    Parameters
+    ----------
+    stack : ChannelStack
+        Image channels and their display labels.
+    origin_zyx_um : numpy.ndarray
+        Global canvas origin in Z, Y, X microns.
+    spacing_zyx_um : numpy.ndarray
+        Voxel spacing in Z, Y, X microns.
+    full_shape_zyx : tuple[int, int, int]
+        Unprojected global canvas dimensions in Z, Y, X order.
+    """
 
     stack: ChannelStack
     origin_zyx_um: np.ndarray
@@ -135,7 +180,15 @@ class GlobalChannelStack:
 
 @dataclass(frozen=True)
 class ViewerDisplay:
-    """Display payload and warning messages produced by viewer loaders."""
+    """Display payload and warning messages produced by viewer loaders.
+
+    Parameters
+    ----------
+    stack : ChannelStack
+        Image channels and their display labels.
+    warnings : list[str]
+        Warnings recorded while loading or warping the requested channels.
+    """
 
     stack: ChannelStack
     warnings: list[str]
@@ -143,7 +196,21 @@ class ViewerDisplay:
 
 @dataclass(frozen=True)
 class SparsePointLayer:
-    """Point geometry rendered as a sparse viewer overlay."""
+    """Point geometry rendered as a sparse viewer overlay.
+
+    Parameters
+    ----------
+    index : Any
+        Transcript coordinates and gene IDs indexed by rounded Z plane.
+    selected_genes : tuple[str, ...]
+        Gene identifiers selected for display, in color order.
+    marker_size : int
+        Marker size passed to VisPy, in display pixels.
+    spacing_zyx_um : tuple[float, float, float]
+        Voxel spacing in Z, Y, X microns.
+    label : str
+        Display label for the sparse layer.
+    """
 
     index: Any
     selected_genes: tuple[str, ...]
@@ -154,7 +221,29 @@ class SparsePointLayer:
 
 @dataclass(frozen=True)
 class SparseLineLayer:
-    """Polyline geometry rendered as a sparse viewer overlay."""
+    """Polyline geometry rendered as a sparse viewer overlay.
+
+    Parameters
+    ----------
+    polylines : tuple[Any, ...]
+        Y, X vertex arrays, or (z_min, z_max, vertices_yx) tuples for Z-aware lines.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    width : int
+        Outline width in display pixels.
+    color : str
+        VisPy-compatible outline color.
+    spacing_zyx_um : tuple[float, float, float]
+        Voxel spacing in Z, Y, X microns.
+    label : str
+        Display label for the sparse layer.
+    z_aware : bool, default=False
+        Whether outlines vary with their Z interval or indexed plane.
+    z_polylines_by_index : dict[int, tuple[numpy.ndarray, ...]] | None, default=None
+        Y, X outline vertices grouped by integer Z plane, or None if not indexed.
+    max_polylines_yx : tuple[numpy.ndarray, ...]
+        Y, X outlines for maximum-projection display.
+    """
 
     polylines: tuple[Any, ...]
     shape: tuple[int, int, int]
@@ -169,7 +258,15 @@ class SparseLineLayer:
 
 @dataclass(frozen=True)
 class SparseOverlayPayload:
-    """Sparse point and line layers for the current viewer display."""
+    """Sparse point and line layers for the current viewer display.
+
+    Parameters
+    ----------
+    points : tuple[SparsePointLayer, ...]
+        Transcript point layers in display order.
+    lines : tuple[SparseLineLayer, ...]
+        Cell-boundary line layers in display order.
+    """
 
     points: tuple[SparsePointLayer, ...] = ()
     lines: tuple[SparseLineLayer, ...] = ()
@@ -182,7 +279,31 @@ class SparseOverlayPayload:
 
 @dataclass(frozen=True)
 class DisplayContext:
-    """Immutable context needed to refresh overlays for a displayed stack."""
+    """Immutable context needed to refresh overlays for a displayed stack.
+
+    Parameters
+    ----------
+    mode : str
+        Displayed coordinate frame, local or global.
+    base_stack : ChannelStack
+        Image stack retained while transcript overlays refresh.
+    base_sparse_lines : tuple[SparseLineLayer, ...]
+        Boundary layers retained while transcript overlays refresh.
+    shape_zyx : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    spacing_zyx_um : numpy.ndarray
+        Voxel spacing in Z, Y, X microns.
+    origin_zyx_um : numpy.ndarray | None, default=None
+        Canvas origin in Z, Y, X microns, or None for local views.
+    full_shape_zyx : tuple[int, int, int] | None, default=None
+        Unprojected global canvas dimensions in Z, Y, X order.
+    tile : str | None, default=None
+        Local tile identifier, or None for a global view.
+    tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] | None, default=None
+        Tile affine, origin, and spacing in Z, Y, X microns for global overlays.
+    refresh_only : bool, default=False
+        Whether this result updates overlays without replacing the image stack.
+    """
 
     mode: str
     base_stack: ChannelStack
@@ -208,7 +329,23 @@ class DisplayContext:
 
 @dataclass(frozen=True)
 class ViewerBuildResult:
-    """Prepared viewer data produced off the Qt UI thread."""
+    """Prepared viewer data produced off the Qt UI thread.
+
+    Parameters
+    ----------
+    stack : ChannelStack
+        Image channels and their display labels.
+    spacing_zyx_um : numpy.ndarray
+        Voxel spacing in Z, Y, X microns.
+    origin_zyx_um : numpy.ndarray | None
+        Canvas origin in Z, Y, X microns, or None for local views.
+    context : DisplayContext
+        Coordinate and image context retained for later overlay refreshes.
+    status : str
+        Status text describing the displayed channels and sparse layers.
+    sparse_payload : SparseOverlayPayload | None, default=None
+        Sparse point and boundary layers, or None when there are none.
+    """
 
     stack: ChannelStack
     spacing_zyx_um: np.ndarray
@@ -220,7 +357,47 @@ class ViewerBuildResult:
 
 @dataclass(frozen=True)
 class ViewerState:
-    """Controller selection snapshot used to build display requests."""
+    """Controller selection snapshot used to build display requests.
+
+    Parameters
+    ----------
+    view_mode : str
+        Selected local-native, local-warped, or global-fused display mode.
+    tile : str
+        Selected datastore tile identifier.
+    fiducial_sources : tuple[str, ...]
+        Selected fiducial image sources, corrected or deconvolved.
+    fiducial_rounds : tuple[str, ...]
+        Selected fiducial round identifiers.
+    bit_ids : tuple[str, ...]
+        Selected readout bit identifiers.
+    bit_sources : tuple[str, ...]
+        Selected readout image sources: corrected, deconvolved, or feature predictor.
+    warp_options : WarpChainOptions
+        Local affine and SOFIMA components selected for display.
+    gpu_id : int
+        CUDA device index used for local image warping.
+    include_fused_image : bool
+        Include the fused fiducial intensity image.
+    include_segmentation : bool
+        Include the Cellpose label image.
+    include_cell_boundaries : bool
+        Include global Cellpose boundary outlines.
+    include_proseg_boundaries : bool
+        Include boundary outlines from the selected Proseg run.
+    include_baysor_boundaries : bool
+        Include Baysor boundary outlines.
+    transcript_source : str | None
+        Selected datastore, Proseg, or Baysor transcript source, or None.
+    selected_genes : tuple[str, ...]
+        Gene identifiers selected for display, in color order.
+    marker_radius : int
+        Transcript marker radius in display pixels.
+    proseg_run_name : str | None
+        Selected Proseg run name, or None for the default run.
+    max_project : bool
+        Display the global image and sparse geometry in maximum projection.
+    """
 
     view_mode: str
     tile: str
@@ -244,7 +421,31 @@ class ViewerState:
 
 @dataclass(frozen=True)
 class GlobalDisplayRequest:
-    """Controller state needed to build a global display."""
+    """Controller state needed to build a global display.
+
+    Parameters
+    ----------
+    include_fused_image : bool
+        Include the fused fiducial intensity image.
+    include_segmentation : bool
+        Include the Cellpose label image.
+    include_cell_boundaries : bool
+        Include global Cellpose boundary outlines.
+    include_proseg_boundaries : bool
+        Include boundary outlines from the selected Proseg run.
+    include_baysor_boundaries : bool
+        Include Baysor boundary outlines.
+    transcript_source : str | None
+        Selected datastore, Proseg, or Baysor transcript source, or None.
+    selected_genes : tuple[str, ...]
+        Gene identifiers selected for display, in color order.
+    marker_radius : int
+        Transcript marker radius in display pixels.
+    proseg_run_name : str | None
+        Selected Proseg run name, or None for the default run.
+    max_project : bool
+        Display the global image and sparse geometry in maximum projection.
+    """
 
     include_fused_image: bool
     include_segmentation: bool
@@ -260,7 +461,39 @@ class GlobalDisplayRequest:
 
 @dataclass(frozen=True)
 class LocalDisplayRequest:
-    """Controller state needed to build a local tile display."""
+    """Controller state needed to build a local tile display.
+
+    Parameters
+    ----------
+    tile : str
+        Selected datastore tile identifier.
+    fiducial_sources : tuple[str, ...]
+        Selected fiducial image sources, corrected or deconvolved.
+    fiducial_rounds : tuple[str, ...]
+        Selected fiducial round identifiers.
+    bit_ids : tuple[str, ...]
+        Selected readout bit identifiers.
+    bit_sources : tuple[str, ...]
+        Selected readout image sources: corrected, deconvolved, or feature predictor.
+    warp_options : WarpChainOptions
+        Local affine and SOFIMA components selected for display.
+    gpu_id : int
+        CUDA device index used for local image warping.
+    include_cell_boundaries : bool
+        Include global Cellpose boundary outlines.
+    include_proseg_boundaries : bool
+        Include boundary outlines from the selected Proseg run.
+    include_baysor_boundaries : bool
+        Include Baysor boundary outlines.
+    transcript_source : str | None
+        Selected datastore, Proseg, or Baysor transcript source, or None.
+    selected_genes : tuple[str, ...]
+        Gene identifiers selected for display, in color order.
+    marker_radius : int
+        Transcript marker radius in display pixels.
+    proseg_run_name : str | None
+        Selected Proseg run name, or None for the default run.
+    """
 
     tile: str
     fiducial_sources: tuple[str, ...]
@@ -280,7 +513,19 @@ class LocalDisplayRequest:
 
 @dataclass(frozen=True)
 class TranscriptRefreshRequest:
-    """Controller state needed to rebuild transcript sparse overlays."""
+    """Controller state needed to rebuild transcript sparse overlays.
+
+    Parameters
+    ----------
+    source : str | None
+        Selected datastore, Proseg, or Baysor transcript source, or None.
+    selected_genes : tuple[str, ...]
+        Gene identifiers selected for display, in color order.
+    marker_radius : int
+        Transcript marker radius in display pixels.
+    proseg_run_name : str | None
+        Selected Proseg run name, or None for the default run.
+    """
 
     source: str | None
     selected_genes: tuple[str, ...]
@@ -290,7 +535,15 @@ class TranscriptRefreshRequest:
 
 @dataclass(frozen=True)
 class WarpChainOptions:
-    """Viewer-selected local warp-chain components."""
+    """Viewer-selected local warp-chain components.
+
+    Parameters
+    ----------
+    stage_affine : bool, default=True
+        Apply the stored local round affine when True.
+    sofima : bool, default=True
+        Apply the stored residual SOFIMA field when True.
+    """
 
     stage_affine: bool = True
     sofima: bool = True

@@ -37,9 +37,9 @@ def sweep_decode_params(
         The range of minimum magnitude threshold to sweep through.
     mag_threshold_step : float, default 0.1
         The step size for the magnitude threshold.
-    minimum_pixels_range: tuple[float, float], default = (3.0, 11.0)
+    minimum_pixels_range : tuple[float, float], default = (3.0, 11.0)
         Range of minimum pixels to sweep through.
-    minimum_pixels_step: float, default = 2.0
+    minimum_pixels_step : float, default = 2.0
         The step size for the minimum pixel threshold.
     """
     mag_values = np.arange(

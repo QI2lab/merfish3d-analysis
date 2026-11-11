@@ -23,7 +23,17 @@ class ConcurrentSceneUpdateError(RuntimeError):
 def _check_revision(
     products: Mapping[str, Any], selection: str, expected: str | None
 ) -> None:
-    """Prevent a worker from replacing an image published by another worker."""
+    """Prevent a worker from replacing an image published by another worker.
+
+    Parameters
+    ----------
+    products : Mapping[str, Any]
+        Published Scene products indexed by logical selection.
+    selection : str
+        Logical product identifier whose revision is checked.
+    expected : str or None
+        Revision read by the worker, or None when no product was published.
+    """
     previous = products.get(selection)
     if (None if previous is None else previous["revision"]) != expected:
         raise ConcurrentSceneUpdateError(f"Image {selection!r} has changed.")
@@ -32,7 +42,17 @@ def _check_revision(
 def _image_frame(
     scene: v06.Scene, image: v06.Image, frame: str
 ) -> v06.CoordinateSystem:
-    """Verify that an image can be linked to its requested Scene frame."""
+    """Verify that an image can be linked to its requested Scene frame.
+
+    Parameters
+    ----------
+    scene : yaozarrs.v06.Scene
+        Scene containing the target coordinate system.
+    image : yaozarrs.v06.Image
+        Image metadata whose spatial axes must match the target frame.
+    frame : str
+        Name of the target Scene coordinate system.
+    """
     systems = {system.name: system for system in scene.scene.coordinateSystems or []}
     if frame not in systems:
         raise ValueError(f"Unknown image frame {frame!r}.")
@@ -53,7 +73,23 @@ def _expected_transform_index(
     expected_status: str,
     expected_revision: int,
 ) -> int:
-    """Detect concurrent or intermediate updates before replacing a transform."""
+    """Detect concurrent or intermediate updates before replacing a transform.
+
+    Parameters
+    ----------
+    scene : yaozarrs.v06.Scene
+        Scene containing the transform to replace.
+    statuses : Mapping[str, str]
+        Current calculation status indexed by transform name.
+    versions : Mapping[str, int]
+        Current revision indexed by transform name.
+    expected : yaozarrs.v06.CoordinateTransformation
+        Transform previously read by the worker.
+    expected_status : str
+        Calculation status previously read by the worker.
+    expected_revision : int
+        Transform revision previously read by the worker.
+    """
     matches = [
         i
         for i, transform in enumerate(scene.scene.coordinateTransformations)
@@ -116,12 +152,28 @@ def build_acquisition_scene(
     statuses: dict[str, str] = {}
 
     def add_system(name: str) -> str:
-        """Add a shared frame for the acquisition transform graph."""
+        """Add a shared frame for the acquisition transform graph.
+
+        Parameters
+        ----------
+        name : str
+            Unique coordinate system name within the acquisition Scene.
+        """
         systems.append(v06.CoordinateSystem(name=name, axes=axes))
         return name
 
     def add_identity(name: str, source: str, target: str) -> None:
-        """Reserve a relationship until its registration is calculated."""
+        """Reserve a relationship until its registration is calculated.
+
+        Parameters
+        ----------
+        name : str
+            Unique transform name used to track calculation status.
+        source : str
+            Input coordinate system name.
+        target : str
+            Output coordinate system name.
+        """
         transforms.append(
             v06.IdentityTransformation(
                 name=name,
@@ -252,7 +304,15 @@ def publish_acquisition_scene(
     def update(
         current: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish the graph without discarding concurrently created products."""
+        """Publish the graph without discarding concurrently created products.
+
+        Parameters
+        ----------
+        current : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         if state.get("tile_ids") or state.get("transform_status"):
             raise ConcurrentSceneUpdateError(
@@ -395,7 +455,15 @@ def publish_transforms(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Replace transforms only when their expected revisions still match."""
+        """Replace transforms only when their expected revisions still match.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         statuses = dict(state["transform_status"])
         versions = dict(state["transform_versions"])
@@ -468,7 +536,15 @@ def update_chromatic_metadata(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Keep all channel relationships consistent with optimizer metadata."""
+        """Keep all channel relationships consistent with optimizer metadata.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         wavelengths = dict(state.get("readout_wavelengths_um", {}))
         if wavelength is not None:
@@ -710,7 +786,15 @@ def publish_sofima_field(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish the field and its pixel coordinate systems atomically."""
+        """Publish the field and its pixel coordinate systems atomically.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         statuses = dict(state["transform_status"])
         versions = dict(state["transform_versions"])
@@ -869,7 +953,15 @@ def publish_completed_image(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish a completed image and its frame together under the Scene lock."""
+        """Publish a completed image and its frame together under the Scene lock.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         products = dict(state["products"])
         previous = products.get(selection)
@@ -1038,7 +1130,15 @@ def publish_projection_labels(path: str | Path, labels: Any) -> None:
 def _axis_aligned_grid(
     dataset: v06.Dataset, ndim: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Read the dataset grid through yaozarrs and require valid sampling spacing."""
+    """Read the dataset grid through yaozarrs and require valid sampling spacing.
+
+    Parameters
+    ----------
+    dataset : yaozarrs.v06.Dataset
+        Dataset metadata containing the scale and translation transforms.
+    ndim : int
+        Required number of image axes, in dataset order.
+    """
     scale = dataset.scale_transform
     translation = dataset.translation_transform
     spacing = (

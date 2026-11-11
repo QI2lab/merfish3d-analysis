@@ -21,7 +21,13 @@ app = typer.Typer(pretty_exceptions_enable=False)
 
 
 def load_qi2lab_transcripts_within_cells(specified_dir: Path) -> pd.DataFrame:
-    """Load filtered decoded features and keep only transcripts assigned to cells."""
+    """Load filtered decoded features and keep only transcripts assigned to cells.
+
+    Parameters
+    ----------
+    specified_dir : Path
+        Experiment, datastore, Parquet, or gzipped CSV path containing decoded spots.
+    """
     if specified_dir.is_file():
         if specified_dir.suffixes[-2:] == [".csv", ".gz"]:
             transcripts_df = pd.read_csv(specified_dir)
@@ -65,7 +71,17 @@ def calculate_F1(
     merlin_path: Path,
     search_radius: float,
 ) -> dict:
-    """Calculate F1 using filtered decoded spots and MERLIN ground truth."""
+    """Calculate F1 using filtered decoded spots and MERLIN ground truth.
+
+    Parameters
+    ----------
+    specified_dir : Path
+        Experiment, datastore, or decoded-spots table path.
+    merlin_path : Path
+        MERLIN reference CSV containing global coordinates and molecule names.
+    search_radius : float
+        Maximum distance in microns between matching transcripts.
+    """
     qi2lab_spots = load_qi2lab_transcripts_within_cells(specified_dir)
     qi2lab_coords = qi2lab_spots[["global_z", "global_x", "global_y"]].to_numpy()
     qi2lab_gene_ids = qi2lab_spots["gene_id"].to_numpy()
@@ -86,7 +102,13 @@ def calculate_F1(
 
 @app.command()
 def main(root_path: Path) -> None:
-    """Compare Zhuang decoded spots with MERLIN using a 3 µm search radius."""
+    """Compare Zhuang decoded spots with MERLIN using a 3 µm search radius.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment directory containing the datastore and MERLIN reference.
+    """
     root_path = root_path.expanduser().resolve()
     merlin_spots_path = root_path / Path(
         r"mop/mouse_sample1_raw/zhuang_decoded_codewords/spots_mouse1sample1.csv"

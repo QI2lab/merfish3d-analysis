@@ -53,7 +53,15 @@ class qi2labDataStore:
     )
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
-        """Initialize a qi2lab datastore handle."""
+        """Initialize a qi2lab datastore handle.
+
+        Parameters
+        ----------
+        datastore_path : str | Path
+            Datastore root path.
+        validate : bool
+            Whether to validate existing image arrays while parsing the store.
+        """
         self._datastore_path = Path(datastore_path)
         self._tile_scene_path = self._datastore_path / "tiles.ome.zarr"
         if self._datastore_path.exists():
@@ -101,7 +109,13 @@ class qi2labDataStore:
             ) from exc
 
     def _ensure_fused_scene(self, fusion_type: str) -> Path:
-        """Atomically create a product Scene because MVS writes its images later."""
+        """Atomically create a product Scene because MVS writes its images later.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` for the downsampled volume or ``"all_channels"`` for full fusion.
+        """
         import os
         from tempfile import TemporaryDirectory
 
@@ -598,7 +612,15 @@ class qi2labDataStore:
         return attributes
 
     def _set_calibration_attribute(self, key: str, value: Any) -> None:
-        """Save a calibration field in its product's metadata file."""
+        """Save a calibration field in its product's metadata file.
+
+        Parameters
+        ----------
+        key : str
+            Calibration metadata key.
+        value : Any
+            Value to store after JSON conversion.
+        """
         if key in {"exp_order", "codebook"}:
             product = (
                 "experiment_order/experiment_order.parquet"
@@ -864,7 +886,13 @@ class qi2labDataStore:
         self._set_calibration_attribute("channels_in_data", channels)
 
     def _validate_scene_channels(self, channels: list[Any] | None) -> None:
-        """Keep acquisition channel identities consistent with the Scene."""
+        """Keep acquisition channel identities consistent with the Scene.
+
+        Parameters
+        ----------
+        channels : list[Any] or None
+            Acquisition channel names or indices in their stored order.
+        """
         state = open_group(self._tile_scene_path).attrs["qi2lab"]
         if state.get("tile_ids") and state.get("channels_in_data") != channels:
             raise ValueError("Acquisition channels do not match the tile Scene.")
@@ -955,8 +983,8 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        value: float
-            New detection objective numerical aperture (NA)
+        value : float
+            New detection objective numerical aperture (NA).
         """
         self._na = value
         self._set_calibration_attribute("na", value)
@@ -978,8 +1006,8 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        value: float
-            New detection objective refractive index (RI)
+        value : float
+            New detection objective refractive index (RI).
         """
         self._ri = value
         self._set_calibration_attribute("ri", value)
@@ -1227,7 +1255,13 @@ class qi2labDataStore:
             self._bit_ids.append("bit" + str(bit_idx + 1).zfill(3))
 
     def _validate_scene_experiment_order(self, order: pd.DataFrame) -> None:
-        """Keep acquisition channel slots consistent with the initialized Scene."""
+        """Keep acquisition channel slots consistent with the initialized Scene.
+
+        Parameters
+        ----------
+        order : pandas.DataFrame
+            Proposed round-by-channel acquisition order, including empty channel slots.
+        """
         state = open_group(self._tile_scene_path).attrs["qi2lab"]
         if state.get("tile_ids") and not np.array_equal(
             order.to_numpy(), np.asarray(state.get("experiment_order"))
@@ -1293,7 +1327,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _normalize_voxel_size_zyx_um(value: ArrayLike) -> list[float]:
-        """Validate three positive finite ZYX spacings at stored precision."""
+        """Validate three positive finite ZYX spacings at stored precision.
+
+        Parameters
+        ----------
+        value : ArrayLike
+            Three positive voxel spacings in Z, Y, X order, in micrometers.
+        """
         spacing = round_spacing_um(value)
         if (
             spacing.shape != (3,)
@@ -1416,7 +1456,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _validate_decode_run_key(decode_run_key: str | None) -> str | None:
-        """Validate an optional decoded-output run key."""
+        """Validate an optional decoded-output run key.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Optional subfolder name under decoded-output roots.
+        """
         if decode_run_key is None:
             return None
         decode_run_key = str(decode_run_key)
@@ -1430,14 +1476,26 @@ class qi2labDataStore:
         return decode_run_key
 
     def _decoded_run_root(self, decode_run_key: str | None = None) -> Path:
-        """Return the local decoded output root for an optional decode run."""
+        """Return the local decoded output root for an optional decode run.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
+        """
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
             return self._decoded_root_path
         return self._decoded_root_path / "runs" / decode_run_key
 
     def _decode_normalization_path(self, decode_run_key: str | None) -> Path:
-        """Keep each decode run's normalization metadata with its codewords."""
+        """Keep each decode run's normalization metadata with its codewords.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Named decode run, or None for the default run.
+        """
         root = self._datastore_path / "codewords/normalization"
         key = self._validate_decode_run_key(decode_run_key)
         return root / "default.json" if key is None else root / "runs" / f"{key}.json"
@@ -1450,7 +1508,20 @@ class qi2labDataStore:
         kind: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        """Serialize and atomically publish normalization updates across workers."""
+        """Serialize and atomically publish normalization updates across workers.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Named decode run, or None for the default run.
+        updates : Mapping[str, Any]
+            Normalization and background fields to merge into the stored metadata.
+        kind : str or None, default None
+            Normalization kind associated with metadata, such as ``"global"`` or
+            ``"iterative"``. Required when metadata is supplied.
+        metadata : Mapping[str, Any] or None, default None
+            Provenance to store for the selected normalization kind, if supplied.
+        """
         import os
         from tempfile import TemporaryDirectory
 
@@ -1506,7 +1577,13 @@ class qi2labDataStore:
         self,
         decode_run_key: str | None = None,
     ) -> Path:
-        """Return the global filtered output root for an optional decode run."""
+        """Return the global filtered output root for an optional decode run.
+
+        Parameters
+        ----------
+        decode_run_key : str or None, default None
+            Optional decoded-output run key.
+        """
         root = self._datastore_path / "codewords/global_filtered"
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
@@ -1817,7 +1894,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
-        """Create chunk sizes for fused image storage."""
+        """Create chunk sizes for fused image storage.
+
+        Parameters
+        ----------
+        array : np.ndarray
+            Fused image array that will be written.
+        """
         if array.ndim == 2:
             return [min(int(dim), 2048) for dim in array.shape]
         return [
@@ -1829,7 +1912,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _image_store_path(image_path: Path | str) -> Path:
-        """Normalize a logical image name to an ``.ome.zarr`` path."""
+        """Normalize a logical image name to an ``.ome.zarr`` path.
+
+        Parameters
+        ----------
+        image_path : Path | str
+            Logical image path or OME-Zarr path.
+        """
         path = Path(image_path)
         if path.name.endswith(".ome.zarr"):
             return path
@@ -1868,7 +1957,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _to_json_compatible(value: Any) -> Any:
-        """Convert NumPy scalars and containers to JSON-compatible values."""
+        """Convert NumPy scalars and containers to JSON-compatible values.
+
+        Parameters
+        ----------
+        value : Any
+            Value to convert before JSON serialization.
+        """
         if isinstance(value, np.ndarray):
             return value.tolist()
         if isinstance(value, np.generic):
@@ -2013,7 +2108,15 @@ class qi2labDataStore:
         def update(
             scene: v06.Scene, attributes: dict[str, Any]
         ) -> tuple[v06.Scene, dict[str, Any]]:
-            """Merge the entity update under the Scene lock."""
+            """Merge the entity update under the Scene lock.
+
+            Parameters
+            ----------
+            scene : yaozarrs.v06.Scene
+                Current Scene read while holding its metadata lock.
+            attributes : dict[str, Any]
+                Non-OME root attributes, including the qi2lab processing state.
+            """
             state = dict(attributes["qi2lab"])
             metadata = dict(state.get("entity_metadata", {}))
             entity = dict(metadata.get(key, {}))
@@ -2028,7 +2131,14 @@ class qi2labDataStore:
 
     @staticmethod
     def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
-        """Return ZYX stage coordinates, padding YX positions with Z=0."""
+        """Return ZYX stage coordinates, padding YX positions with Z=0.
+
+        Parameters
+        ----------
+        stage_zyx_um : ArrayLike
+            Stage coordinates in Z, Y, X order, in micrometers. Two values are
+            interpreted as Y, X and receive a zero Z coordinate.
+        """
         stage = np.asarray(stage_zyx_um, dtype=np.float32)
         if stage.shape == (2,):
             return np.asarray((0.0, stage[0], stage[1]), dtype=np.float32)
@@ -3062,7 +3172,15 @@ class qi2labDataStore:
         def update(
             scene: v06.Scene, attributes: dict[str, Any]
         ) -> tuple[v06.Scene, dict[str, Any]]:
-            """Move the bit's image and chromatic links in one Scene update."""
+            """Move the bit's image and chromatic links in one Scene update.
+
+            Parameters
+            ----------
+            scene : yaozarrs.v06.Scene
+                Current Scene read while holding its metadata lock.
+            attributes : dict[str, Any]
+                Non-OME root attributes, including the qi2lab processing state.
+            """
             state = dict(attributes["qi2lab"])
             transforms = list(scene.scene.coordinateTransformations)
             chromatic = next(
@@ -3227,8 +3345,9 @@ class qi2labDataStore:
         stage_zyx_um : ArrayLike
             Tile stage position in Z, Y, X microns. Two-coordinate Y, X input
             is accepted and stored as Z, Y, X with Z=0.
-        affine_zyx_px: ArrayLike
-            4x4 homogeneous affine matrix for stage transformation
+        affine_zyx_px : ArrayLike
+            4x4 homogeneous camera affine in Z, Y, X order, applied after
+            the stage translation.
         tile : int or str
             Tile index or tile id.
         round : int or str
@@ -5087,6 +5206,15 @@ class qi2labDataStore:
         path = self.fiducial_projection_path()
 
         def publish(dest: Path, expected_revision: str | None) -> None:
+            """Publish the completed projection in its Scene.
+
+            Parameters
+            ----------
+            dest : pathlib.Path
+                Projection Scene directory to receive the completed image.
+            expected_revision : str or None
+                Previously published projection revision, or None for a new projection.
+            """
             publish_image(
                 dest,
                 "projection/fiducial",

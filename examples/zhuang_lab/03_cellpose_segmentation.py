@@ -30,9 +30,9 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment or qi2labdatastore directory
-    cellpose_parameters: dict
+    cellpose_parameters : dict
         dictionary of cellpose parameters
     """
     # initialize datastore
@@ -106,7 +106,13 @@ def run_cellpose(root_path: Path, cellpose_parameters: dict) -> None:
 
 @app.command()
 def main(root_path: Path) -> None:
-    """Segment the downsampled fiducial projection with Zhuang parameters."""
+    """Segment the downsampled fiducial projection with Zhuang parameters.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment or datastore directory containing the fiducial projection.
+    """
     root_path = root_path.expanduser().resolve()
     # Zhuang parameters; tune on the downsampled fiducial projection.
     # The original convention passes the negative of cellprob_threshold.

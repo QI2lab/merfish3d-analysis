@@ -20,7 +20,17 @@ from merfish3danalysis.viewer.models import (
 
 @dataclass(frozen=True)
 class _GlobalBaseImage:
-    """Selected global base image for NDV display."""
+    """Selected global base image for NDV display.
+
+    Parameters
+    ----------
+    image_zyx : Any
+        Selected intensity volume, maximum projection, or empty Z, Y, X canvas.
+    shape_zyx : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    labels : list[str]
+        Display labels in image channel order.
+    """
 
     image_zyx: Any
     shape_zyx: tuple[int, int, int]
@@ -29,7 +39,19 @@ class _GlobalBaseImage:
 
 @dataclass(frozen=True)
 class PointOverlayIndex:
-    """Reusable Z-indexed transcript point coordinates and gene ids."""
+    """Reusable Z-indexed transcript point coordinates and gene ids.
+
+    Parameters
+    ----------
+    coords_sorted : numpy.ndarray
+        Transcript coordinates in Z, Y, X pixels, sorted by rounded Z.
+    genes_sorted : numpy.ndarray
+        Gene identifier for each sorted transcript coordinate.
+    z_sorted : numpy.ndarray
+        Rounded integer Z-plane index for each sorted coordinate.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    """
 
     coords_sorted: np.ndarray
     genes_sorted: np.ndarray
@@ -79,7 +101,19 @@ class PointOverlayIndex:
 
 @dataclass(frozen=True)
 class PolylineGeometry:
-    """Sparse 2D polyline geometry virtually repeated across Z planes."""
+    """Sparse 2D polyline geometry virtually repeated across Z planes.
+
+    Parameters
+    ----------
+    polylines_yx : tuple[numpy.ndarray, ...]
+        Boundary vertex arrays in Y, X pixel coordinates, repeated across Z.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    line_thickness : int
+        Outline width in display pixels.
+    value : int, default=1
+        Overlay value carried with the geometry.
+    """
 
     polylines_yx: tuple[np.ndarray, ...]
     shape: tuple[int, int, int]
@@ -89,7 +123,23 @@ class PolylineGeometry:
 
 @dataclass(frozen=True)
 class ZPolylineGeometry:
-    """Sparse polyline geometry valid over selected Z intervals."""
+    """Sparse polyline geometry valid over selected Z intervals.
+
+    Parameters
+    ----------
+    polylines : tuple[Any, ...]
+        Tuples of lower Z, upper Z, and Y, X vertices in pixel coordinates.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    line_thickness : int
+        Outline width in display pixels.
+    z_polylines_by_index : dict[int, tuple[numpy.ndarray, ...]] | None, default=None
+        Y, X outline vertices grouped by integer Z plane, or None if not indexed.
+    max_polylines_yx : tuple[numpy.ndarray, ...]
+        Y, X outlines for maximum-projection display.
+    value : int, default=1
+        Overlay value carried with the geometry.
+    """
 
     polylines: tuple[Any, ...]
     shape: tuple[int, int, int]
@@ -101,7 +151,21 @@ class ZPolylineGeometry:
 
 @dataclass(frozen=True)
 class _LocalBaysorLayer:
-    """Processed local geometry for one Baysor cell layer."""
+    """Processed local geometry for one Baysor cell layer.
+
+    Parameters
+    ----------
+    z_min : float
+        Lower local Z coordinate of the transformed cell layer, in pixels.
+    z_max : float
+        Upper local Z coordinate of the transformed cell layer, in pixels.
+    lower_yx : numpy.ndarray
+        Transformed lower-boundary vertices in local Y, X pixels.
+    closed_yx : numpy.ndarray
+        Closed lower-boundary ring in local Y, X pixels.
+    area : float
+        Area of the closed Y, X ring in square pixels.
+    """
 
     z_min: float
     z_max: float
@@ -111,7 +175,13 @@ class _LocalBaysorLayer:
 
 
 def _empty_point_index(shape_zyx: tuple[int, int, int]) -> PointOverlayIndex:
-    """Return an empty point index for the Z, Y, X canvas."""
+    """Return an empty point index for the Z, Y, X canvas.
+
+    Parameters
+    ----------
+    shape_zyx : tuple[int, int, int]
+        Target Z, Y, X canvas shape.
+    """
     empty_coords = np.empty((0, 3), dtype=float)
     empty_genes = np.empty(0, dtype=object)
     return PointOverlayIndex.from_points(empty_coords, empty_genes, shape_zyx)
@@ -464,7 +534,13 @@ def local_transcript_index(
 
 
 def _parse_baysor_layer(layer: Any) -> tuple[float, float] | None:
-    """Parse a Baysor Z interval in microns, or return None if invalid."""
+    """Parse a Baysor Z interval in microns, or return None if invalid.
+
+    Parameters
+    ----------
+    layer : Any
+        Baysor layer value.
+    """
     if isinstance(layer, str):
         try:
             layer = ast.literal_eval(layer)
@@ -513,7 +589,13 @@ def _iter_baysor_boundary_rows(
 def _baysor_rows_by_cell(
     rows: list[tuple[str, tuple[float, float], np.ndarray]],
 ) -> dict[str, list[tuple[tuple[float, float], np.ndarray]]]:
-    """Group Baysor Z intervals and polygon rings by cell ID."""
+    """Group Baysor Z intervals and polygon rings by cell ID.
+
+    Parameters
+    ----------
+    rows : list[tuple[str, tuple[float, float], numpy.ndarray]]
+        Parsed Baysor boundary rows.
+    """
     grouped: dict[str, list[tuple[tuple[float, float], np.ndarray]]] = {}
     for cell_id, layer, polygon_xy in rows:
         grouped.setdefault(cell_id, []).append((layer, polygon_xy))
@@ -523,7 +605,13 @@ def _baysor_rows_by_cell(
 
 
 def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
-    """Close a Y, X ring without duplicating its closing vertex."""
+    """Close a Y, X ring without duplicating its closing vertex.
+
+    Parameters
+    ----------
+    points_yx : numpy.ndarray
+        Ring vertices in Y, X order.
+    """
     points = np.asarray(points_yx, dtype=float)
     if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
         return np.empty((0, 2), dtype=float)
@@ -535,7 +623,13 @@ def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
 
 
 def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
-    """Return a scale-relative tolerance for detecting degenerate rings."""
+    """Return a scale-relative tolerance for detecting degenerate rings.
+
+    Parameters
+    ----------
+    points_yx : numpy.ndarray
+        Ring vertices in Y, X order.
+    """
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 2:
         return 0.0
@@ -546,7 +640,13 @@ def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
 
 
 def _closed_valid_ring_yx(points_yx: np.ndarray) -> tuple[np.ndarray, float]:
-    """Return a closed Y, X ring and area, or an empty ring and zero area."""
+    """Return a closed Y, X ring and area, or an empty ring and zero area.
+
+    Parameters
+    ----------
+    points_yx : numpy.ndarray
+        Ring vertices in Y, X order.
+    """
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 4:
         return np.empty((0, 2), dtype=float), 0.0
@@ -597,7 +697,13 @@ def _add_z_indexed_polyline(
 def _freeze_z_indexed_polylines(
     z_polylines_by_index: dict[int, list[np.ndarray]],
 ) -> dict[int, tuple[np.ndarray, ...]]:
-    """Convert each Z-indexed polyline list to a tuple."""
+    """Convert each Z-indexed polyline list to a tuple.
+
+    Parameters
+    ----------
+    z_polylines_by_index : dict[int, list[numpy.ndarray]]
+        Mutable Z-indexed polyline map.
+    """
     return {
         z_index: tuple(polylines)
         for z_index, polylines in z_polylines_by_index.items()
@@ -1242,7 +1348,15 @@ def _match_lazy_global_image_shape(
 
 
 def _squeeze_leading_singleton_axes(array: Any, ndim: int) -> Any:
-    """Remove leading singleton axes without reading image data."""
+    """Remove leading singleton axes without reading image data.
+
+    Parameters
+    ----------
+    array : Any
+        Lazy or eager image array.
+    ndim : int
+        Required output dimensionality.
+    """
     squeezed = array
     while len(squeezed.shape) > ndim and int(squeezed.shape[0]) == 1:
         squeezed = squeezed[0]

@@ -296,7 +296,25 @@ def _save_global_rois(
     *,
     workers: int = 1,
 ) -> None:
-    """Stream parallel, vectorized outline filtering into a replacement ZIP."""
+    """Stream parallel, vectorized outline filtering into a replacement ZIP.
+
+    Parameters
+    ----------
+    pixel_spacing_rois : list[ImagejRoi]
+        ImageJ outlines in projection pixel coordinates.
+    global_roi_path : Path
+        Destination ZIP for the filtered global ImageJ outlines.
+    spacing_zyx_um : numpy.ndarray
+        Projection voxel spacing in Z, Y, X microns.
+    origin_zyx_um : numpy.ndarray
+        Projection origin in Z, Y, X microns.
+    affine_zyx_um : numpy.ndarray
+        Projection-to-world affine in physical Z, Y, X coordinates.
+    min_cell_area_um2 : float
+        Minimum global outline area in square microns.
+    workers : int, default=1
+        Number of parallel ROI transformation workers.
+    """
     step_start = perf_counter()
     print(
         f"Warping, filtering, and saving global ImageJ ROIs to {global_roi_path} "
@@ -306,6 +324,13 @@ def _save_global_rois(
     kept_count = 0
 
     def retained_rois() -> Iterator[ImagejRoi]:
+        """Yield filtered global outlines while counting the saved ROIs.
+
+        Yields
+        ------
+        roifile.ImagejRoi
+            One outline in global micron coordinates.
+        """
         nonlocal kept_count
         for roi in global_rois(
             pixel_spacing_rois,

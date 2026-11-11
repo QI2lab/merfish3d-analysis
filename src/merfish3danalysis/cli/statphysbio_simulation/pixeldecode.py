@@ -77,14 +77,14 @@ def decode_pixels(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
         Defaults to 7 for 2D simulations and 28 for 3D simulations.
     lowpass_sigma : tuple[float, float, float], default (3.0, 1.0, 1.0)
         Gaussian lowpass sigma in z, y, x before decoding.
-    magnitude_threshold: tuple[float,float], optional
+    magnitude_threshold : tuple[float,float], optional
         minimum magnitude across all normalized bits required to accept a spot.
         Defaults to (0.9, 10.0) for 3D simulations and a 2D lookup table keyed
         by axial sampling relative to the 0.315 um Nyquist reference:
