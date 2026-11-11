@@ -111,19 +111,7 @@ class _LocalBaysorLayer:
 
 
 def _empty_point_index(shape_zyx: tuple[int, int, int]) -> PointOverlayIndex:
-    """
-    Return an empty point index for a canvas shape.
-
-    Parameters
-    ----------
-    shape_zyx : tuple[int, int, int]
-        Target Z, Y, X canvas shape.
-
-    Returns
-    -------
-    PointOverlayIndex
-        Empty point index.
-    """
+    """Return an empty point index for the Z, Y, X canvas."""
     empty_coords = np.empty((0, 3), dtype=float)
     empty_genes = np.empty(0, dtype=object)
     return PointOverlayIndex.from_points(empty_coords, empty_genes, shape_zyx)
@@ -476,19 +464,7 @@ def local_transcript_index(
 
 
 def _parse_baysor_layer(layer: Any) -> tuple[float, float] | None:
-    """
-    Parse one Baysor Z-layer interval.
-
-    Parameters
-    ----------
-    layer : Any
-        Baysor layer value.
-
-    Returns
-    -------
-    tuple[float, float] or None
-        Z interval in microns.
-    """
+    """Parse a Baysor Z interval in microns, or return None if invalid."""
     if isinstance(layer, str):
         try:
             layer = ast.literal_eval(layer)
@@ -537,19 +513,7 @@ def _iter_baysor_boundary_rows(
 def _baysor_rows_by_cell(
     rows: list[tuple[str, tuple[float, float], np.ndarray]],
 ) -> dict[str, list[tuple[tuple[float, float], np.ndarray]]]:
-    """
-    Group Baysor boundary rows by cell id.
-
-    Parameters
-    ----------
-    rows : list[tuple[str, tuple[float, float], numpy.ndarray]]
-        Parsed Baysor boundary rows.
-
-    Returns
-    -------
-    dict[str, list[tuple[tuple[float, float], numpy.ndarray]]]
-        Boundary rows grouped by cell id.
-    """
+    """Group Baysor Z intervals and polygon rings by cell ID."""
     grouped: dict[str, list[tuple[tuple[float, float], np.ndarray]]] = {}
     for cell_id, layer, polygon_xy in rows:
         grouped.setdefault(cell_id, []).append((layer, polygon_xy))
@@ -559,19 +523,7 @@ def _baysor_rows_by_cell(
 
 
 def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
-    """
-    Return a closed Y, X ring without duplicate intermediate endpoints.
-
-    Parameters
-    ----------
-    points_yx : numpy.ndarray
-        Ring vertices in Y, X order.
-
-    Returns
-    -------
-    numpy.ndarray
-        Closed ring in Y, X order.
-    """
+    """Close a Y, X ring without duplicating its closing vertex."""
     points = np.asarray(points_yx, dtype=float)
     if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
         return np.empty((0, 2), dtype=float)
@@ -583,19 +535,7 @@ def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
 
 
 def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
-    """
-    Return a scale-relative tolerance for detecting degenerate rings.
-
-    Parameters
-    ----------
-    points_yx : numpy.ndarray
-        Ring vertices in Y, X order.
-
-    Returns
-    -------
-    float
-        Degenerate-area tolerance.
-    """
+    """Return a scale-relative tolerance for detecting degenerate rings."""
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 2:
         return 0.0
@@ -606,19 +546,7 @@ def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
 
 
 def _closed_valid_ring_yx(points_yx: np.ndarray) -> tuple[np.ndarray, float]:
-    """
-    Return a closed ring and its valid area, or an empty ring and zero area.
-
-    Parameters
-    ----------
-    points_yx : numpy.ndarray
-        Ring vertices in Y, X order.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, float]
-        Closed ring and absolute area.
-    """
+    """Return a closed Y, X ring and area, or an empty ring and zero area."""
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 4:
         return np.empty((0, 2), dtype=float), 0.0
@@ -669,19 +597,7 @@ def _add_z_indexed_polyline(
 def _freeze_z_indexed_polylines(
     z_polylines_by_index: dict[int, list[np.ndarray]],
 ) -> dict[int, tuple[np.ndarray, ...]]:
-    """
-    Return an immutable Z-indexed polyline map.
-
-    Parameters
-    ----------
-    z_polylines_by_index : dict[int, list[numpy.ndarray]]
-        Mutable Z-indexed polyline map.
-
-    Returns
-    -------
-    dict[int, tuple[numpy.ndarray, ...]]
-        Z-indexed polyline map.
-    """
+    """Convert each Z-indexed polyline list to a tuple."""
     return {
         z_index: tuple(polylines)
         for z_index, polylines in z_polylines_by_index.items()
@@ -1326,21 +1242,7 @@ def _match_lazy_global_image_shape(
 
 
 def _squeeze_leading_singleton_axes(array: Any, ndim: int) -> Any:
-    """
-    Remove leading singleton axes without reading lazy image data.
-
-    Parameters
-    ----------
-    array : Any
-        Lazy or eager image array.
-    ndim : int
-        Required output dimensionality.
-
-    Returns
-    -------
-    Any
-        Image array with leading singleton axes removed.
-    """
+    """Remove leading singleton axes without reading image data."""
     squeezed = array
     while len(squeezed.shape) > ndim and int(squeezed.shape[0]) == 1:
         squeezed = squeezed[0]

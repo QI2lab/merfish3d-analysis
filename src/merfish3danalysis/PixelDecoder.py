@@ -8,6 +8,7 @@ MERFISH datasets efficiently.
 
 import gc
 import hashlib
+import itertools
 import multiprocessing as mp
 import operator
 import os
@@ -20,15 +21,47 @@ from pathlib import Path
 from random import sample
 from typing import Literal
 
-from merfish3danalysis.utils.dataio import time_stamp
-from merfish3danalysis.utils.imageprocessing import image_has_signal
+import cupy as cp
+import numpy as np
+import pandas as pd
+import rtree
+import shapely
+from cucim.skimage.measure import label
+from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
+from cucim.skimage.morphology import remove_small_objects
+from cupyx.scipy.ndimage import gaussian_filter
+from cuvs.distance import pairwise_distance
+from scipy.spatial import cKDTree
+from shapely.geometry import Point, Polygon
+from skimage.draw import polygon as rasterize_polygon
+from skimage.measure import regionprops_table
+from tqdm.auto import tqdm, trange
 
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.decode_warping import (
+    optimizer_calibration_is_applicable,
+    warp_bit_image_to_reference,
+)
+from merfish3danalysis.utils.imageprocessing import image_has_signal
+from merfish3danalysis.utils.spacing import round_spacing_um
+
+DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
+DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
+DEFAULT_2D_MINIMUM_PIXELS = 7.0
+DEFAULT_3D_MINIMUM_PIXELS = 16.0
 _SPAWN_CONTEXT = mp.get_context("spawn")
+
+# filter warning from skimage
+warnings.filterwarnings(
+    "ignore",
+    message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
+)
 
 
 @dataclass(frozen=True)
 class ChromaticAffineEstimationConfig:
-    """Explicit RNA-derived chromatic affine estimation parameters."""
+    """Parameters for RNA-derived chromatic affine estimation."""
 
     min_pairs: int = 20
     distance_filter_min_pairs_multiplier: int = 4
@@ -53,68 +86,15 @@ class ChromaticAffineEstimationConfig:
     centroid_weight_epsilon: float = 1e-6
 
 
-import itertools
-
-import cupy as cp
-import numpy as np
-import pandas as pd
-import rtree
-import shapely
-from cucim.skimage.measure import label
-from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
-from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter
-from cuvs.distance import pairwise_distance
-from scipy.spatial import cKDTree
-from shapely.geometry import Point, Polygon
-from skimage.draw import polygon as rasterize_polygon
-from skimage.measure import regionprops_table
-from tqdm.auto import tqdm, trange
-
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.decode_warping import (
-    optimizer_calibration_is_applicable,
-    warp_bit_image_to_reference,
-)
-from merfish3danalysis.utils.spacing import round_spacing_um
-
-DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
-DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
-DEFAULT_2D_MINIMUM_PIXELS = 7.0
-DEFAULT_3D_MINIMUM_PIXELS = 16.0
-
-# filter warning from skimage
-warnings.filterwarnings(
-    "ignore",
-    message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
-)
-
-# GPU helper functions
-
-
 def _start_gpu_worker_process(
     *,
     target: object,
     args: tuple,
     physical_gpu_id: int,
 ) -> mp.Process:
-    """
-    Start one worker with only its assigned physical GPU visible.
+    """Start a worker with only its assigned physical GPU visible.
 
-    Parameters
-    ----------
-    target : object
-        Worker function passed to :class:`multiprocessing.Process`.
-    args : tuple
-        Worker arguments. These should use local GPU index 0 because the child
-        process sees only ``physical_gpu_id``.
-    physical_gpu_id : int
-        Physical GPU index to expose to the child process.
-
-    Returns
-    -------
-    multiprocessing.Process
-        Started worker process.
+    Worker arguments use local GPU index 0.
     """
     previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
@@ -130,21 +110,7 @@ def _start_gpu_worker_process(
 
 
 def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
-    """
-    Join GPU workers and raise if any worker failed.
-
-    Parameters
-    ----------
-    processes : Sequence[multiprocessing.Process]
-        Worker processes to join.
-    label : str
-        Human-readable worker group name used in the error message.
-
-    Returns
-    -------
-    None
-        Raises RuntimeError when at least one worker exits nonzero.
-    """
+    """Join GPU workers and raise RuntimeError if any worker failed."""
     errors = []
     for process in processes:
         process.join()
@@ -171,41 +137,10 @@ def decode_tiles_worker(
     decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
-    """
-    Worker that runs decode_one_tile on a subset of tiles under one GPU.
+    """Decode and save the assigned tiles on one GPU.
 
-    Parameters
-    ----------
-    datastore_path : Path
-        Path to the qi2lab datastore containing the tiles to decode.
-    tile_indices : Sequence[int]
-        Datastore tile indices assigned to this worker.
-    gpu_id : int
-        Process-local CUDA device index. Isolated workers use 0; progress logs
-        report the corresponding identifier in ``CUDA_VISIBLE_DEVICES`` instead.
-    merfish_bits : int
-        Number of MERFISH bits used by the decoder.
-    verbose : int
-        Print tile start and completion messages when at least 1.
-    decode_mode : Literal['auto', '2d', '3d']
-        Decode connected-component/filtering mode.
-    lowpass_sigma : Sequence[float]
-        Gaussian lowpass standard deviations in ZYX pixel units.
-    magnitude_threshold : Sequence[float]
-        Lower and upper pixel-trace magnitude thresholds.
-    minimum_pixels : float
-        Minimum connected-component size accepted as a transcript.
-    normalization_method : Literal['iterative', 'global', 'none']
-        Normalization source used for pixel traces.
-    decode_run_key : str or None
-        Optional run whose normalization and decoded outputs the worker uses.
-    normalization_features : Literal['all', 'cells']
-        Feature population used to fit normalization vectors.
-
-    Returns
-    -------
-    None
-        Decoded transcripts are saved to the datastore for each assigned tile.
+    Isolated workers use local GPU index 0; logs show its physical device.
+    ``lowpass_sigma`` is in ZYX pixels.
     """
     import cupy as cp
     import torch
@@ -288,41 +223,11 @@ def _optimize_norm_worker(
     decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
-    """
-    Worker that runs one iteration of normalization-by-decoding on a GPU.
+    """Run one normalization iteration for the assigned tiles on one GPU.
 
-    Parameters
-    ----------
-    datastore_path : Path
-        Path to the existing datastore shared by the GPU workers.
-    tile_indices : Sequence[int]
-        Zero-based tile indices assigned to this worker.
-    gpu_id : int
-        CUDA device index used for decoding and normalization.
-    merfish_bits : int
-        Number of readout bits used from the codebook.
-    decode_mode : Literal['auto', '2d', '3d']
-        Decode connected-component/filtering mode.
-    temp_dir : Path
-        Directory for per-tile normalization Parquet outputs.
-    iteration : int
-        Zero-based normalization iteration; iteration zero starts from global estimates.
-    lowpass_sigma : Sequence[float]
-        Gaussian filter widths in Z, Y, X pixels.
-    magnitude_threshold : Sequence[float]
-        Lower and upper accepted pixel-vector magnitudes.
-    minimum_pixels : float
-        Minimum connected-component size in pixels.
-    collect_chromatic_centroids : bool
-        If True, collect per-on-bit centroid features needed for chromatic
-        affine estimation.
-    excluded_gene_ids : Sequence[str]
-        Codebook gene IDs whose winning pixel assignments are suppressed during
-        iterative optimization.
-    decode_run_key : str or None
-        Optional run whose normalization vectors the worker loads and updates.
-    normalization_features : Literal['all', 'cells']
-        Feature population used to fit normalization vectors.
+    Seed iteration zero with global normalization. Save per-tile features to
+    ``temp_dir``; optionally collect on-bit centroids for chromatic estimation.
+    ``lowpass_sigma`` is in ZYX pixels.
     """
     import cupy as cp
     import torch
@@ -759,7 +664,7 @@ class PixelDecoder:
     def _normalization_features_match_metadata(
         self, metadata: dict[str, object] | None
     ) -> bool:
-        """Treat legacy untagged vectors as the previous cell-based default."""
+        """Check the feature population, treating untagged vectors as cell-based."""
         cached_features = (
             metadata.get("normalization_features", "cells")
             if isinstance(metadata, dict)
@@ -1363,15 +1268,7 @@ class PixelDecoder:
     def _estimate_chromatic_affines_from_barcodes(
         self,
     ) -> None:
-        """
-        Estimate chromatic matrices from RNA centroids in the decoding dimensions.
-
-        Returns
-        -------
-        None
-            Chromatic affine metadata are saved into the datastore calibration
-            sidecar.
-        """
+        """Estimate and save chromatic affines from decoded RNA centroids."""
         config = self._chromatic_affine_config
         min_pairs = int(config.min_pairs)
 
@@ -1731,14 +1628,7 @@ class PixelDecoder:
         )
 
     def _save_identity_chromatic_affines(self) -> None:
-        """
-        Save identity chromatic affine transforms for the current bit wavelengths.
-
-        Returns
-        -------
-        None
-            Identity channel transforms are written to datastore metadata.
-        """
+        """Save identity channel affines unless optimizer estimates already exist."""
         existing = self._datastore.load_chromatic_affine_transforms_zyx_um()
         if optimizer_calibration_is_applicable(existing):
             return
@@ -2091,23 +1981,7 @@ class PixelDecoder:
             target_yx: np.ndarray,
             fit_weights: np.ndarray,
         ) -> tuple[float, float, float]:
-            """
-            Fit lateral radial scale and translation.
-
-            Parameters
-            ----------
-            source_yx : numpy.ndarray
-                Source Y, X coordinates.
-            target_yx : numpy.ndarray
-                Target Y, X coordinates.
-            fit_weights : numpy.ndarray
-                Per-point fit weights.
-
-            Returns
-            -------
-            tuple[float, float, float]
-                Scale, Y translation, and X translation.
-            """
+            """Return radial scale, Y translation, and X translation for weighted pairs."""
             design_y = np.column_stack(
                 [
                     source_yx[:, 0],
@@ -3247,19 +3121,10 @@ class PixelDecoder:
         gpu_id: int = 0,
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
-        """
-        Select and load the normalization state used by pixel decoding.
+        """Load the requested normalization vectors for pixel decoding.
 
-        Parameters
-        ----------
-        normalization_method : Literal['iterative', 'global', 'none']
-            Normalization vectors to load.
-        gpu_id : int
-            CUDA device index used for decoding and normalization.
-        lowpass_sigma : Sequence[float], default = (3, 1, 1)
-            Lowpass sigma used when global normalization needs to be
-            recalculated, keeping normalization preprocessing aligned with
-            decoding preprocessing.
+        ``lowpass_sigma`` is in ZYX pixels and matches decoding preprocessing
+        when global normalization must be recalculated.
         """
         if normalization_method == "iterative":
             self._load_iterative_normalization_vectors(gpu_id=gpu_id)

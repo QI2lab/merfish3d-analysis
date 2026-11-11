@@ -37,8 +37,7 @@ _fft_cache_3d: dict[tuple[int, int, int, int], cp.ndarray] = {}
 
 
 def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
-    """
-    Clear cached FFT resources used by RLGC helper functions.
+    """Clear cached FFT resources used by RLGC helper functions.
 
     Parameters
     ----------
@@ -46,10 +45,6 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
         If True, synchronize the current CUDA stream and release CuPy device
         and pinned memory pools in addition to clearing local FFT buffers and
         CuPy FFT plans.
-
-    Returns
-    -------
-    None
     """
     _fft_cache_3d.clear()
     try:
@@ -227,8 +222,7 @@ def enforce_symmetric_boundary(
     image: cp.ndarray,
     pad_width: tuple[tuple[int, int], tuple[int, int], tuple[int, int]],
 ) -> None:
-    """
-    Constrain padded samples to be a symmetric extension of observed samples.
+    """Constrain padded samples to be a symmetric extension of observed samples.
 
     Parameters
     ----------
@@ -236,10 +230,6 @@ def enforce_symmetric_boundary(
         Padded 3D image in Z, Y, X order. The array is modified in place.
     pad_width : tuple[tuple[int, int], tuple[int, int], tuple[int, int]]
         Per-axis padding widths returned by :func:`pad_for_linear_fft`.
-
-    Returns
-    -------
-    None
     """
     for axis, (pad_before, pad_after) in enumerate(pad_width):
         if pad_before == 0 and pad_after == 0:
@@ -409,21 +399,7 @@ def kl_div(p: cp.ndarray, q: cp.ndarray, mask: cp.ndarray | None = None) -> floa
 
 
 def _child_log_prefix(base_prefix: str, suffix: str) -> str:
-    """
-    Append one structured suffix to an RLGC log prefix.
-
-    Parameters
-    ----------
-    base_prefix : str
-        Existing structured log prefix, or an empty string.
-    suffix : str
-        Suffix to append as a separate token.
-
-    Returns
-    -------
-    str
-        Combined log prefix. If ``base_prefix`` is empty, returns ``suffix``.
-    """
+    """Append a space-separated suffix to the RLGC log prefix."""
     return suffix if not base_prefix else f"{base_prefix} {suffix}"
 
 
@@ -464,21 +440,7 @@ def _resolve_tiled_axis_geometry(
 
 
 def _axis_retained_bounds(retained_size: int, image_size: int) -> list[tuple[int, int]]:
-    """
-    Build non-overlapping retained tile bounds that exactly cover one axis.
-
-    Parameters
-    ----------
-    retained_size : int
-        Number of output samples retained from each tile along the axis.
-    image_size : int
-        Full image size along the axis.
-
-    Returns
-    -------
-    list[tuple[int, int]]
-        Inclusive-exclusive retained bounds covering ``[0, image_size)``.
-    """
+    """Return half-open tile bounds covering [0, image_size) without overlap."""
     if retained_size <= 0:
         raise ValueError("retained_size must be greater than 0.")
     bounds = []
@@ -754,20 +716,7 @@ def rlgc(
 
 
 def _is_gpu_memory_error(exc: BaseException) -> bool:
-    """
-    Identify CUDA allocation failures that should trigger chunk fallback.
-
-    Parameters
-    ----------
-    exc : BaseException
-        Exception raised during an RLGC attempt.
-
-    Returns
-    -------
-    bool
-        True if the exception appears to be a GPU or host memory allocation
-        failure; otherwise False.
-    """
+    """Identify GPU or host allocation failures that trigger chunk fallback."""
     if isinstance(exc, MemoryError):
         return True
     if isinstance(exc, cp.cuda.memory.OutOfMemoryError):

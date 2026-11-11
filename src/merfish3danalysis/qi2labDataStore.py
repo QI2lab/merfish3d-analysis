@@ -53,16 +53,7 @@ class qi2labDataStore:
     )
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
-        """
-        Initialize a qi2lab datastore handle.
-
-        Parameters
-        ----------
-        datastore_path : str | Path
-            Datastore root path.
-        validate : bool
-            Whether to validate existing image arrays while parsing the store.
-        """
+        """Initialize a qi2lab datastore handle."""
         self._datastore_path = Path(datastore_path)
         self._tile_scene_path = self._datastore_path / "tiles.ome.zarr"
         if self._datastore_path.exists():
@@ -577,25 +568,11 @@ class qi2labDataStore:
         return self._datastore_path / "shading/shading_metadata/flatfield_tile_ids.json"
 
     def _calibrations_attributes_path(self) -> Path:
-        """
-        Return the acquisition metadata JSON path.
-
-        Returns
-        -------
-        Path
-            Path to acquisition-wide metadata.
-        """
+        """Return the acquisition metadata JSON path."""
         return self._acquisition_metadata_root / "acquisition.json"
 
     def _load_calibrations_attributes(self) -> dict[str, Any]:
-        """
-        Load acquisition and calibration metadata from their product folders.
-
-        Returns
-        -------
-        dict[str, Any]
-            Merged metadata loaded from JSON and Parquet files.
-        """
+        """Load acquisition and calibration metadata from their product folders."""
         attributes_path = self._calibrations_attributes_path()
         if not attributes_path.is_file():
             raise FileNotFoundError(
@@ -621,21 +598,7 @@ class qi2labDataStore:
         return attributes
 
     def _set_calibration_attribute(self, key: str, value: Any) -> None:
-        """
-        Update one calibration metadata field.
-
-        Parameters
-        ----------
-        key : str
-            Calibration metadata key.
-        value : Any
-            Value to store after JSON conversion.
-
-        Returns
-        -------
-        None
-            No return value.
-        """
+        """Save a calibration field in its product's metadata file."""
         if key in {"exp_order", "codebook"}:
             product = (
                 "experiment_order/experiment_order.parquet"
@@ -665,7 +628,7 @@ class qi2labDataStore:
         calibration: Mapping[str, Any],
     ) -> None:
         """
-        Save chromatic affine calibration metadata.
+        Save chromatic calibration and update applicable Scene transforms.
 
         Parameters
         ----------
@@ -673,11 +636,6 @@ class qi2labDataStore:
             Calibration metadata containing one 4x4 ``affine_zyx_um`` matrix
             per channel. Each affine maps that channel's physical Z, Y, X
             coordinates onto the lowest-wavelength reference channel.
-
-        Returns
-        -------
-        None
-            Calibration and applicable transforms are stored in the Scene.
         """
         calibration = dict(calibration)
         if "voxel_size_zyx_um" in calibration:
@@ -1458,19 +1416,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _validate_decode_run_key(decode_run_key: str | None) -> str | None:
-        """
-        Validate an optional decoded-output run key.
-
-        Parameters
-        ----------
-        decode_run_key : str or None
-            Optional subfolder name under decoded-output roots.
-
-        Returns
-        -------
-        str or None
-            Validated run key.
-        """
+        """Validate an optional decoded-output run key."""
         if decode_run_key is None:
             return None
         decode_run_key = str(decode_run_key)
@@ -1484,19 +1430,7 @@ class qi2labDataStore:
         return decode_run_key
 
     def _decoded_run_root(self, decode_run_key: str | None = None) -> Path:
-        """
-        Return the local decoded output root for an optional decode run.
-
-        Parameters
-        ----------
-        decode_run_key : str or None, default None
-            Optional decoded-output run key.
-
-        Returns
-        -------
-        pathlib.Path
-            Decoded output root.
-        """
+        """Return the local decoded output root for an optional decode run."""
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
             return self._decoded_root_path
@@ -1572,19 +1506,7 @@ class qi2labDataStore:
         self,
         decode_run_key: str | None = None,
     ) -> Path:
-        """
-        Return the global filtered decoded-output root for an optional decode run.
-
-        Parameters
-        ----------
-        decode_run_key : str or None, default None
-            Optional decoded-output run key.
-
-        Returns
-        -------
-        pathlib.Path
-            Global filtered decoded-output root.
-        """
+        """Return the global filtered output root for an optional decode run."""
         root = self._datastore_path / "codewords/global_filtered"
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
@@ -1766,10 +1688,7 @@ class qi2labDataStore:
         return getattr(self, "_bit_ids", None)
 
     def _init_datastore(self) -> None:
-        """Initialize datastore.
-
-        Create directory structure and initialize datastore state.
-        """
+        """Create directory structure and initialize datastore state."""
         from merfish3danalysis.storage.ome import initialize_scene
 
         self._datastore_path.mkdir(parents=True, exist_ok=False)
@@ -1898,19 +1817,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
-        """
-        Create chunk sizes tailored for fused image storage.
-
-        Parameters
-        ----------
-        array : np.ndarray
-            Fused image array that will be written.
-
-        Returns
-        -------
-        list[int]
-            Chunk shape for fused image storage.
-        """
+        """Create chunk sizes for fused image storage."""
         if array.ndim == 2:
             return [min(int(dim), 2048) for dim in array.shape]
         return [
@@ -1922,19 +1829,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _image_store_path(image_path: Path | str) -> Path:
-        """
-        Normalize image path to the *.ome.zarr folder naming scheme.
-
-        Parameters
-        ----------
-        image_path : Path | str
-            Logical image path or OME-Zarr path.
-
-        Returns
-        -------
-        Path
-            Normalized path ending in ``.ome.zarr``.
-        """
+        """Normalize a logical image name to an ``.ome.zarr`` path."""
         path = Path(image_path)
         if path.name.endswith(".ome.zarr"):
             return path
@@ -1973,19 +1868,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _to_json_compatible(value: Any) -> Any:
-        """
-        Convert numpy/scalar containers to JSON-compatible values.
-
-        Parameters
-        ----------
-        value : Any
-            Value to convert before JSON serialization.
-
-        Returns
-        -------
-        Any
-            JSON-compatible representation.
-        """
+        """Convert NumPy scalars and containers to JSON-compatible values."""
         if isinstance(value, np.ndarray):
             return value.tolist()
         if isinstance(value, np.generic):
@@ -2108,11 +1991,6 @@ class qi2labDataStore:
             Logical tile-and-round or tile-and-bit path.
         updates : Mapping[str, Any]
             Metadata updates to persist.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         if not updates:
             return
@@ -2150,7 +2028,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
-        """Return ZYX stage coordinates, padding legacy YX positions with Z=0."""
+        """Return ZYX stage coordinates, padding YX positions with Z=0."""
         stage = np.asarray(stage_zyx_um, dtype=np.float32)
         if stage.shape == (2,):
             return np.asarray((0.0, stage[0], stage[1]), dtype=np.float32)
@@ -2178,11 +2056,6 @@ class qi2labDataStore:
             Logical image name being validated.
         image : ArrayLike
             Image data to validate.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         entity_root = Path(entity_root_path)
         shape = tuple(int(v) for v in np.asarray(image).shape)
@@ -2255,7 +2128,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _load_from_microjson(dictionary_path: Path | str) -> dict:
-        """Load cell outlines outlines microjson as dictionary.
+        """Load cell outlines microjson as dictionary.
 
         Parameters
         ----------
@@ -2520,11 +2393,6 @@ class qi2labDataStore:
         ----------
         validate : bool
             Whether to validate existing zarr arrays while parsing.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         if not self._tile_scene_path.is_dir():
             raise ValueError(
@@ -2662,7 +2530,6 @@ class qi2labDataStore:
                 keys_to_check = [
                     "excitation_um",
                     "emission_um",
-                    # "exposure_ms",
                     "psf_idx",
                 ]
 
@@ -2693,7 +2560,6 @@ class qi2labDataStore:
                 keys_to_check = [
                     "excitation_um",
                     "emission_um",
-                    # "exposure_ms",
                     "psf_idx",
                 ]
                 for key in keys_to_check:
@@ -3945,7 +3811,7 @@ class qi2labDataStore:
         round: int | str,
     ) -> None:
         """
-        Save the local fiducial round transform for one tile.
+        Save the local round transform as a moving-to-reference Scene edge.
 
         Parameters
         ----------
@@ -3957,11 +3823,6 @@ class qi2labDataStore:
             Tile index or tile identifier.
         round : int | str
             Fiducial round index or round identifier.
-
-        Returns
-        -------
-        None
-            The moving-to-reference affine is stored in the Scene.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -5706,14 +5567,7 @@ class qi2labDataStore:
             return None
 
     def _proseg_3d_root(self) -> Path:
-        """
-        Return the root path for Proseg 3D outputs.
-
-        Returns
-        -------
-        Path
-            Proseg 3D output root.
-        """
+        """Return the root path for Proseg 3D outputs."""
         return self._datastore_path / Path("proseg") / Path("3D")
 
     def _proseg_3d_run_root(self, run_name: str | None = None) -> Path:

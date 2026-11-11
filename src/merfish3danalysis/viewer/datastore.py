@@ -37,8 +37,8 @@ def component_summary(datastore: qi2labDataStore) -> dict[str, bool]:
 
     Parameters
     ----------
-    datastore : Any
-        qi2lab datastore-like object.
+    datastore : qi2labDataStore
+        Source datastore.
 
     Returns
     -------
@@ -64,8 +64,8 @@ def codebook_gene_bits(datastore: qi2labDataStore) -> dict[str, list[str]]:
 
     Parameters
     ----------
-    datastore : Any
-        qi2lab datastore-like object.
+    datastore : qi2labDataStore
+        Source datastore.
 
     Returns
     -------
@@ -97,8 +97,8 @@ def viewer_datastore_options(datastore: qi2labDataStore) -> ViewerDatastoreOptio
 
     Parameters
     ----------
-    datastore : Any
-        qi2lab datastore-like object.
+    datastore : qi2labDataStore
+        Source datastore.
 
     Returns
     -------

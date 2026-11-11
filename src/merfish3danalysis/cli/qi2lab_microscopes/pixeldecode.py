@@ -153,10 +153,6 @@ def _validate_filter_arguments(
     lr_fdr_target : float
         False-discovery-rate target for LR filtering.
 
-    Returns
-    -------
-    None
-        This function raises when arguments are inconsistent.
     """
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:

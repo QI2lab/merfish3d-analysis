@@ -130,7 +130,7 @@ class _TensorStoreChunkView(Store):
 
 
 def mvs_array(array: Any, chunks: Sequence[int] | None = None) -> zarr.Array:
-    """Adapt sharded yaozarrs arrays until MVS supports its virtual transforms.
+    """Adapt sharded yaozarrs arrays for MVS singleton-axis and channel views.
 
     Parameters
     ----------

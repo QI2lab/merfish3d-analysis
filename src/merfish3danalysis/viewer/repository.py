@@ -45,7 +45,7 @@ class ViewerDataRepository:
         Parameters
         ----------
         datastore : qi2labDataStore
-            qi2lab datastore-like object.
+            Source datastore.
         """
         self.datastore = datastore
         self._datastore_transcripts = None
@@ -59,14 +59,7 @@ class ViewerDataRepository:
         self._point_indices.clear()
 
     def require_datastore(self) -> "qi2labDataStore":
-        """
-        Return the active datastore or raise a clear error.
-
-        Returns
-        -------
-        Any
-            Active qi2lab datastore-like object.
-        """
+        """Return the active datastore, raising if none has been selected."""
         if self.datastore is None:
             raise ValueError("Select a datastore first.")
         return self.datastore
@@ -104,7 +97,7 @@ class ViewerDataRepository:
 
         Returns
         -------
-        Any
+        PointOverlayIndex
             Cached transcript coordinate index.
         """
         mode = "global" if tile_transform is None else "local"
@@ -153,7 +146,7 @@ class ViewerDataRepository:
 
         Returns
         -------
-        Any
+        pandas.DataFrame or None
             Transcript table for the selected source.
         """
         datastore = self.require_datastore()
@@ -267,7 +260,7 @@ class ViewerDataRepository:
 
         Returns
         -------
-        Any
+        PointOverlayIndex
             Transcript coordinate index.
         """
         table = ViewerDataRepository._filter_table_by_genes(table, selected_genes)
@@ -290,21 +283,7 @@ class ViewerDataRepository:
     def _filter_table_by_genes(
         table: "pd.DataFrame | None", selected_genes: tuple[str, ...]
     ) -> "pd.DataFrame | None":
-        """
-        Return rows matching selected genes.
-
-        Parameters
-        ----------
-        table : pandas.DataFrame or None
-            Transcript table.
-        selected_genes : tuple[str, ...]
-            Selected transcript genes.
-
-        Returns
-        -------
-        Any
-            Filtered transcript table.
-        """
+        """Filter the transcript table by gene_id or gene when genes are selected."""
         if table is None or len(selected_genes) == 0:
             return table
         column = "gene_id" if "gene_id" in table.columns else "gene"
@@ -314,19 +293,7 @@ class ViewerDataRepository:
 
     @staticmethod
     def _array_key(values: ArrayLike | None) -> tuple[float, ...] | None:
-        """
-        Return an immutable cache key for a numeric array.
-
-        Parameters
-        ----------
-        values : Any
-            Numeric values or ``None``.
-
-        Returns
-        -------
-        tuple[float, ...] or None
-            Flattened numeric cache key.
-        """
+        """Flatten numeric values into a cache key, preserving None."""
         if values is None:
             return None
         return tuple(float(value) for value in np.asarray(values, dtype=float).ravel())
@@ -342,19 +309,7 @@ class ViewerDataRepository:
         ]
         | None
     ):
-        """
-        Return an immutable cache key for a tile transform.
-
-        Parameters
-        ----------
-        tile_transform : tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray] or None
-            Tile affine, origin, and spacing.
-
-        Returns
-        -------
-        tuple[tuple[float, ...] or None, ...] or None
-            Immutable tile-transform cache key.
-        """
+        """Return cache keys for the tile affine, origin, and spacing."""
         if tile_transform is None:
             return None
         affine, origin, spacing = tile_transform

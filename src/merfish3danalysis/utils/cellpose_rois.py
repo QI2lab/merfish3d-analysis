@@ -22,23 +22,10 @@ if TYPE_CHECKING:
 def _bounded_map[Input, Output](
     function: Callable[[Input], Output], tasks: Iterable[Input], workers: int
 ) -> Iterator[Output]:
-    """Preserve input order while limiting queued work and result memory.
+    """Yield results in input order with at most 2 * workers queued tasks.
 
-    Python 3.12's executor map submits eagerly; batches bound outstanding work.
-
-    Parameters
-    ----------
-    function : Callable
-        Operation applied to each task.
-    tasks : Iterable
-        Tasks to process.
-    workers : int
-        Number of worker threads; one executes tasks sequentially.
-
-    Yields
-    ------
-    Output
-        Results in task order.
+    Python 3.12's Executor.map submits eagerly; batches bound result memory.
+    One worker executes tasks sequentially.
     """
     if workers == 1:
         yield from map(function, tasks)
@@ -91,19 +78,10 @@ def extract_pixel_rois(
 def _extract_roi_batch(
     regions: tuple[tuple[int, tuple[slice, slice]], ...], *, masks: np.ndarray
 ) -> list[ImagejRoi]:
-    """Extract the longest external contour from each labeled region.
+    """Extract pixel ROIs with at least five vertices from YX label crops.
 
-    Parameters
-    ----------
-    regions : tuple
-        Mask label and YX bounding-box slices for each cell.
-    masks : numpy.ndarray
-        Two-dimensional labeled mask shared by the batch.
-
-    Returns
-    -------
-    list of ImagejRoi
-        Pixel-coordinate contours having at least five vertices.
+    ``regions`` contains label IDs and bounding-box slices. Retain each
+    label's longest external contour.
     """
     rois = []
     for label, (ys, xs) in regions:

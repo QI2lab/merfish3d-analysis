@@ -44,10 +44,6 @@ def export_ome_tiffs(
     channel_ids : list[str]
         Ordered channel names matching the OME-Zarr channel axis.
 
-    Returns
-    -------
-    None
-        One tiled OME-TIFF is written for each channel.
     """
     from tifffile import TiffWriter
 
@@ -374,11 +370,9 @@ def fuse_all_channels(
 ) -> None:
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
-    Each tile is represented as one lazy multichannel spatial image. Channel-
-    dependent multiview-stitcher affines compose local round registration,
-    the known stage-camera affine, stage location, and the
-    stored global refinement. SOFIMA fields are intentionally ignored. One CPU
-    fusion writes fiducial first, followed by numerically ordered codebook bits.
+    Channel affines compose local round registration, stage-camera placement,
+    and global refinement. SOFIMA is not applied during fusion. Channels are
+    ordered as fiducial first, followed by numerically ordered codebook bits.
 
     Parameters
     ----------
@@ -399,11 +393,6 @@ def fuse_all_channels(
         Compression effort from 1 through 9. Higher levels can trade encoding
         speed for a smaller output without changing pixel values.
 
-    Returns
-    -------
-    None
-        The multiscale image is published in the datastore Scene. Optional
-        TIFFs are written to ``qi2labdatastore/fused_tiff``.
     """
     output_chunksize = (
         dict(zip("zyx", output_chunk_zyx, strict=True))
@@ -475,13 +464,7 @@ def fuse_all_channels(
 
 
 def main() -> None:
-    """Run the fuse-all Typer command-line interface.
-
-    Returns
-    -------
-    None
-        The command-line application runs to completion.
-    """
+    """Run the fuse-all CLI."""
     mp.set_start_method("spawn", force=True)
     app()
 

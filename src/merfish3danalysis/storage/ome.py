@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class ConcurrentSceneUpdateError(RuntimeError):
-    """A transform changed after a worker read it."""
+    """A Scene product or transform changed after a worker read it."""
 
 
 def _check_revision(

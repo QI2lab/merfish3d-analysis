@@ -493,37 +493,11 @@ class ViewerDisplayModel:
 
     @staticmethod
     def _status(labels: list[str], sparse_payload: SparseOverlayPayload) -> str:
-        """
-        Return a compact display status string.
-
-        Parameters
-        ----------
-        labels : list[str]
-            Image channel labels.
-        sparse_payload : SparseOverlayPayload
-            Sparse overlay payload.
-
-        Returns
-        -------
-        str
-            Human-readable display status.
-        """
+        """Return image and sparse-overlay labels as a status string."""
         return "Displayed: " + ", ".join([*labels, *sparse_payload.labels])
 
     @staticmethod
     def _spacing_tuple(spacing_zyx_um: Any) -> tuple[float, float, float]:
-        """
-        Return Z, Y, X spacing as a float tuple.
-
-        Parameters
-        ----------
-        spacing_zyx_um : Any
-            Z, Y, X voxel spacing in microns.
-
-        Returns
-        -------
-        tuple[float, float, float]
-            Spacing as Python floats.
-        """
+        """Return Z, Y, X spacing in microns as Python floats."""
         spacing = round_spacing_um(spacing_zyx_um)
         return float(spacing[0]), float(spacing[1]), float(spacing[2])

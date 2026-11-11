@@ -22,7 +22,7 @@ def view(path: Path | None = VIEW_PATH_ARGUMENT) -> None:
     Parameters
     ----------
     path : Path | None
-        path for this viewer operation.
+        Experiment or datastore directory. Opens a picker when omitted.
     """
     Qi2labViewer(path).run()
 

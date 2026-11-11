@@ -183,14 +183,7 @@ def calibrate(
 
 
 def main() -> None:
-    """
-    Run the CLI.
-
-    Returns
-    -------
-    None
-        CLI command is executed.
-    """
+    """Run the chromatic calibration CLI."""
     app()
 
 

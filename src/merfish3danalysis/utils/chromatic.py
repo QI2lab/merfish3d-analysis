@@ -557,8 +557,7 @@ def estimate_chromatic_affines(
 
 
 def save_calibration_json(calibration: dict[str, Any], output_path: Path | str) -> None:
-    """
-    Save chromatic calibration metadata as JSON.
+    """Save chromatic calibration metadata as JSON.
 
     Parameters
     ----------
@@ -566,11 +565,6 @@ def save_calibration_json(calibration: dict[str, Any], output_path: Path | str) 
         Calibration metadata.
     output_path : pathlib.Path or str
         Output JSON path.
-
-    Returns
-    -------
-    None
-        JSON is written to disk.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
