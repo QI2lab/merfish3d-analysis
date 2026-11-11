@@ -232,7 +232,6 @@ def _counts_vs_fpkm(
 
     counts_df = genes1.value_counts().rename_axis("gene_id").reset_index(name="count")
     counts_df["count"] = counts_df["count"].astype("int64")
-    print(genes1)
 
     # ---- File2 normalization & FPKM aggregation ----
     df2 = df2.copy()
@@ -462,8 +461,8 @@ def main(
             only_cell_id_positive,
             cellid_col1b,
             "file1b",
+            drop_prefix,
         )
-        # If you also want to see unmatched for file1b, you can print unmatched_b here.
 
     # Apply FPKM threshold filter
     if min_fpkm > 0.0:
