@@ -1,143 +1,18 @@
 """Chromatic aberration calibration from multi-channel bead images."""
 
 import json
-import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from ome_types import from_xml
 from scipy.spatial import cKDTree
 from tifffile import TiffFile, imread
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.utils.ufish import load_ufish_model
-
-
-def parse_csv_floats(value: str | Sequence[float] | None) -> tuple[float, ...] | None:
-    """
-    Parse a comma-separated float string.
-
-    Parameters
-    ----------
-    value : str or Sequence[float] or None
-        Input value to parse.
-
-    Returns
-    -------
-    tuple[float, ...] or None
-        Parsed floats, or None when ``value`` is None.
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return tuple(float(v.strip()) for v in value.split(",") if v.strip())
-    return tuple(float(v) for v in value)
-
-
-def _xml_float(value: str | None) -> float | None:
-    """
-    Parse an XML float value.
-
-    Parameters
-    ----------
-    value : str or None
-        XML attribute value.
-
-    Returns
-    -------
-    float or None
-        Parsed float, or None if parsing fails.
-    """
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
-def _wavelength_to_um(value: float | None) -> float | None:
-    """
-    Convert wavelength metadata to microns.
-
-    Parameters
-    ----------
-    value : float or None
-        Wavelength value. OME files often store wavelengths in nanometers.
-
-    Returns
-    -------
-    float or None
-        Wavelength in microns.
-    """
-    if value is None:
-        return None
-    if value > 10:
-        return value / 1000.0
-    return value
-
-
-def _parse_ome_metadata(
-    ome_metadata: str | None,
-) -> tuple[tuple[float, float, float] | None, list[float] | None, list[str] | None]:
-    """
-    Parse spacing and channel metadata from OME XML.
-
-    Parameters
-    ----------
-    ome_metadata : str or None
-        OME XML metadata string.
-
-    Returns
-    -------
-    tuple
-        ``(spacing_zyx_um, wavelengths_um, channel_names)``. Missing values are
-        returned as None.
-    """
-    if not ome_metadata:
-        return None, None, None
-
-    try:
-        root = ET.fromstring(ome_metadata)
-    except ET.ParseError:
-        return None, None, None
-
-    namespace = ""
-    if root.tag.startswith("{"):
-        namespace = root.tag.split("}", 1)[0] + "}"
-    pixels = root.find(f".//{namespace}Pixels")
-    if pixels is None:
-        return None, None, None
-
-    size_z = _xml_float(pixels.attrib.get("PhysicalSizeZ"))
-    size_y = _xml_float(pixels.attrib.get("PhysicalSizeY"))
-    size_x = _xml_float(pixels.attrib.get("PhysicalSizeX"))
-    spacing = None
-    if size_z is not None and size_y is not None and size_x is not None:
-        spacing = tuple(round_spacing_um((size_z, size_y, size_x)))
-
-    wavelengths = []
-    names = []
-    for channel in pixels.findall(f"{namespace}Channel"):
-        name = channel.attrib.get("Name") or channel.attrib.get("ID") or ""
-        names.append(str(name))
-        emission = _wavelength_to_um(
-            _xml_float(channel.attrib.get("EmissionWavelength"))
-        )
-        excitation = _wavelength_to_um(
-            _xml_float(channel.attrib.get("ExcitationWavelength"))
-        )
-        wavelengths.append(emission if emission is not None else excitation)
-
-    if not wavelengths or any(v is None for v in wavelengths):
-        wavelengths = None
-    else:
-        wavelengths = [float(v) for v in wavelengths]
-    if not names:
-        names = None
-    return spacing, wavelengths, names
 
 
 def load_bead_channel_stack(
@@ -168,11 +43,31 @@ def load_bead_channel_stack(
         Channel stack in C, Z, Y, X order and metadata.
     """
     image_path = Path(image_path)
+    ome_spacing = ome_wavelengths = channel_names = None
     with TiffFile(image_path) as tif:
         axes = channel_axis or tif.series[0].axes
-        ome_spacing, ome_wavelengths, channel_names = _parse_ome_metadata(
-            tif.ome_metadata
-        )
+        if tif.ome_metadata:
+            pixels = from_xml(tif.ome_metadata).images[0].pixels
+            sizes = [
+                getattr(pixels, f"physical_size_{axis}_quantity") for axis in "zyx"
+            ]
+            if voxel_size_zyx_um is None and all(size is not None for size in sizes):
+                ome_spacing = [size.to("micrometer").magnitude for size in sizes]
+            channel_names = [channel.name or channel.id for channel in pixels.channels]
+            wavelengths = [
+                channel.emission_wavelength_quantity
+                if channel.emission_wavelength is not None
+                else channel.excitation_wavelength_quantity
+                for channel in pixels.channels
+            ]
+            if (
+                wavelengths_um is None
+                and wavelengths
+                and all(value is not None for value in wavelengths)
+            ):
+                ome_wavelengths = [
+                    value.to("micrometer").magnitude for value in wavelengths
+                ]
     image = np.asarray(imread(image_path))
     axes = str(axes).upper()
 
@@ -662,8 +557,7 @@ def estimate_chromatic_affines(
 
 
 def save_calibration_json(calibration: dict[str, Any], output_path: Path | str) -> None:
-    """
-    Save chromatic calibration metadata as JSON.
+    """Save chromatic calibration metadata as JSON.
 
     Parameters
     ----------
@@ -671,11 +565,6 @@ def save_calibration_json(calibration: dict[str, Any], output_path: Path | str) 
         Calibration metadata.
     output_path : pathlib.Path or str
         Output JSON path.
-
-    Returns
-    -------
-    None
-        JSON is written to disk.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -156,7 +156,7 @@ OME-NGFF v0.6 image in `qi2labdatastore/fused.ome.zarr`:
 
 ```bash
 uv run qi2lab-fuseall /path/to/experiment \
-  --output-chunk-zyx 32,2048,2048 \
+  --output-chunk-zyx 32 2048 2048 \
   --fusion-workers 30 \
   --compression blosc-lz4 \
   --compression-level 1

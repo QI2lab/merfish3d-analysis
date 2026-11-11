@@ -22,9 +22,9 @@ def build_figure(root_path: Path, sim_path: Path = "example_16bit_cells") -> Non
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
-    sim_path: Path, default "example_16bit_cells"
+    sim_path : Path, default "example_16bit_cells"
         path to simulation within experiment
     """
     z_spacings = ["0.315", "1.0", "1.5"]

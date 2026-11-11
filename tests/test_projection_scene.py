@@ -367,12 +367,10 @@ def test_projection_scene_reopens_with_cellpose_labels(image_datastore):
     )
     replacement = masks.copy()
     replacement[0, 0] = 3
-    completion = reopened.save_global_cellpose_segmentation_image(
+    reopened.save_global_cellpose_segmentation_image(
         replacement,
         downsampling=spacing / datastore.voxel_size_zyx_um,
-        return_future=True,
     )
-    assert completion.result() is None
     np.testing.assert_array_equal(lazy_masks.read().result(), masks)
     np.testing.assert_array_equal(
         reopened.load_global_cellpose_segmentation_image(return_future=False),

@@ -46,7 +46,6 @@ def test_viewer_loads_real_scene_owned_fusion(image_datastore):
 
 @pytest.mark.unit
 def test_all_channels_setter_replaces_its_own_scene_image(image_datastore):
-    from tensorstore import WriteFutures
     from yaozarrs import open_group, v06
 
     datastore = image_datastore
@@ -55,16 +54,13 @@ def test_all_channels_setter_replaces_its_own_scene_image(image_datastore):
     image = np.arange(48, dtype=np.uint16).reshape(1, 2, 2, 3, 4)
     affine = np.eye(4)
     for expected in (image, image + 1):
-        completion = datastore.save_global_fiducial_image(
+        datastore.save_global_fiducial_image(
             expected,
             affine,
             [7, 8, 9],
             [1, 2, 3],
             fusion_type="all_channels",
-            return_future=True,
         )
-        assert isinstance(completion, WriteFutures)
-        completion.result()
         path = datastore.fused_image_path("fused_all_channels_zyx")
         group = open_group(path).validate(strict=True)
         model = group.ome_metadata(strict=True)

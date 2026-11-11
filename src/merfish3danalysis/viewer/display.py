@@ -88,7 +88,6 @@ class ViewerDisplayModel:
             shape_zyx=shape_zyx,
             origin_zyx_um=global_stack.origin_zyx_um,
             spacing_zyx_um=global_stack.spacing_zyx_um,
-            full_shape_zyx=global_stack.full_shape_zyx,
         )
         return ViewerBuildResult(
             stack=stack,
@@ -137,7 +136,6 @@ class ViewerDisplayModel:
             base_stack=stack,
             base_sparse_lines=sparse_payload.lines,
             shape_zyx=shape_zyx,
-            tile=request.tile,
             spacing_zyx_um=np.asarray(datastore.voxel_size_zyx_um),
             tile_transform=tile_transform,
         )
@@ -493,8 +491,7 @@ class ViewerDisplayModel:
 
     @staticmethod
     def _status(labels: list[str], sparse_payload: SparseOverlayPayload) -> str:
-        """
-        Return a compact display status string.
+        """Return image and sparse-overlay labels as a status string.
 
         Parameters
         ----------
@@ -502,28 +499,17 @@ class ViewerDisplayModel:
             Image channel labels.
         sparse_payload : SparseOverlayPayload
             Sparse overlay payload.
-
-        Returns
-        -------
-        str
-            Human-readable display status.
         """
         return "Displayed: " + ", ".join([*labels, *sparse_payload.labels])
 
     @staticmethod
     def _spacing_tuple(spacing_zyx_um: Any) -> tuple[float, float, float]:
-        """
-        Return Z, Y, X spacing as a float tuple.
+        """Return Z, Y, X spacing in microns as Python floats.
 
         Parameters
         ----------
         spacing_zyx_um : Any
             Z, Y, X voxel spacing in microns.
-
-        Returns
-        -------
-        tuple[float, float, float]
-            Spacing as Python floats.
         """
         spacing = round_spacing_um(spacing_zyx_um)
         return float(spacing[0]), float(spacing[1]), float(spacing[2])

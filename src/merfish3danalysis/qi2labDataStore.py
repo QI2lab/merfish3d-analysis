@@ -28,7 +28,7 @@ from merfish3danalysis.utils.spacing import (
 )
 
 if TYPE_CHECKING:
-    from tensorstore import Future, TensorStore, WriteFutures
+    from tensorstore import Future, TensorStore
 
 
 class qi2labDataStore:
@@ -53,8 +53,7 @@ class qi2labDataStore:
     )
 
     def __init__(self, datastore_path: str | Path, validate: bool = True) -> None:
-        """
-        Initialize a qi2lab datastore handle.
+        """Initialize a qi2lab datastore handle.
 
         Parameters
         ----------
@@ -110,7 +109,13 @@ class qi2labDataStore:
             ) from exc
 
     def _ensure_fused_scene(self, fusion_type: str) -> Path:
-        """Atomically create a product Scene because MVS writes its images later."""
+        """Atomically create a product Scene because MVS writes its images later.
+
+        Parameters
+        ----------
+        fusion_type : str
+            ``"fiducial"`` for the downsampled volume or ``"all_channels"`` for full fusion.
+        """
         import os
         from tempfile import TemporaryDirectory
 
@@ -577,25 +582,11 @@ class qi2labDataStore:
         return self._datastore_path / "shading/shading_metadata/flatfield_tile_ids.json"
 
     def _calibrations_attributes_path(self) -> Path:
-        """
-        Return the acquisition metadata JSON path.
-
-        Returns
-        -------
-        Path
-            Path to acquisition-wide metadata.
-        """
+        """Return the acquisition metadata JSON path."""
         return self._acquisition_metadata_root / "acquisition.json"
 
     def _load_calibrations_attributes(self) -> dict[str, Any]:
-        """
-        Load acquisition and calibration metadata from their product folders.
-
-        Returns
-        -------
-        dict[str, Any]
-            Merged metadata loaded from JSON and Parquet files.
-        """
+        """Load acquisition and calibration metadata from their product folders."""
         attributes_path = self._calibrations_attributes_path()
         if not attributes_path.is_file():
             raise FileNotFoundError(
@@ -621,8 +612,7 @@ class qi2labDataStore:
         return attributes
 
     def _set_calibration_attribute(self, key: str, value: Any) -> None:
-        """
-        Update one calibration metadata field.
+        """Save a calibration field in its product's metadata file.
 
         Parameters
         ----------
@@ -630,11 +620,6 @@ class qi2labDataStore:
             Calibration metadata key.
         value : Any
             Value to store after JSON conversion.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         if key in {"exp_order", "codebook"}:
             product = (
@@ -665,7 +650,7 @@ class qi2labDataStore:
         calibration: Mapping[str, Any],
     ) -> None:
         """
-        Save chromatic affine calibration metadata.
+        Save chromatic calibration and update applicable Scene transforms.
 
         Parameters
         ----------
@@ -673,11 +658,6 @@ class qi2labDataStore:
             Calibration metadata containing one 4x4 ``affine_zyx_um`` matrix
             per channel. Each affine maps that channel's physical Z, Y, X
             coordinates onto the lowest-wavelength reference channel.
-
-        Returns
-        -------
-        None
-            Calibration and applicable transforms are stored in the Scene.
         """
         calibration = dict(calibration)
         if "voxel_size_zyx_um" in calibration:
@@ -906,7 +886,13 @@ class qi2labDataStore:
         self._set_calibration_attribute("channels_in_data", channels)
 
     def _validate_scene_channels(self, channels: list[Any] | None) -> None:
-        """Keep acquisition channel identities consistent with the Scene."""
+        """Keep acquisition channel identities consistent with the Scene.
+
+        Parameters
+        ----------
+        channels : list[Any] or None
+            Acquisition channel names or indices in their stored order.
+        """
         state = open_group(self._tile_scene_path).attrs["qi2lab"]
         if state.get("tile_ids") and state.get("channels_in_data") != channels:
             raise ValueError("Acquisition channels do not match the tile Scene.")
@@ -997,8 +983,8 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        value: float
-            New detection objective numerical aperture (NA)
+        value : float
+            New detection objective numerical aperture (NA).
         """
         self._na = value
         self._set_calibration_attribute("na", value)
@@ -1020,8 +1006,8 @@ class qi2labDataStore:
 
         Parameters
         ----------
-        value: float
-            New detection objective refractive index (RI)
+        value : float
+            New detection objective refractive index (RI).
         """
         self._ri = value
         self._set_calibration_attribute("ri", value)
@@ -1055,7 +1041,6 @@ class qi2labDataStore:
         self._save_to_zarr_array(
             value,
             current_local_zarr_path,
-            return_future=False,
             axes="cyx" if np.ndim(value) == 3 else "yx",
             extra_attributes={
                 "calibration_type": "camera_noise",
@@ -1105,7 +1090,6 @@ class qi2labDataStore:
         self._save_to_zarr_array(
             shading_maps,
             current_local_zarr_path,
-            return_future=False,
             axes="cyx",
             extra_attributes={
                 "calibration_type": "channel_shading",
@@ -1192,7 +1176,6 @@ class qi2labDataStore:
             self._save_to_zarr_array(
                 psf_array,
                 current_psf_path,
-                return_future=False,
                 extra_attributes={"calibration_type": "psf", "psf_idx": psf_idx},
             )
             psf_manifest[str(psf_idx)] = {"id": psf_id}
@@ -1272,7 +1255,13 @@ class qi2labDataStore:
             self._bit_ids.append("bit" + str(bit_idx + 1).zfill(3))
 
     def _validate_scene_experiment_order(self, order: pd.DataFrame) -> None:
-        """Keep acquisition channel slots consistent with the initialized Scene."""
+        """Keep acquisition channel slots consistent with the initialized Scene.
+
+        Parameters
+        ----------
+        order : pandas.DataFrame
+            Proposed round-by-channel acquisition order, including empty channel slots.
+        """
         state = open_group(self._tile_scene_path).attrs["qi2lab"]
         if state.get("tile_ids") and not np.array_equal(
             order.to_numpy(), np.asarray(state.get("experiment_order"))
@@ -1338,7 +1327,13 @@ class qi2labDataStore:
 
     @staticmethod
     def _normalize_voxel_size_zyx_um(value: ArrayLike) -> list[float]:
-        """Validate three positive finite ZYX spacings at stored precision."""
+        """Validate three positive finite ZYX spacings at stored precision.
+
+        Parameters
+        ----------
+        value : ArrayLike
+            Three positive voxel spacings in Z, Y, X order, in micrometers.
+        """
         spacing = round_spacing_um(value)
         if (
             spacing.shape != (3,)
@@ -1461,18 +1456,12 @@ class qi2labDataStore:
 
     @staticmethod
     def _validate_decode_run_key(decode_run_key: str | None) -> str | None:
-        """
-        Validate an optional decoded-output run key.
+        """Validate an optional decoded-output run key.
 
         Parameters
         ----------
         decode_run_key : str or None
             Optional subfolder name under decoded-output roots.
-
-        Returns
-        -------
-        str or None
-            Validated run key.
         """
         if decode_run_key is None:
             return None
@@ -1487,18 +1476,12 @@ class qi2labDataStore:
         return decode_run_key
 
     def _decoded_run_root(self, decode_run_key: str | None = None) -> Path:
-        """
-        Return the local decoded output root for an optional decode run.
+        """Return the local decoded output root for an optional decode run.
 
         Parameters
         ----------
         decode_run_key : str or None, default None
             Optional decoded-output run key.
-
-        Returns
-        -------
-        pathlib.Path
-            Decoded output root.
         """
         decode_run_key = self._validate_decode_run_key(decode_run_key)
         if decode_run_key is None:
@@ -1506,7 +1489,13 @@ class qi2labDataStore:
         return self._decoded_root_path / "runs" / decode_run_key
 
     def _decode_normalization_path(self, decode_run_key: str | None) -> Path:
-        """Keep each decode run's normalization metadata with its codewords."""
+        """Keep each decode run's normalization metadata with its codewords.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Named decode run, or None for the default run.
+        """
         root = self._datastore_path / "codewords/normalization"
         key = self._validate_decode_run_key(decode_run_key)
         return root / "default.json" if key is None else root / "runs" / f"{key}.json"
@@ -1519,7 +1508,20 @@ class qi2labDataStore:
         kind: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        """Serialize and atomically publish normalization updates across workers."""
+        """Serialize and atomically publish normalization updates across workers.
+
+        Parameters
+        ----------
+        decode_run_key : str or None
+            Named decode run, or None for the default run.
+        updates : Mapping[str, Any]
+            Normalization and background fields to merge into the stored metadata.
+        kind : str or None, default None
+            Normalization kind associated with metadata, such as ``"global"`` or
+            ``"iterative"``. Required when metadata is supplied.
+        metadata : Mapping[str, Any] or None, default None
+            Provenance to store for the selected normalization kind, if supplied.
+        """
         import os
         from tempfile import TemporaryDirectory
 
@@ -1575,18 +1577,12 @@ class qi2labDataStore:
         self,
         decode_run_key: str | None = None,
     ) -> Path:
-        """
-        Return the global filtered decoded-output root for an optional decode run.
+        """Return the global filtered output root for an optional decode run.
 
         Parameters
         ----------
         decode_run_key : str or None, default None
             Optional decoded-output run key.
-
-        Returns
-        -------
-        pathlib.Path
-            Global filtered decoded-output root.
         """
         root = self._datastore_path / "codewords/global_filtered"
         decode_run_key = self._validate_decode_run_key(decode_run_key)
@@ -1731,7 +1727,6 @@ class qi2labDataStore:
         if decode_run_key is None:
             metadata = calib_attrs.get("decode_normalization_metadata", {}).get(kind)
         else:
-            decode_run_key = self._validate_decode_run_key(decode_run_key)
             metadata = calib_attrs.get(f"{kind}_metadata")
         return dict(metadata) if isinstance(metadata, Mapping) else None
 
@@ -1769,10 +1764,7 @@ class qi2labDataStore:
         return getattr(self, "_bit_ids", None)
 
     def _init_datastore(self) -> None:
-        """Initialize datastore.
-
-        Create directory structure and initialize datastore state.
-        """
+        """Create directory structure and initialize datastore state."""
         from merfish3danalysis.storage.ome import initialize_scene
 
         self._datastore_path.mkdir(parents=True, exist_ok=False)
@@ -1901,18 +1893,12 @@ class qi2labDataStore:
 
     @staticmethod
     def _fused_image_chunks(array: np.ndarray) -> list[int]:
-        """
-        Create chunk sizes tailored for fused image storage.
+        """Create chunk sizes for fused image storage.
 
         Parameters
         ----------
         array : np.ndarray
             Fused image array that will be written.
-
-        Returns
-        -------
-        list[int]
-            Chunk shape for fused image storage.
         """
         if array.ndim == 2:
             return [min(int(dim), 2048) for dim in array.shape]
@@ -1925,18 +1911,12 @@ class qi2labDataStore:
 
     @staticmethod
     def _image_store_path(image_path: Path | str) -> Path:
-        """
-        Normalize image path to the *.ome.zarr folder naming scheme.
+        """Normalize a logical image name to an ``.ome.zarr`` path.
 
         Parameters
         ----------
         image_path : Path | str
             Logical image path or OME-Zarr path.
-
-        Returns
-        -------
-        Path
-            Normalized path ending in ``.ome.zarr``.
         """
         path = Path(image_path)
         if path.name.endswith(".ome.zarr"):
@@ -1976,18 +1956,12 @@ class qi2labDataStore:
 
     @staticmethod
     def _to_json_compatible(value: Any) -> Any:
-        """
-        Convert numpy/scalar containers to JSON-compatible values.
+        """Convert NumPy scalars and containers to JSON-compatible values.
 
         Parameters
         ----------
         value : Any
             Value to convert before JSON serialization.
-
-        Returns
-        -------
-        Any
-            JSON-compatible representation.
         """
         if isinstance(value, np.ndarray):
             return value.tolist()
@@ -2111,11 +2085,6 @@ class qi2labDataStore:
             Logical tile-and-round or tile-and-bit path.
         updates : Mapping[str, Any]
             Metadata updates to persist.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         if not updates:
             return
@@ -2138,14 +2107,21 @@ class qi2labDataStore:
         def update(
             scene: v06.Scene, attributes: dict[str, Any]
         ) -> tuple[v06.Scene, dict[str, Any]]:
-            """Merge the entity update under the Scene lock."""
+            """Merge the entity update under the Scene lock.
+
+            Parameters
+            ----------
+            scene : yaozarrs.v06.Scene
+                Current Scene read while holding its metadata lock.
+            attributes : dict[str, Any]
+                Non-OME root attributes, including the qi2lab processing state.
+            """
             state = dict(attributes["qi2lab"])
             metadata = dict(state.get("entity_metadata", {}))
             entity = dict(metadata.get(key, {}))
             entity.update(payload)
             metadata[key] = entity
             state["entity_metadata"] = metadata
-            state["generation"] = int(state["generation"]) + 1
             attributes["qi2lab"] = state
             return scene, attributes
 
@@ -2153,7 +2129,14 @@ class qi2labDataStore:
 
     @staticmethod
     def _normalize_stage_position_zyx_um(stage_zyx_um: ArrayLike) -> np.ndarray:
-        """Return ZYX stage coordinates, padding legacy YX positions with Z=0."""
+        """Return ZYX stage coordinates, padding YX positions with Z=0.
+
+        Parameters
+        ----------
+        stage_zyx_um : ArrayLike
+            Stage coordinates in Z, Y, X order, in micrometers. Two values are
+            interpreted as Y, X and receive a zero Z coordinate.
+        """
         stage = np.asarray(stage_zyx_um, dtype=np.float32)
         if stage.shape == (2,):
             return np.asarray((0.0, stage[0], stage[1]), dtype=np.float32)
@@ -2181,11 +2164,6 @@ class qi2labDataStore:
             Logical image name being validated.
         image : ArrayLike
             Image data to validate.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         entity_root = Path(entity_root_path)
         shape = tuple(int(v) for v in np.asarray(image).shape)
@@ -2258,7 +2236,7 @@ class qi2labDataStore:
 
     @staticmethod
     def _load_from_microjson(dictionary_path: Path | str) -> dict:
-        """Load cell outlines outlines microjson as dictionary.
+        """Load cell outlines microjson as dictionary.
 
         Parameters
         ----------
@@ -2339,7 +2317,6 @@ class qi2labDataStore:
     def _save_to_zarr_array(
         array: ArrayLike,
         image_path: Path | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
@@ -2351,7 +2328,7 @@ class qi2labDataStore:
         scene_selection: str | None = None,
         scene_frame: str | None = None,
         scene_affine: ArrayLike | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save image data using yaozarrs and its TensorStore backend.
 
         Parameters
@@ -2372,18 +2349,10 @@ class qi2labDataStore:
             Additional image metadata.
         axes : str or None
             Array axes when the default spatial layout does not apply.
-        return_future : bool or None
-            Return the write-completion handle (True), or wait for the write
-            to finish and return None (False or None).
         scene_path, scene_selection, scene_frame : Path or str or None
             Publish a native image in the Scene, when all three are supplied.
         scene_affine : ArrayLike or None
             Optional physical ZYX affine from the image to its Scene frame.
-
-        Returns
-        -------
-        write_future : tensorstore.WriteFutures or None
-            Pixel-write completion handle when return_future is True.
 
         Raises
         ------
@@ -2408,67 +2377,6 @@ class qi2labDataStore:
             ome_translation, image_array.ndim, 0.0
         )
 
-        if scene_path is not None:
-            from merfish3danalysis.storage.ome import publish_image
-
-            if not scene_selection or not scene_frame:
-                raise ValueError("A Scene image needs a selection and a frame.")
-            axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
-            if len(axis_names) != image_array.ndim:
-                raise ValueError(
-                    "The number of axes must match the array dimensionality."
-                )
-            model = v06.Image(
-                multiscales=[
-                    v06.Multiscale.from_dims(
-                        [
-                            DimSpec(
-                                name=axis,
-                                size=size,
-                                scale=round_pixel_size_um(step)
-                                if axis in "zyx"
-                                else step,
-                                translation=offset,
-                                unit="micrometer"
-                                if axis in "zyx"
-                                else ("second" if axis == "t" else None),
-                            )
-                            for axis, size, step, offset in zip(
-                                axis_names,
-                                image_array.shape,
-                                scale,
-                                translation,
-                                strict=True,
-                            )
-                        ]
-                    )
-                ]
-            )
-            products = open_group(scene_path).attrs["qi2lab"]["products"]
-            previous = products.get(scene_selection)
-            published = publish_image(
-                scene_path,
-                scene_selection,
-                scene_frame,
-                model,
-                image_array,
-                expected_revision=None if previous is None else previous["revision"],
-                chunks=chunks,
-                shards=shards,
-                extra_attributes=extra_attributes,
-                return_write_future=bool(return_future),
-                affine_zyx_um=scene_affine,
-                missing_z_origin_um=(
-                    float(ome_translation[-3])
-                    if image_array.ndim == 2
-                    and ome_translation is not None
-                    and len(ome_translation) >= 3
-                    else 0
-                ),
-            )
-            return published[1] if return_future else None
-
-        image_path.parent.mkdir(parents=True, exist_ok=True)
         axis_names = axes if axes is not None else "tczyx"[-image_array.ndim :]
         if len(axis_names) != image_array.ndim:
             raise ValueError("The number of axes must match the array dimensionality.")
@@ -2496,7 +2404,35 @@ class qi2labDataStore:
                 )
             ]
         )
+        if scene_path is not None:
+            from merfish3danalysis.storage.ome import publish_image
 
+            if not scene_selection or not scene_frame:
+                raise ValueError("A Scene image needs a selection and a frame.")
+            products = open_group(scene_path).attrs["qi2lab"]["products"]
+            previous = products.get(scene_selection)
+            publish_image(
+                scene_path,
+                scene_selection,
+                scene_frame,
+                image_metadata,
+                image_array,
+                expected_revision=None if previous is None else previous["revision"],
+                chunks=chunks,
+                shards=shards,
+                extra_attributes=extra_attributes,
+                affine_zyx_um=scene_affine,
+                missing_z_origin_um=(
+                    float(ome_translation[-3])
+                    if image_array.ndim == 2
+                    and ome_translation is not None
+                    and len(ome_translation) >= 3
+                    else 0
+                ),
+            )
+            return
+
+        image_path.parent.mkdir(parents=True, exist_ok=True)
         chunk_spec = tuple(int(c) for c in chunks)
         write_options = {
             "extra_attributes": qi2labDataStore._to_json_compatible(extra_attributes)
@@ -2508,28 +2444,12 @@ class qi2labDataStore:
             "shards": tuple(shards) if shards is not None else None,
             "compression": "blosc-zstd",
         }
-        if return_future:
-            from yaozarrs.write.v06 import prepare_image
-
-            # yaozarrs creates the complete OME-Zarr v3 structure. Its write_image
-            # API is synchronous; writing the prepared array is necessary to
-            # preserve the datastore's TensorStore write-completion handle.
-            _, arrays = prepare_image(
-                dest=str(image_path),
-                image=image_metadata,
-                datasets=(image_array.shape, image_array.dtype),
-                **write_options,
-            )
-            return arrays[image_metadata.multiscales[0].datasets[0].path].write(
-                image_array
-            )
         write_image(
             dest=str(image_path),
             image=image_metadata,
             datasets=image_array,
             **write_options,
         )
-        return None
 
     @staticmethod
     def _load_from_parquet(parquet_path: Path | str) -> pd.DataFrame:
@@ -2581,11 +2501,6 @@ class qi2labDataStore:
         ----------
         validate : bool
             Whether to validate existing zarr arrays while parsing.
-
-        Returns
-        -------
-        None
-            No return value.
         """
         if not self._tile_scene_path.is_dir():
             raise ValueError(
@@ -2723,7 +2638,6 @@ class qi2labDataStore:
                 keys_to_check = [
                     "excitation_um",
                     "emission_um",
-                    # "exposure_ms",
                     "psf_idx",
                 ]
 
@@ -2754,7 +2668,6 @@ class qi2labDataStore:
                 keys_to_check = [
                     "excitation_um",
                     "emission_um",
-                    # "exposure_ms",
                     "psf_idx",
                 ]
                 for key in keys_to_check:
@@ -3257,7 +3170,15 @@ class qi2labDataStore:
         def update(
             scene: v06.Scene, attributes: dict[str, Any]
         ) -> tuple[v06.Scene, dict[str, Any]]:
-            """Move the bit's image and chromatic links in one Scene update."""
+            """Move the bit's image and chromatic links in one Scene update.
+
+            Parameters
+            ----------
+            scene : yaozarrs.v06.Scene
+                Current Scene read while holding its metadata lock.
+            attributes : dict[str, Any]
+                Non-OME root attributes, including the qi2lab processing state.
+            """
             state = dict(attributes["qi2lab"])
             transforms = list(scene.scene.coordinateTransformations)
             chromatic = next(
@@ -3319,7 +3240,6 @@ class qi2labDataStore:
             state.update(
                 products=products,
                 round_links=links,
-                generation=int(state["generation"]) + 1,
             )
             attributes["qi2lab"] = state
             return scene.model_copy(
@@ -3422,8 +3342,9 @@ class qi2labDataStore:
         stage_zyx_um : ArrayLike
             Tile stage position in Z, Y, X microns. Two-coordinate Y, X input
             is accepted and stored as Z, Y, X with Z=0.
-        affine_zyx_px: ArrayLike
-            4x4 homogeneous affine matrix for stage transformation
+        affine_zyx_px : ArrayLike
+            4x4 homogeneous camera affine in Z, Y, X order, applied after
+            the stage translation.
         tile : int or str
             Tile index or tile id.
         round : int or str
@@ -3809,11 +3730,10 @@ class qi2labDataStore:
         psf_idx: int = 0,
         round: int | str | None = None,
         bit: int | str | None = None,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save gain and offset corrected image.
 
         Parameters
@@ -3834,18 +3754,10 @@ class qi2labDataStore:
             Round index or round id.
         bit : int or str or None
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if (round is None and bit is None) or (round is not None and bit is not None):
             print("Provide either 'round' or 'bit', but not both")
@@ -3925,10 +3837,9 @@ class qi2labDataStore:
                 }
             )
             selection = f"{tile_id}/{local_id}/corrected_data"
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 entity_root / "corrected_data",
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -3937,7 +3848,6 @@ class qi2labDataStore:
                 scene_selection=selection,
                 scene_frame=frame,
             )
-            return write_future
         except (OSError, TimeoutError, ValueError) as e:
             print(e)
             print("Error saving corrected image.")
@@ -4017,7 +3927,7 @@ class qi2labDataStore:
         round: int | str,
     ) -> None:
         """
-        Save the local fiducial round transform for one tile.
+        Save the local round transform as a moving-to-reference Scene edge.
 
         Parameters
         ----------
@@ -4029,11 +3939,6 @@ class qi2labDataStore:
             Tile index or tile identifier.
         round : int | str
             Fiducial round index or round identifier.
-
-        Returns
-        -------
-        None
-            The moving-to-reference affine is stored in the Scene.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4179,8 +4084,7 @@ class qi2labDataStore:
         moving_shape_zyx_px: Sequence[int],
         sofima_status: str = "ok",
         valid_flow_vectors: int | None = None,
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save the SOFIMA flow field for one local fiducial round.
 
@@ -4220,15 +4124,7 @@ class qi2labDataStore:
             Status reported by the SOFIMA estimator.
         valid_flow_vectors : int or None, default=None
             Number of valid local vectors before missing-vector fill.
-        return_future : bool or None, default=False
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile or round selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4316,7 +4212,7 @@ class qi2labDataStore:
                 if t.name == name
             )
             state = group.attrs["qi2lab"]
-            return publish_sofima_field(
+            publish_sofima_field(
                 self._tile_scene_path,
                 previous,
                 sofima_flow_field_xyz_px,
@@ -4326,7 +4222,6 @@ class qi2labDataStore:
                 expected_status=state["transform_status"][name],
                 expected_revision=state["transform_versions"][name],
                 extra_attributes=attributes,
-                return_write_future=bool(return_future),
             )
         except (OSError, TimeoutError):
             print("Error saving SOFIMA flow field.")
@@ -4443,11 +4338,10 @@ class qi2labDataStore:
         image: ArrayLike,
         tile: int | str,
         round: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save a native-frame deconvolved fiducial image.
 
@@ -4462,18 +4356,10 @@ class qi2labDataStore:
             Tile index or tile id.
         round : int or str
             Round index or round id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4524,10 +4410,9 @@ class qi2labDataStore:
             source = products.get(f"{tile_id}/{round_id}/corrected_data")
             if source is not None:
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 decon_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4536,7 +4421,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{round_id}/decon_data",
                 scene_frame=frame,
             )
-            return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved fiducial image.")
             raise
@@ -4646,11 +4530,10 @@ class qi2labDataStore:
         image: ArrayLike,
         tile: int | str,
         bit: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """
         Save a native-frame deconvolved readout bit image.
 
@@ -4665,18 +4548,10 @@ class qi2labDataStore:
             Tile index or tile id.
         bit : int or str
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4723,10 +4598,9 @@ class qi2labDataStore:
             source = products.get(f"{tile_id}/{bit_id}/corrected_data")
             if source is not None:
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 image,
                 readout_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4735,7 +4609,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{bit_id}/decon_data",
                 scene_frame=f"{tile_id}/{round_id}/{bit_id}/native",
             )
-            return write_future
         except (OSError, TimeoutError, ValueError):
             print("Error saving local deconvolved readout image.")
             raise
@@ -4817,12 +4690,11 @@ class qi2labDataStore:
         feature_predictor_image: ArrayLike,
         tile: int | str,
         bit: int | str,
-        return_future: bool | None = False,
         *,
         chunks: Sequence[int] | None = None,
         shards: Sequence[int] | None = None,
         source_image: str | None = None,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save feature_predictor prediction image.
 
         Parameters
@@ -4833,9 +4705,6 @@ class qi2labDataStore:
             Tile index or tile id.
         bit : int or str
             Bit index or bit id.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
         chunks, shards : Sequence[int] or None
             Inner chunk and shard shapes passed to yaozarrs. None selects the
             default chunks and disables sharding, respectively.
@@ -4843,11 +4712,6 @@ class qi2labDataStore:
             Actual predictor input: ``corrected_data`` or ``decon_data``.
             None leaves the input unspecified for manually supplied predictions.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None. Invalid tile/round/bit selections also return None.
         """
         if isinstance(tile, int):
             if tile < 0 or tile >= self._num_tiles:
@@ -4910,10 +4774,9 @@ class qi2labDataStore:
                     )
                 attributes["source_image"] = source_image
                 attributes["source_revision"] = source["revision"]
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 feature_predictor_image,
                 current_local_zarr_path,
-                return_future,
                 chunks=chunks,
                 shards=shards,
                 ome_scale=self.voxel_size_zyx_um,
@@ -4922,7 +4785,6 @@ class qi2labDataStore:
                 scene_selection=f"{tile_id}/{local_id}/{self.feature_predictor_folder_name}_data",
                 scene_frame=f"{tile_id}/{round_id}/{local_id}/native",
             )
-            return write_future
         except (OSError, ValueError) as e:
             print(e)
             print("Error saving feature_predictor image.")
@@ -5264,8 +5126,7 @@ class qi2labDataStore:
         affine_zyx_um: ArrayLike,
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Publish the fused YX projection in its own NGFF 0.6 Scene.
 
         The projection has no measured Z. Its world link uses the existing ROI
@@ -5286,13 +5147,7 @@ class qi2labDataStore:
             Original fused-grid origin in ZYX micrometers.
         spacing_zyx_um : ArrayLike
             Original fused-grid spacing in ZYX micrometers.
-        return_future : bool or None
-            Return the completed TensorStore pixel-write handle when True.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed write handle when requested; otherwise None.
         """
         import os
         from tempfile import TemporaryDirectory
@@ -5347,8 +5202,17 @@ class qi2labDataStore:
         }
         path = self.fiducial_projection_path()
 
-        def publish(dest: Path, expected_revision: str | None) -> Any:
-            return publish_image(
+        def publish(dest: Path, expected_revision: str | None) -> None:
+            """Publish the completed projection in its Scene.
+
+            Parameters
+            ----------
+            dest : pathlib.Path
+                Projection Scene directory to receive the completed image.
+            expected_revision : str or None
+                Previously published projection revision, or None for a new projection.
+            """
+            publish_image(
                 dest,
                 "projection/fiducial",
                 "world",
@@ -5356,7 +5220,6 @@ class qi2labDataStore:
                 pixels,
                 expected_revision=expected_revision,
                 extra_attributes=attrs,
-                return_write_future=bool(return_future),
                 affine_zyx_um=affine,
                 missing_z_origin_um=float(origin[0] + 10 * spacing[0]),
             )
@@ -5370,7 +5233,7 @@ class qi2labDataStore:
                 ) as temp:
                     candidate = Path(temp) / path.name
                     initialize_scene(candidate)
-                    published = publish(candidate, None)
+                    publish(candidate, None)
                     open_group(candidate).validate(strict=True)
                     with _scene_lock(path.resolve()):
                         if path.exists():
@@ -5422,7 +5285,7 @@ class qi2labDataStore:
                                     target.parent.mkdir(parents=True, exist_ok=True)
                                     source.replace(target)
                                     moved.append((source, target))
-                        published = publish(path, revision)
+                        publish(path, revision)
                     except Exception:
                         current = (
                             open_group(path)
@@ -5439,7 +5302,6 @@ class qi2labDataStore:
                                 os.replace(backup, self._datastore_state_json_path)
                                 self._datastore_state = state
                         raise
-        return published[1] if return_future else None
 
     def load_global_fiducial_projection(
         self, return_future: bool | None = True
@@ -5554,8 +5416,7 @@ class qi2labDataStore:
         origin_zyx_um: ArrayLike,
         spacing_zyx_um: ArrayLike,
         fusion_type: str = "fiducial",
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save downsampled, fused fiducial image.
 
         The caller selects the fusion grid. This method stores the supplied
@@ -5573,15 +5434,7 @@ class qi2labDataStore:
             Caller-selected fused voxel spacing in Z, Y, X microns.
         fusion_type : str
             Type of fusion (fiducial or all_channels).
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None.
         """
         scene_path = self._ensure_fused_scene(fusion_type)
         current_local_zarr_path = scene_path / "image"
@@ -5593,10 +5446,9 @@ class qi2labDataStore:
         }
         fused_array = np.asarray(fused_image)
         try:
-            write_future = self._save_to_zarr_array(
+            self._save_to_zarr_array(
                 fused_array.astype(np.uint16),
                 current_local_zarr_path,
-                return_future,
                 ome_scale=metadata_attrs["spacing_zyx_um"],
                 ome_translation=metadata_attrs["origin_zyx_um"],
                 extra_attributes=metadata_attrs,
@@ -5606,7 +5458,6 @@ class qi2labDataStore:
                 scene_frame="world",
                 scene_affine=affine_zyx_um,
             )
-            return write_future
         except (OSError, TimeoutError):
             print("Error saving fused image.")
             raise
@@ -5841,14 +5692,7 @@ class qi2labDataStore:
             return None
 
     def _proseg_3d_root(self) -> Path:
-        """
-        Return the root path for Proseg 3D outputs.
-
-        Returns
-        -------
-        Path
-            Proseg 3D output root.
-        """
+        """Return the root path for Proseg 3D outputs."""
         return self._datastore_path / Path("proseg") / Path("3D")
 
     def _proseg_3d_run_root(self, run_name: str | None = None) -> Path:
@@ -6068,8 +5912,7 @@ class qi2labDataStore:
         self,
         cellpose_image: ArrayLike,
         downsampling: Sequence[float],
-        return_future: bool | None = False,
-    ) -> "WriteFutures | None":
+    ) -> None:
         """Save Cellpose max projection, downsampled segmentation image.
 
         The caller runs segmentation and selects its image grid. This method
@@ -6084,15 +5927,7 @@ class qi2labDataStore:
             Caller-selected Z, Y, X factors: segmentation spacing divided by
             native voxel spacing. Two-dimensional masks use the resulting YX
             physical scale while retaining all three factors in metadata.
-        return_future : bool or None
-            Return the completed TensorStore write handle when True. Writes
-            finish before associated metadata is reported as saved.
 
-        Returns
-        -------
-        tensorstore.WriteFutures or None
-            Completed pixel-write handle when return_future is True; otherwise
-            None.
         """
         downsampling = np.asarray(downsampling, dtype=np.float64)
         if (
@@ -6115,8 +5950,7 @@ class qi2labDataStore:
             raise ValueError("Label downsampling must match the projection grid.")
         from merfish3danalysis.storage.ome import publish_projection_labels
 
-        return publish_projection_labels(
+        publish_projection_labels(
             self.fiducial_projection_path(),
             cellpose_image,
-            return_write_future=bool(return_future),
         )

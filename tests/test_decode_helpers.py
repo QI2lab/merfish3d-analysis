@@ -1,24 +1,21 @@
 """Model resolution and transcript matching contracts."""
 
-from pathlib import Path
-from unittest.mock import Mock
-
 import numpy as np
 import pytest
 
 from merfish3danalysis.utils.metrics import calculate_F1_with_radius
-from merfish3danalysis.utils.ufish import load_ufish_model, resolve_ufish_weights_path
+from merfish3danalysis.utils.ufish import resolve_ufish_weights_path
 
 
 @pytest.mark.unit
-def test_ufish_existing_local_weights_take_precedence_over_alias(tmp_path, monkeypatch):
-    weights = tmp_path / "simfish"
-    monkeypatch.setattr(Path, "exists", lambda path: path in {Path("simfish"), weights})
-    assert resolve_ufish_weights_path("simfish") == Path("simfish")
-    model = Mock()
-    load_ufish_model(model, weights)
-    model.load_weights_from_path.assert_called_once_with(weights)
-    model.load_weights.assert_not_called()
+def test_ufish_resolves_local_weights_and_leaves_alias_caching_to_upstream(tmp_path):
+    weights = tmp_path / "weights.onnx"
+    weights.touch()
+    assert resolve_ufish_weights_path(weights) == weights
+    assert resolve_ufish_weights_path("simfish") == (
+        "finetune_models/v1.0.1-simfish_model.onnx"
+    )
+    assert resolve_ufish_weights_path(None) == resolve_ufish_weights_path("simfish")
 
 
 @pytest.mark.unit
@@ -95,10 +92,6 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
 
     import pandas as pd
 
-    from merfish3danalysis.cli.statphysbio_simulation.sweep_f1 import (
-        calculate_F1 as calculate_sweep_f1,
-    )
-
     command = importlib.import_module(
         "merfish3danalysis.cli.statphysbio_simulation.calculate_F1"
     )
@@ -169,9 +162,12 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     assert result["Recall"] == pytest.approx(2 / 3)
     assert result["F1 Score"] == pytest.approx(4 / 7)
 
-    # The sweep can use an alternate ground-truth file, independent of the
-    # default CSV. Both entry points must use the same coordinate conventions.
+    # Explicit ground truth must override the default CSV without changing
+    # coordinate conventions.
     alternate_truth = tmp_path / "alternate_ground_truth.csv"
     truth.to_csv(alternate_truth, index=False)
     truth.iloc[0:0].to_csv(tmp_path / "GT_spots.csv", index=False)
-    assert calculate_sweep_f1(tmp_path, alternate_truth, search_radius=0.01) == result
+    assert (
+        command.calculate_F1(tmp_path, search_radius=0.01, gt_path=alternate_truth)
+        == result
+    )

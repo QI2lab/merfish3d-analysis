@@ -1,7 +1,6 @@
 """Export camera-corrected NDTiff positions and selected U-FISH predictions."""
 
-import sys
-from collections import defaultdict
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,9 @@ import numpy as np
 import typer
 from tifffile import imwrite
 
+from merfish3danalysis.cli.qi2lab_microscopes.create_datastore import (
+    _camera_parameters as camera_parameters,
+)
 from merfish3danalysis.utils.psf import (
     QI2LAB_EMISSION_WAVELENGTHS_UM,
     generate_qi2lab_psf,
@@ -24,7 +26,21 @@ QI2LAB_DECON_CROP_YX = 2048
 
 @dataclass(frozen=True)
 class DatasetLayout:
-    """Axes needed to read each position, channel, and Z plane."""
+    """Axes needed to read each position, channel, and Z plane.
+
+    Parameters
+    ----------
+    channels : tuple[str, ...]
+        Metadata channel names in acquisition order.
+    channel_coordinates : tuple[int | str, ...]
+        NDTiff channel coordinates corresponding to the channel names.
+    positions : tuple[int | None, ...]
+        NDTiff position coordinates, with None when the position axis is absent.
+    z_values : tuple[int | None, ...]
+        Ordered NDTiff Z coordinates, with None when the Z axis is absent.
+    fixed_coordinates : dict[str, int | str]
+        Coordinates for singleton acquisition axes other than channel, position, and Z.
+    """
 
     channels: tuple[str, ...]
     channel_coordinates: tuple[int | str, ...]
@@ -34,7 +50,13 @@ class DatasetLayout:
 
 
 def _load_dataset(dataset_path: Path) -> Any:
-    """Open an NDTiff dataset."""
+    """Open an NDTiff dataset.
+
+    Parameters
+    ----------
+    dataset_path : Path
+        NDTiff acquisition directory containing NDTiff.index.
+    """
     from ndstorage import Dataset
 
     dataset = Dataset(str(dataset_path))
@@ -42,37 +64,14 @@ def _load_dataset(dataset_path: Path) -> Any:
     return dataset
 
 
-def _expand_ufish_channel_arguments(arguments: Sequence[str]) -> list[str]:
-    """Expand consecutive U-FISH channel values into repeated CLI options."""
-    expanded_arguments = []
-    argument_index = 0
-    while argument_index < len(arguments):
-        argument = arguments[argument_index]
-        if argument != "--ufish-channel":
-            expanded_arguments.append(argument)
-            argument_index += 1
-            continue
-
-        expanded_arguments.append(argument)
-        argument_index += 1
-        if argument_index >= len(arguments) or arguments[argument_index].startswith(
-            "-"
-        ):
-            continue
-
-        expanded_arguments.append(arguments[argument_index])
-        argument_index += 1
-        while argument_index < len(arguments) and not arguments[
-            argument_index
-        ].startswith("-"):
-            expanded_arguments.extend(["--ufish-channel", arguments[argument_index]])
-            argument_index += 1
-
-    return expanded_arguments
-
-
 def _alias_zero_suffixed_stack_reader(dataset: Any) -> None:
-    """Alias an indexed first stack to its on-disk ``_0`` reader when needed."""
+    """Handle NDStorage's missing first-stack ``_0`` filename lookup.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset whose index may omit the first-stack _0 suffix.
+    """
     readers = getattr(dataset, "_readers_by_filename", None)
     index = getattr(dataset, "index", None)
     if not isinstance(readers, dict) or not isinstance(index, dict):
@@ -89,7 +88,15 @@ def _alias_zero_suffixed_stack_reader(dataset: Any) -> None:
 def _axis_values(
     coordinates: Sequence[dict[str, int | str]], axis: str
 ) -> tuple[int | str, ...]:
-    """Return sorted unique values for one NDTiff axis."""
+    """Return sorted unique values for one NDTiff axis.
+
+    Parameters
+    ----------
+    coordinates : Sequence[dict[str, int | str]]
+        Image coordinate mappings returned by ndstorage.
+    axis : str
+        NDTiff axis whose unique coordinate values are requested.
+    """
     values = {coordinate[axis] for coordinate in coordinates if axis in coordinate}
     try:
         return tuple(sorted(values))
@@ -100,7 +107,13 @@ def _axis_values(
 
 
 def inspect_dataset(dataset: Any) -> DatasetLayout:
-    """Discover channels, positions, Z planes, and singleton coordinates."""
+    """Discover channels, positions, Z planes, and singleton coordinates.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset with channel names and image coordinates.
+    """
     coordinates = dataset.get_image_coordinates_list()
     if not coordinates:
         raise ValueError("The NDTiff dataset does not contain any images.")
@@ -177,40 +190,20 @@ def inspect_dataset(dataset: Any) -> DatasetLayout:
     )
 
 
-def camera_parameters(metadata: dict[str, Any]) -> tuple[str, float, float]:
-    """Return camera name, electrons per ADU, and offset from image metadata."""
-    camera_id = metadata.get("Camera-CameraName")
-    alternate_camera_id = metadata.get("Core-Camera")
-
-    if camera_id == "C13440-20CU" or alternate_camera_id == "C13440-20CU":
-        try:
-            gain = float(metadata["Camera-CONVERSION FACTOR COEFF"])
-            offset = float(metadata["Camera-CONVERSION FACTOR OFFSET"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "ORCA-Flash4.0 V3 metadata is missing a valid conversion factor "
-                "coefficient or offset."
-            ) from error
-        return "orcav3", gain, offset
-
-    if (
-        camera_id == "Blackfly S BFS-U3-200S6M"
-        or alternate_camera_id == "Blackfly S BFS-U3-200S6M"
-    ):
-        return "flir", 0.03, 0.0
-
-    raise ValueError(
-        "Unsupported camera metadata: "
-        f"Camera-CameraName={camera_id!r}, Core-Camera={alternate_camera_id!r}."
-    )
-
-
 def voxel_size_zyx_um(
     dataset: Any,
     *,
     layout: DatasetLayout,
 ) -> tuple[float, float, float]:
-    """Derive uniform ZYX voxel spacing in micrometers from NDTiff metadata."""
+    """Derive uniform ZYX voxel spacing in micrometers from NDTiff metadata.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset containing acquisition and per-plane metadata.
+    layout : DatasetLayout
+        Detected channel, position, and Z coordinates used to select metadata.
+    """
     if len(layout.z_values) < 2:
         raise ValueError(
             "At least two Z planes are required to infer PhysicalSizeZ from NDTiff "
@@ -251,7 +244,15 @@ def voxel_size_zyx_um(
 
 
 def _z_spacing_from_plane_metadata(dataset: Any, layout: DatasetLayout) -> float:
-    """Calculate uniform Z spacing from intended plane positions."""
+    """Calculate uniform Z spacing from intended plane positions.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset containing intended Z positions in microns.
+    layout : DatasetLayout
+        Detected coordinates for reading successive planes in the first stack.
+    """
     intended_z_positions = []
     for z_value in layout.z_values:
         coordinates = _image_coordinates(
@@ -285,7 +286,15 @@ def _z_spacing_from_plane_metadata(dataset: Any, layout: DatasetLayout) -> float
 
 
 def _optical_channel_index(channel_name: str, fallback_index: int) -> int:
-    """Map a metadata channel name onto qi2lab blue, yellow, or red optics."""
+    """Map a metadata channel name onto qi2lab blue, yellow, or red optics.
+
+    Parameters
+    ----------
+    channel_name : str
+        Metadata channel name identifying blue, yellow, or red optics.
+    fallback_index : int
+        Zero-based channel index used when the name has no optical identifier.
+    """
     normalized_name = channel_name.casefold()
     channel_tokens = (
         (0, ("blue", "488")),
@@ -309,7 +318,17 @@ def generate_channel_psfs(
     z_depth: int,
     voxel_size_zyx_um: tuple[float, float, float],
 ) -> dict[str, np.ndarray]:
-    """Generate normalized channel PSFs using qi2lab microscope parameters."""
+    """Generate normalized channel PSFs using qi2lab microscope parameters.
+
+    Parameters
+    ----------
+    channels : Sequence[str]
+        Metadata channel names in acquisition order.
+    z_depth : int
+        Number of axial planes in each generated PSF.
+    voxel_size_zyx_um : tuple[float, float, float]
+        Z, Y, X voxel spacing in microns.
+    """
     channel_psfs = {}
     for fallback_index, channel in enumerate(channels):
         optical_index = _optical_channel_index(channel, fallback_index)
@@ -328,7 +347,17 @@ def deconvolve_stack(
     *,
     gpu_id: int,
 ) -> np.ndarray:
-    """Run repository-standard chunked RLGC and return a uint16 stack."""
+    """Run repository-standard chunked RLGC and return a uint16 stack.
+
+    Parameters
+    ----------
+    image_zyx : numpy.ndarray
+        Camera-corrected image volume in Z, Y, X order.
+    psf_zyx : numpy.ndarray
+        Normalized PSF sampled on the image voxel grid.
+    gpu_id : int
+        CUDA device index used for deconvolution.
+    """
     from merfish3danalysis.utils.rlgc import chunked_rlgc
 
     deconvolved = chunked_rlgc(
@@ -336,7 +365,6 @@ def deconvolve_stack(
         psf=psf_zyx,
         gpu_id=gpu_id,
         crop_yx=QI2LAB_DECON_CROP_YX,
-        crop_z=None,
         release_memory=True,
     )
     return np.asarray(deconvolved).clip(0, np.iinfo(np.uint16).max).astype(np.uint16)
@@ -345,7 +373,17 @@ def deconvolve_stack(
 def correct_camera_image(
     raw_image: np.ndarray, *, gain: float, offset: float
 ) -> np.ndarray:
-    """Apply camera offset and gain and return a clipped uint16 image."""
+    """Apply camera offset and gain and return a clipped uint16 image.
+
+    Parameters
+    ----------
+    raw_image : numpy.ndarray
+        Raw camera plane or stack in ADU.
+    gain : float
+        Camera conversion gain in electrons per ADU.
+    offset : float
+        Camera baseline in ADU, subtracted before applying gain.
+    """
     corrected = (np.asarray(raw_image, dtype=np.float32) - offset) * gain
     return corrected.clip(0, np.iinfo(np.uint16).max).astype(np.uint16)
 
@@ -357,7 +395,19 @@ def _image_coordinates(
     z_value: int | None,
     fixed_coordinates: dict[str, int | str],
 ) -> dict[str, int | str]:
-    """Build ndstorage keyword coordinates for one image plane."""
+    """Build ndstorage keyword coordinates for one image plane.
+
+    Parameters
+    ----------
+    channel_coordinate : int | str
+        NDTiff channel coordinate corresponding to the metadata channel name.
+    position : int | None
+        NDTiff position coordinate, or None when the axis is absent.
+    z_value : int | None
+        NDTiff Z coordinate, or None when the axis is absent.
+    fixed_coordinates : dict[str, int | str]
+        Coordinates for the remaining singleton acquisition axes.
+    """
     coordinates = dict(fixed_coordinates)
     coordinates["channel"] = channel_coordinate
     if position is not None:
@@ -378,7 +428,27 @@ def read_corrected_stack(
     gain: float,
     offset: float,
 ) -> np.ndarray:
-    """Read and camera-correct one channel as a ZYX volume."""
+    """Read and camera-correct one channel as a ZYX volume.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset providing image planes.
+    channel : str
+        Metadata channel name used in missing-image diagnostics.
+    channel_coordinate : int | str
+        NDTiff channel coordinate used to read each plane.
+    position : int | None
+        NDTiff position coordinate, or None when the axis is absent.
+    z_values : Sequence[int | None]
+        Ordered NDTiff Z coordinates to read into the volume.
+    fixed_coordinates : dict[str, int | str]
+        Coordinates for the remaining singleton acquisition axes.
+    gain : float
+        Camera conversion gain in electrons per ADU.
+    offset : float
+        Camera baseline in ADU, subtracted before applying gain.
+    """
     planes = []
     expected_shape: tuple[int, int] | None = None
     for z_value in z_values:
@@ -411,7 +481,13 @@ def read_corrected_stack(
 
 
 def _validate_channel_filenames(channels: Sequence[str]) -> None:
-    """Ensure metadata channel names can be used unchanged as TIFF stems."""
+    """Ensure metadata channel names can be used unchanged as TIFF stems.
+
+    Parameters
+    ----------
+    channels : Sequence[str]
+        Metadata channel names to validate as TIFF filename stems.
+    """
     invalid = [
         channel
         for channel in channels
@@ -434,7 +510,19 @@ def _planned_output_paths(
     *,
     deconvolve: bool,
 ) -> list[Path]:
-    """Return every TIFF path that the processing run will write."""
+    """Return every TIFF path that the processing run will write.
+
+    Parameters
+    ----------
+    output_dir : Path
+        Root directory for per-position output folders.
+    layout : DatasetLayout
+        Detected positions and metadata channel names.
+    ufish_channels : set[str]
+        Channel names for which prediction TIFFs will be written.
+    deconvolve : bool
+        Include one deconvolved TIFF per channel in the output paths.
+    """
     paths = []
     for position_index, position in enumerate(layout.positions):
         output_position = position_index if position is None else position
@@ -446,19 +534,11 @@ def _planned_output_paths(
             if channel in ufish_channels:
                 paths.append(position_dir / f"{channel}_ufish.ome.tif")
     if len(paths) != len(set(paths)):
-        duplicates = [str(path) for path, count in _counts(paths).items() if count > 1]
+        duplicates = [str(path) for path, count in Counter(paths).items() if count > 1]
         raise ValueError(
             "Channel names produce colliding output filenames: " + ", ".join(duplicates)
         )
     return paths
-
-
-def _counts(paths: Sequence[Path]) -> dict[Path, int]:
-    """Count paths while retaining their first-seen order."""
-    counts: dict[Path, int] = defaultdict(int)
-    for path in paths:
-        counts[path] += 1
-    return dict(counts)
 
 
 def _write_stack(
@@ -468,7 +548,19 @@ def _write_stack(
     voxel_size_zyx_um: tuple[float, float, float],
     channel_name: str,
 ) -> None:
-    """Write one uncompressed, calibrated ZYX OME-TIFF stack."""
+    """Write one uncompressed, calibrated ZYX OME-TIFF stack.
+
+    Parameters
+    ----------
+    path : Path
+        Destination OME-TIFF filename.
+    stack : numpy.ndarray
+        Image volume in Z, Y, X order.
+    voxel_size_zyx_um : tuple[float, float, float]
+        Z, Y, X voxel spacing in microns.
+    channel_name : str
+        Metadata channel name to retain in the OME-TIFF.
+    """
     z_size_um, y_size_um, x_size_um = round_spacing_um(voxel_size_zyx_um)
     stack_array = np.asarray(stack)
     imwrite(
@@ -493,7 +585,13 @@ def _write_stack(
 
 
 def load_default_ufish(gpu_id: int) -> Any:
-    """Load the repository's default simfish U-FISH model."""
+    """Load the repository's default simfish U-FISH model.
+
+    Parameters
+    ----------
+    gpu_id : int
+        CUDA device index on which to load the model.
+    """
     from ufish.api import UFish
 
     from merfish3danalysis.utils.ufish import load_ufish_model
@@ -515,7 +613,29 @@ def process_dataset(
     gpu_id: int = 0,
     deconvolve: bool = False,
 ) -> None:
-    """Process all positions and channels from an open NDTiff dataset."""
+    """Process all positions and channels from an open NDTiff dataset.
+
+    Parameters
+    ----------
+    dataset : ndstorage.Dataset
+        Open NDTiff dataset to process.
+    output_dir : Path
+        Root directory for the pos#### output folders.
+    ufish_channels : Sequence[str]
+        Exact metadata channel names selected for U-FISH prediction.
+    z_start : int
+        Inclusive zero-based offset into the detected Z planes.
+    z_stop : int
+        Exclusive Z-plane offset, or -1 to include the end of the stack.
+    overwrite : bool
+        Replace existing output TIFFs when True.
+    ufish : ufish.api.UFish or None
+        Loaded U-FISH predictor, or None to load the default model when needed.
+    gpu_id : int, default=0
+        CUDA device index used by deconvolution and the default U-FISH model.
+    deconvolve : bool, default=False
+        Save deconvolved stacks and use them as U-FISH input when True.
+    """
     layout = inspect_dataset(dataset)
     _validate_channel_filenames(layout.channels)
 
@@ -733,7 +853,29 @@ def process(
         ),
     ] = False,
 ) -> None:
-    """Split an NDTiff acquisition into corrected, per-position TIFF stacks."""
+    """Split an NDTiff acquisition into corrected, per-position TIFF stacks.
+
+    Parameters
+    ----------
+    dataset_path : Path
+        NDTiff acquisition directory containing NDTiff.index.
+    output_dir : Path | None, default=None
+        Root directory for per-position outputs; required unless listing channels.
+    ufish_channels : list[str] | None, default=None
+        Exact metadata channel names selected for U-FISH prediction.
+    z_start : int, default=0
+        Inclusive zero-based offset into the detected Z planes.
+    z_stop : int
+        Exclusive Z-plane offset, or -1 to include the end of the stack.
+    gpu_id : int, default=0
+        CUDA device index used for processing.
+    overwrite : bool, default=False
+        Replace existing output TIFFs when True.
+    deconvolve : bool, default=False
+        Save deconvolved stacks and use them as U-FISH input when True.
+    list_channels : bool, default=False
+        Print metadata channel names and exit without processing.
+    """
     dataset = _load_dataset(dataset_path)
     try:
         layout = inspect_dataset(dataset)
@@ -784,7 +926,7 @@ def process(
 
 def main() -> None:
     """Run the command-line interface."""
-    app(args=_expand_ufish_channel_arguments(sys.argv[1:]))
+    app()
 
 
 if __name__ == "__main__":

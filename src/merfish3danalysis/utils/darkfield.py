@@ -14,6 +14,8 @@ def window_sum_filter(image2d: cp.ndarray, r: int) -> cp.ndarray:
     """
     Compute local windowed sum via two-pass cumulative sum.
 
+    Windows truncate at image boundaries.
+
     Parameters
     ----------
     image2d : cp.ndarray
@@ -26,9 +28,6 @@ def window_sum_filter(image2d: cp.ndarray, r: int) -> cp.ndarray:
     cp.ndarray
         Summed image of same shape as input.
     """
-    # size = 2 * r + 1
-    # kernel = cp.ones((size, size), dtype=image2d.dtype)
-    # return convolve(image2d, kernel, mode='reflect')
     m, n = image2d.shape
     im_cum = cp.cumsum(image2d, axis=0)
     sum_img = cp.empty_like(image2d)
@@ -254,7 +253,7 @@ def dehaze_fast2(
 
 def get_dark_channel(image2d: cp.ndarray, win_size: int) -> cp.ndarray:
     """
-    Compute dark channel via local minimum with Inf padding.
+    Compute the local minimum with reflected image boundaries.
 
     Parameters
     ----------
@@ -412,8 +411,8 @@ def dark_sectioning(
 
     Returns
     -------
-    cp.ndarray
-        Dehazed 3D image in (z, y, x) order on GPU.
+    numpy.ndarray
+        Dehazed uint16 image in (z, y, x) order.
     """
     if input_image.ndim == 2:
         input_image = input_image[None, ...]
@@ -509,11 +508,7 @@ def dark_sectioning(
     del el, lo, hi, lp
 
     # Free any cached FFT and memory-pool blocks
-    try:
-        cp.fft.clear_plan_cache()  # drop cuFFT plans
-    except AttributeError:
-        # older CuPy: no public API, but you already set PlanCache(memsize=0) earlier
-        pass
+    cp.fft.config.get_plan_cache().clear()
 
     cp.get_default_memory_pool().free_all_blocks()
 

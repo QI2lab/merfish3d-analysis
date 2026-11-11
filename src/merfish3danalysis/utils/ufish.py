@@ -43,16 +43,11 @@ def resolve_ufish_weights_path(model: str | Path | None) -> Path | str:
 
     weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
 
-    local_path = Path.home() / ".ufish" / weights_file
-    if local_path.exists():
-        return local_path
-
     return weights_file
 
 
 def load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
-    """
-    Load configured U-FISH weights from an alias, local path, or weights file.
+    """Load configured U-FISH weights from an alias, local path, or weights file.
 
     Parameters
     ----------
@@ -61,11 +56,6 @@ def load_ufish_model(ufish: Any, model: str | Path | None = None) -> None:
     model : str | Path | None
         U-FISH model alias, weights filename, local path, or None to use the
         default model.
-
-    Returns
-    -------
-    None
-        The weights are loaded into ``ufish`` in place.
     """
     weights = resolve_ufish_weights_path(model)
 

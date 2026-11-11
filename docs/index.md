@@ -23,7 +23,7 @@ To efficiently perform 3D MERFISH processing, we created this `merfish3d-analysi
       estimation, and single-pass GPU warping.
 - Rigid and affine global registration using [multiview-stitcher](https://multiview-stitcher.github.io/multiview-stitcher/main/)
 - GPU-accelerated image processing and decoding.
-    - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels. All non-GPU accelerated functions are [Numba](https://numba.pydata.org/) accelerated.
+    - Nearly all image processing functions utilize GPU acceleration through [CuPy](https://cupy.dev/), [CuCIM](https://docs.rapids.ai/api/cucim/stable/), [CuVS](https://docs.rapids.ai/api/cuvs/nightly/), and custom CUDA kernels.
     - Larger-than-GPU-memory block computations are handled using [Ryomen](https://ryomen.readthedocs.io/en/latest/), a lightweight solution that avoids many issues with other distribution computing solutions.
 - Iterative estimation of background and normalization vectors across codebook bits to remove subjective normalization by user that often leads to non-optimal decoding solutions.
 - Integrated functionality to leverage machine learning tools such as [Cellpose](https://cellpose.readthedocs.io/en/latest/), [Proseg](https://github.com/dcjones/proseg), and [U-FISH](https://github.com/UFISH-Team/U-FISH).

@@ -10,22 +10,30 @@ import numpy as np
 from yaozarrs import ZarrGroup, open_group, v06
 from yaozarrs.write.v06 import write_image, write_scene
 
-from merfish3danalysis.storage._scene_update import ensure_scene_group, update_scene
+from merfish3danalysis.storage._scene_update import update_scene
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from tensorstore import WriteFutures
-
 
 class ConcurrentSceneUpdateError(RuntimeError):
-    """A transform changed after a worker read it."""
+    """A Scene product or transform changed after a worker read it."""
 
 
 def _check_revision(
     products: Mapping[str, Any], selection: str, expected: str | None
 ) -> None:
-    """Prevent a worker from replacing an image published by another worker."""
+    """Prevent a worker from replacing an image published by another worker.
+
+    Parameters
+    ----------
+    products : Mapping[str, Any]
+        Published Scene products indexed by logical selection.
+    selection : str
+        Logical product identifier whose revision is checked.
+    expected : str or None
+        Revision read by the worker, or None when no product was published.
+    """
     previous = products.get(selection)
     if (None if previous is None else previous["revision"]) != expected:
         raise ConcurrentSceneUpdateError(f"Image {selection!r} has changed.")
@@ -34,7 +42,17 @@ def _check_revision(
 def _image_frame(
     scene: v06.Scene, image: v06.Image, frame: str
 ) -> v06.CoordinateSystem:
-    """Verify that an image can be linked to its requested Scene frame."""
+    """Verify that an image can be linked to its requested Scene frame.
+
+    Parameters
+    ----------
+    scene : yaozarrs.v06.Scene
+        Scene containing the target coordinate system.
+    image : yaozarrs.v06.Image
+        Image metadata whose spatial axes must match the target frame.
+    frame : str
+        Name of the target Scene coordinate system.
+    """
     systems = {system.name: system for system in scene.scene.coordinateSystems or []}
     if frame not in systems:
         raise ValueError(f"Unknown image frame {frame!r}.")
@@ -55,7 +73,23 @@ def _expected_transform_index(
     expected_status: str,
     expected_revision: int,
 ) -> int:
-    """Detect concurrent or intermediate updates before replacing a transform."""
+    """Detect concurrent or intermediate updates before replacing a transform.
+
+    Parameters
+    ----------
+    scene : yaozarrs.v06.Scene
+        Scene containing the transform to replace.
+    statuses : Mapping[str, str]
+        Current calculation status indexed by transform name.
+    versions : Mapping[str, int]
+        Current revision indexed by transform name.
+    expected : yaozarrs.v06.CoordinateTransformation
+        Transform previously read by the worker.
+    expected_status : str
+        Calculation status previously read by the worker.
+    expected_revision : int
+        Transform revision previously read by the worker.
+    """
     matches = [
         i
         for i, transform in enumerate(scene.scene.coordinateTransformations)
@@ -118,12 +152,28 @@ def build_acquisition_scene(
     statuses: dict[str, str] = {}
 
     def add_system(name: str) -> str:
-        """Add a shared frame for the acquisition transform graph."""
+        """Add a shared frame for the acquisition transform graph.
+
+        Parameters
+        ----------
+        name : str
+            Unique coordinate system name within the acquisition Scene.
+        """
         systems.append(v06.CoordinateSystem(name=name, axes=axes))
         return name
 
     def add_identity(name: str, source: str, target: str) -> None:
-        """Reserve a relationship until its registration is calculated."""
+        """Reserve a relationship until its registration is calculated.
+
+        Parameters
+        ----------
+        name : str
+            Unique transform name used to track calculation status.
+        source : str
+            Input coordinate system name.
+        target : str
+            Output coordinate system name.
+        """
         transforms.append(
             v06.IdentityTransformation(
                 name=name,
@@ -212,7 +262,6 @@ def initialize_scene(path: str | Path) -> Path:
             "qi2lab": {
                 "schema_version": "0.7",
                 "dataset_id": uuid4().hex,
-                "generation": 0,
                 "products": {},
                 "transform_status": {},
                 "transform_versions": {},
@@ -254,7 +303,15 @@ def publish_acquisition_scene(
     def update(
         current: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish the graph without discarding concurrently created products."""
+        """Publish the graph without discarding concurrently created products.
+
+        Parameters
+        ----------
+        current : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         if state.get("tile_ids") or state.get("transform_status"):
             raise ConcurrentSceneUpdateError(
@@ -294,7 +351,6 @@ def publish_acquisition_scene(
                 for bit in bits:
                     round_links.setdefault(f"{tile}/{bit}", round_id)
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=dict.fromkeys(statuses, 0),
             reference_round=next(iter(bits_by_round)),
@@ -397,7 +453,15 @@ def publish_transforms(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Replace transforms only when their expected revisions still match."""
+        """Replace transforms only when their expected revisions still match.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         statuses = dict(state["transform_status"])
         versions = dict(state["transform_versions"])
@@ -432,7 +496,6 @@ def publish_transforms(
             }
         )
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=versions,
             transform_provenance=provenance_by_transform,
@@ -470,7 +533,15 @@ def update_chromatic_metadata(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Keep all channel relationships consistent with optimizer metadata."""
+        """Keep all channel relationships consistent with optimizer metadata.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         wavelengths = dict(state.get("readout_wavelengths_um", {}))
         if wavelength is not None:
@@ -529,7 +600,6 @@ def update_chromatic_metadata(
                 versions[transform.name] = int(versions.get(transform.name, 0)) + 1
             transforms.append(replacement)
         state.update(
-            generation=int(state["generation"]) + 1,
             readout_wavelengths_um=wavelengths,
             transform_status=statuses,
             transform_versions=versions,
@@ -558,8 +628,7 @@ def publish_sofima_field(
     expected_status: str = "pending",
     expected_revision: int = 0,
     extra_attributes: Mapping[str, Any] | None = None,
-    return_write_future: bool = False,
-) -> WriteFutures | None:
+) -> None:
     """Store the existing XYZ-pixel field using NGFF displacement models.
 
     Parameters
@@ -582,13 +651,7 @@ def publish_sofima_field(
         Previously read transform revision.
     extra_attributes : Mapping[str, Any] or None
         Additional metadata stored with the field image.
-    return_write_future : bool
-        Return the completed TensorStore write handle when True.
 
-    Returns
-    -------
-    tensorstore.WriteFutures or None
-        Completed field-write handle when requested; otherwise None.
     """
     if not expected.name or not expected.name.endswith("/deformable"):
         raise ValueError("A SOFIMA field must replace a deformable relationship.")
@@ -681,25 +744,15 @@ def publish_sofima_field(
             )
         ]
     )
-    ensure_scene_group(path, "coordinateTransformations")
+    from yaozarrs.write._common._groups import _ensure_parent_groups
+
     relative_path = f"coordinateTransformations/field_{uuid4().hex}"
+    _ensure_parent_groups(Path(path), relative_path)
     options = {
         "writer": "tensorstore",
         "extra_attributes": dict(extra_attributes) if extra_attributes else None,
     }
-    if return_write_future:
-        from yaozarrs.write.v06 import prepare_image
-
-        _, arrays = prepare_image(
-            Path(path) / relative_path,
-            image,
-            (field.shape, field.dtype),
-            **options,
-        )
-        completion = arrays[dataset_path].write(field)
-        completion.result()
-    else:
-        write_image(Path(path) / relative_path, image, field, **options)
+    write_image(Path(path) / relative_path, image, field, **options)
     spacing_xyz = spacing[::-1]
     to_pixels = v06.SequenceTransformation(
         name=to_pixels_name,
@@ -729,7 +782,15 @@ def publish_sofima_field(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish the field and its pixel coordinate systems atomically."""
+        """Publish the field and its pixel coordinate systems atomically.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         statuses = dict(state["transform_status"])
         versions = dict(state["transform_versions"])
@@ -754,7 +815,6 @@ def publish_sofima_field(
         statuses[expected.name] = "calculated"
         versions[expected.name] = expected_revision + 1
         state.update(
-            generation=int(state["generation"]) + 1,
             transform_status=statuses,
             transform_versions=versions,
         )
@@ -771,7 +831,6 @@ def publish_sofima_field(
         ), attributes
 
     update_scene(path, update)
-    return completion if return_write_future else None
 
 
 def publish_image(
@@ -785,10 +844,9 @@ def publish_image(
     chunks: Sequence[int] | None = None,
     shards: Sequence[int] | None = None,
     extra_attributes: Mapping[str, Any] | None = None,
-    return_write_future: bool = False,
     affine_zyx_um: Any | None = None,
     missing_z_origin_um: float = 0,
-) -> str | tuple[str, WriteFutures]:
+) -> str:
     """Publish an image only after its TensorStore write has completed.
 
     Parameters
@@ -811,8 +869,6 @@ def publish_image(
         Shard shape, or None for unsharded storage.
     extra_attributes : Mapping[str, Any] or None
         Additional image metadata.
-    return_write_future : bool
-        Return the completed TensorStore pixel-write handle when True.
     affine_zyx_um : Any or None
         Optional 3D affine from the image coordinates to its Scene frame.
     missing_z_origin_um : float
@@ -820,8 +876,8 @@ def publish_image(
 
     Returns
     -------
-    str or tuple of (str, tensorstore.WriteFutures)
-        Published revision, optionally with its completed write handle.
+    str
+        Published revision.
     """
     if not selection:
         raise ValueError("An image selection is required.")
@@ -839,17 +895,7 @@ def publish_image(
         "shards": tuple(shards) if shards is not None else None,
         "extra_attributes": dict(extra_attributes) if extra_attributes else None,
     }
-    if return_write_future:
-        from yaozarrs.write.v06 import prepare_image
-
-        array = np.asarray(pixels)
-        _, arrays = prepare_image(
-            Path(path) / relative_path, image, (array.shape, array.dtype), **options
-        )
-        completion = arrays[image.multiscales[0].datasets[0].path].write(array)
-        completion.result()
-    else:
-        write_image(Path(path) / relative_path, image, pixels, **options)
+    write_image(Path(path) / relative_path, image, pixels, **options)
 
     publish_completed_image(
         path,
@@ -861,7 +907,7 @@ def publish_image(
         affine_zyx_um=affine_zyx_um,
         missing_z_origin_um=missing_z_origin_um,
     )
-    return (revision, completion) if return_write_future else revision
+    return revision
 
 
 def publish_completed_image(
@@ -902,7 +948,15 @@ def publish_completed_image(
     def update(
         scene: v06.Scene, attributes: dict[str, Any]
     ) -> tuple[v06.Scene, dict[str, Any]]:
-        """Publish a completed image and its frame together under the Scene lock."""
+        """Publish a completed image and its frame together under the Scene lock.
+
+        Parameters
+        ----------
+        scene : yaozarrs.v06.Scene
+            Current Scene read while holding its metadata lock.
+        attributes : dict[str, Any]
+            Non-OME root attributes, including the qi2lab processing state.
+        """
         state = dict(attributes["qi2lab"])
         products = dict(state["products"])
         previous = products.get(selection)
@@ -971,16 +1025,14 @@ def publish_completed_image(
             "edge": edge_name,
             "frame": frame,
         }
-        state.update(generation=int(state["generation"]) + 1, products=products)
+        state["products"] = products
         attributes["qi2lab"] = state
         return candidate, attributes
 
     update_scene(path, update)
 
 
-def publish_projection_labels(
-    path: str | Path, labels: Any, *, return_write_future: bool = False
-) -> WriteFutures | None:
+def publish_projection_labels(path: str | Path, labels: Any) -> None:
     """Stage labels before publication because yaozarrs lists them before writing.
 
     Parameters
@@ -989,18 +1041,13 @@ def publish_projection_labels(
         Fiducial projection Scene path.
     labels : Any
         Integer YX labels on the projection grid.
-    return_write_future : bool
-        Return the completed TensorStore pixel-write handle when True.
 
-    Returns
-    -------
-    tensorstore.WriteFutures or None
-        Completed label-write handle when requested; otherwise None.
     """
     import os
     import shutil
-    from tempfile import NamedTemporaryFile, TemporaryDirectory
+    from tempfile import TemporaryDirectory
 
+    from yaozarrs.write._common._groups import _update_zarr3_group
     from yaozarrs.write.v06 import LabelsBuilder
 
     from merfish3danalysis.storage._scene_update import _scene_lock
@@ -1037,10 +1084,7 @@ def publish_projection_labels(
                 (staged_image / child.name).symlink_to(child.resolve())
         staged_labels = staged_image / "labels"
         builder = LabelsBuilder(staged_labels, writer="tensorstore")
-        builder.add_label(name, label_model, (masks.shape, masks.dtype))
-        _, arrays = builder.prepare()
-        completion = arrays[f"{name}/{dataset.path}"].write(masks)
-        completion.result()
+        builder.write_label(name, label_model, masks)
         open_group(staged_image).validate(strict=True)
 
         with _scene_lock(path.resolve()):
@@ -1067,54 +1111,46 @@ def publish_projection_labels(
                     if not item.startswith("cellpose_")
                 ]
                 names.append(name)
-                attrs = dict(existing.attrs)
-                attrs["ome"] = v06.LabelsGroup(labels=names).model_dump(mode="json")
-                metadata = existing.metadata.model_copy(update={"attributes": attrs})
                 os.rename(staged_labels / name, target / name)
-                with NamedTemporaryFile(
-                    mode="w", dir=target, prefix=".zarr-", delete=False
-                ) as stream:
-                    temporary = Path(stream.name)
-                    stream.write(metadata.model_dump_json(exclude_none=True))
-                    stream.flush()
+                _update_zarr3_group(target, v06.LabelsGroup(labels=names))
+                with (target / "zarr.json").open("rb") as stream:
                     os.fsync(stream.fileno())
-                os.replace(temporary, target / "zarr.json")
-    return completion if return_write_future else None
-
-
-def _apply_affine_transform(
-    points: np.ndarray, transform: v06.CoordinateTransformation
-) -> np.ndarray:
-    """Evaluate NGFF transforms because yaozarrs models but does not apply them."""
-    if isinstance(transform, v06.IdentityTransformation):
-        return points
-    if isinstance(transform, v06.ScaleTransformation):
-        return points * np.asarray(transform.scale, dtype=np.float64)
-    if isinstance(transform, v06.TranslationTransformation):
-        return points + np.asarray(transform.translation, dtype=np.float64)
-    if isinstance(transform, v06.AffineTransformation) and transform.affine is not None:
-        affine = np.asarray(transform.affine, dtype=np.float64)
-        if affine.shape != (3, 4):
-            raise ValueError("Expected a 3D affine matrix with shape (3, 4).")
-        return points @ affine[:, :3].T + affine[:, 3]
-    if isinstance(transform, v06.SequenceTransformation):
-        for step in transform.transformations:
-            points = _apply_affine_transform(points, step)
-        return points
-    raise NotImplementedError(f"Unsupported affine transform type {transform.type!r}.")
+                directory = os.open(target, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
 
 
 def _axis_aligned_grid(
     dataset: v06.Dataset, ndim: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Extract the regular physical grid required by sampling and display."""
-    samples = _apply_affine_transform(
-        np.concatenate([np.zeros((1, ndim)), np.eye(ndim)]), dataset.transform
+    """Read the dataset grid through yaozarrs and require valid sampling spacing.
+
+    Parameters
+    ----------
+    dataset : yaozarrs.v06.Dataset
+        Dataset metadata containing the scale and translation transforms.
+    ndim : int
+        Required number of image axes, in dataset order.
+    """
+    scale = dataset.scale_transform
+    translation = dataset.translation_transform
+    spacing = (
+        np.ones(ndim) if scale is None else np.asarray(scale.scale, dtype=np.float64)
     )
-    origin = samples[0]
-    matrix = samples[1:] - origin
-    spacing = np.diag(matrix)
-    if not np.allclose(matrix, np.diag(spacing)) or np.any(spacing <= 0):
+    origin = (
+        np.zeros(ndim)
+        if translation is None
+        else np.asarray(translation.translation, dtype=np.float64)
+    )
+    if (
+        spacing.shape != (ndim,)
+        or origin.shape != (ndim,)
+        or not np.all(np.isfinite(spacing))
+        or not np.all(np.isfinite(origin))
+        or np.any(spacing <= 0)
+    ):
         raise ValueError("Expected a positive axis-aligned image grid.")
     return spacing, origin
 

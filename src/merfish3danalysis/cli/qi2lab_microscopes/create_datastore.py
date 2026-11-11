@@ -80,7 +80,13 @@ def _first_dataset_dir(
 
 
 def _load_dataset_silently(dataset_path: Path) -> Any:
-    """Load an NDTiff dataset while suppressing ndstorage console output."""
+    """Load an NDTiff dataset while suppressing ndstorage console output.
+
+    Parameters
+    ----------
+    dataset_path : Path
+        NDTiff dataset directory to open.
+    """
     from ndstorage import Dataset
 
     with redirect_stdout(io.StringIO()):
@@ -90,7 +96,19 @@ def _load_dataset_silently(dataset_path: Path) -> Any:
 def _first_stack_path(
     root_path: Path, root_name: str, round_idx: int, tile_idx: int
 ) -> Path:
-    """Return the first raw NDTiff stack file for a round/tile."""
+    """Return the first raw NDTiff stack file for a round/tile.
+
+    Parameters
+    ----------
+    root_path : Path
+        Experiment directory containing round and tile acquisition folders.
+    root_name : str
+        Acquisition filename prefix.
+    round_idx : int
+        Zero-based acquisition round index.
+    tile_idx : int
+        Zero-based tile index.
+    """
     base = f"{root_name}_r{round_idx + 1:04d}_tile{tile_idx:04d}"
     return (
         _first_dataset_dir(root_path, root_name, round_idx, tile_idx)
@@ -99,16 +117,26 @@ def _first_stack_path(
 
 
 def _camera_parameters(ndtiff_metadata: dict) -> tuple[str, float, float]:
-    """Return camera model, gain, and offset from NDTiff metadata."""
+    """Return camera model, gain, and offset from NDTiff metadata.
+
+    Parameters
+    ----------
+    ndtiff_metadata : dict
+        Per-image NDTiff metadata containing camera model and conversion fields.
+    """
     camera_id = ndtiff_metadata.get("Camera-CameraName")
     camera_id_alt = ndtiff_metadata.get("Core-Camera")
 
     if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
-        return (
-            "orcav3",
-            float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"]),
-            float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"]),
-        )
+        try:
+            gain = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
+            offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "ORCA-Flash4.0 V3 metadata is missing a valid conversion factor "
+                "coefficient or offset."
+            ) from error
+        return "orcav3", gain, offset
 
     if (
         camera_id == "Blackfly S BFS-U3-200S6M"
@@ -120,7 +148,17 @@ def _camera_parameters(ndtiff_metadata: dict) -> tuple[str, float, float]:
 
 
 def _camera_binning(metadata: dict, ndtiff_metadata: dict, camera: str) -> int:
-    """Return camera binning from microscope or NDTiff metadata."""
+    """Return camera binning from microscope or NDTiff metadata.
+
+    Parameters
+    ----------
+    metadata : dict
+        Microscope configuration metadata, optionally containing binning.
+    ndtiff_metadata : dict
+        Per-image NDTiff metadata containing the camera binning setting.
+    camera : str
+        Camera identifier returned by _camera_parameters.
+    """
     try:
         return int(metadata["binning"])
     except (KeyError, TypeError, ValueError):
@@ -147,7 +185,17 @@ def _correct_channel_image(
     channel_idx: int,
     illuminations: np.ndarray | None,
 ) -> np.ndarray:
-    """Return one corrected channel image as uint16."""
+    """Return one corrected channel image as uint16.
+
+    Parameters
+    ----------
+    raw_image : numpy.ndarray
+        Camera-corrected acquisition array with a leading channel axis.
+    channel_idx : int
+        Zero-based channel index to extract.
+    illuminations : numpy.ndarray | None
+        Channel illumination maps, or None to skip shading correction.
+    """
     channel_image = np.squeeze(raw_image[channel_idx, :]).astype(np.float32)
     if illuminations is not None:
         channel_image = channel_image / illuminations[channel_idx, :]
@@ -159,7 +207,17 @@ def _readout_bit_ids(
     channel_idx: int,
     bit_ids: list[str],
 ) -> list[str]:
-    """Return bit IDs acquired through one readout channel."""
+    """Return bit IDs acquired through one readout channel.
+
+    Parameters
+    ----------
+    experiment_order : numpy.ndarray
+        Round-by-channel acquisition table containing one-based bit numbers.
+    channel_idx : int
+        Acquisition-table column for the selected readout channel.
+    bit_ids : list[str]
+        Ordered datastore bit identifiers indexed by one-based acquisition bits.
+    """
     bit_numbers = np.asarray(experiment_order[:, channel_idx], dtype=np.int64)
     unique_bit_numbers = dict.fromkeys(int(bit_number) for bit_number in bit_numbers)
 
@@ -179,7 +237,19 @@ def _sample_readout_tile_bit_pairs(
     max_images: int,
     rng: np.random.Generator,
 ) -> list[tuple[int, str]]:
-    """Assign unique sampled tile IDs across the bits for one dye."""
+    """Assign unique sampled tile IDs across the bits for one dye.
+
+    Parameters
+    ----------
+    bit_ids : list[str]
+        Readout bit identifiers acquired with one dye.
+    num_tiles : int
+        Number of available acquisition tiles.
+    max_images : int
+        Maximum number of distinct tiles sampled for shading estimation.
+    rng : numpy.random.Generator
+        Random generator used to sample tiles and distribute bit identifiers.
+    """
     if max_images < 1:
         raise ValueError("max_images must be at least 1.")
     if num_tiles < 1 or not bit_ids:
@@ -202,7 +272,17 @@ def _stage_position_zyx_um(
     tile_idx: int,
     ndtiff_metadata: dict,
 ) -> np.ndarray:
-    """Return stage position in zyx microns for one tile."""
+    """Return stage position in zyx microns for one tile.
+
+    Parameters
+    ----------
+    position_list : numpy.ndarray
+        Acquisition stage positions in microns before camera-axis correction.
+    tile_idx : int
+        Zero-based tile index in the position list.
+    ndtiff_metadata : dict
+        NDTiff metadata containing stage transpose and mirror flags.
+    """
     mirror_x = int(ndtiff_metadata["XYStage-TransposeMirrorX"]) == 1
     mirror_y = int(ndtiff_metadata["XYStage-TransposeMirrorY"]) == 1
 

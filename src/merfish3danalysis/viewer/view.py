@@ -10,14 +10,11 @@ from qtpy import QtCore
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
+    LazyGlobalChannelData,
     SparseOverlayPayload,
     stack_with_micron_coords,
 )
-from merfish3danalysis.viewer.ndv import (
-    apply_lut_channel_labels,
-    channel_cmap_for_label,
-    hide_ndv_volume_button,
-)
+from merfish3danalysis.viewer.ndv import apply_lut_channel_labels
 from merfish3danalysis.viewer.sparse import SparseVispyOverlay, _display_scale_zyx
 
 
@@ -148,7 +145,7 @@ class DatastoreNdvView(QtCore.QObject):
             self._enable_scale_bar(spacing_zyx_um)
             return
         self.close()
-        self._reset_array_viewer(data, self.channel_labels, spacing_zyx_um)
+        self._reset_array_viewer(data, spacing_zyx_um)
         apply_lut_channel_labels(self.array_viewer, self.channel_labels)
         self._enable_scale_bar(spacing_zyx_um)
 
@@ -234,9 +231,7 @@ class DatastoreNdvView(QtCore.QObject):
             return False
         return super().eventFilter(watched, event)
 
-    def _reset_array_viewer(
-        self, data: Any, labels: list[str], spacing_zyx_um: Any
-    ) -> None:
+    def _reset_array_viewer(self, data: Any, spacing_zyx_um: Any) -> None:
         """
         Replace NDV's viewer to avoid stale axis/channel state.
 
@@ -244,15 +239,13 @@ class DatastoreNdvView(QtCore.QObject):
         ----------
         data : Any
             NDV-compatible image data.
-        labels : list[str]
-            Channel labels.
         spacing_zyx_um : ArrayLike
             Z, Y, X voxel spacing used by the image and sparse overlays.
         """
         z_size = (
             int(data.sizes["z_um"]) if hasattr(data, "sizes") else int(data.shape[1])
         )
-        display_model = self._display_model(data, labels, z_size)
+        display_model = self._display_model(data, z_size)
         scales = dict(
             zip(
                 ("z_um", "y_um", "x_um"),
@@ -264,6 +257,7 @@ class DatastoreNdvView(QtCore.QObject):
             display_model.scales.update(scales)
         self.array_viewer = ndv.ArrayViewer(
             data,
+            viewer_options={"show_3d_button": False},
             display_model=display_model,
             **(
                 {}
@@ -290,7 +284,6 @@ class DatastoreNdvView(QtCore.QObject):
         widget.show()
         self.viewer_windows.append(widget)
         self._sparse_overlay.attach(self.array_viewer)
-        hide_ndv_volume_button(self.array_viewer)
         self._connect_ndv_index_signal()
 
     def _update_array_viewer(
@@ -327,7 +320,6 @@ class DatastoreNdvView(QtCore.QObject):
                 )
             )
             apply_lut_channel_labels(self.array_viewer, labels)
-            hide_ndv_volume_button(self.array_viewer)
             self._connect_ndv_index_signal()
             return True
         except Exception:
@@ -336,25 +328,17 @@ class DatastoreNdvView(QtCore.QObject):
             )
             return False
 
-    def _display_model(self, data: Any, labels: list[str], z_size: int) -> Any | None:
-        """
-        Return an NDV display model for lazy global channel data.
+    def _display_model(self, data: Any, z_size: int) -> Any | None:
+        """Keep lazy fused-image display limits tied to the intensity dtype.
 
         Parameters
         ----------
         data : Any
             NDV-compatible image data.
-        labels : list[str]
-            Channel labels.
         z_size : int
             Number of Z planes.
-
-        Returns
-        -------
-        Any or None
-            NDV display model, or ``None`` for NDV defaults.
         """
-        if not hasattr(data, "channel_value_range"):
+        if not isinstance(data, LazyGlobalChannelData):
             return None
         from ndv.models import ArrayDisplayModel, LUTModel
 
@@ -364,22 +348,12 @@ class DatastoreNdvView(QtCore.QObject):
             image_clims = (float(dtype_info.min), float(dtype_info.max))
         else:
             image_clims = (0.0, 1.0)
-        luts = {0: LUTModel(cmap="gray", clims=image_clims)}
-        for channel_index in range(1, int(data.shape[0])):
-            value_range = data.channel_value_range(channel_index)
-            if value_range is None:
-                continue
-            cmap = channel_cmap_for_label(labels[channel_index])
-            luts[channel_index] = LUTModel(
-                cmap="gray" if cmap is None else cmap,
-                clims=value_range,
-            )
         return ArrayDisplayModel(
             channel_axis="c",
             channel_mode="composite",
             visible_axes=("y_um", "x_um"),
             current_index={"z_um": z_size // 2},
-            luts=luts,
+            luts={0: LUTModel(cmap="gray", clims=image_clims)},
         )
 
     def _connect_ndv_index_signal(self) -> None:

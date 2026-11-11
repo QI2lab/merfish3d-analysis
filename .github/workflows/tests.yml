@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   cpu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       QT_QPA_PLATFORM: offscreen
       MPLBACKEND: Agg
@@ -23,8 +23,14 @@ jobs:
           python-version: "3.12"
       - name: Install headless rendering dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libfontconfig1 libglib2.0-0 libx11-6 libxkbcommon0
+          # Prefer an independent mirror during Canonical DNS outages.
+          printf 'https://mirrors.kernel.org/ubuntu/\tpriority:0\n' | sudo tee -a /etc/apt/apt-mirrors.txt
+          sudo apt-get -o Acquire::Retries=1 \
+            -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+            update --error-on=any
+          sudo apt-get -o Acquire::Retries=1 \
+            -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
+            install -y libegl1 libgl1 libfontconfig1 libglib2.0-0 libx11-6 libxkbcommon0
       - name: Install CPU test dependencies from project declarations
         run: |
           uv venv
@@ -37,8 +43,8 @@ jobs:
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
               "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely",
-              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "pyarrow",
-              "ndv", "matplotlib", "scikit-image",
+              "joblib", "filelock", "ndstorage", "psfmodels", "pyarrow",
+              "ndv", "matplotlib", "scikit-image", "ome-types",
           }
           requirements = [
               value for value in project["project"]["dependencies"]
@@ -62,6 +68,8 @@ jobs:
             tests/test_datastore_feature_predictor.py \
             tests/test_data_registration.py \
             tests/test_dataio.py \
+            tests/test_bulkseq_correlation.py \
+            tests/test_chromatic_calibration.py \
             tests/test_global_fusion_mode.py \
             tests/test_multiview_registration.py \
             tests/test_spacing_precision.py \

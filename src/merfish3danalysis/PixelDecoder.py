@@ -6,14 +6,13 @@ MERFISH datasets efficiently.
 
 """
 
-import ctypes
 import gc
 import hashlib
+import itertools
 import multiprocessing as mp
 import operator
 import os
 import shutil
-import sys
 import tempfile
 import warnings
 from collections.abc import Sequence
@@ -22,16 +21,112 @@ from pathlib import Path
 from random import sample
 from typing import Literal
 
-from merfish3danalysis.utils.dataio import time_stamp
-from merfish3danalysis.utils.imageprocessing import image_has_signal
+import cupy as cp
+import numpy as np
+import pandas as pd
+import rtree
+import shapely
+from cucim.skimage.measure import label
+from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
+from cucim.skimage.morphology import remove_small_objects
+from cupyx.scipy.ndimage import gaussian_filter
+from cuvs.distance import pairwise_distance
+from scipy.spatial import cKDTree
+from shapely.geometry import Point, Polygon
+from skimage.draw import polygon as rasterize_polygon
+from skimage.measure import regionprops_table
+from tqdm.auto import tqdm, trange
 
-_CUDA_LIBRARY_HANDLES: list[ctypes.CDLL] = []
+from merfish3danalysis.qi2labDataStore import qi2labDataStore
+from merfish3danalysis.utils.dataio import time_stamp
+from merfish3danalysis.utils.decode_warping import (
+    optimizer_calibration_is_applicable,
+    warp_bit_image_to_reference,
+)
+from merfish3danalysis.utils.imageprocessing import image_has_signal
+from merfish3danalysis.utils.spacing import round_spacing_um
+
+DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
+DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
+DEFAULT_2D_MINIMUM_PIXELS = 7.0
+DEFAULT_3D_MINIMUM_PIXELS = 16.0
 _SPAWN_CONTEXT = mp.get_context("spawn")
+
+# filter warning from skimage
+warnings.filterwarnings(
+    "ignore",
+    message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
+)
 
 
 @dataclass(frozen=True)
 class ChromaticAffineEstimationConfig:
-    """Explicit RNA-derived chromatic affine estimation parameters."""
+    """Configure RNA-derived chromatic affine estimation.
+
+    Parameters
+    ----------
+    min_pairs : int, default 20
+        Minimum retained transcript correspondences needed to fit a
+        wavelength pair.
+    distance_filter_min_pairs_multiplier : int, default 4
+        Apply decoding-distance percentile filtering only when the candidate
+        count is at least this multiple of min_pairs.
+    distance_filter_percentile : float, default 25.0
+        Upper decoding-distance percentile retained for high-confidence
+        transcript selection, from 0 to 100.
+    weight_filter_min_pairs_multiplier : int, default 2
+        Apply confidence-weight percentile filtering only when a wavelength
+        pair has at least this multiple of min_pairs.
+    weight_filter_percentile : float, default 25.0
+        Discard correspondence weights below this percentile, from 0 to 100.
+    residual_threshold_um : float, default 0.35
+        Maximum fitting residual in micrometers used to select affine
+        inliers.
+    residual_threshold_z_spacing_fraction : float, default 0.5
+        Minimum 3D residual threshold as a fraction of Z voxel spacing; the
+        larger of this threshold and residual_threshold_um is used.
+    z_limit_spacing_multiplier : float, default 3.5
+        Maximum accepted cumulative Z translation in units of Z voxel
+        spacing when updating an existing correction.
+    lateral_scale_min : float, default 0.85
+        Minimum accepted cumulative Y/X scale when updating an existing
+        correction.
+    lateral_scale_max : float, default 1.05
+        Maximum accepted cumulative Y/X scale when updating an existing
+        correction.
+    lateral_shear_max : float, default 0.08
+        Maximum absolute cumulative Y/X off-diagonal affine coefficient when
+        updating an existing correction.
+    max_iterations : int, default 6
+        Maximum robust affine refinement passes after initial consensus
+        fitting.
+    scale_regularization : float, default 0.0
+        Nonnegative least-squares penalty pulling the fitted radial Y/X
+        scale toward one; zero disables the penalty.
+    robust_z_mad_multiplier : float, default 3.0
+        Maximum Z-offset deviation from the median, in scaled median
+        absolute deviations.
+    robust_z_mad_scale : float, default 1.4826
+        Scale factor converting the median absolute deviation of Z offsets
+        to a robust standard-deviation estimate.
+    ransac_seed : int, default 1729
+        Random seed used to sample initial affine-fit correspondences.
+    ransac_min_iterations : int, default 64
+        Minimum number of random correspondence samples for consensus
+        fitting.
+    ransac_max_iterations : int, default 512
+        Maximum number of random correspondence samples for consensus
+        fitting.
+    ransac_sample_size : int, default 3
+        Number of correspondence pairs in each random consensus sample.
+    centroid_z_support : int, default 7
+        Requested axial support width in planes for on-bit weighted
+        centroids. Clip to the volume depth and use an odd width; 2D
+        decoding uses one plane.
+    centroid_weight_epsilon : float, default 1e-06
+        Lower bound on summed intensity weights when calculating on-bit
+        centroids.
+    """
 
     min_pairs: int = 20
     distance_filter_min_pairs_multiplier: int = 4
@@ -56,88 +151,15 @@ class ChromaticAffineEstimationConfig:
     centroid_weight_epsilon: float = 1e-6
 
 
-def preload_cuda_libraries() -> None:
-    """Preload CUDA libs from NVIDIA pip wheels so GPU libraries can resolve them."""
-    if _CUDA_LIBRARY_HANDLES:
-        return
-
-    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    base = Path(sys.prefix) / "lib" / pyver / "site-packages" / "nvidia"
-
-    package_libraries = [
-        ("cuda_runtime", ["libcudart.so.12"]),
-        ("cuda_nvrtc", ["libnvrtc.so.12"]),
-        ("cuda_cupti", ["libcupti.so.12"]),
-        ("cufft", ["libcufft.so.11"]),
-        ("cublas", ["libcublasLt.so.12", "libcublas.so.12"]),
-        ("curand", ["libcurand.so.10"]),
-        ("cusparse", ["libcusparse.so.12"]),
-        ("cusolver", ["libcusolver.so.11", "libcusolverMg.so.11"]),
-        ("nvjitlink", ["libnvJitLink.so.12"]),
-    ]
-
-    for package_dir, names in package_libraries:
-        directory = base / package_dir / "lib"
-        for name in names:
-            lib_path = directory / name
-            if not lib_path.exists():
-                continue
-            try:
-                _CUDA_LIBRARY_HANDLES.append(
-                    ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
-                )
-            except OSError:
-                pass
-
-
-preload_cuda_libraries()
-
-import itertools
-
-import cupy as cp
-import numpy as np
-import pandas as pd
-import rtree
-from cucim.skimage.measure import label
-from cucim.skimage.measure import regionprops_table as gpu_regionprops_table
-from cucim.skimage.morphology import remove_small_objects
-from cupyx.scipy.ndimage import gaussian_filter
-from cuvs.distance import pairwise_distance
-from scipy.spatial import cKDTree
-from shapely.geometry import Point, Polygon
-from skimage.draw import polygon as rasterize_polygon
-from skimage.measure import regionprops_table
-from tqdm.auto import tqdm, trange
-
-from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.decode_warping import (
-    optimizer_calibration_is_applicable,
-    warp_bit_image_to_reference,
-)
-from merfish3danalysis.utils.spacing import round_spacing_um
-
-DEFAULT_DECODE_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
-DEFAULT_DECODE_MAGNITUDE_THRESHOLD = (1.5, 10.0)
-DEFAULT_2D_MINIMUM_PIXELS = 7.0
-DEFAULT_3D_MINIMUM_PIXELS = 16.0
-
-# filter warning from skimage
-warnings.filterwarnings(
-    "ignore",
-    message="Only one label was provided to `remove_small_objects`. Did you mean to use a boolean array?",
-)
-
-# GPU helper functions
-
-
 def _start_gpu_worker_process(
     *,
     target: object,
     args: tuple,
     physical_gpu_id: int,
 ) -> mp.Process:
-    """
-    Start one worker with only its assigned physical GPU visible.
+    """Start a worker with only its assigned physical GPU visible.
+
+    Worker arguments use local GPU index 0.
 
     Parameters
     ----------
@@ -148,11 +170,6 @@ def _start_gpu_worker_process(
         process sees only ``physical_gpu_id``.
     physical_gpu_id : int
         Physical GPU index to expose to the child process.
-
-    Returns
-    -------
-    multiprocessing.Process
-        Started worker process.
     """
     previous_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(physical_gpu_id))
@@ -168,8 +185,7 @@ def _start_gpu_worker_process(
 
 
 def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
-    """
-    Join GPU workers and raise if any worker failed.
+    """Join GPU workers and raise RuntimeError if any worker failed.
 
     Parameters
     ----------
@@ -177,11 +193,6 @@ def _join_gpu_workers(processes: Sequence[mp.Process], label: str) -> None:
         Worker processes to join.
     label : str
         Human-readable worker group name used in the error message.
-
-    Returns
-    -------
-    None
-        Raises RuntimeError when at least one worker exits nonzero.
     """
     errors = []
     for process in processes:
@@ -205,13 +216,14 @@ def decode_tiles_worker(
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    feature_predictor_threshold: float,
     normalization_method: Literal["iterative", "global", "none"],
     decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
-    """
-    Worker that runs decode_one_tile on a subset of tiles under one GPU.
+    """Decode and save the assigned tiles on one GPU.
+
+    Isolated workers use local GPU index 0; logs show its physical device.
+    ``lowpass_sigma`` is in ZYX pixels.
 
     Parameters
     ----------
@@ -234,22 +246,13 @@ def decode_tiles_worker(
         Lower and upper pixel-trace magnitude thresholds.
     minimum_pixels : float
         Minimum connected-component size accepted as a transcript.
-    feature_predictor_threshold : float
-        Minimum feature-predictor probability passed to tile decoding.
     normalization_method : Literal['iterative', 'global', 'none']
         Normalization source used for pixel traces.
     decode_run_key : str or None
         Optional run whose normalization and decoded outputs the worker uses.
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
-
-    Returns
-    -------
-    None
-        Decoded transcripts are saved to the datastore for each assigned tile.
     """
-    preload_cuda_libraries()
-
     import cupy as cp
     import torch
 
@@ -266,7 +269,6 @@ def decode_tiles_worker(
     local_datastore = qi2labDataStore(datastore_path, validate=False)
     local_decoder = PixelDecoder(
         datastore=local_datastore,
-        use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
@@ -298,7 +300,6 @@ def decode_tiles_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            feature_predictor_threshold=feature_predictor_threshold,
             normalization_method=normalization_method,
             gpu_id=gpu_id,
         )
@@ -328,14 +329,16 @@ def _optimize_norm_worker(
     lowpass_sigma: Sequence[float],
     magnitude_threshold: Sequence[float],
     minimum_pixels: float,
-    feature_predictor_threshold: float,
     collect_chromatic_centroids: bool,
     excluded_gene_ids: Sequence[str],
     decode_run_key: str | None = None,
     normalization_features: Literal["all", "cells"] = "cells",
 ) -> None:
-    """
-    Worker that runs one iteration of normalization-by-decoding on a GPU.
+    """Run one normalization iteration for the assigned tiles on one GPU.
+
+    Seed iteration zero with global normalization. Save per-tile features to
+    ``temp_dir``; optionally collect on-bit centroids for chromatic estimation.
+    ``lowpass_sigma`` is in ZYX pixels.
 
     Parameters
     ----------
@@ -359,8 +362,6 @@ def _optimize_norm_worker(
         Lower and upper accepted pixel-vector magnitudes.
     minimum_pixels : float
         Minimum connected-component size in pixels.
-    feature_predictor_threshold : float
-        Minimum U-FISH probability retained in the decoding mask.
     collect_chromatic_centroids : bool
         If True, collect per-on-bit centroid features needed for chromatic
         affine estimation.
@@ -372,8 +373,6 @@ def _optimize_norm_worker(
     normalization_features : Literal['all', 'cells']
         Feature population used to fit normalization vectors.
     """
-    preload_cuda_libraries()
-
     import cupy as cp
     import torch
 
@@ -384,7 +383,6 @@ def _optimize_norm_worker(
     local_datastore = qi2labDataStore(datastore_path, validate=False)
     local_decoder = PixelDecoder(
         datastore=local_datastore,
-        use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=0,
@@ -412,7 +410,6 @@ def _optimize_norm_worker(
             lowpass_sigma=lowpass_sigma,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels,
-            feature_predictor_threshold=feature_predictor_threshold,
             normalization_method="iterative" if use_norm else "global",
             gpu_id=gpu_id,
         )
@@ -441,10 +438,8 @@ class PixelDecoder:
     num_gpus : int, default 1
         Number of GPUs to use for decoding.
     verbose : int, default 1
-        Progress verbosity: 0 suppresses routine output, 1 shows progress,
+        Progress verbosity : 0 suppresses routine output, 1 shows progress,
         and 2 includes diagnostic output.
-    use_mask : bool or None, default False
-        Masked decoding is not implemented; this must be False or None.
     z_range : Sequence[int] or None, default None
         Half-open Z-index range to decode. None selects all planes.
     decode_mode : {'auto', '2d', '3d'}, default 'auto'
@@ -473,7 +468,7 @@ class PixelDecoder:
         merfish_bits: int = 16,
         num_gpus: int = 1,
         verbose: int = 1,
-        use_mask: bool | None = False,
+        *,
         z_range: Sequence[int] | None = None,
         decode_mode: Literal["auto", "2d", "3d"] = "auto",
         estimate_chromatic_affines: bool = False,
@@ -482,10 +477,40 @@ class PixelDecoder:
         normalization_features: Literal["all", "cells"] = "cells",
         decode_run_key: str | None = None,
     ) -> None:
-        """Initialize the decoding workflow."""
-        if use_mask:
-            raise NotImplementedError("Masked decoding is not implemented.")
+        """Initialize the decoding workflow.
 
+        Parameters
+        ----------
+        datastore : qi2labDataStore
+            Datastore containing preprocessed images, transforms, and the codebook.
+        merfish_bits : int, default 16
+            Number of MERFISH readout bits.
+        num_gpus : int, default 1
+            Number of GPUs to use for decoding.
+        verbose : int, default 1
+            Progress verbosity : 0 suppresses routine output, 1 shows progress,
+            and 2 includes diagnostic output.
+        z_range : Sequence[int] or None, default None
+            Half-open Z-index range to decode. None selects all planes.
+        decode_mode : {'auto', '2d', '3d'}, default 'auto'
+            Connected-component and filtering mode. ``auto`` follows the datastore
+            microscope type.
+        estimate_chromatic_affines : bool, default False
+            If True, estimate chromatic affine transforms during iterative
+            normalization. If False, use existing datastore calibration metadata
+            with identity fallback.
+        chromatic_affine_config : ChromaticAffineEstimationConfig or None, default None
+            Parameters for RNA-derived chromatic affine estimation.
+        excluded_gene_ids : Sequence[str] or None, default None
+            Codebook gene IDs whose winning pixel assignments should be suppressed.
+            The full codebook remains in the nearest-neighbor search.
+        normalization_features : {'all', 'cells'}, default 'cells'
+            Fit normalization using all features or only those inside Cellpose
+            outlines. Without segmentation, ``cells`` falls back to all features.
+            This does not spatially filter the final decoded output.
+        decode_run_key : str or None, default None
+            Optional run name used to isolate normalization and decoded output.
+        """
         self._datastore_path = Path(datastore.datastore_path)
         self._datastore = datastore
         self._num_gpus = num_gpus
@@ -591,7 +616,15 @@ class PixelDecoder:
         tile_id: str,
         image_shape_zyx: Sequence[int],
     ) -> np.ndarray | None:
-        """Rasterize global cell polygons into one tile's round-1 YX grid."""
+        """Rasterize global cell polygons into one tile's round-1 YX grid.
+
+        Parameters
+        ----------
+        tile_id : str
+            Datastore tile identifier whose first-round grid receives the mask.
+        image_shape_zyx : Sequence[int]
+            Decoding volume shape in ZYX pixels, after selecting the Z range.
+        """
         polygons = self._load_normalization_cell_polygons()
         if not self._normalization_cell_segmentation_present:
             return None
@@ -672,27 +705,37 @@ class PixelDecoder:
         global_y: np.ndarray,
         polygons: Sequence[Polygon],
     ) -> np.ndarray:
-        """Return whether each global XY point is covered by any cell polygon."""
-        spatial_index = rtree.index.Index()
-        for polygon_index, polygon in enumerate(polygons):
-            spatial_index.insert(polygon_index, polygon.bounds)
+        """Return whether each global XY point is covered by any cell polygon.
 
+        Parameters
+        ----------
+        global_x : numpy.ndarray
+            One-dimensional world X coordinates in micrometers.
+        global_y : numpy.ndarray
+            World Y coordinates in micrometers, matching ``global_x``.
+        polygons : Sequence[Polygon]
+            Cell outlines in the same world XY coordinate system.
+        """
         inside = np.zeros(len(global_x), dtype=bool)
-        for point_index, (x_value, y_value) in enumerate(
-            zip(global_x, global_y, strict=True)
-        ):
-            if not np.isfinite(x_value) or not np.isfinite(y_value):
-                continue
-            point = Point(float(x_value), float(y_value))
-            inside[point_index] = any(
-                polygons[candidate].covers(point)
-                for candidate in spatial_index.intersection(point.bounds)
-            )
+        finite = np.flatnonzero(np.isfinite(global_x) & np.isfinite(global_y))
+        matches = shapely.STRtree(polygons).query(
+            shapely.points(global_x[finite], global_y[finite]), predicate="covered_by"
+        )
+        inside[finite[matches[0]]] = True
         return inside
 
     @staticmethod
     def _normalization_pixels(image: object, cell_mask: object | None) -> object:
-        """Flatten all voxels, or only voxels whose YX center lies in a cell."""
+        """Flatten all voxels, or only voxels whose YX center lies in a cell.
+
+        Parameters
+        ----------
+        image : numpy.ndarray or cupy.ndarray
+            Image data in ZYX order.
+        cell_mask : numpy.ndarray or cupy.ndarray or None
+            Boolean YX mask selecting normalization pixels across all Z planes;
+            None selects every voxel.
+        """
         if cell_mask is None:
             return image.reshape(-1)
         return image[:, cell_mask].reshape(-1)
@@ -701,7 +744,14 @@ class PixelDecoder:
         self,
         barcodes: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Keep normalization barcodes inside cells when segmentation exists."""
+        """Keep normalization barcodes inside cells when segmentation exists.
+
+        Parameters
+        ----------
+        barcodes : pandas.DataFrame
+            Normalization transcripts with ``global_x`` and ``global_y`` columns
+            in micrometers.
+        """
         polygons = self._load_normalization_cell_polygons()
         if not self._normalization_cell_segmentation_present or barcodes.empty:
             return barcodes
@@ -764,7 +814,14 @@ class PixelDecoder:
         self,
         excluded_gene_ids: Sequence[str] | None,
     ) -> tuple[tuple[str, ...], tuple[int, ...]]:
-        """Resolve requested gene IDs to stable full-codebook row indices."""
+        """Resolve requested gene IDs to stable full-codebook row indices.
+
+        Parameters
+        ----------
+        excluded_gene_ids : Sequence[str] or None
+            Case-sensitive codebook gene IDs to exclude during normalization;
+            None excludes no codewords.
+        """
         if not excluded_gene_ids:
             return (), ()
 
@@ -825,7 +882,14 @@ class PixelDecoder:
     def _normalization_features_match_metadata(
         self, metadata: dict[str, object] | None
     ) -> bool:
-        """Treat legacy untagged vectors as the previous cell-based default."""
+        """Check the feature population, treating untagged vectors as cell-based.
+
+        Parameters
+        ----------
+        metadata : dict or None
+            Saved normalization metadata. Missing ``normalization_features``
+            identifies cell-based normalization.
+        """
         cached_features = (
             metadata.get("normalization_features", "cells")
             if isinstance(metadata, dict)
@@ -839,7 +903,17 @@ class PixelDecoder:
         codebook_index_trace: object,
         excluded_codeword_indices: Sequence[int],
     ) -> None:
-        """Mark excluded winning assignments as background, without fallback."""
+        """Mark excluded winning assignments as background, without fallback.
+
+        Parameters
+        ----------
+        decoded_trace : numpy.ndarray or cupy.ndarray
+            Winning pixel assignments, modified in place to mark exclusions as -1.
+        codebook_index_trace : numpy.ndarray or cupy.ndarray
+            Full-codebook row index of each winning assignment.
+        excluded_codeword_indices : Sequence[int]
+            Full-codebook row indices whose winning assignments become background.
+        """
         if not excluded_codeword_indices:
             return
         array_module = cp.get_array_module(decoded_trace)
@@ -856,14 +930,14 @@ class PixelDecoder:
 
         Parameters
         ----------
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         include_errors : bool, default False
             Append normalized single-bit errors to the decoding matrix.
 
         Returns
         -------
-        all_barcodes: np.ndarray
+        all_barcodes : np.ndarray
             normalized codebook
         """
         with cp.cuda.Device(gpu_id):
@@ -915,8 +989,8 @@ class PixelDecoder:
 
         Parameters
         ----------
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         recalculate : bool, default False
             Recompute global normalization/background vectors instead of
             reusing cached datastore values.
@@ -987,8 +1061,8 @@ class PixelDecoder:
             Upper percentile cut for normalization estimation.
         hot_pixel_threshold : int, default 50000
             Threshold for hot pixel removal.
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         tile_indices : Sequence[int], optional
             Explicit tile indices to use. If omitted, up to five random tiles
             are sampled from the datastore.
@@ -1199,8 +1273,8 @@ class PixelDecoder:
 
         Parameters
         ----------
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         """
         self._iterative_normalization_loaded = False
         with cp.cuda.Device(gpu_id):
@@ -1266,8 +1340,8 @@ class PixelDecoder:
 
         Parameters
         ----------
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         """
         with cp.cuda.Device(gpu_id):
             keep = ~(
@@ -1429,15 +1503,7 @@ class PixelDecoder:
     def _estimate_chromatic_affines_from_barcodes(
         self,
     ) -> None:
-        """
-        Estimate chromatic matrices from RNA centroids in the decoding dimensions.
-
-        Returns
-        -------
-        None
-            Chromatic affine metadata are saved into the datastore calibration
-            sidecar.
-        """
+        """Estimate and save chromatic affines from decoded RNA centroids."""
         config = self._chromatic_affine_config
         min_pairs = int(config.min_pairs)
 
@@ -1797,14 +1863,7 @@ class PixelDecoder:
         )
 
     def _save_identity_chromatic_affines(self) -> None:
-        """
-        Save identity chromatic affine transforms for the current bit wavelengths.
-
-        Returns
-        -------
-        None
-            Identity channel transforms are written to datastore metadata.
-        """
+        """Save identity channel affines unless optimizer estimates already exist."""
         existing = self._datastore.load_chromatic_affine_transforms_zyx_um()
         if optimizer_calibration_is_applicable(existing):
             return
@@ -1852,16 +1911,13 @@ class PixelDecoder:
 
     def _load_bit_data(
         self,
-        feature_predictor_threshold: float | None = 0.1,
+        *,
         gpu_id: int = 0,
     ) -> None:
         """Load prediction-weighted readout data for all bits in the tile.
 
         Parameters
         ----------
-        feature_predictor_threshold : float, default 0.1
-            Legacy argument kept for API compatibility. The loaded image is
-            weighted by the feature-predictor image rather than thresholded.
         gpu_id : int, default=0
             CUDA device ID used for decode-time warping.
         """
@@ -2011,10 +2067,10 @@ class PixelDecoder:
 
         Parameters
         ----------
-        gpu_id: int, default = 0
-            GPU identifier
-        sigma : Sequence[int, int, int], default [3,1,1]
-            Sigma values for Gaussian filter.
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
+        sigma : Sequence[float], default (3, 1, 1)
+            Gaussian standard deviations in ZYX pixels.
         """
         with cp.cuda.Device(gpu_id):
             self._image_data_lp = self._image_data.copy()
@@ -2049,7 +2105,13 @@ class PixelDecoder:
     def _effective_lowpass_sigma(
         self, sigma: Sequence[float] | None
     ) -> tuple[float, float, float] | None:
-        """Return a validated sigma tuple for lowpass filtering."""
+        """Return a validated sigma tuple for lowpass filtering.
+
+        Parameters
+        ----------
+        sigma : Sequence[float] or None
+            Gaussian standard deviations in ZYX pixels; None disables filtering.
+        """
         if sigma is None:
             return None
         sigma_zyx = tuple(float(v) for v in sigma)
@@ -2074,15 +2136,14 @@ class PixelDecoder:
         residual_threshold_um: float = 0.35,
         estimate_z: bool = True,
     ) -> tuple[np.ndarray | None, dict[str, float | int | str | list[float]]]:
-        """
-        Fit a robust chromatic affine from decoded transcript centroids.
+        """Fit a robust chromatic affine from decoded transcript centroids.
 
         The iterative chromatic estimator uses decoded RNA centroids, not bead
         calibration volumes. These centroids span the lateral field of view
         well, but usually span only a thin axial range. A full 3D affine is
         therefore poorly conditioned and can turn centroid noise into axial
         scale or shear. This fit estimates the chromatic model supported by
-        decoded RNA features: one shared radial Y/X scale, Y/X translations,
+        decoded RNA features : one shared radial Y/X scale, Y/X translations,
         and a Z translation, returned as a 4x4 Z, Y, X physical transform.
         In 2D mode, Z is excluded from both fitting and residual filtering.
 
@@ -2160,8 +2221,7 @@ class PixelDecoder:
             target_yx: np.ndarray,
             fit_weights: np.ndarray,
         ) -> tuple[float, float, float]:
-            """
-            Fit lateral radial scale and translation.
+            """Return radial scale, Y translation, and X translation for weighted pairs.
 
             Parameters
             ----------
@@ -2171,11 +2231,6 @@ class PixelDecoder:
                 Target Y, X coordinates.
             fit_weights : numpy.ndarray
                 Per-point fit weights.
-
-            Returns
-            -------
-            tuple[float, float, float]
-                Scale, Y translation, and X translation.
             """
             design_y = np.column_stack(
                 [
@@ -2409,8 +2464,8 @@ class PixelDecoder:
             Normalization vector.
         merfish_bits : int, default = 16
             Number of MERFISH bits. Default 16. Assume MERFISH bits are [0, merfish_bits].
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
 
         Returns
         -------
@@ -2455,8 +2510,8 @@ class PixelDecoder:
             clip lower bound.
         clip_upper : float, default 1.0
             clip upper bound.
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
 
         Returns
         -------
@@ -2480,8 +2535,8 @@ class PixelDecoder:
         ----------
         pixel_traces : np.ndarray or cp.ndarray
             Pixel traces to normalize.
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
 
         Returns
         -------
@@ -2519,8 +2574,8 @@ class PixelDecoder:
             Pixel traces.
         codebook_matrix : np.ndarray or cp.ndarray
             Codebook matrix.
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
 
         Returns
         -------
@@ -2567,10 +2622,10 @@ class PixelDecoder:
 
         Parameters
         ----------
-        magnitude_threshold : Sequence[float], default (1.1, 2.0).
-            Magnitude threshold for decoding.
-        gpu_id: int, default = 0
-            GPU identifier
+        magnitude_threshold : Sequence[float], default (1.1, 2.0)
+            Inclusive lower and upper pixel-trace L2 magnitudes.
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
         """
         with cp.cuda.Device(gpu_id):
             if self._filter_type == "lp":
@@ -2882,6 +2937,18 @@ class PixelDecoder:
         ``z_support // 2`` planes to the nearest label at the same Y/X.
         Equal-distance conflicts between different labels remain background.
         Workspace is limited to individual Z planes.
+
+        Parameters
+        ----------
+        labels : numpy.ndarray or cupy.ndarray
+            ZYX connected-component labels, with zero marking background.
+        intensity : numpy.ndarray or cupy.ndarray
+            Matching ZYX intensity volume used for nonnegative centroid weights.
+        z_support : int
+            Axial support width in planes. Search at most ``z_support // 2`` planes
+            on either side for the nearest label at each YX position.
+        minlength : int
+            Number of label accumulator entries, including background label zero.
         """
         array_module = cp.get_array_module(labels)
         accumulator_dtype = array_module.float64
@@ -2968,8 +3035,8 @@ class PixelDecoder:
             Minimum number of pixels for a barcode.
         maximum_pixels : int, default 500
             Maximum number of pixels for a barcode.
-        gpu_id: int, default = 0
-            GPU identifier
+        gpu_id : int, default = 0
+            CUDA device index used for this operation.
 
         Notes
         -----
@@ -3311,20 +3378,20 @@ class PixelDecoder:
 
     def _prepare_normalization_state(
         self,
-        normalization_method: Literal["iterative", "global", "none"] | None,
-        use_normalization: bool | None,
+        normalization_method: Literal["iterative", "global", "none"],
+        *,
         gpu_id: int = 0,
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
     ) -> None:
-        """
-        Select and load the normalization state used by pixel decoding.
+        """Load the requested normalization vectors for pixel decoding.
+
+        ``lowpass_sigma`` is in ZYX pixels and matches decoding preprocessing
+        when global normalization must be recalculated.
 
         Parameters
         ----------
-        normalization_method : Literal['iterative', 'global', 'none'] | None
-            Normalization vectors to load; None uses the legacy use_normalization flag.
-        use_normalization : bool | None
-            Legacy flag selecting iterative normalization when no method is supplied.
+        normalization_method : Literal['iterative', 'global', 'none']
+            Normalization vectors to load.
         gpu_id : int
             CUDA device index used for decoding and normalization.
         lowpass_sigma : Sequence[float], default = (3, 1, 1)
@@ -3332,9 +3399,6 @@ class PixelDecoder:
             recalculated, keeping normalization preprocessing aligned with
             decoding preprocessing.
         """
-        if normalization_method is None:
-            normalization_method = "iterative" if use_normalization else "none"
-
         if normalization_method == "iterative":
             self._load_iterative_normalization_vectors(gpu_id=gpu_id)
         elif normalization_method == "global":
@@ -3346,10 +3410,10 @@ class PixelDecoder:
         elif normalization_method == "none":
             self._iterative_normalization_loaded = False
             self._global_normalization_loaded = False
-        elif normalization_method is not None:
+        else:
             raise ValueError(
                 "normalization_method must be one of 'iterative', 'global', "
-                f"'none', or None. Got {normalization_method!r}."
+                f"'none'. Got {normalization_method!r}."
             )
 
     def _load_all_barcodes(self) -> None:
@@ -3986,9 +4050,7 @@ class PixelDecoder:
             )
 
             if self._verbose > 1:
-                print("generating synthetic samples for class balance")
-            # SMOTE(random_state=42)
-            # X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+                print("preparing training samples")
             X_train_resampled = X_train.copy()
             y_train_resampled = y_train.copy()
 
@@ -4179,7 +4241,7 @@ class PixelDecoder:
         4) Their identity matches (``gene_id`` is equal).
 
         For each connected component (cluster) under this neighbor relation,
-        keep exactly one row: the one with the smallest ``distance_min``.
+        keep exactly one row : the one with the smallest ``distance_min``.
         Ties are broken deterministically by original row index
         (lower index wins).
 
@@ -4197,7 +4259,7 @@ class PixelDecoder:
 
         Notes
         -----
-        Expected columns: ``global_z``, ``global_y``, ``global_x``,
+        Expected columns : ``global_z``, ``global_y``, ``global_x``,
         ``tile_idx``, ``gene_id``, ``distance_min``.
         """
         df = getattr(self, "_df_filtered_barcodes", None)
@@ -4407,9 +4469,8 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
         magnitude_threshold: Sequence[float] | None = None,
         minimum_pixels: float | None = None,
-        use_normalization: bool | None = True,
-        normalization_method: Literal["iterative", "global", "none"] | None = None,
-        feature_predictor_threshold: float | None = 0.1,
+        *,
+        normalization_method: Literal["iterative", "global", "none"] = "iterative",
     ) -> tuple[np.ndarray, ...] | None:
         """Decode one tile.
 
@@ -4425,22 +4486,17 @@ class PixelDecoder:
             Display results in NDV.
         return_results : bool, default False
             Return results as np.ndarray
-        lowpass_sigma : Sequence[float], default (3, 1, 1)
-            Lowpass sigma.
-        magnitude_threshold: Sequence[float], optional
-            L2-norm threshold
+        lowpass_sigma : Sequence[float] or None, default (3, 1, 1)
+            Gaussian standard deviations in ZYX pixels; None disables filtering.
+        magnitude_threshold : Sequence[float] or None, optional
+            Inclusive lower and upper pixel-trace L2 magnitudes. None uses
+            (1.5, 10.0).
         minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
-        use_normalization : bool, default True
-            Use iterative normalization when ``normalization_method`` is not set.
-            This legacy argument is kept for compatibility.
-        normalization_method : {"iterative", "global", "none"}, optional
+        normalization_method : {"iterative", "global", "none"}, default "iterative"
             Normalization source for pixel traces. ``iterative`` uses cached or
             calculated iterative normalization, ``global`` uses global
             normalization, and ``none`` decodes unnormalized traces.
-        feature_predictor_threshold : float, default 0.1
-            Legacy argument retained for compatibility. Decode input is weighted
-            by the feature-predictor image rather than thresholded.
 
         Returns
         -------
@@ -4459,14 +4515,12 @@ class PixelDecoder:
                 minimum_pixels = self._default_minimum_pixels()
             self._prepare_normalization_state(
                 normalization_method=normalization_method,
-                use_normalization=use_normalization,
                 gpu_id=gpu_id,
                 lowpass_sigma=lowpass_sigma,
             )
 
             self._tile_idx = tile_idx
             self._load_bit_data(
-                feature_predictor_threshold=feature_predictor_threshold,
                 gpu_id=gpu_id,
             )
             self._filter_type = "raw"
@@ -4516,6 +4570,14 @@ class PixelDecoder:
         Explicit indices restrict the candidates and preserve their order. Screen
         the requested Z range and, when present, the round-1 cell mask. Use fewer
         tiles with a warning if the candidates are exhausted; fail if none qualify.
+
+        Parameters
+        ----------
+        count : int
+            Requested number of signal-containing tiles when sampling the datastore.
+        tile_indices : Sequence[int] or None, default None
+            Explicit zero-based candidate tile indices in the desired order. If given,
+            inspect all unique candidates rather than limiting selection to ``count``.
         """
         if count < 1:
             raise ValueError("The normalization tile count must be at least 1.")
@@ -4560,7 +4622,7 @@ class PixelDecoder:
         n_random_tiles: int = 5,
         n_iterations: int = 10,
         minimum_pixels: float | None = None,
-        feature_predictor_threshold: float | None = 0.1,
+        *,
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
         magnitude_threshold: Sequence[float] | None = None,
         tile_indices: Sequence[int] | None = None,
@@ -4577,12 +4639,11 @@ class PixelDecoder:
             Number of iterations.
         minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
-        feature_predictor_threshold : float, default = 0.1
-            feature_predictor threshold.
-        lowpass_sigma : Sequence[float], default = (3, 1, 1)
-            Lowpass sigma.
-        magnitude_threshold: Sequence[float], optional
-            L2-norm threshold
+        lowpass_sigma : Sequence[float] or None, default (3, 1, 1)
+            Gaussian standard deviations in ZYX pixels; None disables filtering.
+        magnitude_threshold : Sequence[float] or None, optional
+            Inclusive lower and upper pixel-trace L2 magnitudes. None uses
+            (1.5, 10.0).
         tile_indices : Sequence[int], optional
             Explicit candidate tile indices to screen for normalization. If omitted,
             sample without replacement until ``n_random_tiles`` qualify or tiles run out.
@@ -4689,7 +4750,6 @@ class PixelDecoder:
                         lowpass_sigma,
                         magnitude_threshold,
                         minimum_pixels,
-                        feature_predictor_threshold,
                         run_chromatic_estimation,
                         self._optimization_excluded_gene_ids,
                         self._decode_run_key,
@@ -4735,7 +4795,7 @@ class PixelDecoder:
         lowpass_sigma: Sequence[float] | None = DEFAULT_DECODE_LOWPASS_SIGMA,
         magnitude_threshold: Sequence[float] | None = None,
         minimum_pixels: float | None = None,
-        feature_predictor_threshold: float | None = 0.1,
+        *,
         normalization_method: Literal["iterative", "global", "none"] = "iterative",
         duplicate_radius_xy: float | None = None,
         duplicate_radius_z: float | None = None,
@@ -4747,16 +4807,15 @@ class PixelDecoder:
 
         Parameters
         ----------
-        assign_to_cells: bool, default = True
+        assign_to_cells : bool, default = True
             Assign codewords to cells
-        lowpass_sigma : Sequence[float], default = (3, 1, 1)
-            Lowpass sigma.
-        magnitude_threshold: Sequence[float], optional
-            Accept pixels with magnitudes between low and high values
+        lowpass_sigma : Sequence[float] or None, default (3, 1, 1)
+            Gaussian standard deviations in ZYX pixels; None disables filtering.
+        magnitude_threshold : Sequence[float] or None, optional
+            Inclusive lower and upper pixel-trace L2 magnitudes. None uses
+            (1.5, 10.0).
         minimum_pixels : float, optional
             Minimum number of pixels for a barcode.
-        feature_predictor_threshold : float, default 0.1
-            feature_predictor threshold.
         normalization_method : {"iterative", "global", "none"}, default "iterative"
             Normalization source for pixel traces.
         duplicate_radius_xy : float, optional
@@ -4767,7 +4826,7 @@ class PixelDecoder:
             Downstream filter to apply after exact transcript calling.
         target_gross_misid_rate : float, default 0.05
             Gross misidentification-rate target for blank-fraction filtering.
-        lr_fdr_target: float, default = 0.05
+        lr_fdr_target : float, default = 0.05
             False discovery rate target for LR filtering.
         """
         if self._num_gpus < 1:
@@ -4811,7 +4870,6 @@ class PixelDecoder:
                     lowpass_sigma,
                     magnitude_threshold,
                     minimum_pixels,
-                    feature_predictor_threshold,
                     normalization_method,
                     self._decode_run_key,
                     getattr(self, "_normalization_features", "cells"),
@@ -4858,13 +4916,12 @@ class PixelDecoder:
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
-        """
-        Validate that the selected downstream filter uses the matching target.
+        """Validate that the selected downstream filter uses the matching target.
 
         Parameters
         ----------
         filter_method : Literal['blank_fraction', 'lr']
-            Transcript filtering method: blank_fraction or lr.
+            Transcript filtering method : blank_fraction or lr.
         target_gross_misid_rate : float
             Gross misidentification-rate target for blank-fraction filtering.
         lr_fdr_target : float
@@ -4895,13 +4952,12 @@ class PixelDecoder:
         target_gross_misid_rate: float,
         lr_fdr_target: float,
     ) -> None:
-        """
-        Apply one supported downstream transcript filter to loaded barcodes.
+        """Apply one supported downstream transcript filter to loaded barcodes.
 
         Parameters
         ----------
         filter_method : Literal['blank_fraction', 'lr']
-            Transcript filtering method: blank_fraction or lr.
+            Transcript filtering method : blank_fraction or lr.
         target_gross_misid_rate : float
             Gross misidentification-rate target for blank-fraction filtering.
         lr_fdr_target : float
@@ -4935,7 +4991,7 @@ class PixelDecoder:
 
         Parameters
         ----------
-        assign_to_cells : bool, default False
+        assign_to_cells : bool, default True
             Assign barcodes to cells.
         duplicate_radius_xy : float, optional
             Override XY radius, in microns, for within-tile duplicate collapse.

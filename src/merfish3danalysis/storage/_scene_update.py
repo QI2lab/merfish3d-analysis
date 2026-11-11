@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 
@@ -17,56 +17,27 @@ if TYPE_CHECKING:
 
 
 def _local_scene_path(dest: str | PathLike) -> Path:
-    """Restrict atomic publication to local POSIX paths and canonicalize aliases."""
+    """Restrict atomic publication to local POSIX paths and canonicalize aliases.
+
+    Parameters
+    ----------
+    dest : str or os.PathLike
+        Existing local Scene directory, which may be reached through a symlink.
+    """
     if os.name != "posix" or "://" in str(dest):
         raise ValueError("Scene updates require a local POSIX filesystem.")
     return Path(dest).resolve(strict=True)
 
 
 def _scene_lock(path: Path) -> FileLock:
-    """Serialize independent workers updating the same Scene."""
-    return FileLock(str(path.parent / f".{path.name}.metadata.lock"))
-
-
-def ensure_scene_group(dest: str | PathLike, relative_path: str) -> Path:
-    """Create a parent group that yaozarrs' standalone image writer cannot create.
+    """Serialize independent workers updating the same Scene.
 
     Parameters
     ----------
-    dest : str or PathLike
-        Local OME-NGFF 0.6 Scene directory.
-    relative_path : str
-        Relative group path beneath the Scene. Parent groups are created as
-        needed; existing groups are preserved and symbolic links are rejected.
-
-    Returns
-    -------
-    Path
-        Path to the requested group within the Scene.
+    path : pathlib.Path
+        Canonical local Scene path whose metadata updates must be serialized.
     """
-    relative = PurePosixPath(relative_path)
-    if (
-        not relative_path
-        or relative.is_absolute()
-        or any(part in (".", "..") for part in relative_path.split("/"))
-    ):
-        raise ValueError("A relative Scene group path without '.' or '..' is required.")
-    root = _local_scene_path(dest)
-    with _scene_lock(root):
-        if not isinstance(open_group(root).ome_metadata(strict=True), v06.Scene):
-            raise ValueError("Expected an OME-NGFF 0.6 Scene.")
-        group = root
-        for part in relative.parts:
-            group = group / part
-            if group.is_symlink():
-                raise ValueError("Scene group paths cannot traverse symbolic links.")
-            if group.exists():
-                open_group(group)
-            else:
-                # yaozarrs has no public API for adding a plain group to an
-                # existing Scene; its own writer keeps group metadata upstream.
-                _create_zarr3_group(group)
-        return group
+    return FileLock(str(path.parent / f".{path.name}.metadata.lock"))
 
 
 def update_scene(
@@ -105,21 +76,16 @@ def update_scene(
         if not isinstance(scene, v06.Scene) or "ome" in attributes:
             raise ValueError("Update must return a Scene and non-OME attributes.")
         scene = v06.Scene.model_validate(scene.model_dump(mode="python"), strict=True)
-        attributes = dict(attributes)
-        attributes["ome"] = scene.model_dump(mode="json")
-        metadata = group.metadata.model_copy(update={"attributes": attributes})
-
         with TemporaryDirectory(
             prefix=f".{path.name}.validate-", dir=path.parent
         ) as temp:
-            candidate = Path(temp)
+            candidate = Path(temp) / path.name
+            _create_zarr3_group(candidate, scene, extra_attributes=dict(attributes))
             for child in path.iterdir():
                 if child.name != "zarr.json":
                     (candidate / child.name).symlink_to(child.resolve())
             candidate_metadata = candidate / "zarr.json"
-            with candidate_metadata.open("w", encoding="utf-8") as stream:
-                stream.write(metadata.model_dump_json(exclude_none=True))
-                stream.flush()
+            with candidate_metadata.open("rb") as stream:
                 os.fsync(stream.fileno())
             open_group(candidate).validate(strict=True)
             os.replace(candidate_metadata, path / "zarr.json")

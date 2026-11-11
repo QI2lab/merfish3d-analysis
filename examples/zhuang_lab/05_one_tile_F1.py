@@ -20,20 +20,18 @@ app = typer.Typer(pretty_exceptions_enable=False)
 def decode_pixels(
     root_path: Path,
     minimum_pixels_per_RNA: int = 7,
-    feature_predictor_threshold: float = 0.5,
+    *,
     magnitude_threshold: tuple[float, float] = (0.2, 10.0),
 ) -> None:
     """Perform pixel decoding.
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment
     minimum_pixels_per_RNA : int
         minimum pixels with same barcode ID required to call a spot. Default = 7.
-    feature_predictor_threshold : float
-        threshold to accept feature_predictor prediction. Default = 0.5
-    magnitude_threshold: tuple[float,float], default = (0.2, 10.0)
+    magnitude_threshold : tuple[float,float], default = (0.2, 10.0)
         lower and upper magnitude threshold to accept a spot.
     """
     # initialize datastore
@@ -45,7 +43,6 @@ def decode_pixels(
     decoder = PixelDecoder(
         datastore=datastore,
         decode_mode="2d",  # Required for the 1.5 micron axial spacing.
-        use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=1,
         verbose=1,
@@ -59,8 +56,7 @@ def decode_pixels(
         return_results=True,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels=minimum_pixels_per_RNA,
-        use_normalization=True,
-        feature_predictor_threshold=feature_predictor_threshold,
+        normalization_method="iterative",
         lowpass_sigma=(3, 1, 1),
     )
     file_name = root_path / (
@@ -126,7 +122,13 @@ def decode_pixels(
 
 @app.command()
 def main(root_path: Path) -> None:
-    """Decode and compare one Zhuang tile with MERLIN."""
+    """Decode and compare one Zhuang tile with MERLIN.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment or datastore directory used for the single-tile comparison.
+    """
     root_path = root_path.expanduser().resolve()
     decode_pixels(root_path=root_path)
 

@@ -23,7 +23,7 @@ def local_register_data(root_path: Path) -> None:
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment or qi2labdatastore directory
     """
     from merfish3danalysis.DataRegistration import DataRegistration
@@ -58,10 +58,10 @@ def global_register_data(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to experiment or qi2labdatastore directory
 
-    create_max_proj_tiff: Optional[bool]
+    create_max_proj_tiff : Optional[bool]
         Also write a maximum-projection TIFF in the fiducial_projection_tiff
         directory when fusion runs. Fusion also creates the projection Scene.
         Default = True.
@@ -88,7 +88,17 @@ def global_register_data(
 
 @app.command()
 def main(root_path: Path, local_only: bool = False, global_only: bool = False) -> None:
-    """Run local and global Zhuang registration, or only the selected stage."""
+    """Run local and global Zhuang registration, or only the selected stage.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang experiment or datastore directory.
+    local_only : bool, default=False
+        Run only registration between rounds within each tile.
+    global_only : bool, default=False
+        Run only registration between first-round tiles.
+    """
     if local_only and global_only:
         raise typer.BadParameter(
             "--local-only and --global-only are mutually exclusive."

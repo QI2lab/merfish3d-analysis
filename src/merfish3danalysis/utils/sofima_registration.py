@@ -8,7 +8,79 @@ import numpy as np
 
 @dataclass(frozen=True)
 class SofimaRegistrationConfig:
-    """Explicit SOFIMA deformable registration parameters."""
+    """Configure SOFIMA residual deformable registration.
+
+    Parameters
+    ----------
+    residual_iterations : int, default 2
+        Number of residual estimation passes composed after affine
+        initialization.
+    patch_size_zyx : tuple[int, int, int], default (10, 32, 32)
+        Requested cross-correlation patch shape in ZYX pixels.
+    minimum_patch_size_px : int, default 4
+        Lower bound on each patch dimension after limiting the requested
+        patch to the image shape.
+    step_divisor : int, default 2
+        Divisor applied to each resolved patch dimension to obtain the flow-
+        lattice stride, with a minimum stride of one pixel.
+    peak_min_distance : int, default 2
+        Minimum separation between cross-correlation peaks in pixels.
+    peak_radius : int, default 8
+        Neighborhood radius in pixels used to measure correlation-peak
+        sharpness.
+    batch_size : int, default 32
+        Number of image patches processed together during SOFIMA cross-
+        correlation.
+    max_masked : float, default 0.75
+        Maximum masked-pixel fraction permitted in a cross-correlation
+        patch.
+    min_peak_ratio : float, default 1.2
+        Minimum ratio between the strongest and second strongest correlation
+        peaks.
+    min_peak_sharpness : float, default 1.2
+        Minimum absolute SOFIMA peak sharpness, measured as peak intensity
+        divided by the local minimum within peak_radius.
+    max_magnitude : float, default 30.0
+        Maximum absolute displacement component in image pixels; a
+        nonpositive value disables this filter.
+    max_deviation : float, default 5.0
+        Maximum displacement-component deviation from the 3-by-3-by-3 flow-
+        grid median, in image pixels; a nonpositive value disables this
+        filter.
+    max_local_z_displacement_px : float, default 5.0
+        Maximum local Z displacement relative to the median axial flow, in
+        reference-image pixels.
+    subpixel_offsets : tuple[float, ...], default (-0.5, 0.0, 0.5)
+        Candidate offsets in image pixels, evaluated along every ZYX axis
+        during subpixel patch matching.
+    subpixel_batch_size : int, default 32
+        Number of valid flow vectors refined together during subpixel
+        matching.
+    normalization_epsilon : float, default 1e-06
+        Lower bound on patch RMS intensity during normalization and
+        tolerance for counting changed axial flow values.
+    mesh_dt : float, default 0.001
+        Initial SOFIMA mesh-integration time step.
+    mesh_gamma : float, default 0.0
+        SOFIMA mesh damping coefficient.
+    mesh_k0 : float, default 1.0
+        Spring constant anchoring the relaxed mesh to measured flow vectors.
+    mesh_k : float, default 0.01
+        Elastic spring constant between neighboring mesh nodes.
+    mesh_num_iters : int, default 1000
+        Number of mesh-integration steps between convergence checks.
+    mesh_max_iters : int, default 20000
+        Maximum total mesh-integration steps.
+    mesh_stop_v_max : float, default 0.001
+        Maximum node speed allowed for mesh convergence; the final force cap
+        must also have been reached.
+    mesh_dt_max : float, default 100.0
+        Maximum adaptive time step as a multiple of mesh_dt.
+    mesh_start_cap : float, default 0.1
+        Initial magnitude cap on the mesh anchoring force.
+    mesh_final_cap : float, default 10.0
+        Final magnitude cap on the mesh anchoring force.
+    """
 
     residual_iterations: int = 2
     patch_size_zyx: tuple[int, int, int] = (10, 32, 32)
@@ -190,6 +262,9 @@ def _compose_flow_fields_same_grid(
 ) -> np.ndarray:
     """
     Compose two SOFIMA flow fields sampled on the same reference grid.
+
+    Upstream ``compose_maps_fast`` clamps absolute coordinates at map edges.
+    Clamping only the sampled displacement here preserves boundary residuals.
 
     Parameters
     ----------
@@ -581,8 +656,8 @@ def _estimate_sofima_flow_field_xyz_px_impl(
         Moving fiducial image already rendered into the reference grid by the
         stored affine transform.
     single_residual_pass : bool, default=False
-        Internal recursion control. Public callers always use the fixed
-        production path with two residual passes.
+        Limit recursion to one residual pass. Otherwise use
+        ``config.residual_iterations`` passes.
     config : SofimaRegistrationConfig
         Explicit SOFIMA parameter set.
 

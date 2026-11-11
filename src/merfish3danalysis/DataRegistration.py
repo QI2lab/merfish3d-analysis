@@ -47,33 +47,33 @@ _SPAWN_CONTEXT = mp.get_context("spawn")
 
 @dataclass(frozen=True)
 class GlobalRegistrationConfig:
-    """
-    Configure global multiview-stitcher registration behavior.
+    """Configure global multiview-stitcher registration.
 
-    Attributes
+    Parameters
     ----------
-    registration_binning_zyx : tuple[int, int, int]
-        Integer registration binning in physical Z, Y, X axis order.
-    reg_channel_index : int
-        Channel index used to register each tile.
-    post_registration_do_quality_filter : bool
-        Whether multiview-stitcher removes low-quality pairwise links.
-    reference_view : int
-        Tile index fixed during groupwise transform resolution.
-    transform : str
-        Transform family used for groupwise resolution.
-    n_parallel_pairwise_regs : int
-        Maximum number of concurrent pairwise registrations.
-    fusion_workers : int or None
-        Number of workers for direct-to-Zarr fusion, or the available CPU count.
-    affine_round_decimals : int or None
-        Decimal places retained when transforms are stored. ``None`` disables
+    registration_binning_zyx : tuple[int, int, int], default (3, 6, 6)
+        Integer registration downsampling factors in ZYX order.
+    reg_channel_index : int, default 0
+        Image channel index used to register tiles.
+    post_registration_do_quality_filter : bool, default True
+        Remove low-quality pairwise registration links before resolving tile
+        transforms.
+    reference_view : int, default 0
+        Zero-based tile index fixed during groupwise transform resolution.
+    transform : str, default 'translation'
+        MVS transform family used for groupwise resolution.
+    n_parallel_pairwise_regs : int, default 1
+        Maximum number of concurrent pairwise tile registrations.
+    fusion_workers : int | None, default None
+        Number of direct-to-Zarr fusion workers; None uses the available CPU
+        count.
+    affine_round_decimals : int | None, default 2
+        Decimal places retained in stored global transforms; None disables
         rounding.
 
     Notes
     -----
-    MVS transform-key strings are intentionally not configurable. They are
-    implementation-local identifiers that must agree across image loading,
+    MVS transform-key strings are internal identifiers shared by image loading,
     registration, and fusion.
     """
 
@@ -88,8 +88,7 @@ class GlobalRegistrationConfig:
 
 
 def _registration_diag(message: str, *, enabled: bool) -> None:
-    """
-    Print one timestamped registration diagnostic message when enabled.
+    """Print a timestamped registration diagnostic when enabled.
 
     Parameters
     ----------
@@ -97,11 +96,6 @@ def _registration_diag(message: str, *, enabled: bool) -> None:
         Diagnostic message body.
     enabled : bool
         If True, print the diagnostic message.
-
-    Returns
-    -------
-    None
-        The message is printed only when diagnostics are enabled.
     """
     if enabled:
         print(time_stamp(), f"[registration-diagnostics] {message}", flush=True)
@@ -114,6 +108,11 @@ def _cleanup_fusion_worker_semaphore(name: str) -> None:
     FileNotFoundError. That leaves a stale entry in the standard resource
     tracker, producing another missing-semaphore warning at shutdown. Only
     ENOENT is harmless here; other unlink errors must remain visible and tracked.
+
+    Parameters
+    ----------
+    name : str
+        POSIX semaphore name registered by the worker resource tracker.
     """
     from multiprocessing.resource_tracker import unregister
     from multiprocessing.synchronize import sem_unlink
@@ -126,19 +125,9 @@ def _cleanup_fusion_worker_semaphore(name: str) -> None:
 
 
 def _configure_loky_fusion_worker() -> None:
-    """
-    Configure a spawned Loky process for long-running fusion work.
+    """Disable Loky's RSS recycler and tolerate already-unlinked semaphores.
 
-    Returns
-    -------
-    None
-        Disable Loky's process-level RSS-growth recycler and make standard
-        multiprocessing semaphore cleanup tolerate an already-removed name.
-
-    Notes
-    -----
-    This must remain a module-level callable because Loky pickles the
-    initializer when starting worker processes.
+    Keep this initializer at module scope so Loky can pickle it for workers.
     """
     from joblib.externals.loky import process_executor
 
@@ -159,8 +148,7 @@ def _direct_zarr_fusion_kwargs(
     compression: str = "blosc-zstd",
     compression_level: int = 1,
 ) -> dict[str, Any]:
-    """
-    Build direct-to-Zarr fusion and process-parallelization options.
+    """Build direct-to-Zarr fusion and process-parallelization options.
 
     Parameters
     ----------
@@ -170,7 +158,7 @@ def _direct_zarr_fusion_kwargs(
         Number of Loky worker processes. The available CPU count is used when
         omitted.
     compression : str, default="blosc-zstd"
-        Lossless output codec: ``blosc-zstd``, ``blosc-lz4``, or ``zstd``.
+        Lossless output codec : ``blosc-zstd``, ``blosc-lz4``, or ``zstd``.
         Blosc codecs use bitshuffle with the array's element size. The codec
         applies to both full-resolution fusion and the OME-Zarr pyramid.
     compression_level : int, default=1
@@ -230,8 +218,32 @@ def _fuse_views_to_scene(
     extra_attributes: dict[str, Any] | None = None,
     verbose: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
-    """Fuse directly into a Scene because MVS cannot write v0.6 metadata."""
-    from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
+    """Fuse directly into a Scene because MVS cannot write v0.6 metadata.
+
+    Parameters
+    ----------
+    datastore : qi2labDataStore
+        Datastore receiving the fused image and its NGFF v0.6 metadata.
+    msims : list
+        Multiscale tile images with stored ``global_registered`` transforms.
+    fusion_type : {'fiducial', 'all_channels'}
+        Select the downsampled fiducial or full-resolution fusion product.
+    output_spacing : dict[str, float]
+        Output voxel spacing in micrometers, keyed by spatial axis name.
+    output_chunksize : dict[str, int] or None
+        Output chunk lengths in pixels by spatial axis; None uses MVS defaults.
+    batch_options : dict
+        MVS batch function, batch size, and worker scheduling options.
+    compression : {'blosc-zstd', 'blosc-lz4', 'zstd'}
+        Lossless codec used for fused pixels and pyramid levels.
+    compression_level : int
+        Compression effort from 1 through 9.
+    extra_attributes : dict or None, default None
+        Additional NGFF image attributes saved with the fused image.
+    verbose : bool, default False
+        Show progress while writing pyramid levels.
+    """
+    from multiview_stitcher import fusion, msi_utils, ngff_utils
     from multiview_stitcher import spatial_image_utils as si_utils
     from yaozarrs import DimSpec, v06
     from yaozarrs.write.v06 import prepare_image
@@ -354,24 +366,16 @@ def _fuse_views_to_scene(
             raise ValueError("MVS fusion output must not be sharded.")
         level = int(path.name)
         if level == 0:
-            task = fusion.prepare_block_fusion(
-                str(path),
-                {
-                    "images": sims,
-                    "transform_key": global_transform_key,
-                    "output_stack_properties": grid,
-                    "output_chunksize": output_chunks,
-                    "backend": "numpy",
-                },
-                zarr_array_creation_kwargs=creation_kwargs,
-                verbose=verbose,
+            fusion.fuse(
+                images=sims,
+                transform_key=global_transform_key,
+                output_stack_properties=grid,
+                output_chunksize=output_chunks,
+                output_zarr_url=str(path),
+                zarr_options={"zarr_array_creation_kwargs": creation_kwargs},
+                batch_options=batch_options,
+                backend="numpy",
             )
-            for batch in misc_utils.ndindex_batches(
-                task["nblocks"], batch_options["n_batch"]
-            ):
-                batch_options["batch_func"](
-                    task["func"], batch, **batch_options["batch_func_kwargs"]
-                )
         previous_level = ngff_utils.write_and_return_downsampled_sim(
             previous_level,
             dims=dims,
@@ -411,27 +415,19 @@ def _fuse_views_to_scene(
 
 
 def _restrict_worker_to_assigned_gpu(gpu_id: int) -> int:
-    """
-    Restrict a spawned worker process to one physical CUDA device.
+    """Expose one physical GPU to the worker and return its local index, 0.
 
     Parameters
     ----------
     gpu_id : int
         Physical GPU index assigned by the parent process.
-
-    Returns
-    -------
-    int
-        Local CUDA device index visible inside the restricted worker. This is
-        always 0 after setting ``CUDA_VISIBLE_DEVICES``.
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = str(int(gpu_id))
     return 0
 
 
 def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
-    """
-    Fetch PSF by index from uniform or ragged channel PSF storage.
+    """Return a float32 channel PSF from a stacked array or ragged list.
 
     Parameters
     ----------
@@ -440,11 +436,6 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
         array whose first axis indexes channels.
     psf_idx : int
         Channel PSF index to return.
-
-    Returns
-    -------
-    numpy.ndarray
-        Selected PSF as a float32 array.
     """
     if isinstance(psfs, list):
         if psf_idx < 0 or psf_idx >= len(psfs):
@@ -462,30 +453,17 @@ def _resolve_psf(psfs: Any, psf_idx: int) -> np.ndarray:
 
 
 def _release_worker_gpu_memory(cp: Any) -> None:
-    """
-    Release cached CuPy allocations in a worker process.
+    """Synchronize the worker and release cached CuPy and Torch allocations.
 
     Parameters
     ----------
     cp : Any
         Imported CuPy module for the worker process.
-
-    Returns
-    -------
-    None
-        The current CUDA stream is synchronized and GPU memory caches are
-        released.
     """
     gc.collect()
     cp.cuda.Stream.null.synchronize()
     try:
         cp.fft.config.get_plan_cache().clear()
-    except Exception:
-        pass
-    try:
-        import cupyx
-
-        cupyx.scipy.fft.clear_plan_cache()
     except Exception:
         pass
     cp.get_default_memory_pool().free_all_blocks()
@@ -509,29 +487,25 @@ def _run_chunked_rlgc_remembering_crop(
     gpu_id: int,
     release_memory: bool = False,
 ) -> np.ndarray:
-    """
-    Run RLGC and remember the lateral chunk size that succeeds in this worker.
+    """Deconvolve and cache a smaller lateral crop after GPU memory fallback.
+
+    The successful crop is reused for subsequent images in this worker.
+    ``release_memory`` asks RLGC to release CuPy memory pools before returning.
 
     Parameters
     ----------
-    dr : Any
-        DataRegistration-like object containing the current cached
-        ``_crop_yx_decon`` value.
+    dr : DataRegistration
+        Registration workflow whose successful lateral crop size is cached.
     chunked_rlgc : Any
         RLGC callable. It must accept ``on_successful_crop_yx``.
     image : np.ndarray
-        Image to deconvolve.
+        Native image to deconvolve in ZYX order.
     psf : np.ndarray
-        PSF to use for deconvolution.
+        Channel point-spread function in ZYX order.
     gpu_id : int
         CUDA device index.
     release_memory : bool, default=False
         If True, ask RLGC to release its CuPy memory pools before returning.
-
-    Returns
-    -------
-    numpy.ndarray
-        Deconvolved image returned by ``chunked_rlgc``.
     """
     image_arr = np.asarray(image)
     if image_arr.ndim == 2:
@@ -540,18 +514,12 @@ def _run_chunked_rlgc_remembering_crop(
         image_max_yx = max(image_arr.shape[-2:])
 
     def _remember_successful_crop(successful_crop_yx: int) -> None:
-        """
-        Cache the successful RLGC crop size on the registration object.
+        """Cache a smaller lateral crop after GPU memory fallback.
 
         Parameters
         ----------
         successful_crop_yx : int
             Lateral crop size that completed without GPU memory fallback.
-
-        Returns
-        -------
-        None
-            The crop size is stored on ``dr``.
         """
         previous_crop_yx = int(dr._crop_yx_decon)
         requested_crop_yx = min(previous_crop_yx, int(image_max_yx))
@@ -578,7 +546,6 @@ def _run_chunked_rlgc_remembering_crop(
         psf=psf,
         gpu_id=gpu_id,
         crop_yx=dr._crop_yx_decon,
-        crop_z=None,
         release_memory=release_memory,
         on_successful_crop_yx=_remember_successful_crop,
     )
@@ -590,8 +557,9 @@ def _load_deconvolve_fiducial_round(
     gpu_id: int,
     chunked_rlgc: Any,
 ) -> np.ndarray:
-    """
-    Load and optionally deconvolve one fiducial round.
+    """Load one corrected fiducial and optionally save its deconvolution.
+
+    Return the native-frame image as uint16 in ZYX order.
 
     Parameters
     ----------
@@ -603,12 +571,6 @@ def _load_deconvolve_fiducial_round(
         CUDA device index used for RLGC.
     chunked_rlgc : Any
         RLGC function imported in the process using this helper.
-
-    Returns
-    -------
-    numpy.ndarray
-        Deconvolved fiducial image if deconvolution is enabled, otherwise the
-        corrected fiducial image, as ``uint16``.
     """
     raw = dr._datastore.load_local_corrected_image(
         tile=dr._tile_id, round=round_id, return_future=False
@@ -662,8 +624,12 @@ def _process_fiducial_rounds_on_gpu(
     gpu_id: int,
     result_queue: Any,
 ) -> None:
-    """
-    Deconvolve, register, warp, and optionally save fiducials on one GPU.
+    """Register fiducials and save round-to-reference affine transforms.
+
+    ``reference_image`` is the first-round fiducial in ZYX order. Bind the
+    worker to physical ``gpu_id``, optionally deconvolve each round, and report
+    ``("result", round_id, crop_yx)``
+    or a formatted ``"error"`` through ``result_queue``.
 
     Parameters
     ----------
@@ -673,19 +639,13 @@ def _process_fiducial_rounds_on_gpu(
     round_list : list
         Moving fiducial round identifiers assigned to this worker.
     reference_image : numpy.ndarray
-        Round-1 deconvolved fiducial image in Z, Y, X order.
+        First-round fiducial in ZYX order, deconvolved when enabled.
     gpu_id : int
-        CUDA device index visible within the worker process.
+        Physical CUDA device index assigned to this worker.
     result_queue : multiprocessing.Queue
         Queue used to send ``("result", round_id, crop_yx)`` messages back to
         the parent. On failure the worker sends an ``"error"`` message
         containing the formatted traceback.
-
-    Returns
-    -------
-    None
-        Results are saved to the datastore and status is returned through
-        ``result_queue``.
     """
     assigned_gpu_id = int(gpu_id)
     local_gpu_id = _restrict_worker_to_assigned_gpu(assigned_gpu_id)
@@ -766,8 +726,9 @@ def _process_sofima_rounds_on_gpu(
     gpu_id: int,
     result_queue: Any,
 ) -> None:
-    """
-    Estimate SOFIMA residual flow fields in an isolated GPU worker.
+    """Estimate and save SOFIMA residuals in a worker bound to physical gpu_id.
+
+    Report completion or a formatted traceback through ``result_queue``.
 
     Parameters
     ----------
@@ -779,11 +740,6 @@ def _process_sofima_rounds_on_gpu(
         Physical GPU index assigned by the parent process.
     result_queue : multiprocessing.Queue
         Queue used to send completion or error messages to the parent.
-
-    Returns
-    -------
-    None
-        SOFIMA flow fields are saved to the datastore.
     """
     local_gpu_id = _restrict_worker_to_assigned_gpu(int(gpu_id))
 
@@ -872,7 +828,6 @@ def _process_sofima_rounds_on_gpu(
                 moving_shape_zyx_px=warped.shape,
                 sofima_status=metadata.get("status", "ok"),
                 valid_flow_vectors=metadata.get("valid_flow_vectors"),
-                return_future=False,
             )
             _registration_diag(
                 "fiducial_sofima_done "
@@ -902,11 +857,10 @@ def _read_fiducial_sim(
     affine_zyx_px: Any,
     transform_key: str,
 ) -> Any:
-    """
-    Open an image for multiview-stitcher's Zarr-backed SpatialImage reader.
+    """Attach datastore coordinates to MVS's Zarr-backed SpatialImage.
 
-    Its singleton-axis expansion requires an unlabeled Zarr v3 handle; the
-    image model supplies the actual axes and the underlying store is unchanged.
+    MVS singleton-axis expansion needs an unlabeled Zarr v3 handle. Remove
+    labels from the handle only; retain the stored axis order in ``dims``.
 
     Parameters
     ----------
@@ -920,12 +874,6 @@ def _read_fiducial_sim(
         Camera-to-stage affine transform loaded from datastore metadata.
     transform_key : str
         Transform key used for stage metadata in the returned SpatialImage.
-
-    Returns
-    -------
-    Any
-        SpatialImage with datastore stage metadata attached under
-        ``stage_metadata``.
     """
     import zarr
     from multiview_stitcher import spatial_image_utils as si_utils
@@ -1036,8 +984,7 @@ def _write_zarr_max_projection_tiff(
     spacing_zyx_um: np.ndarray,
     tile_shape_yx: tuple[int, int] = (1024, 1024),
 ) -> None:
-    """
-    Write a tiled OME-TIFF Z projection without materializing the mosaic.
+    """Write a tiled OME-TIFF Z projection without materializing the mosaic.
 
     Parameters
     ----------
@@ -1051,11 +998,6 @@ def _write_zarr_max_projection_tiff(
         Physical voxel spacing in micrometers and Z, Y, X order.
     tile_shape_yx : tuple[int, int], default=(1024, 1024)
         TIFF tile height and width.
-
-    Returns
-    -------
-    None
-        The projection is streamed to ``filename_path``.
     """
     from tifffile import TiffWriter
 
@@ -1093,8 +1035,10 @@ def _write_zarr_max_projection_tiff(
 
 
 def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: ANN001
-    """
-    Optionally deconvolve readout bits and always save U-FISH outputs.
+    """Process readout bits and save native-frame U-FISH outputs on one GPU.
+
+    Bind the worker to physical ``gpu_id`` and optionally deconvolve readouts.
+    Return True after all assigned bits have been processed.
 
     Parameters
     ----------
@@ -1103,12 +1047,7 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
     bit_list : list
         Bit identifiers to process on this GPU.
     gpu_id : int
-        CUDA device index visible within this worker process.
-
-    Returns
-    -------
-    bool
-        True after all assigned bits are processed.
+        Physical CUDA device index assigned to this worker.
     """
     local_gpu_id = _restrict_worker_to_assigned_gpu(gpu_id)
 
@@ -1236,23 +1175,17 @@ def _apply_bits_on_gpu(dr, bit_list: list, gpu_id: int = 0) -> bool:  # noqa: AN
             roi_z, roi_y, roi_x = 7, 5, 5
 
             def sum_pixels_in_roi(row, image, roi_dims):  # noqa
-                """
-                Sum image intensities in a fixed-size ROI centered on one spot.
+                """Sum image intensities in the clipped ZYX ROI centered on a spot.
 
                 Parameters
                 ----------
-                row : Any
+                row : pandas.Series
                     Feature predictor spot row containing ``z``, ``y``, and
                     ``x`` coordinates.
-                image : Any
-                    Image from which to sample intensities.
-                roi_dims : Any
-                    ROI shape in Z, Y, X order.
-
-                Returns
-                -------
-                float
-                    Sum of pixel intensities inside the clipped ROI.
+                image : numpy.ndarray
+                    ZYX image from which to sample intensities.
+                roi_dims : tuple[int, int, int]
+                    ROI shape in ZYX pixels.
                 """
                 z, y, x = row["z"], row["y"], row["x"]
                 rz, ry, rx = roi_dims
@@ -1376,7 +1309,48 @@ class DataRegistration:
         global_registration_config: GlobalRegistrationConfig | None = None,
         verbose: int = 1,
     ) -> None:
-        """Initialize the registration workflow."""
+        """Initialize the registration workflow.
+
+        Parameters
+        ----------
+        datastore : qi2labDataStore
+            Datastore containing corrected images, PSFs, metadata, and outputs.
+        decon_fiducial : bool, default True
+            Deconvolve fiducial images before registration. If False, use the
+            corrected fiducial images directly.
+        decon_readout : bool, default False
+            Deconvolve readout images before U-FISH feature prediction; registration
+            is applied when the images are loaded for decoding.
+        overwrite_outputs : bool, default False
+            Overwrite existing local transforms and preprocessing outputs.
+        perform_deformable_registration : bool, default True
+            Estimate and save a residual SOFIMA deformable flow field after affine
+            fiducial registration. The field has X, Y, Z channels, Z, Y, X
+            spatial axes, and a patch-centered map origin. Decoding composes it
+            with affine and chromatic transforms.
+        num_gpus : int, default 1
+            Number of GPUs to use for registration.
+        crop_yx_decon : int, default 2048
+            Initial lateral deconvolution crop size. GPU memory fallback can reduce
+            this value and cache the successful size.
+        ufish_model : str or pathlib.Path or None, default None
+            U-FISH model to use for feature prediction. If omitted or ``None``, use
+            the package default ``simfish`` weights. Known aliases include
+            ``simfish``, ``merfish``, ``seqfish``,
+            ``deepspot``, and ``exseq``. A local ``.onnx``/``.pth`` path or
+            HuggingFace weights filename can also be supplied.
+        global_registration : bool, default False
+            Run global tile registration and fused fiducial OME-Zarr generation
+            after local tile preprocessing.
+        registration_diagnostics : bool, default False
+            Print detailed registration diagnostics.
+        sofima_config : SofimaRegistrationConfig or None, default None
+            SOFIMA deformable registration parameters.
+        global_registration_config : GlobalRegistrationConfig or None, default None
+            Multiview-stitcher global registration parameters.
+        verbose : int, default 1
+            Progress verbosity. Set to 0 to suppress routine progress prints.
+        """
         self._datastore = datastore
         self._decon_fiducial = decon_fiducial
         self._tile_ids = self._datastore.tile_ids
@@ -1418,7 +1392,7 @@ class DataRegistration:
 
         Returns
         -------
-        tile_id: int or str
+        tile_id : int or str
             Tile id
         """
         return self._tile_id
@@ -1494,8 +1468,9 @@ class DataRegistration:
         tile_id: str | None = None,
         round_id: str | None = None,
     ) -> bool:
-        """
-        Has valid native-frame deconvolved fiducial image.
+        """Check fiducial deconvolution shape and source metadata.
+
+        Use the current tile when ``tile_id`` is omitted.
 
         Parameters
         ----------
@@ -1503,11 +1478,6 @@ class DataRegistration:
             Stored tile identifier; None selects the current tile.
         round_id : str | None
             Stored fiducial round identifier.
-
-        Returns
-        -------
-        bool
-            True when ``decon_data`` matches the current corrected image and shape.
         """
         if round_id is None:
             raise ValueError("round_id is required for fiducial images.")
@@ -1533,8 +1503,9 @@ class DataRegistration:
         tile_id: str | None = None,
         bit_id: str | None = None,
     ) -> bool:
-        """
-        Has valid native-frame deconvolved readout image.
+        """Check readout deconvolution shape and source metadata.
+
+        Use the current tile when ``tile_id`` is omitted.
 
         Parameters
         ----------
@@ -1542,11 +1513,6 @@ class DataRegistration:
             Tile identifier.
         bit_id : str | None
             Bit identifier.
-
-        Returns
-        -------
-        bool
-            True when ``decon_data`` matches the current corrected image and shape.
         """
         tile_id = self._tile_id if tile_id is None else tile_id
         if bit_id is None:
@@ -1572,8 +1538,9 @@ class DataRegistration:
         tile_id: str | None = None,
         bit_id: str | None = None,
     ) -> bool:
-        """
-        Has valid feature predictor outputs.
+        """Check U-FISH image shape, source metadata, and spot localizations.
+
+        Use the current tile when ``tile_id`` is omitted.
 
         Parameters
         ----------
@@ -1581,11 +1548,6 @@ class DataRegistration:
             Stored tile identifier; None selects the current tile.
         bit_id : str | None
             Stored readout bit identifier.
-
-        Returns
-        -------
-        bool
-            True when predictor and corrected image shapes match and spot localizations exist.
         """
         tile_id = self._tile_id if tile_id is None else tile_id
         if bit_id is None:
@@ -1625,8 +1587,9 @@ class DataRegistration:
         *,
         process_readouts: bool = True,
     ) -> bool:
-        """
-        Is tile complete.
+        """Check that requested preprocessing outputs and transforms are current.
+
+        If ``process_readouts`` is False, check only fiducials and local transforms.
 
         Parameters
         ----------
@@ -1634,11 +1597,6 @@ class DataRegistration:
             Tile identifier.
         process_readouts : bool, default=True
             If False, assess only fiducial deconvolution and local transforms.
-
-        Returns
-        -------
-        bool
-            True when every requested image and local transform is already present.
         """
         if self._decon_fiducial:
             for round_id in self._round_ids:
@@ -1682,15 +1640,14 @@ class DataRegistration:
         return True
 
     def register_all_tiles(self, *, process_readouts: bool = True) -> None:
-        """
-        Register all tiles.
+        """Register all tiles.
 
         Parameters
         ----------
         process_readouts : bool, default=True
             If True, also regenerate readout deconvolution and U-FISH outputs.
             Set False to recompute only the complete fiducial registration
-            chain: local affine transforms, optional SOFIMA fields, global
+            chain : local affine transforms, optional SOFIMA fields, global
             transforms, and global fiducial fusion.
         """
         tile_ids = list(self._datastore.tile_ids)
@@ -1979,8 +1936,7 @@ class DataRegistration:
         self,
         create_max_proj_tiff: bool = True,
     ) -> None:
-        """
-        Globally register first-round fiducial tiles and write fused OME-Zarr.
+        """Globally register first-round fiducial tiles and write fused OME-Zarr.
 
         The method reads each tile's first fiducial round, combines stage
         metadata with multiview-stitcher global registration, saves per-tile
@@ -1992,12 +1948,6 @@ class DataRegistration:
         create_max_proj_tiff : bool, default=True
             If True, write ``fiducial_projection_tiff/fiducial_max_projection.ome.tiff``
             from the downsampled fused fiducial OME-Zarr, retaining its spacing.
-
-        Returns
-        -------
-        None
-            Global transforms, fused fiducial OME-Zarr, datastore state, and
-            optional max projection are written to the datastore.
 
         Notes
         -----
@@ -2124,8 +2074,7 @@ class DataRegistration:
         self,
         create_max_proj_tiff: bool = True,
     ) -> None:
-        """
-        Fuse fiducials, registering globally first when transforms are absent.
+        """Fuse fiducials, registering globally first when transforms are absent.
 
         Existing per-tile global transforms are reused when every tile has one.
         Before normal preprocessing, or for a partially registered datastore,
@@ -2137,12 +2086,6 @@ class DataRegistration:
         create_max_proj_tiff : bool, default=True
             If True, write ``fiducial_projection_tiff/fiducial_max_projection.ome.tiff``
             from the downsampled fused fiducial OME-Zarr, retaining its spacing.
-
-        Returns
-        -------
-        None
-            Fused fiducial OME-Zarr, datastore state, and optional max
-            projection are written to the datastore.
         """
         if not self._global_transforms_available():
             if self._verbose >= 1:
@@ -2175,14 +2118,7 @@ class DataRegistration:
             )
 
     def _global_transforms_available(self) -> bool:
-        """
-        Check whether every tile has a stored global affine transform.
-
-        Returns
-        -------
-        bool
-            ``True`` only when every tile has a non-null global affine.
-        """
+        """Check that every tile has a stored global affine transform."""
         for tile_id in self._tile_ids:
             affine_zyx_um, _origin_zyx_um, _spacing_zyx_um = (
                 self._datastore.load_global_coord_xforms_um(tile=tile_id)
@@ -2192,19 +2128,10 @@ class DataRegistration:
         return True
 
     def _generate_registrations(self) -> None:
-        """
-        Deconvolve fiducials, register rounds, and save local transforms.
+        """Register fiducials to the first round and save local transforms.
 
-        The first fiducial round is loaded, optionally deconvolved, saved, and
-        stored as the local reference for the tile. Remaining fiducial rounds
-        are split across GPU worker processes. Each worker loads its assigned
-        rounds, optionally deconvolves them, registers them to round 1, saves the
-        physical-space transform, and estimates SOFIMA residuals when requested.
-
-        Returns
-        -------
-        None
-            Results are written to the datastore.
+        Optionally deconvolve each round. Distribute later rounds across GPU
+        workers and estimate SOFIMA residuals when enabled.
         """
         if self._num_gpus == 0:
             raise RuntimeError(
@@ -2378,14 +2305,7 @@ class DataRegistration:
         gc.collect()
 
     def _apply_registration_to_bits(self) -> None:
-        """
-        Deconvolve readout bits, run U-FISH, and save unwarped outputs.
-
-        Returns
-        -------
-        None
-            Results are written to the datastore.
-        """
+        """Optionally deconvolve readouts and save native-frame U-FISH outputs."""
         # 1) How many GPUs do we have?
         if self._num_gpus == 0:
             raise RuntimeError(

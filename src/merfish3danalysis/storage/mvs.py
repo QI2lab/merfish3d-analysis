@@ -18,7 +18,18 @@ from zarr.core.buffer import Buffer, BufferPrototype, default_buffer_prototype
 
 
 class _TensorStoreChunkView(Store):
-    """Expose inner chunks because MVS cannot expand sharded Zarr arrays yet."""
+    """Expose inner chunks because MVS cannot expand sharded Zarr arrays yet.
+
+    Parameters
+    ----------
+    source : tensorstore.TensorStore
+        Lazily opened source image array.
+    metadata : dict[str, Any]
+        Zarr v3 source array metadata, including shape and fill value.
+    chunks : Sequence[int] or None, default None
+        Requested view chunk shape in array-axis order, or None to use the
+        source's inner read chunks.
+    """
 
     supports_writes = False
     supports_deletes = False
@@ -30,6 +41,18 @@ class _TensorStoreChunkView(Store):
         metadata: dict[str, Any],
         chunks: Sequence[int] | None = None,
     ) -> None:
+        """Initialize a read-only TensorStore chunk view.
+
+        Parameters
+        ----------
+        source : tensorstore.TensorStore
+            Lazily opened source image array.
+        metadata : dict[str, Any]
+            Zarr v3 source array metadata, including shape and fill value.
+        chunks : Sequence[int] or None, default None
+            Requested view chunk shape in array-axis order, or None to use the
+            source's inner read chunks.
+        """
         super().__init__(read_only=True)
         self.source = source
         self.shape = tuple(metadata["shape"])
@@ -49,9 +72,17 @@ class _TensorStoreChunkView(Store):
         self.metadata = json.dumps(metadata).encode()
 
     def __eq__(self, other: object) -> bool:
+        """Compare views by object identity.
+
+        Parameters
+        ----------
+        other : object
+            Store to compare with this view by object identity.
+        """
         return self is other
 
     def __hash__(self) -> int:
+        """Return an identity-based hash for the chunk view."""
         return id(self)
 
     async def get(
@@ -60,6 +91,17 @@ class _TensorStoreChunkView(Store):
         prototype: BufferPrototype,
         byte_range: ByteRequest | None = None,
     ) -> Buffer | None:
+        """Read a metadata value or lazily encode one TensorStore chunk.
+
+        Parameters
+        ----------
+        key : str
+            Zarr metadata or chunk key to read from the view.
+        prototype : zarr.core.buffer.BufferPrototype
+            Buffer implementation used for the returned bytes.
+        byte_range : zarr.abc.store.ByteRequest or None, default None
+            Requested byte range within the value, or None for the entire value.
+        """
         if key == "zarr.json":
             data = self.metadata
         elif key.startswith("c/"):
@@ -105,32 +147,79 @@ class _TensorStoreChunkView(Store):
         prototype: BufferPrototype,
         key_ranges: Iterable[tuple[str, ByteRequest | None]],
     ) -> list[Buffer | None]:
+        """Read requested keys and byte ranges in order.
+
+        Parameters
+        ----------
+        prototype : zarr.core.buffer.BufferPrototype
+            Buffer implementation used for each returned value.
+        key_ranges : Iterable[tuple[str, ByteRequest or None]]
+            Metadata or chunk keys paired with their requested byte ranges.
+        """
         return [
             await self.get(key, prototype, byte_range) for key, byte_range in key_ranges
         ]
 
     async def exists(self, key: str) -> bool:
+        """Check whether a metadata value or chunk is available.
+
+        Parameters
+        ----------
+        key : str
+            Zarr metadata or chunk key whose presence is checked.
+        """
         return await self.get(key, default_buffer_prototype()) is not None
 
     async def set(self, key: str, value: Buffer) -> None:
+        """Reject writes to the MVS input view.
+
+        Parameters
+        ----------
+        key : str
+            Destination key supplied by the Zarr Store protocol.
+        value : zarr.core.buffer.Buffer
+            Bytes supplied for writing. This read-only view rejects the write.
+        """
         raise NotImplementedError("MVS input view is read-only")
 
     async def delete(self, key: str) -> None:
+        """Reject deletion from the MVS input view.
+
+        Parameters
+        ----------
+        key : str
+            Key supplied for deletion. This read-only view rejects the deletion.
+        """
         raise NotImplementedError("MVS input view is read-only")
 
     async def list(self) -> AsyncIterator[str]:
+        """Reject key listing, which the MVS input view does not support."""
         raise NotImplementedError("MVS input view does not support listing")
         yield
 
     def list_prefix(self, prefix: str) -> AsyncIterator[str]:
+        """Reject key-prefix listing for the MVS input view.
+
+        Parameters
+        ----------
+        prefix : str
+            Key prefix supplied for listing, which this view does not support.
+        """
         return self.list()
 
     def list_dir(self, prefix: str) -> AsyncIterator[str]:
+        """Reject directory listing for the MVS input view.
+
+        Parameters
+        ----------
+        prefix : str
+            Directory prefix supplied for listing, which this view does not support.
+        """
         return self.list()
 
 
 def mvs_array(array: Any, chunks: Sequence[int] | None = None) -> zarr.Array:
-    """Adapt sharded yaozarrs arrays until MVS supports its virtual transforms.
+    """Adapt sharded yaozarrs arrays for MVS singleton-axis and channel views.
 
     Parameters
     ----------

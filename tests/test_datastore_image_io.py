@@ -50,18 +50,11 @@ def test_failed_image_write_propagates_before_success_metadata(image_datastore):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("return_future", [False, True])
 @pytest.mark.parametrize("spacing", [[0.315, 0.081, 0.081], [0.4, 0.2, 0.3]])
-def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, return_future, spacing):
+def test_ome_zarr_v3_write_and_all_read_modes(tmp_path, spacing):
     path = tmp_path / "image.ome.zarr"
     pixels = np.arange(60, dtype=np.uint16).reshape(3, 4, 5)
-    result = qi2labDataStore._save_to_zarr_array(
-        pixels, path, return_future, ome_scale=spacing
-    )
-    if return_future:
-        assert result.result() is None
-    else:
-        assert result is None
+    qi2labDataStore._save_to_zarr_array(pixels, path, ome_scale=spacing)
     group = open_group(path)
     assert json.loads((path / "zarr.json").read_text())["zarr_format"] == 3
     model = group.ome_metadata(strict=True)

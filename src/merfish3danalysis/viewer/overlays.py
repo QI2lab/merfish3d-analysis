@@ -1,12 +1,14 @@
 """Image loading and sparse geometry helpers for the datastore viewer."""
 
 import ast
-import struct
 from dataclasses import dataclass
 from operator import itemgetter
 from typing import Any
 
 import numpy as np
+import tensorstore as ts
+from shapely import from_wkb, get_coordinates, get_exterior_ring
+from shapely.geometry import Polygon
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
@@ -16,179 +18,19 @@ from merfish3danalysis.viewer.models import (
 )
 
 
-def _axis_indices(axis_key: Any, axis_size: int) -> tuple[np.ndarray, bool]:
-    """
-    Return selected axis indices and whether the key was scalar.
+@dataclass(frozen=True)
+class _GlobalBaseImage:
+    """Selected global base image for NDV display.
 
     Parameters
     ----------
-    axis_key : Any
-        NumPy-style axis key.
-    axis_size : int
-        Axis length.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, bool]
-        Selected indices and scalar-key flag.
+    image_zyx : Any
+        Selected intensity volume, maximum projection, or empty Z, Y, X canvas.
+    shape_zyx : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    labels : list[str]
+        Display labels in image channel order.
     """
-    if isinstance(axis_key, np.integer):
-        axis_key = int(axis_key)
-    indices = np.arange(axis_size, dtype=np.intp)
-    if isinstance(axis_key, int):
-        return np.asarray([indices[axis_key]], dtype=np.intp), True
-    return np.asarray(indices[axis_key], dtype=np.intp), False
-
-
-@dataclass(frozen=True)
-class LazyRepeatedPlaneImage:
-    """A 2D image virtually repeated across all Z planes."""
-
-    plane_yx: np.ndarray
-    z_size: int
-
-    @property
-    def shape(self) -> tuple[int, int, int]:
-        """Return Z, Y, X shape."""
-        plane_shape = tuple(int(value) for value in self.plane_yx.shape)
-        return (self.z_size, *plane_shape)
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the image dtype."""
-        dtype = self.plane_yx.dtype
-        numpy_dtype = getattr(dtype, "numpy_dtype", None)
-        if numpy_dtype is not None:
-            return np.dtype(numpy_dtype)
-        return np.dtype(dtype)
-
-    @property
-    def max_value(self) -> int | None:
-        """Return the maximum display value without expanding across Z."""
-        if hasattr(self.plane_yx, "read"):
-            return None
-        if self.plane_yx.size == 0:
-            return 0
-        return int(np.max(self.plane_yx))
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested repeated-plane slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested image slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        z_indices, z_scalar = _axis_indices(key[0], self.z_size)
-        plane = self.plane_yx[key[1], key[2]]
-        if hasattr(plane, "read"):
-            plane = plane.read().result()
-        plane = np.asarray(plane)
-        if z_scalar:
-            return plane
-        return np.broadcast_to(plane, (len(z_indices), *plane.shape)).copy()
-
-
-@dataclass(frozen=True)
-class LazyMaxProjectionImage:
-    """A lazy Z-max projection presented as one Z plane."""
-
-    image_zyx: Any
-
-    @property
-    def shape(self) -> tuple[int, int, int]:
-        """Return projected Z, Y, X shape."""
-        image_shape = tuple(int(value) for value in self.image_zyx.shape)
-        return (1, *image_shape[1:])
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the image dtype."""
-        dtype = self.image_zyx.dtype
-        numpy_dtype = getattr(dtype, "numpy_dtype", None)
-        if numpy_dtype is not None:
-            return np.dtype(numpy_dtype)
-        return np.dtype(dtype)
-
-    @property
-    def max_value(self) -> int | None:
-        """Return no cheap display maximum for lazy projected data."""
-        return None
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested max-projected slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested max-projected image slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        _z_indices, z_scalar = _axis_indices(key[0], 1)
-        selected = self.image_zyx[(slice(None), key[1], key[2])]
-        if hasattr(selected, "read"):
-            selected = selected.read().result()
-        plane = np.max(np.asarray(selected), axis=0)
-        if z_scalar:
-            return plane
-        return plane[np.newaxis, ...]
-
-
-@dataclass(frozen=True)
-class LazyZeroVolume:
-    """A lazy black Z, Y, X canvas."""
-
-    shape: tuple[int, int, int]
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the canvas dtype."""
-        return np.dtype(np.uint16)
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested zero-filled slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested zero-filled canvas slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        axis_indices = [_axis_indices(key[axis], self.shape[axis]) for axis in range(3)]
-        output_shape = tuple(
-            len(indices) for indices, is_scalar in axis_indices if not is_scalar
-        )
-        return np.broadcast_to(np.asarray(0, dtype=np.uint16), output_shape)
-
-
-@dataclass(frozen=True)
-class _GlobalBaseImage:
-    """Selected global base image for NDV display."""
 
     image_zyx: Any
     shape_zyx: tuple[int, int, int]
@@ -197,7 +39,19 @@ class _GlobalBaseImage:
 
 @dataclass(frozen=True)
 class PointOverlayIndex:
-    """Reusable Z-indexed transcript point coordinates and gene ids."""
+    """Reusable Z-indexed transcript point coordinates and gene ids.
+
+    Parameters
+    ----------
+    coords_sorted : numpy.ndarray
+        Transcript coordinates in Z, Y, X pixels, sorted by rounded Z.
+    genes_sorted : numpy.ndarray
+        Gene identifier for each sorted transcript coordinate.
+    z_sorted : numpy.ndarray
+        Rounded integer Z-plane index for each sorted coordinate.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    """
 
     coords_sorted: np.ndarray
     genes_sorted: np.ndarray
@@ -247,29 +101,65 @@ class PointOverlayIndex:
 
 @dataclass(frozen=True)
 class PolylineGeometry:
-    """Sparse 2D polyline geometry virtually repeated across Z planes."""
+    """Sparse 2D polyline geometry virtually repeated across Z planes.
+
+    Parameters
+    ----------
+    polylines_yx : tuple[numpy.ndarray, ...]
+        Boundary vertex arrays in Y, X pixel coordinates, repeated across Z.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    line_thickness : int
+        Outline width in display pixels.
+    """
 
     polylines_yx: tuple[np.ndarray, ...]
     shape: tuple[int, int, int]
     line_thickness: int
-    value: int = 1
 
 
 @dataclass(frozen=True)
 class ZPolylineGeometry:
-    """Sparse polyline geometry valid over selected Z intervals."""
+    """Sparse polyline geometry valid over selected Z intervals.
+
+    Parameters
+    ----------
+    polylines : tuple[Any, ...]
+        Tuples of lower Z, upper Z, and Y, X vertices in pixel coordinates.
+    shape : tuple[int, int, int]
+        Canvas dimensions in Z, Y, X order.
+    line_thickness : int
+        Outline width in display pixels.
+    z_polylines_by_index : dict[int, tuple[numpy.ndarray, ...]] | None, default=None
+        Y, X outline vertices grouped by integer Z plane, or None if not indexed.
+    max_polylines_yx : tuple[numpy.ndarray, ...]
+        Y, X outlines for maximum-projection display.
+    """
 
     polylines: tuple[Any, ...]
     shape: tuple[int, int, int]
     line_thickness: int
     z_polylines_by_index: dict[int, tuple[np.ndarray, ...]] | None = None
     max_polylines_yx: tuple[np.ndarray, ...] = ()
-    value: int = 1
 
 
 @dataclass(frozen=True)
 class _LocalBaysorLayer:
-    """Processed local geometry for one Baysor cell layer."""
+    """Processed local geometry for one Baysor cell layer.
+
+    Parameters
+    ----------
+    z_min : float
+        Lower local Z coordinate of the transformed cell layer, in pixels.
+    z_max : float
+        Upper local Z coordinate of the transformed cell layer, in pixels.
+    lower_yx : numpy.ndarray
+        Transformed lower-boundary vertices in local Y, X pixels.
+    closed_yx : numpy.ndarray
+        Closed lower-boundary ring in local Y, X pixels.
+    area : float
+        Area of the closed Y, X ring in square pixels.
+    """
 
     z_min: float
     z_max: float
@@ -279,18 +169,12 @@ class _LocalBaysorLayer:
 
 
 def _empty_point_index(shape_zyx: tuple[int, int, int]) -> PointOverlayIndex:
-    """
-    Return an empty point index for a canvas shape.
+    """Return an empty point index for the Z, Y, X canvas.
 
     Parameters
     ----------
     shape_zyx : tuple[int, int, int]
         Target Z, Y, X canvas shape.
-
-    Returns
-    -------
-    PointOverlayIndex
-        Empty point index.
     """
     empty_coords = np.empty((0, 3), dtype=float)
     empty_genes = np.empty(0, dtype=object)
@@ -644,18 +528,12 @@ def local_transcript_index(
 
 
 def _parse_baysor_layer(layer: Any) -> tuple[float, float] | None:
-    """
-    Parse one Baysor Z-layer interval.
+    """Parse a Baysor Z interval in microns, or return None if invalid.
 
     Parameters
     ----------
     layer : Any
         Baysor layer value.
-
-    Returns
-    -------
-    tuple[float, float] or None
-        Z interval in microns.
     """
     if isinstance(layer, str):
         try:
@@ -666,49 +544,6 @@ def _parse_baysor_layer(layer: Any) -> tuple[float, float] | None:
     if values.size < 2 or not np.isfinite(values[:2]).all():
         return None
     return float(values[0]), float(values[1])
-
-
-def _parse_wkb_polygon_xy(geometry: Any) -> np.ndarray | None:
-    """
-    Parse the exterior ring from a little- or big-endian WKB polygon.
-
-    Parameters
-    ----------
-    geometry : Any
-        WKB polygon bytes.
-
-    Returns
-    -------
-    numpy.ndarray or None
-        Exterior ring in X, Y order.
-    """
-    if geometry is None:
-        return None
-    data = bytes(geometry)
-    if len(data) < 13:
-        return None
-    byte_order = data[0]
-    endian = "<" if byte_order == 1 else ">" if byte_order == 0 else None
-    if endian is None:
-        return None
-    geom_type = struct.unpack_from(f"{endian}I", data, 1)[0]
-    if geom_type != 3:
-        return None
-    ring_count = struct.unpack_from(f"{endian}I", data, 5)[0]
-    if ring_count < 1:
-        return None
-    offset = 9
-    point_count = struct.unpack_from(f"{endian}I", data, offset)[0]
-    offset += 4
-    if point_count < 2 or len(data) < offset + point_count * 16:
-        return None
-    coords = np.frombuffer(
-        data,
-        dtype=np.dtype(f"{endian}f8"),
-        count=point_count * 2,
-        offset=offset,
-    )
-    return coords.reshape(point_count, 2).astype(float, copy=False)
 
 
 def _iter_baysor_boundary_rows(
@@ -736,8 +571,10 @@ def _iter_baysor_boundary_rows(
     rows: list[tuple[str, tuple[float, float], np.ndarray]] = []
     for row in boundaries[["cell", "layer", "geometry"]].itertuples(index=False):
         layer = _parse_baysor_layer(row.layer)
-        polygon_xy = _parse_wkb_polygon_xy(row.geometry)
-        if layer is None or polygon_xy is None:
+        polygon_xy = get_coordinates(
+            get_exterior_ring(from_wkb(row.geometry, on_invalid="ignore"))
+        )
+        if layer is None or polygon_xy.size == 0:
             continue
         rows.append((str(row.cell), layer, polygon_xy))
     return rows
@@ -746,18 +583,12 @@ def _iter_baysor_boundary_rows(
 def _baysor_rows_by_cell(
     rows: list[tuple[str, tuple[float, float], np.ndarray]],
 ) -> dict[str, list[tuple[tuple[float, float], np.ndarray]]]:
-    """
-    Group Baysor boundary rows by cell id.
+    """Group Baysor Z intervals and polygon rings by cell ID.
 
     Parameters
     ----------
     rows : list[tuple[str, tuple[float, float], numpy.ndarray]]
         Parsed Baysor boundary rows.
-
-    Returns
-    -------
-    dict[str, list[tuple[tuple[float, float], numpy.ndarray]]]
-        Boundary rows grouped by cell id.
     """
     grouped: dict[str, list[tuple[tuple[float, float], np.ndarray]]] = {}
     for cell_id, layer, polygon_xy in rows:
@@ -768,18 +599,12 @@ def _baysor_rows_by_cell(
 
 
 def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
-    """
-    Return a closed Y, X ring without duplicate intermediate endpoints.
+    """Close a Y, X ring without duplicating its closing vertex.
 
     Parameters
     ----------
     points_yx : numpy.ndarray
         Ring vertices in Y, X order.
-
-    Returns
-    -------
-    numpy.ndarray
-        Closed ring in Y, X order.
     """
     points = np.asarray(points_yx, dtype=float)
     if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
@@ -791,43 +616,13 @@ def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
     return np.vstack([points, points[0]])
 
 
-def _signed_ring_area_yx(points_yx: np.ndarray) -> float:
-    """
-    Return the signed area of one open Y, X ring.
-
-    Parameters
-    ----------
-    points_yx : numpy.ndarray
-        Ring vertices in Y, X order.
-
-    Returns
-    -------
-    float
-        Signed ring area.
-    """
-    if points_yx.shape[0] < 3:
-        return 0.0
-    y_values = points_yx[:, 0]
-    x_values = points_yx[:, 1]
-    return float(
-        0.5
-        * np.sum(x_values * np.roll(y_values, -1) - np.roll(x_values, -1) * y_values)
-    )
-
-
 def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
-    """
-    Return a scale-relative tolerance for detecting degenerate rings.
+    """Return a scale-relative tolerance for detecting degenerate rings.
 
     Parameters
     ----------
     points_yx : numpy.ndarray
         Ring vertices in Y, X order.
-
-    Returns
-    -------
-    float
-        Degenerate-area tolerance.
     """
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 2:
@@ -839,23 +634,17 @@ def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
 
 
 def _closed_valid_ring_yx(points_yx: np.ndarray) -> tuple[np.ndarray, float]:
-    """
-    Return a closed ring and its valid area, or an empty ring and zero area.
+    """Return a closed Y, X ring and area, or an empty ring and zero area.
 
     Parameters
     ----------
     points_yx : numpy.ndarray
         Ring vertices in Y, X order.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, float]
-        Closed ring and absolute area.
     """
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 4:
         return np.empty((0, 2), dtype=float), 0.0
-    area = abs(_signed_ring_area_yx(ring[:-1]))
+    area = Polygon(ring).area
     if area <= _ring_area_tolerance_yx(ring):
         return np.empty((0, 2), dtype=float), 0.0
     return ring, area
@@ -902,18 +691,12 @@ def _add_z_indexed_polyline(
 def _freeze_z_indexed_polylines(
     z_polylines_by_index: dict[int, list[np.ndarray]],
 ) -> dict[int, tuple[np.ndarray, ...]]:
-    """
-    Return an immutable Z-indexed polyline map.
+    """Convert each Z-indexed polyline list to a tuple.
 
     Parameters
     ----------
     z_polylines_by_index : dict[int, list[numpy.ndarray]]
         Mutable Z-indexed polyline map.
-
-    Returns
-    -------
-    dict[int, tuple[numpy.ndarray, ...]]
-        Z-indexed polyline map.
     """
     return {
         z_index: tuple(polylines)
@@ -1546,21 +1329,20 @@ def _match_lazy_global_image_shape(
         and shape_zyx[0] == 1
         and image_shape[1:] == shape_zyx[1:]
     ):
-        return LazyMaxProjectionImage(image)
+        return ts.downsample(image, (image_shape[0], 1, 1), method="max")
     if image_shape == shape_zyx[1:]:
-        return LazyRepeatedPlaneImage(image, shape_zyx[0])
+        return image[None][0 : shape_zyx[0]]
     if (
         len(image_shape) == 3
         and image_shape[0] == 1
         and image_shape[1:] == shape_zyx[1:]
     ):
-        return LazyRepeatedPlaneImage(image[0], shape_zyx[0])
+        return image[0][None][0 : shape_zyx[0]]
     raise ValueError("Global image shape does not match fused global image.")
 
 
 def _squeeze_leading_singleton_axes(array: Any, ndim: int) -> Any:
-    """
-    Remove leading singleton axes without reading lazy image data.
+    """Remove leading singleton axes without reading image data.
 
     Parameters
     ----------
@@ -1568,11 +1350,6 @@ def _squeeze_leading_singleton_axes(array: Any, ndim: int) -> Any:
         Lazy or eager image array.
     ndim : int
         Required output dimensionality.
-
-    Returns
-    -------
-    Any
-        Image array with leading singleton axes removed.
     """
     squeezed = array
     while len(squeezed.shape) > ndim and int(squeezed.shape[0]) == 1:
@@ -1610,7 +1387,7 @@ def _global_base_image(
     """
     if include_fused_image and max_project_fused_image:
         return _GlobalBaseImage(
-            LazyMaxProjectionImage(fused_zyx),
+            ts.downsample(fused_zyx, (full_shape_zyx[0], 1, 1), method="max"),
             (1, *full_shape_zyx[1:]),
             ["global polyDT max projection"],
         )
@@ -1625,7 +1402,7 @@ def _global_base_image(
     if max_project_fused_image:
         shape_zyx = (1, *shape_zyx[1:])
     return _GlobalBaseImage(
-        LazyZeroVolume(shape_zyx),
+        np.broadcast_to(np.uint16(0), shape_zyx),
         shape_zyx,
         ["global empty canvas"],
     )

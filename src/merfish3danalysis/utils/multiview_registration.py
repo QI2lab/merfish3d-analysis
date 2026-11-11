@@ -11,8 +11,7 @@ from merfish3danalysis.utils.spacing import round_spacing_um
 
 
 def _diag(message: str, *, enabled: bool) -> None:
-    """
-    Print one multiview registration diagnostic message when enabled.
+    """Print a multiview registration diagnostic when enabled.
 
     Parameters
     ----------
@@ -20,29 +19,18 @@ def _diag(message: str, *, enabled: bool) -> None:
         Diagnostic message body.
     enabled : bool
         If True, print the diagnostic message.
-
-    Returns
-    -------
-    None
-        The message is printed only when diagnostics are enabled.
     """
     if enabled:
         print(f"[multiview-registration] {message}", flush=True)
 
 
 def _clear_cupy_memory(cp: Any) -> None:
-    """
-    Release cached CuPy allocations and FFT plans after a registration stage.
+    """Synchronize and release CuPy allocations and FFT plans.
 
     Parameters
     ----------
     cp : Any
         Imported ``cupy`` module.
-
-    Returns
-    -------
-    None
-        CuPy memory pools and FFT plan cache are cleared in-place.
     """
     cp.cuda.Stream.null.synchronize()
     try:
@@ -55,8 +43,7 @@ def _clear_cupy_memory(cp: Any) -> None:
 
 
 def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
-    """
-    Compute a maximum Z projection without retaining the full GPU volume.
+    """Return a GPU YX maximum projection of the ZYX image.
 
     Parameters
     ----------
@@ -64,11 +51,6 @@ def _max_z_projection_gpu(image: np.ndarray, cp: Any) -> Any:
         Input image in Z, Y, X order.
     cp : Any
         Imported ``cupy`` module.
-
-    Returns
-    -------
-    cupy.ndarray
-        Maximum projection over Z as a GPU array.
     """
     image_gpu = cp.asarray(image, dtype=cp.float32)
     projection = cp.max(image_gpu, axis=0)
@@ -460,7 +442,6 @@ def warp_array_to_reference_gpu(
     cval: float = 0.0,
     order: int = 1,
     gpu_id: int = 0,
-    z_batch_size: int = 4,
     diagnostics: bool = False,
 ) -> np.ndarray:
     """
@@ -497,9 +478,6 @@ def warp_array_to_reference_gpu(
         Interpolation order passed to ``cupyx.scipy.ndimage.affine_transform``.
     gpu_id : int, default=0
         CUDA device ID to use.
-    z_batch_size : int, default=4
-        Number of output z planes to process per GPU batch. Keeping this small
-        avoids allocating full-volume coordinate grids for large tiles.
     diagnostics : bool, default=False
         If True, print detailed timing diagnostics.
 

@@ -44,10 +44,6 @@ def export_ome_tiffs(
     channel_ids : list[str]
         Ordered channel names matching the OME-Zarr channel axis.
 
-    Returns
-    -------
-    None
-        One tiled OME-TIFF is written for each channel.
     """
     from tifffile import TiffWriter
 
@@ -201,43 +197,6 @@ def _channel_global_transforms_zyx_um(
     return np.asarray(channel_transforms, dtype=np.float32)
 
 
-def _parse_output_chunk_zyx(value: str | None) -> dict[str, int] | None:
-    """
-    Parse an optional comma-separated fusion chunk shape.
-
-    Parameters
-    ----------
-    value : str or None
-        Chunk sizes in Z, Y, X order, such as ``"32,2048,2048"``. ``None``
-        requests multiview-stitcher's default chunking.
-
-    Returns
-    -------
-    dict[str, int] or None
-        Positive chunk sizes keyed by spatial dimension, or ``None``.
-
-    Raises
-    ------
-    typer.BadParameter
-        If the value does not contain exactly three positive integers.
-    """
-    if value is None:
-        return None
-    try:
-        chunks = tuple(int(part.strip()) for part in value.split(","))
-    except ValueError as exc:
-        raise typer.BadParameter(
-            "Use three comma-separated integers, for example 32,2048,2048.",
-            param_hint="--output-chunk-zyx",
-        ) from exc
-    if len(chunks) != 3 or any(chunk < 1 for chunk in chunks):
-        raise typer.BadParameter(
-            "Use three positive comma-separated integers, for example 32,2048,2048.",
-            param_hint="--output-chunk-zyx",
-        )
-    return dict(zip("zyx", chunks, strict=True))
-
-
 def _load_tile_multichannel_msim(
     *,
     datastore: qi2labDataStore,
@@ -354,7 +313,13 @@ def _load_tile_multichannel_msim(
 
 
 def _bit_number(bit_id: str) -> int:
-    """Return the numeric suffix of a stored bit identifier."""
+    """Return the numeric suffix of a stored bit identifier.
+
+    Parameters
+    ----------
+    bit_id : str
+        Datastore bit identifier whose numeric suffix determines channel order.
+    """
     return int(bit_id[3:])
 
 
@@ -371,11 +336,12 @@ def fuse_all_channels(
         ),
     ] = False,
     output_chunk_zyx: Annotated[
-        str | None,
+        tuple[int, int, int] | None,
         typer.Option(
             "--output-chunk-zyx",
+            min=1,
             help=(
-                "Fusion/output chunk shape as Z,Y,X. Larger chunks reduce task "
+                "Fusion/output chunk shape as Z Y X. Larger chunks reduce task "
                 "overhead but increase memory and downstream read amplification."
             ),
         ),
@@ -410,11 +376,9 @@ def fuse_all_channels(
 ) -> None:
     """Fuse the first-round fiducial and all readout bits into one OME-Zarr.
 
-    Each tile is represented as one lazy multichannel spatial image. Channel-
-    dependent multiview-stitcher affines compose local round registration,
-    the known stage-camera affine, stage location, and the
-    stored global refinement. SOFIMA fields are intentionally ignored. One CPU
-    fusion writes fiducial first, followed by numerically ordered codebook bits.
+    Channel affines compose local round registration, stage-camera placement,
+    and global refinement. SOFIMA is not applied during fusion. Channels are
+    ordered as fiducial first, followed by numerically ordered codebook bits.
 
     Parameters
     ----------
@@ -423,8 +387,8 @@ def fuse_all_channels(
     write_ome_tiffs : bool, default=False
         Write one full-resolution tiled OME-TIFF for each fused channel when
         ``True``.
-    output_chunk_zyx : str or None, default=None
-        Optional comma-separated Z, Y, X fusion and output chunk shape. When
+    output_chunk_zyx : tuple[int, int, int] or None, default=None
+        Optional Z, Y, X fusion and output chunk shape. When
         omitted, multiview-stitcher preserves the source Zarr chunk shape.
     fusion_workers : int or None, default=None
         Number of CPU worker processes. Defaults to the available CPU count.
@@ -435,13 +399,12 @@ def fuse_all_channels(
         Compression effort from 1 through 9. Higher levels can trade encoding
         speed for a smaller output without changing pixel values.
 
-    Returns
-    -------
-    None
-        The multiscale image is published in the datastore Scene. Optional
-        TIFFs are written to ``qi2labdatastore/fused_tiff``.
     """
-    output_chunksize = _parse_output_chunk_zyx(output_chunk_zyx)
+    output_chunksize = (
+        dict(zip("zyx", output_chunk_zyx, strict=True))
+        if output_chunk_zyx is not None
+        else None
+    )
     try:
         fusion_options = _direct_zarr_fusion_kwargs(
             misc_utils=misc_utils,
@@ -507,13 +470,7 @@ def fuse_all_channels(
 
 
 def main() -> None:
-    """Run the fuse-all Typer command-line interface.
-
-    Returns
-    -------
-    None
-        The command-line application runs to completion.
-    """
+    """Run the fuse-all CLI."""
     mp.set_start_method("spawn", force=True)
     app()
 

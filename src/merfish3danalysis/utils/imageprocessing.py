@@ -1,8 +1,7 @@
 """
 Image processing functions for qi2lab 3D MERFISH.
 
-This module includes various utilities for image processing, such as
-downsampling, padding, and chunked GPU-based deconvolution.
+This module provides hot-pixel correction, signal screening, and shading estimation.
 
 """
 
@@ -12,7 +11,6 @@ from contextlib import redirect_stdout
 from typing import TYPE_CHECKING
 
 import numpy as np
-from numba import njit, prange
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
@@ -28,16 +26,17 @@ def replace_hot_pixels(
 
     Parameters
     ----------
-    noise_map: ArrayLike
-        darkfield image collected at long exposure time to get hot pixels
-    data: ArrayLike
-        ND data [broadcast_dim,z,y,x]
-    threshold: float, default = 375.0
-        threshold to determine hot pixel
+    noise_map : ArrayLike
+        YX camera darkfield or maximum projection identifying hot pixels.
+    data : ArrayLike
+        Image stack in ZYX order with the same YX shape as ``noise_map``.
+    threshold : float, default = 375.0
+        Hot-pixel cutoff in noise-map intensity units. Pixels above this value
+        are replaced by their plane's 3-by-3 median.
 
     Returns
     -------
-    data: ArrayLike
+    data : ArrayLike
         hotpixel corrected data
     """
     # GPU
@@ -135,13 +134,13 @@ def estimate_shading(images: "Iterable[Future]") -> ArrayLike:
 
     Parameters
     ----------
-    images: Iterable[Future]
+    images : Iterable[Future]
         Read futures yielding ZYX images. Pass a generator to load one stack at
         a time. Only YX maximum projections are retained for fitting.
 
     Returns
     -------
-    shading_image: ArrayLike
+    shading_image : ArrayLike
         estimated shading image
     """
     # GPU
@@ -181,106 +180,3 @@ def estimate_shading(images: "Iterable[Future]") -> ArrayLike:
     cp.get_default_pinned_memory_pool().free_all_blocks()
 
     return shading_correction
-
-
-def downsample_image_anisotropic(
-    image: ArrayLike, level: tuple[int, int, int] = (2, 6, 6)
-) -> ArrayLike:
-    """Numba accelerated anisotropic downsampling.
-
-    Parameters
-    ----------
-    image: ArrayLike
-        3D image to be downsampled
-    level: tuple[int,int,int], default=(2,6,6)
-        anisotropic downsampling level
-
-    Returns
-    -------
-    downsampled_image: ArrayLike
-        downsampled 3D image
-    """
-    downsampled_image = downsample_axis(
-        downsample_axis(downsample_axis(image, level[0], 0), level[1], 1), level[2], 2
-    )
-
-    return downsampled_image
-
-
-@njit(parallel=True)
-def downsample_axis(image: ArrayLike, level: int = 2, axis: int = 0) -> ArrayLike:
-    """Numba accelerated downsampling for 3D images along a specified axis.
-
-    Parameters
-    ----------
-    image: ArrayLike
-        3D image to be downsampled.
-    level: int
-        Amount of downsampling.
-    axis: int
-        Axis along which to downsample (0, 1, or 2).
-
-    Returns
-    -------
-    downsampled_image: ArrayLike
-        3D downsampled image.
-
-    """
-    if axis == 0:
-        new_length = image.shape[0] // level + (1 if image.shape[0] % level != 0 else 0)
-        downsampled_image = np.zeros(
-            (new_length, image.shape[1], image.shape[2]), dtype=image.dtype
-        )
-
-        for y in prange(image.shape[1]):
-            for x in range(image.shape[2]):
-                for z in range(new_length):
-                    sum_value = 0.0
-                    count = 0
-                    for j in range(level):
-                        original_index = z * level + j
-                        if original_index < image.shape[0]:
-                            sum_value += image[original_index, y, x]
-                            count += 1
-                    if count > 0:
-                        downsampled_image[z, y, x] = sum_value / count
-
-    elif axis == 1:
-        new_length = image.shape[1] // level + (1 if image.shape[1] % level != 0 else 0)
-        downsampled_image = np.zeros(
-            (image.shape[0], new_length, image.shape[2]), dtype=image.dtype
-        )
-
-        for z in prange(image.shape[0]):
-            for x in range(image.shape[2]):
-                for y in range(new_length):
-                    sum_value = 0.0
-                    count = 0
-                    for j in range(level):
-                        original_index = y * level + j
-                        if original_index < image.shape[1]:
-                            sum_value += image[z, original_index, x]
-                            count += 1
-                    if count > 0:
-                        downsampled_image[z, y, x] = sum_value / count
-
-    elif axis == 2:
-        new_length = image.shape[2] // level + (1 if image.shape[2] % level != 0 else 0)
-        downsampled_image = np.zeros(
-            (image.shape[0], image.shape[1], new_length), dtype=image.dtype
-        )
-
-        for z in prange(image.shape[0]):
-            for y in range(image.shape[1]):
-                for x in range(new_length):
-                    sum_value = 0.0
-                    count = 0
-                    for j in range(level):
-                        original_index = x * level + j
-                        if original_index < image.shape[2]:
-                            sum_value += image[z, y, original_index]
-                            count += 1
-                    if count > 0:
-                        downsampled_image[z, y, x] = sum_value / count
-
-    return downsampled_image

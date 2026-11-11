@@ -41,17 +41,17 @@ def convert_data(
 
     Parameters
     ----------
-    root_path: Path
+    root_path : Path
         path to dataset
-    channel_names: list[str], default ["alexa488", "atto565", "alexa647"]
+    channel_names : list[str], default ["alexa488", "atto565", "alexa647"]
         name of dye molecules used in ascending order of wavelength
-    output_path: Optional[Path], default None
+    output_path : Optional[Path], default None
         path to output datastore. Default of `None` writes
         ``root_path.parents[1] / "qi2labdatastore"``.
-    codebook_path: Optional[Path], default None
+    codebook_path : Optional[Path], default None
         path to codebook. Default of `None` uses
         ``root_path / "additional_files" / "codebook.csv"``.
-    max_flatfield_images: int, default 100
+    max_flatfield_images : int, default 100
         Maximum number of distinct tiles randomly sampled per channel from all
         tiles with round-1 fiducial signal, as in the qi2lab CLI. Eligible IDs
         are saved in ``flatfield_tile_ids.json`` in the datastore. Estimated CYX
@@ -345,7 +345,13 @@ def convert_data(
 
 @app.command()
 def main(root_path: Path) -> None:
-    """Convert the Zhuang experiment using its channel names and codebook."""
+    """Convert the Zhuang experiment using its channel names and codebook.
+
+    Parameters
+    ----------
+    root_path : Path
+        Zhuang acquisition directory containing additional_files and raw images.
+    """
     root_path = root_path.expanduser().resolve()
 
     convert_data(

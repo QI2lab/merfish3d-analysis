@@ -45,7 +45,58 @@ from merfish3danalysis.viewer.sparse import (
     selected_line_data,
     selected_point_data,
 )
-from merfish3danalysis.viewer.warping import selected_warp_label
+from merfish3danalysis.viewer.warping import (
+    load_local_warped_image_channels,
+    selected_warp_label,
+)
+
+
+@pytest.mark.integration
+def test_local_viewer_displays_native_sharded_processing_products(image_datastore):
+    """The local viewer retains pixels and channel order across stored products."""
+    datastore = image_datastore
+    z, y, x = np.indices((4, 12, 16), dtype=np.float32)
+    radius = (z - 2) ** 2 + ((y - 6) / 2) ** 2 + ((x - 8) / 2) ** 2
+    feature = np.exp(-radius).astype(np.float32)
+    fiducial = (100 + 3000 * np.exp(-radius / 2)).astype(np.uint16)
+    fiducial_decon = (3000 * feature).astype(np.uint16)
+    readout = (50 + 1000 * np.exp(-radius / 2)).astype(np.uint16)
+    readout_decon = (1000 * feature).astype(np.uint16)
+    layout = {"chunks": (2, 6, 8), "shards": (4, 12, 16)}
+    datastore.save_local_corrected_image(fiducial, tile=0, round=1, **layout)
+    datastore.save_local_deconvolved_fiducial_image(
+        fiducial_decon, tile=0, round=1, **layout
+    )
+    datastore.save_local_corrected_image(readout, tile=0, bit=1, **layout)
+    datastore.save_local_deconvolved_readout_image(
+        readout_decon, tile=0, bit=1, **layout
+    )
+    datastore.save_local_feature_predictor_image(
+        feature, tile=0, bit=1, source_image="decon_data", **layout
+    )
+
+    displayed = load_local_warped_image_channels(
+        datastore,
+        tile="tile0000",
+        fiducial_round_ids=["round002"],
+        fiducial_sources=["corrected", "decon"],
+        bit_ids=["bit002"],
+        bit_sources=["corrected", "decon", "feature"],
+        options=WarpChainOptions(False, False),
+    )
+
+    assert displayed.warnings == []
+    assert displayed.stack.labels == [
+        "tile0000:round002 native fiducial corrected",
+        "tile0000:round002 native fiducial decon",
+        "tile0000:bit002 native corrected",
+        "tile0000:bit002 native decon",
+        "tile0000:bit002 native feature predictor",
+    ]
+    np.testing.assert_array_equal(
+        displayed.stack.data,
+        np.stack([fiducial, fiducial_decon, readout, readout_decon, feature]),
+    )
 
 
 @pytest.mark.unit
@@ -293,40 +344,105 @@ def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors(
             origin_zyx_um=None,
         )
         app.processEvents()
-        controllers = view.array_viewer._lut_controllers
-        assert apply_lut_channel_labels(view.array_viewer, labels) >= len(labels)
+        apply_lut_channel_labels(view.array_viewer, labels)
         for index, label in enumerate(labels):
-            assert controllers[index].lut_model.cmap.name == "matlab:gray"
-            assert controllers[index].lut_views[0]._qwidget.visible.text() == label
+            model = view.array_viewer.display_model.luts[index]
+            assert model.cmap.name == "matlab:gray"
+            assert model.name == label
+            assert any(
+                widget.text() == label
+                for widget in view.array_viewer.widget().findChildren(
+                    QtWidgets.QCheckBox
+                )
+            )
     finally:
         view.close()
         app.processEvents()
 
 
-@pytest.mark.unit
-def test_lazy_max_projection_image_presents_one_z_plane() -> None:
-    """Lazy max projection reads selected YX pixels across all Z planes."""
-    from merfish3danalysis.viewer.overlays import LazyMaxProjectionImage
+@pytest.mark.integration
+@pytest.mark.parametrize("project_z", [False, True])
+@pytest.mark.parametrize("include_fused_image", [False, True])
+def test_global_viewer_retains_projection_labels_on_fused_grid(
+    image_datastore, monkeypatch, project_z, include_fused_image
+):
+    """NDV retains the fused grid and labels in volume and projection views."""
+    import tensorstore as ts
+    from qtpy import QtWidgets
+    from scipy.ndimage import gaussian_filter, label
+    from skimage.data import binary_blobs
 
-    image_zyx = np.asarray(
-        [
-            [[1, 2, 3], [4, 5, 6]],
-            [[6, 5, 4], [3, 2, 1]],
-        ],
-        dtype=np.uint16,
-    )
-    projected = LazyMaxProjectionImage(image_zyx)
+    from merfish3danalysis.viewer.view import DatastoreNdvView
 
-    assert projected.shape == (1, 2, 3)
-    assert projected.dtype == np.dtype(np.uint16)
+    monkeypatch.setenv("NDV_GUI_FRONTEND", "qt")
+    monkeypatch.setenv("NDV_CANVAS_BACKEND", "vispy")
+    monkeypatch.setenv("NDV_SYNCHRONOUS", "1")
+
+    datastore = image_datastore
+    objects = binary_blobs(length=32, n_dim=3, rng=0, volume_fraction=0.08)
+    fluorescence = gaussian_filter(objects.astype(np.float32), sigma=(1, 1.5, 1))
+    pixels = (100 + 50000 * fluorescence).astype(np.uint16)
+    projection = pixels.max(axis=0)
+    masks, _ = label(projection > 6000)
+    masks = masks.astype(np.uint32)
+    origin = [10, 20, 30]
+    spacing = datastore.voxel_size_zyx_um
+    datastore.save_global_fiducial_image(pixels, np.eye(4), origin, spacing)
+    datastore.save_global_fiducial_projection(projection, np.eye(4), origin, spacing)
+    datastore.save_global_cellpose_segmentation_image(masks, downsampling=[1, 1, 1])
+
+    displayed = load_global_image_channels(
+        datastore,
+        include_fused_image=include_fused_image,
+        max_project_fused_image=project_z,
+    )
+    z_size = 1 if project_z else pixels.shape[0]
+    assert displayed.stack.data.shape == (2, z_size, *pixels.shape[1:])
+    assert isinstance(displayed.stack.data.image_channels[0], ts.TensorStore)
+    assert displayed.stack.labels[1] == "global Cellpose mask"
+    np.testing.assert_allclose(displayed.origin_zyx_um, origin)
+    np.testing.assert_allclose(displayed.spacing_zyx_um, spacing)
+    np.testing.assert_allclose(
+        displayed.stack.data.coords["y_um"][:3], [20, 20.2, 20.4]
+    )
+    np.testing.assert_allclose(
+        displayed.stack.data.coords["x_um"][:3], [30, 30.4, 30.8]
+    )
+
+    expected_image = projection[None] if project_z else pixels
+    if include_fused_image:
+        assert isinstance(displayed.stack.data.fused_zyx, ts.TensorStore)
+    else:
+        expected_image = np.zeros_like(expected_image)
     np.testing.assert_array_equal(
-        projected[0],
-        np.asarray([[6, 5, 4], [4, 5, 6]], dtype=np.uint16),
+        displayed.stack.data[0, :, 4:20, 6:24], expected_image[:, 4:20, 6:24]
     )
     np.testing.assert_array_equal(
-        projected[:, :, 1:],
-        np.asarray([[[5, 4], [5, 6]]], dtype=np.uint16),
+        displayed.stack.data[1, :, 4:20, 6:24],
+        np.broadcast_to(masks[4:20, 6:24], (z_size, 16, 18)),
     )
+    np.testing.assert_array_equal(displayed.stack.data[1, z_size - 1], masks)
+    assert displayed.stack.data[1, 0].dtype == masks.dtype
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = DatastoreNdvView()
+    try:
+        view.show_stack(
+            displayed.stack,
+            spacing_zyx_um=displayed.spacing_zyx_um,
+            origin_zyx_um=displayed.origin_zyx_um,
+        )
+        app.processEvents()
+        coords = view.array_viewer.data_wrapper.coords
+        np.testing.assert_allclose(coords["y_um"][:3], [20, 20.2, 20.4])
+        np.testing.assert_allclose(coords["x_um"][:3], [30, 30.4, 30.8])
+        image_lut = view.array_viewer.display_model.luts[0]
+        assert image_lut.clims.min == 0
+        assert image_lut.clims.max == np.iinfo(pixels.dtype).max
+        assert view.array_viewer.display_model.luts[1].name == "global Cellpose mask"
+    finally:
+        view.close()
+        app.processEvents()
 
 
 def _write_proseg_run(root: Path) -> None:
@@ -663,9 +779,13 @@ def test_local_baysor_boundaries_do_not_require_proseg_run(image_datastore) -> N
 
     boundaries = pd.DataFrame(
         {
-            "cell": ["cell1"],
-            "layer": ["[0.0, 1.0]"],
-            "geometry": [Polygon([(1, 1), (3, 1), (3, 3), (1, 1)]).wkb],
+            "cell": ["cell1", "empty", "invalid"],
+            "layer": ["[0.0, 1.0]"] * 3,
+            "geometry": [
+                Polygon([(1, 1), (3, 1), (3, 3), (1, 1)]).wkb,
+                None,
+                b"invalid WKB",
+            ],
         }
     )
     # Baysor owns this parquet output; the datastore provides the read API.
@@ -969,7 +1089,6 @@ def test_controller_local_apply_updates_existing_viewer(image_datastore) -> None
             base_sparse_lines=(),
             shape_zyx=(1, 2, 2),
             spacing_zyx_um=spacing,
-            tile="tile0000",
         )
         result = ViewerBuildResult(
             stack=stack,

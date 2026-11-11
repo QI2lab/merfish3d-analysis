@@ -12,7 +12,7 @@ from typing import Annotated
 
 import numpy as np
 import typer
-from cellpose import models, transforms
+from cellpose import models
 from roifile import ImagejRoi, roiread, roiwrite
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
@@ -142,9 +142,7 @@ def run_cellpose(
         datastore.datastore_state = datastore_state
         return
 
-    fiducial_max_projection = transforms.convert_image(
-        projection_array.read().result(), do_3D=False
-    )
+    fiducial_max_projection = projection_array.read().result()
     print(
         "Prepared Cellpose input image "
         f"shape={tuple(int(v) for v in fiducial_max_projection.shape)} "
@@ -298,7 +296,25 @@ def _save_global_rois(
     *,
     workers: int = 1,
 ) -> None:
-    """Stream parallel, vectorized outline filtering into a replacement ZIP."""
+    """Stream parallel, vectorized outline filtering into a replacement ZIP.
+
+    Parameters
+    ----------
+    pixel_spacing_rois : list[ImagejRoi]
+        ImageJ outlines in projection pixel coordinates.
+    global_roi_path : Path
+        Destination ZIP for the filtered global ImageJ outlines.
+    spacing_zyx_um : numpy.ndarray
+        Projection voxel spacing in Z, Y, X microns.
+    origin_zyx_um : numpy.ndarray
+        Projection origin in Z, Y, X microns.
+    affine_zyx_um : numpy.ndarray
+        Projection-to-world affine in physical Z, Y, X coordinates.
+    min_cell_area_um2 : float
+        Minimum global outline area in square microns.
+    workers : int, default=1
+        Number of parallel ROI transformation workers.
+    """
     step_start = perf_counter()
     print(
         f"Warping, filtering, and saving global ImageJ ROIs to {global_roi_path} "
@@ -308,6 +324,13 @@ def _save_global_rois(
     kept_count = 0
 
     def retained_rois() -> Iterator[ImagejRoi]:
+        """Yield filtered global outlines while counting the saved ROIs.
+
+        Yields
+        ------
+        roifile.ImagejRoi
+            One outline in global micron coordinates.
+        """
         nonlocal kept_count
         for roi in global_rois(
             pixel_spacing_rois,
@@ -333,42 +356,6 @@ def _save_global_rois(
         f"{perf_counter() - step_start:.1f} s.",
         flush=True,
     )
-
-
-def warp_points(
-    pixel_space_points: np.ndarray,
-    spacing: np.ndarray,
-    origin: np.ndarray,
-    affine: np.ndarray,
-) -> np.ndarray:
-    """
-    Warp points from pixel space to global space using known transforms.
-
-    Parameters
-    ----------
-    pixel_space_points : numpy.ndarray
-        Points in pixel Z, Y, X coordinates.
-    spacing : numpy.ndarray
-        Pixel spacing in microns.
-    origin : numpy.ndarray
-        Physical origin in microns.
-    affine : numpy.ndarray
-        Homogeneous affine transform.
-
-    Returns
-    -------
-    numpy.ndarray
-        Warped physical Z, Y, X coordinates.
-    """
-    spacing = round_spacing_um(spacing).astype(np.asarray(spacing).dtype)
-    physical_space_points = pixel_space_points * spacing + origin
-    homogeneous_points = np.column_stack(
-        (
-            physical_space_points,
-            np.ones(physical_space_points.shape[0], dtype=physical_space_points.dtype),
-        )
-    )
-    return (np.asarray(affine) @ homogeneous_points.T).T[:, :3]
 
 
 def main() -> None:

@@ -1,7 +1,5 @@
 """
-Perform registration on qi2labdatastore. By default creates a max.
-
-projection downsampled fiducial OME-TIFF for cellpose parameter optimization.
+Preprocess qi2lab images and register tiles in local and global coordinates.
 
 Contributions: Shepherd.
 """
@@ -105,15 +103,7 @@ def local_register_data(
 
 
 def main() -> None:
-    """
-    Run the qi2lab preprocessing command-line application.
-
-    Returns
-    -------
-    None
-        Typer parses the command line and runs the selected preprocessing
-        workflow.
-    """
+    """Run the qi2lab preprocessing CLI."""
     app()
 
 

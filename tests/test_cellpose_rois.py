@@ -6,9 +6,7 @@ from cellpose import utils
 from roifile import ImagejRoi
 from shapely.geometry import Polygon
 
-from merfish3danalysis.cli.qi2lab_microscopes.segment_fiducial import warp_points
 from merfish3danalysis.utils.cellpose_rois import (
-    _polygon_areas,
     extract_pixel_rois,
     global_rois,
 )
@@ -71,13 +69,8 @@ def test_batched_global_transform_matches_original_coordinates_and_filter(worker
     expected = []
     for roi in pixel_rois:
         xy = roi.coordinates().astype(np.float32)
-        zyx = np.column_stack(
-            (np.full(len(xy), 10, dtype=np.float32), xy[:, 1], xy[:, 0])
-        )
         expected.append(
-            np.round(warp_points(zyx, spacing, origin, affine)[:, [2, 1]], 2).astype(
-                np.float32
-            )
+            np.round(xy * spacing[[2, 1]] + origin[[2, 1]], 2).astype(np.float32)
         )
     cutoff = Polygon(expected[625]).area
     expected = [points for points in expected if Polygon(points).area >= cutoff]
@@ -95,7 +88,7 @@ def test_batched_global_transform_matches_original_coordinates_and_filter(worker
 
 
 @pytest.mark.unit
-def test_vectorized_areas_handle_orientation_closure_and_large_origins():
+def test_area_filter_handles_orientation_closure_and_large_origins():
     square = np.array([[0, 0], [3, 0], [3, 3], [0, 3]], dtype=np.float32)
     polygons = [
         square,
@@ -104,9 +97,12 @@ def test_vectorized_areas_handle_orientation_closure_and_large_origins():
         square + 1000000,
         np.array([[0, 0], [1, 1], [2, 2]], dtype=np.float32),
     ]
-    offsets = np.concatenate(([0], np.cumsum([len(points) for points in polygons])))
-    areas = _polygon_areas(np.concatenate(polygons), offsets)
-    np.testing.assert_array_equal(areas, [9, 9, 9, 9, 0])
+    pixel_rois = [ImagejRoi.frompoints(points) for points in polygons]
+    retained = list(global_rois(pixel_rois, np.ones(3), np.zeros(3), np.eye(4), 9))
+    assert len(retained) == 4
+    for roi, expected in zip(retained, polygons[:4], strict=True):
+        np.testing.assert_array_equal(roi.coordinates(), expected)
+    assert list(global_rois(pixel_rois, np.ones(3), np.zeros(3), np.eye(4), 9.01)) == []
 
 
 @pytest.mark.unit

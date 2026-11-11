@@ -8,7 +8,25 @@ import pytest
 from scipy.io import mmread
 from scipy.sparse import csr_matrix
 
-from merfish3danalysis.utils.dataio import write_sparse_mtx
+from merfish3danalysis.utils.dataio import (
+    read_metadatafile,
+    write_metadata,
+    write_sparse_mtx,
+)
+
+
+@pytest.mark.unit
+def test_acquisition_metadata_roundtrip_preserves_values_and_quoted_fields(tmp_path):
+    metadata = {
+        "camera_model": "Hamamatsu, ORCA",
+        "is_3D": True,
+        "stage_x_um": -10.37,
+        "voxel_size_xy_um": 0.081,
+        "num_rounds": 8,
+    }
+    path = tmp_path / "scan_metadata.csv"
+    write_metadata(metadata, path)
+    assert read_metadatafile(path) == metadata
 
 
 @pytest.mark.unit

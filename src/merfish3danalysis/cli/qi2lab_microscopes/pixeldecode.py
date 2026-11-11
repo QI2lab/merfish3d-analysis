@@ -26,12 +26,7 @@ QI2LAB_2D_MAGNITUDE_THRESHOLD_BY_NYQUIST = {
     3.0: 0.7,
     5.0: 0.2,
 }
-QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST = {
-    3.0: 0.3,
-    5.0: 0.2,
-}
 QI2LAB_AXIAL_NYQUIST_STEP_UM = 0.315
-QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 
 
 def _nearest_nyquist_multiple(
@@ -53,14 +48,10 @@ def _nearest_nyquist_multiple(
     float
         Key from ``thresholds_by_multiple`` nearest to ``nyquist_multiple``.
     """
-    best_multiple = next(iter(thresholds_by_multiple))
-    best_distance = abs(best_multiple - nyquist_multiple)
-    for multiple in thresholds_by_multiple:
-        distance = abs(multiple - nyquist_multiple)
-        if distance < best_distance:
-            best_multiple = multiple
-            best_distance = distance
-    return best_multiple
+    return min(
+        thresholds_by_multiple,
+        key=lambda multiple: abs(multiple - nyquist_multiple),
+    )
 
 
 def _effective_decode_mode(
@@ -145,65 +136,6 @@ def _default_qi2lab_magnitude_threshold(
     return (lower_threshold, QI2LAB_3D_DEFAULT_MAGNITUDE_THRESHOLD[1])
 
 
-def _readouts_are_deconvolved(datastore: qi2labDataStore) -> bool:
-    """
-    Return whether the feature predictor used deconvolved readout data.
-
-    Parameters
-    ----------
-    datastore : qi2labDataStore
-        Datastore containing registered readout metadata.
-
-    Returns
-    -------
-    bool
-        True if the first readout selects deconvolved pixels.
-    """
-    tile_ids = datastore.tile_ids
-    bit_ids = datastore.bit_ids
-    if tile_ids is None or bit_ids is None:
-        return False
-    tile_ids = list(tile_ids)
-    bit_ids = list(bit_ids)
-    if not tile_ids or not bit_ids:
-        return False
-
-    return datastore.local_readout_image_name(tile_ids[0], bit_ids[0]) == "decon_data"
-
-
-def _default_qi2lab_feature_predictor_threshold(
-    datastore: qi2labDataStore,
-    decode_mode: Literal["auto", "2d", "3d"] = "auto",
-) -> float:
-    """
-    Return the sampling-aware default U-FISH mask threshold.
-
-    Parameters
-    ----------
-    datastore : qi2labDataStore
-        Datastore used to infer microscope type and axial sampling.
-    decode_mode : {'auto', '2d', '3d'}, default 'auto'
-        Decode mode used for default selection.
-
-    Returns
-    -------
-    float
-        Default feature-predictor threshold.
-    """
-    if _effective_decode_mode(
-        datastore, decode_mode
-    ) != "2d" or not _readouts_are_deconvolved(datastore):
-        return QI2LAB_DEFAULT_FEATURE_PREDICTOR_THRESHOLD
-
-    z_step_um = float(datastore.voxel_size_zyx_um[0])
-    nyquist_multiple = z_step_um / QI2LAB_AXIAL_NYQUIST_STEP_UM
-    nearest_multiple = _nearest_nyquist_multiple(
-        QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST,
-        nyquist_multiple,
-    )
-    return QI2LAB_2D_DECON_FEATURE_PREDICTOR_THRESHOLD_BY_NYQUIST[nearest_multiple]
-
-
 def _validate_filter_arguments(
     filter_method: Literal["blank_fraction", "lr"],
     target_gross_misid_rate: float,
@@ -221,10 +153,6 @@ def _validate_filter_arguments(
     lr_fdr_target : float
         False-discovery-rate target for LR filtering.
 
-    Returns
-    -------
-    None
-        This function raises when arguments are inconsistent.
     """
     if filter_method == "blank_fraction":
         if lr_fdr_target != 0.05:
@@ -248,7 +176,13 @@ def _validate_filter_arguments(
 
 
 def _load_optimization_exclusions_file(path: Path) -> list[str]:
-    """Load one codebook gene ID per line from a UTF-8 text file."""
+    """Load one codebook gene ID per line from a UTF-8 text file.
+
+    Parameters
+    ----------
+    path : Path
+        UTF-8 file containing one excluded codebook gene ID per line.
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as error:
@@ -273,7 +207,15 @@ def _load_optimization_exclusions_file(path: Path) -> list[str]:
 
 
 def _optimization_exclusions_path(datastore_path: Path, path: Path) -> Path:
-    """Resolve a relative exclusions filename inside the datastore directory."""
+    """Resolve a relative exclusions filename inside the datastore directory.
+
+    Parameters
+    ----------
+    datastore_path : Path
+        Datastore directory used to resolve relative filenames.
+    path : Path
+        Absolute exclusions path or filename relative to the datastore.
+    """
     if path.is_absolute():
         return path
     return datastore_path / path
@@ -284,7 +226,7 @@ def decode_pixels(
     root_path: Path,
     num_gpus: int = 1,
     minimum_pixels_per_RNA: int | None = None,
-    feature_predictor_threshold: float | None = None,
+    *,
     magnitude_threshold: tuple[float, float] | None = None,
     filter_method: Literal["blank_fraction", "lr"] = "blank_fraction",
     target_gross_misid_rate: float = 0.05,
@@ -336,10 +278,6 @@ def decode_pixels(
     minimum_pixels_per_RNA : int, optional
         minimum pixels with same barcode ID required to call a spot.
         Defaults to 7 for 2D data and 16 for 3D data.
-    feature_predictor_threshold : float, optional
-        Legacy option retained for compatibility. Readout images are now
-        weighted by the feature-predictor image before lowpass filtering rather
-        than thresholded by this value.
     magnitude_threshold : tuple[float, float], optional
         Magnitude threshold range to accept a decoded pixel. Defaults to
         (1.5, 10.0) for 3D data and a 2D lookup keyed by
@@ -457,11 +395,6 @@ def decode_pixels(
             datastore,
             decode_mode=decode_mode,
         )
-    if feature_predictor_threshold is None:
-        feature_predictor_threshold = _default_qi2lab_feature_predictor_threshold(
-            datastore,
-            decode_mode=decode_mode,
-        )
     if magnitude_threshold is None:
         magnitude_threshold = _default_qi2lab_magnitude_threshold(
             datastore,
@@ -475,7 +408,6 @@ def decode_pixels(
     # initialize decoder class
     decoder = PixelDecoder(
         datastore=datastore,
-        use_mask=False,
         merfish_bits=merfish_bits,
         num_gpus=num_gpus,
         verbose=1,
@@ -533,7 +465,6 @@ def decode_pixels(
                 n_random_tiles=20,
                 n_iterations=5,
                 minimum_pixels=minimum_pixels_per_RNA,
-                feature_predictor_threshold=feature_predictor_threshold,
                 magnitude_threshold=magnitude_threshold,
                 excluded_gene_ids=optimization_excluded_gene_ids,
             )
@@ -543,7 +474,6 @@ def decode_pixels(
             assign_to_cells=True,
             magnitude_threshold=magnitude_threshold,
             minimum_pixels=minimum_pixels_per_RNA,
-            feature_predictor_threshold=feature_predictor_threshold,
             normalization_method=normalization_method,
             filter_method=filter_method,
             target_gross_misid_rate=target_gross_misid_rate,

@@ -72,32 +72,6 @@ def ndtiff_acquisition(tmp_path, request):
 
 
 @pytest.mark.unit
-def test_expands_consecutive_ufish_channel_arguments() -> None:
-    arguments = [
-        "/data/acquisition",
-        "--z-start",
-        "5",
-        "--ufish-channel",
-        "Yellow",
-        "Red",
-        "--output-dir",
-        "/data/output",
-    ]
-
-    assert script._expand_ufish_channel_arguments(arguments) == [
-        "/data/acquisition",
-        "--z-start",
-        "5",
-        "--ufish-channel",
-        "Yellow",
-        "--ufish-channel",
-        "Red",
-        "--output-dir",
-        "/data/output",
-    ]
-
-
-@pytest.mark.unit
 def test_generate_channel_psfs_uses_repository_microscope_parameters():
     from psfmodels import make_psf
 
@@ -200,8 +174,9 @@ def test_exports_corrected_channels_and_selected_z_planes(ndtiff_acquisition, tm
 @pytest.mark.integration
 @pytest.mark.gpu
 @pytest.mark.parametrize("ndtiff_acquisition", ["realistic"], indirect=True)
-def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
-    ndtiff_acquisition, tmp_path
+@pytest.mark.parametrize("ufish_channels", [("F-Red",), ("F-Blue", "F-Red")])
+def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channels(
+    ndtiff_acquisition, tmp_path, ufish_channels
 ):
     output = tmp_path / "output"
     result = CliRunner().invoke(
@@ -210,8 +185,11 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
             str(tmp_path / "acquisition"),
             "--output-dir",
             str(output),
-            "--ufish-channel",
-            "F-Red",
+            *[
+                argument
+                for channel in ufish_channels
+                for argument in ("--ufish-channel", channel)
+            ],
             "--deconvolve",
         ],
     )
@@ -219,13 +197,15 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
 
     for position in (0, 2):
         directory = output / f"pos{position:04d}"
-        assert sorted(path.name for path in directory.iterdir()) == [
-            "F-Blue.ome.tif",
-            "F-Blue_decon.ome.tif",
-            "F-Red.ome.tif",
-            "F-Red_decon.ome.tif",
-            "F-Red_ufish.ome.tif",
-        ]
+        assert sorted(path.name for path in directory.iterdir()) == sorted(
+            [
+                "F-Blue.ome.tif",
+                "F-Blue_decon.ome.tif",
+                "F-Red.ome.tif",
+                "F-Red_decon.ome.tif",
+                *[f"{channel}_ufish.ome.tif" for channel in ufish_channels],
+            ]
+        )
         for channel in ("F-Blue", "F-Red"):
             raw = np.stack(
                 [
@@ -248,11 +228,12 @@ def test_cli_deconvolves_real_ndtiff_and_predicts_selected_channel(
             assert 'PhysicalSizeX="0.108"' in metadata
             assert 'PhysicalSizeY="0.108"' in metadata
             assert 'PhysicalSizeZ="0.315"' in metadata
-        prediction = imread(directory / "F-Red_ufish.ome.tif")
-        assert prediction.shape == (9, 96, 96)
-        assert prediction.dtype == np.float32
-        assert np.isfinite(prediction).all()
-        assert prediction.max() > 0
+        for channel in ufish_channels:
+            prediction = imread(directory / f"{channel}_ufish.ome.tif")
+            assert prediction.shape == (9, 96, 96)
+            assert prediction.dtype == np.float32
+            assert np.isfinite(prediction).all()
+            assert prediction.max() > 0
 
     # Check the actual model received deconvolved rather than corrected pixels.
     model = script.load_default_ufish(0)

@@ -20,74 +20,35 @@ from merfish3danalysis.viewer.models import (
 
 @dataclass(frozen=True)
 class _PreparedWarp:
-    """Prepared affine and optional SOFIMA data for one local image."""
+    """Prepared affine and optional SOFIMA data for one local image.
+
+    Parameters
+    ----------
+    transform_zyx_um : numpy.ndarray
+        Selected local affine in physical Z, Y, X coordinates.
+    loaded_flow_field : Any
+        Loaded SOFIMA field with its origin and stride, or None when disabled.
+    """
 
     transform_zyx_um: np.ndarray
     loaded_flow_field: Any
 
 
 def _as_zyx(image: Any) -> np.ndarray:
-    """
-    Convert a loaded image to a 3D zyx NumPy array.
+    """Convert a loaded 2D or 3D image to a Z, Y, X NumPy array.
 
     Parameters
     ----------
     image : Any
-        Loaded image, future, or tensorstore array.
-
-    Returns
-    -------
-    numpy.ndarray
-        Image in Z, Y, X order.
+        Loaded image data.
     """
-    array = np.asarray(_resolve_array(image))
+    array = np.asarray(image)
     array = np.squeeze(array)
     if array.ndim == 2:
         array = array[np.newaxis, :, :]
     if array.ndim != 3:
         raise ValueError(f"Expected a 2D or 3D image, got shape {array.shape}.")
     return array
-
-
-def _resolve_array(array_like: Any) -> Any:
-    """
-    Resolve datastore futures or tensorstore slices into array-like data.
-
-    Parameters
-    ----------
-    array_like : Any
-        Array, future, or tensorstore slice.
-
-    Returns
-    -------
-    Any
-        Resolved array-like data.
-    """
-    if hasattr(array_like, "result"):
-        array_like = array_like.result()
-    if hasattr(array_like, "read"):
-        array_like = array_like.read().result()
-    return array_like
-
-
-def _resolve_loaded_flow_field(loaded_flow_field: Any) -> Any:
-    """
-    Resolve a datastore-loaded SOFIMA flow field tuple when present.
-
-    Parameters
-    ----------
-    loaded_flow_field : Any
-        SOFIMA flow field tuple or ``None``.
-
-    Returns
-    -------
-    Any
-        Flow field tuple with resolved array data, or ``None``.
-    """
-    if loaded_flow_field is None:
-        return None
-    flow_field, attributes = loaded_flow_field
-    return _resolve_array(flow_field), attributes
 
 
 def selected_warp_label(tile: str, local_id: str, options: WarpChainOptions) -> str:
@@ -120,8 +81,7 @@ def _native_after_warp_failure(
     warnings: list[str],
     exc: Exception,
 ) -> np.ndarray:
-    """
-    Return native image data after recording a viewer warp warning.
+    """Record the warp warning and return the native image as float32.
 
     Parameters
     ----------
@@ -133,11 +93,6 @@ def _native_after_warp_failure(
         Warning list updated in place.
     exc : Exception
         Warp failure exception.
-
-    Returns
-    -------
-    numpy.ndarray
-        Native image as float32.
     """
     warnings.append(f"{label} displayed native; warp failed: {exc}")
     return np.asarray(image, dtype=np.float32)
@@ -150,8 +105,7 @@ def _load_sofima_flow_field(
     round_id: str | None,
     enabled: bool,
 ) -> Any:
-    """
-    Load a SOFIMA flow field only when requested and available.
+    """Load the requested moving-round SOFIMA field through the datastore.
 
     Parameters
     ----------
@@ -163,20 +117,13 @@ def _load_sofima_flow_field(
         Moving fiducial round identifier.
     enabled : bool
         Whether SOFIMA should be used.
-
-    Returns
-    -------
-    Any
-        Resolved flow field tuple, or ``None``.
     """
     if not enabled or round_id is None:
         return None
-    return _resolve_loaded_flow_field(
-        datastore.load_local_sofima_flow_field(
-            tile=tile,
-            round=round_id,
-            return_future=True,
-        )
+    return datastore.load_local_sofima_flow_field(
+        tile=tile,
+        round=round_id,
+        return_future=False,
     )
 
 
@@ -187,8 +134,7 @@ def _prepare_bit_warp(
     bit_id: str,
     options: WarpChainOptions,
 ) -> _PreparedWarp:
-    """
-    Prepare selected affine and SOFIMA components for one readout bit.
+    """Prepare the selected Z, Y, X micron affine and SOFIMA field for a bit.
 
     Parameters
     ----------
@@ -200,11 +146,6 @@ def _prepare_bit_warp(
         Readout bit identifier.
     options : WarpChainOptions
         Selected transform-chain components.
-
-    Returns
-    -------
-    _PreparedWarp
-        Prepared affine and optional flow field.
     """
     round_id, stored_round_transform_zyx_um = load_bit_round_transform_zyx_um(
         datastore,
@@ -229,8 +170,7 @@ def _prepare_bit_warp(
 
 
 def _fiducial_moving_round(datastore: Any, round_id: str) -> str | None:
-    """
-    Return the moving round, or None for the reference fiducial round.
+    """Return None for the reference fiducial round, otherwise the round ID.
 
     Parameters
     ----------
@@ -238,11 +178,6 @@ def _fiducial_moving_round(datastore: Any, round_id: str) -> str | None:
         qi2lab datastore-like object.
     round_id : str
         Fiducial round identifier.
-
-    Returns
-    -------
-    str or None
-        Moving round identifier, or ``None`` for reference round.
     """
     fiducial_round_ids = list(datastore.round_ids or [])
     reference_round_id = fiducial_round_ids[0] if fiducial_round_ids else None
@@ -257,8 +192,7 @@ def _load_fiducial_round_transform(
     moving_round: str | None,
     enabled: bool,
 ) -> np.ndarray | None:
-    """
-    Load a fiducial round transform only when requested and needed.
+    """Load a requested moving fiducial affine in physical Z, Y, X coordinates.
 
     Parameters
     ----------
@@ -272,11 +206,6 @@ def _load_fiducial_round_transform(
         Moving fiducial round identifier.
     enabled : bool
         Whether the affine transform should be loaded.
-
-    Returns
-    -------
-    numpy.ndarray or None
-        Round transform, or ``None`` when not needed.
     """
     if not enabled or moving_round is None:
         return None
@@ -298,8 +227,7 @@ def _prepare_fiducial_warp(
     round_id: str,
     options: WarpChainOptions,
 ) -> _PreparedWarp:
-    """
-    Prepare selected affine and SOFIMA components for one fiducial round.
+    """Prepare the selected affine and SOFIMA field for a fiducial round.
 
     Parameters
     ----------
@@ -311,11 +239,6 @@ def _prepare_fiducial_warp(
         Fiducial round identifier.
     options : WarpChainOptions
         Selected transform-chain components.
-
-    Returns
-    -------
-    _PreparedWarp
-        Prepared affine and optional flow field.
     """
     moving_round = _fiducial_moving_round(datastore, round_id)
     round_transform_zyx_um = _load_fiducial_round_transform(
@@ -346,8 +269,7 @@ def _apply_prepared_warp(
     spacing_zyx_um: Any,
     gpu_id: int,
 ) -> np.ndarray:
-    """
-    Apply a prepared local viewer warp to one image.
+    """Warp a Z, Y, X image with its prepared affine and optional SOFIMA field.
 
     Parameters
     ----------
@@ -359,11 +281,6 @@ def _apply_prepared_warp(
         Z, Y, X voxel spacing in microns.
     gpu_id : int
         CUDA device ID.
-
-    Returns
-    -------
-    numpy.ndarray
-        Warped image.
     """
     return warp_image_to_reference_frame(
         image,
@@ -384,8 +301,7 @@ def _warp_bit_for_viewer(
     gpu_id: int,
     warnings: list[str],
 ) -> np.ndarray:
-    """
-    Warp one bit image for local viewer display.
+    """Warp a readout bit for display, retaining native data if warping fails.
 
     Parameters
     ----------
@@ -403,11 +319,6 @@ def _warp_bit_for_viewer(
         CUDA device ID.
     warnings : list[str]
         Warning list updated in place.
-
-    Returns
-    -------
-    numpy.ndarray
-        Native or warped image.
     """
     if options.is_native:
         return np.asarray(image, dtype=np.float32)
@@ -444,8 +355,7 @@ def _warp_fiducial_for_viewer(
     gpu_id: int,
     warnings: list[str],
 ) -> np.ndarray:
-    """
-    Warp one fiducial image for local viewer display.
+    """Warp a fiducial for display, retaining native data if warping fails.
 
     Parameters
     ----------
@@ -463,11 +373,6 @@ def _warp_fiducial_for_viewer(
         CUDA device ID.
     warnings : list[str]
         Warning list updated in place.
-
-    Returns
-    -------
-    numpy.ndarray
-        Native or warped image.
     """
     if options.is_native:
         return np.asarray(image, dtype=np.float32)
@@ -508,8 +413,7 @@ def _append_local_viewer_channel(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """
-    Append one selected local viewer image channel.
+    """Append the selected native or warped image and its display label.
 
     Parameters
     ----------
@@ -574,8 +478,7 @@ def _load_fiducial_source_image(
     round_id: str,
     source: str,
 ) -> tuple[Any, str] | None:
-    """
-    Load one fiducial source image and return its display suffix.
+    """Load a selected fiducial source and its display suffix, or return None.
 
     Parameters
     ----------
@@ -587,23 +490,18 @@ def _load_fiducial_source_image(
         Fiducial round identifier.
     source : str
         Fiducial source name.
-
-    Returns
-    -------
-    tuple[Any, str] or None
-        Loaded image and label suffix, or ``None`` for unknown source.
     """
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
-                **{"tile": tile, "round": round_id, "return_future": True}
+                tile=tile, round=round_id, return_future=False
             ),
             "fiducial corrected",
         )
     if source == "decon":
         return (
             datastore.load_local_deconvolved_fiducial_image(
-                **{"tile": tile, "round": round_id, "return_future": True}
+                tile=tile, round=round_id, return_future=False
             ),
             "fiducial decon",
         )
@@ -617,8 +515,7 @@ def _load_bit_source_image(
     bit_id: str,
     source: str,
 ) -> tuple[Any, str] | None:
-    """
-    Load one readout bit source image and return its display suffix.
+    """Load a selected readout source and its display suffix, or return None.
 
     Parameters
     ----------
@@ -630,30 +527,25 @@ def _load_bit_source_image(
         Readout bit identifier.
     source : str
         Bit source name.
-
-    Returns
-    -------
-    tuple[Any, str] or None
-        Loaded image and label suffix, or ``None`` for unknown source.
     """
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "corrected",
         )
     if source == "decon":
         return (
             datastore.load_local_deconvolved_readout_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "decon",
         )
     if source == "feature":
         return (
             datastore.load_local_feature_predictor_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "feature predictor",
         )
@@ -673,8 +565,7 @@ def _append_source_channel(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """
-    Load and append one selected fiducial or readout bit source.
+    """Load and append one selected fiducial or readout source.
 
     Parameters
     ----------
@@ -745,8 +636,7 @@ def _append_fiducial_channels(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """
-    Append selected fiducial channels.
+    """Append the selected fiducial rounds and image sources.
 
     Parameters
     ----------
@@ -797,8 +687,7 @@ def _append_bit_channels(
     options: WarpChainOptions,
     gpu_id: int,
 ) -> None:
-    """
-    Append selected readout bit channels.
+    """Append the selected readout bits and image sources.
 
     Parameters
     ----------
@@ -841,8 +730,7 @@ def _stack_local_channels(
     channels: list[np.ndarray],
     labels: list[str],
 ) -> ChannelStack:
-    """
-    Return selected local channels as a validated channel stack.
+    """Validate and stack selected image channels along the channel axis.
 
     Parameters
     ----------
@@ -850,11 +738,6 @@ def _stack_local_channels(
         Selected image channels.
     labels : list[str]
         Channel labels.
-
-    Returns
-    -------
-    ChannelStack
-        Validated channel stack.
     """
     if not channels:
         raise ValueError("No selected image channels were available to display.")

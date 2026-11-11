@@ -3,6 +3,7 @@
 from typing import Any
 
 import numpy as np
+from matplotlib.colors import to_rgba
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.colors import transcript_color_hex
@@ -118,7 +119,7 @@ def _selected_point_colors(
     colors = np.empty((genes.shape[0], 4), dtype=np.float32)
     value_count = len(selected_genes)
     for value, gene in enumerate(selected_genes, start=1):
-        colors[genes == gene] = _hex_to_rgba(transcript_color_hex(value, value_count))
+        colors[genes == gene] = to_rgba(transcript_color_hex(value, value_count))
     return colors
 
 
@@ -857,26 +858,3 @@ def _display_scale_zyx(spacing_zyx_um: tuple[float, float, float]) -> np.ndarray
     if spacing.shape != (3,) or not np.isfinite(spacing).all() or np.any(spacing <= 0):
         raise ValueError("Expected positive finite Z, Y, X voxel spacing.")
     return spacing / spacing[2]
-
-
-def _hex_to_rgba(color_hex: str) -> tuple[float, float, float, float]:
-    """
-    Convert a hex RGB color to RGBA floats.
-
-    Parameters
-    ----------
-    color_hex : str
-        Hex RGB color.
-
-    Returns
-    -------
-    tuple[float, float, float, float]
-        RGBA color with values in [0, 1].
-    """
-    color = color_hex.lstrip("#")
-    return (
-        int(color[0:2], 16) / 255.0,
-        int(color[2:4], 16) / 255.0,
-        int(color[4:6], 16) / 255.0,
-        1.0,
-    )
