@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from roifile import ImagejRoi
 from scipy.ndimage import find_objects
+from shapely import GeometryType, area, from_ragged_array
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 
@@ -22,6 +23,8 @@ def _bounded_map[Input, Output](
     function: Callable[[Input], Output], tasks: Iterable[Input], workers: int
 ) -> Iterator[Output]:
     """Preserve input order while limiting queued work and result memory.
+
+    Python 3.12's executor map submits eagerly; batches bound outstanding work.
 
     Parameters
     ----------
@@ -113,32 +116,6 @@ def _extract_roi_batch(
     return rois
 
 
-def _polygon_areas(coordinates: np.ndarray, offsets: np.ndarray) -> np.ndarray:
-    """Calculate vectorized shoelace areas for packed XY polygons.
-
-    Parameters
-    ----------
-    coordinates : numpy.ndarray
-        Concatenated XY polygon vertices.
-    offsets : numpy.ndarray
-        Polygon boundaries as exclusive offsets into ``coordinates``.
-
-    Returns
-    -------
-    numpy.ndarray
-        Absolute area for each polygon.
-    """
-    # Translate each polygon before products to avoid cancellation at large
-    # global origins. Work in float64 on the rounded float32 export coordinates.
-    relative = coordinates.astype(np.float64) - np.repeat(
-        coordinates[offsets[:-1]].astype(np.float64), np.diff(offsets), axis=0
-    )
-    following = np.roll(relative, -1, axis=0)
-    following[offsets[1:] - 1] = 0  # close each polygon at its translated origin
-    cross = relative[:, 0] * following[:, 1] - relative[:, 1] * following[:, 0]
-    return np.abs(np.add.reduceat(cross, offsets[:-1])) * 0.5
-
-
 def _transform_roi_batch(
     rois: Sequence[ImagejRoi],
     *,
@@ -179,9 +156,18 @@ def _transform_roi_batch(
     # Keep the original four-row multiplication and float32 rounding semantics,
     # including for sheared transforms and cells exactly at the area cutoff.
     global_xy = (affine_zyx_um @ homogeneous.T).T[:, [2, 1]]
-    global_xy = np.round(global_xy, 2).astype(np.float32)
+    global_xy = np.round(global_xy, 2).astype(np.float32, order="C")
     keep = (
-        np.flatnonzero(_polygon_areas(global_xy, offsets) >= min_cell_area_um2)
+        np.flatnonzero(
+            area(
+                from_ragged_array(
+                    GeometryType.POLYGON,
+                    global_xy,
+                    (offsets, np.arange(len(rois) + 1)),
+                )
+            )
+            >= min_cell_area_um2
+        )
         if min_cell_area_um2 > 0
         else range(len(rois))
     )

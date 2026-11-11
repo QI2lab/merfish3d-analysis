@@ -4,7 +4,7 @@ import pytest
 from merfish3danalysis.utils.decode_warping import warp_bit_image_to_reference
 
 
-@pytest.mark.unit
+@pytest.mark.integration
 @pytest.mark.gpu
 def test_decode_samples_persisted_round_chromatic_and_deformable_transforms(
     image_datastore,
@@ -19,6 +19,7 @@ def test_decode_samples_persisted_round_chromatic_and_deformable_transforms(
     z, y, x = np.indices((8, 10, 12), dtype=np.float32)
     image = 100 * z + 10 * y + x
     datastore.save_local_corrected_image(image, tile=0, bit=1)
+    datastore.save_local_corrected_image(image, tile=0, round=1)
     round_transform = np.array(
         [[1, 0, 0, 2], [0, 0, -1, 5], [0, 1, 0, 1], [0, 0, 0, 1]],
         dtype=np.float32,
@@ -91,3 +92,20 @@ def test_decode_samples_persisted_round_chromatic_and_deformable_transforms(
     )
     # With no applicable optimizer estimate, chromatic correction is identity.
     assert bead_warp[1, 2, 4] == pytest.approx(274.0, abs=1e-4)
+
+    from merfish3danalysis.viewer.models import WarpChainOptions
+    from merfish3danalysis.viewer.warping import load_local_warped_image_channels
+
+    preview = load_local_warped_image_channels(
+        datastore,
+        tile="tile0000",
+        fiducial_round_ids=["round002"],
+        fiducial_sources=["corrected"],
+        bit_ids=["bit002"],
+        bit_sources=["corrected"],
+        options=WarpChainOptions(),
+    )
+    # Both previews apply the persisted round and SOFIMA transforms; chromatic
+    # corrections belong to decoding and are excluded from this local preview.
+    assert preview.warnings == []
+    np.testing.assert_allclose(preview.stack.data[:, 1, 2, 4], [274, 274], atol=1e-4)

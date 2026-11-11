@@ -16,7 +16,6 @@ from merfish3danalysis.viewer.models import (
 from merfish3danalysis.viewer.ndv import (
     apply_lut_channel_labels,
     channel_cmap_for_label,
-    hide_ndv_volume_button,
 )
 from merfish3danalysis.viewer.sparse import SparseVispyOverlay, _display_scale_zyx
 
@@ -264,6 +263,7 @@ class DatastoreNdvView(QtCore.QObject):
             display_model.scales.update(scales)
         self.array_viewer = ndv.ArrayViewer(
             data,
+            viewer_options={"show_3d_button": False},
             display_model=display_model,
             **(
                 {}
@@ -290,7 +290,6 @@ class DatastoreNdvView(QtCore.QObject):
         widget.show()
         self.viewer_windows.append(widget)
         self._sparse_overlay.attach(self.array_viewer)
-        hide_ndv_volume_button(self.array_viewer)
         self._connect_ndv_index_signal()
 
     def _update_array_viewer(
@@ -327,7 +326,6 @@ class DatastoreNdvView(QtCore.QObject):
                 )
             )
             apply_lut_channel_labels(self.array_viewer, labels)
-            hide_ndv_volume_button(self.array_viewer)
             self._connect_ndv_index_signal()
             return True
         except Exception:

@@ -45,7 +45,58 @@ from merfish3danalysis.viewer.sparse import (
     selected_line_data,
     selected_point_data,
 )
-from merfish3danalysis.viewer.warping import selected_warp_label
+from merfish3danalysis.viewer.warping import (
+    load_local_warped_image_channels,
+    selected_warp_label,
+)
+
+
+@pytest.mark.integration
+def test_local_viewer_displays_native_sharded_processing_products(image_datastore):
+    """The local viewer retains pixels and channel order across stored products."""
+    datastore = image_datastore
+    z, y, x = np.indices((4, 12, 16), dtype=np.float32)
+    radius = (z - 2) ** 2 + ((y - 6) / 2) ** 2 + ((x - 8) / 2) ** 2
+    feature = np.exp(-radius).astype(np.float32)
+    fiducial = (100 + 3000 * np.exp(-radius / 2)).astype(np.uint16)
+    fiducial_decon = (3000 * feature).astype(np.uint16)
+    readout = (50 + 1000 * np.exp(-radius / 2)).astype(np.uint16)
+    readout_decon = (1000 * feature).astype(np.uint16)
+    layout = {"chunks": (2, 6, 8), "shards": (4, 12, 16)}
+    datastore.save_local_corrected_image(fiducial, tile=0, round=1, **layout)
+    datastore.save_local_deconvolved_fiducial_image(
+        fiducial_decon, tile=0, round=1, **layout
+    )
+    datastore.save_local_corrected_image(readout, tile=0, bit=1, **layout)
+    datastore.save_local_deconvolved_readout_image(
+        readout_decon, tile=0, bit=1, **layout
+    )
+    datastore.save_local_feature_predictor_image(
+        feature, tile=0, bit=1, source_image="decon_data", **layout
+    )
+
+    displayed = load_local_warped_image_channels(
+        datastore,
+        tile="tile0000",
+        fiducial_round_ids=["round002"],
+        fiducial_sources=["corrected", "decon"],
+        bit_ids=["bit002"],
+        bit_sources=["corrected", "decon", "feature"],
+        options=WarpChainOptions(False, False),
+    )
+
+    assert displayed.warnings == []
+    assert displayed.stack.labels == [
+        "tile0000:round002 native fiducial corrected",
+        "tile0000:round002 native fiducial decon",
+        "tile0000:bit002 native corrected",
+        "tile0000:bit002 native decon",
+        "tile0000:bit002 native feature predictor",
+    ]
+    np.testing.assert_array_equal(
+        displayed.stack.data,
+        np.stack([fiducial, fiducial_decon, readout, readout_decon, feature]),
+    )
 
 
 @pytest.mark.unit
@@ -293,11 +344,17 @@ def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors(
             origin_zyx_um=None,
         )
         app.processEvents()
-        controllers = view.array_viewer._lut_controllers
-        assert apply_lut_channel_labels(view.array_viewer, labels) >= len(labels)
+        apply_lut_channel_labels(view.array_viewer, labels)
         for index, label in enumerate(labels):
-            assert controllers[index].lut_model.cmap.name == "matlab:gray"
-            assert controllers[index].lut_views[0]._qwidget.visible.text() == label
+            model = view.array_viewer.display_model.luts[index]
+            assert model.cmap.name == "matlab:gray"
+            assert model.name == label
+            assert any(
+                widget.text() == label
+                for widget in view.array_viewer.widget().findChildren(
+                    QtWidgets.QCheckBox
+                )
+            )
     finally:
         view.close()
         app.processEvents()
@@ -663,9 +720,13 @@ def test_local_baysor_boundaries_do_not_require_proseg_run(image_datastore) -> N
 
     boundaries = pd.DataFrame(
         {
-            "cell": ["cell1"],
-            "layer": ["[0.0, 1.0]"],
-            "geometry": [Polygon([(1, 1), (3, 1), (3, 3), (1, 1)]).wkb],
+            "cell": ["cell1", "empty", "invalid"],
+            "layer": ["[0.0, 1.0]"] * 3,
+            "geometry": [
+                Polygon([(1, 1), (3, 1), (3, 3), (1, 1)]).wkb,
+                None,
+                b"invalid WKB",
+            ],
         }
     )
     # Baysor owns this parquet output; the datastore provides the read API.

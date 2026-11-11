@@ -1,6 +1,7 @@
 """Shared viewer color helpers."""
 
 from matplotlib import colormaps
+from matplotlib.colors import to_hex
 
 
 def transcript_color_hex(value: int, value_count: int) -> str:
@@ -23,5 +24,4 @@ def transcript_color_hex(value: int, value_count: int) -> str:
         normalized_value = 1.0
     else:
         normalized_value = (value - 1) / (value_count - 1)
-    rgb = colormaps["turbo"](normalized_value)[:3]
-    return "#" + "".join(f"{round(channel * 255):02x}" for channel in rgb)
+    return to_hex(colormaps["turbo"](normalized_value))

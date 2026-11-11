@@ -1,12 +1,13 @@
 """Image loading and sparse geometry helpers for the datastore viewer."""
 
 import ast
-import struct
 from dataclasses import dataclass
 from operator import itemgetter
 from typing import Any
 
 import numpy as np
+from shapely import from_wkb, get_coordinates, get_exterior_ring
+from shapely.geometry import Polygon
 
 from merfish3danalysis.utils.spacing import round_spacing_um
 from merfish3danalysis.viewer.models import (
@@ -149,41 +150,6 @@ class LazyMaxProjectionImage:
         if z_scalar:
             return plane
         return plane[np.newaxis, ...]
-
-
-@dataclass(frozen=True)
-class LazyZeroVolume:
-    """A lazy black Z, Y, X canvas."""
-
-    shape: tuple[int, int, int]
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the canvas dtype."""
-        return np.dtype(np.uint16)
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested zero-filled slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested zero-filled canvas slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        axis_indices = [_axis_indices(key[axis], self.shape[axis]) for axis in range(3)]
-        output_shape = tuple(
-            len(indices) for indices, is_scalar in axis_indices if not is_scalar
-        )
-        return np.broadcast_to(np.asarray(0, dtype=np.uint16), output_shape)
 
 
 @dataclass(frozen=True)
@@ -668,49 +634,6 @@ def _parse_baysor_layer(layer: Any) -> tuple[float, float] | None:
     return float(values[0]), float(values[1])
 
 
-def _parse_wkb_polygon_xy(geometry: Any) -> np.ndarray | None:
-    """
-    Parse the exterior ring from a little- or big-endian WKB polygon.
-
-    Parameters
-    ----------
-    geometry : Any
-        WKB polygon bytes.
-
-    Returns
-    -------
-    numpy.ndarray or None
-        Exterior ring in X, Y order.
-    """
-    if geometry is None:
-        return None
-    data = bytes(geometry)
-    if len(data) < 13:
-        return None
-    byte_order = data[0]
-    endian = "<" if byte_order == 1 else ">" if byte_order == 0 else None
-    if endian is None:
-        return None
-    geom_type = struct.unpack_from(f"{endian}I", data, 1)[0]
-    if geom_type != 3:
-        return None
-    ring_count = struct.unpack_from(f"{endian}I", data, 5)[0]
-    if ring_count < 1:
-        return None
-    offset = 9
-    point_count = struct.unpack_from(f"{endian}I", data, offset)[0]
-    offset += 4
-    if point_count < 2 or len(data) < offset + point_count * 16:
-        return None
-    coords = np.frombuffer(
-        data,
-        dtype=np.dtype(f"{endian}f8"),
-        count=point_count * 2,
-        offset=offset,
-    )
-    return coords.reshape(point_count, 2).astype(float, copy=False)
-
-
 def _iter_baysor_boundary_rows(
     boundaries: Any,
 ) -> list[tuple[str, tuple[float, float], np.ndarray]]:
@@ -736,8 +659,10 @@ def _iter_baysor_boundary_rows(
     rows: list[tuple[str, tuple[float, float], np.ndarray]] = []
     for row in boundaries[["cell", "layer", "geometry"]].itertuples(index=False):
         layer = _parse_baysor_layer(row.layer)
-        polygon_xy = _parse_wkb_polygon_xy(row.geometry)
-        if layer is None or polygon_xy is None:
+        polygon_xy = get_coordinates(
+            get_exterior_ring(from_wkb(row.geometry, on_invalid="ignore"))
+        )
+        if layer is None or polygon_xy.size == 0:
             continue
         rows.append((str(row.cell), layer, polygon_xy))
     return rows
@@ -791,30 +716,6 @@ def _close_ring_yx(points_yx: np.ndarray) -> np.ndarray:
     return np.vstack([points, points[0]])
 
 
-def _signed_ring_area_yx(points_yx: np.ndarray) -> float:
-    """
-    Return the signed area of one open Y, X ring.
-
-    Parameters
-    ----------
-    points_yx : numpy.ndarray
-        Ring vertices in Y, X order.
-
-    Returns
-    -------
-    float
-        Signed ring area.
-    """
-    if points_yx.shape[0] < 3:
-        return 0.0
-    y_values = points_yx[:, 0]
-    x_values = points_yx[:, 1]
-    return float(
-        0.5
-        * np.sum(x_values * np.roll(y_values, -1) - np.roll(x_values, -1) * y_values)
-    )
-
-
 def _ring_area_tolerance_yx(points_yx: np.ndarray) -> float:
     """
     Return a scale-relative tolerance for detecting degenerate rings.
@@ -855,7 +756,7 @@ def _closed_valid_ring_yx(points_yx: np.ndarray) -> tuple[np.ndarray, float]:
     ring = _close_ring_yx(points_yx)
     if ring.shape[0] < 4:
         return np.empty((0, 2), dtype=float), 0.0
-    area = abs(_signed_ring_area_yx(ring[:-1]))
+    area = Polygon(ring).area
     if area <= _ring_area_tolerance_yx(ring):
         return np.empty((0, 2), dtype=float), 0.0
     return ring, area
@@ -1625,7 +1526,7 @@ def _global_base_image(
     if max_project_fused_image:
         shape_zyx = (1, *shape_zyx[1:])
     return _GlobalBaseImage(
-        LazyZeroVolume(shape_zyx),
+        np.broadcast_to(np.uint16(0), shape_zyx),
         shape_zyx,
         ["global empty canvas"],
     )

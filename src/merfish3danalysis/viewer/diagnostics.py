@@ -107,7 +107,6 @@ def show_diagnostic_images(
 
     from merfish3danalysis.viewer.ndv import (
         apply_lut_channel_labels,
-        hide_ndv_volume_button,
     )
 
     os.environ["NDV_GUI_FRONTEND"] = "qt"
@@ -115,10 +114,13 @@ def show_diagnostic_images(
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     data = diagnostic_channel_data(images, spacing_zyx)
     viewer = ndv.ArrayViewer(
-        data, channel_axis="c", channel_mode="composite", visible_axes=("y", "x")
+        data,
+        viewer_options={"show_3d_button": False},
+        channel_axis="c",
+        channel_mode="composite",
+        visible_axes=("y", "x"),
     )
     apply_lut_channel_labels(viewer, list(data.coords["c"].values))
-    hide_ndv_volume_button(viewer)
     widget = viewer.widget()
     widget.setWindowTitle(f"Decoder diagnostics ({units})")
     widget.resize(1100, 850)

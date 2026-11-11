@@ -24,7 +24,7 @@ def channel_cmap_for_label(label: str) -> str | None:
     return None
 
 
-def apply_lut_channel_labels(array_viewer: Any, labels: list[str]) -> int:
+def apply_lut_channel_labels(array_viewer: Any, labels: list[str]) -> None:
     """
     Apply human-readable labels and stable overlay colors to ndv LUT views.
 
@@ -35,35 +35,12 @@ def apply_lut_channel_labels(array_viewer: Any, labels: list[str]) -> int:
     labels : list[str]
         Channel labels in channel order.
 
-    Returns
-    -------
-    int
-        Number of LUT views updated.
     """
-    controllers = array_viewer._lut_controllers
-    applied = 0
-    for key, controller in controllers.items():
-        if not isinstance(key, int) or key < 0 or key >= len(labels):
-            continue
-        cmap = channel_cmap_for_label(labels[key])
+    from ndv.models import LUTModel
+
+    for index, label in enumerate(labels):
+        model = array_viewer.display_model.luts.setdefault(index, LUTModel())
+        model.name = label
+        cmap = channel_cmap_for_label(label)
         if cmap is not None:
-            controller.lut_model.cmap = cmap
-        for lut_view in controller.lut_views:
-            lut_view.set_channel_name(labels[key])
-            applied += 1
-    return applied
-
-
-def hide_ndv_volume_button(array_viewer: Any) -> None:
-    """
-    Hide NDV's built-in volume-rendering button.
-
-    Parameters
-    ----------
-    array_viewer : Any
-        NDV array viewer.
-    """
-    ndims_button = array_viewer._view._qwidget.ndims_btn
-    ndims_button.setChecked(False)
-    ndims_button.setVisible(False)
-    ndims_button.setEnabled(False)
+            model.cmap = cmap

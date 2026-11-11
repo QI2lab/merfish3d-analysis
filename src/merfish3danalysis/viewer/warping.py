@@ -33,61 +33,20 @@ def _as_zyx(image: Any) -> np.ndarray:
     Parameters
     ----------
     image : Any
-        Loaded image, future, or tensorstore array.
+        Loaded image data.
 
     Returns
     -------
     numpy.ndarray
         Image in Z, Y, X order.
     """
-    array = np.asarray(_resolve_array(image))
+    array = np.asarray(image)
     array = np.squeeze(array)
     if array.ndim == 2:
         array = array[np.newaxis, :, :]
     if array.ndim != 3:
         raise ValueError(f"Expected a 2D or 3D image, got shape {array.shape}.")
     return array
-
-
-def _resolve_array(array_like: Any) -> Any:
-    """
-    Resolve datastore futures or tensorstore slices into array-like data.
-
-    Parameters
-    ----------
-    array_like : Any
-        Array, future, or tensorstore slice.
-
-    Returns
-    -------
-    Any
-        Resolved array-like data.
-    """
-    if hasattr(array_like, "result"):
-        array_like = array_like.result()
-    if hasattr(array_like, "read"):
-        array_like = array_like.read().result()
-    return array_like
-
-
-def _resolve_loaded_flow_field(loaded_flow_field: Any) -> Any:
-    """
-    Resolve a datastore-loaded SOFIMA flow field tuple when present.
-
-    Parameters
-    ----------
-    loaded_flow_field : Any
-        SOFIMA flow field tuple or ``None``.
-
-    Returns
-    -------
-    Any
-        Flow field tuple with resolved array data, or ``None``.
-    """
-    if loaded_flow_field is None:
-        return None
-    flow_field, attributes = loaded_flow_field
-    return _resolve_array(flow_field), attributes
 
 
 def selected_warp_label(tile: str, local_id: str, options: WarpChainOptions) -> str:
@@ -171,12 +130,10 @@ def _load_sofima_flow_field(
     """
     if not enabled or round_id is None:
         return None
-    return _resolve_loaded_flow_field(
-        datastore.load_local_sofima_flow_field(
-            tile=tile,
-            round=round_id,
-            return_future=True,
-        )
+    return datastore.load_local_sofima_flow_field(
+        tile=tile,
+        round=round_id,
+        return_future=False,
     )
 
 
@@ -596,14 +553,14 @@ def _load_fiducial_source_image(
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
-                **{"tile": tile, "round": round_id, "return_future": True}
+                tile=tile, round=round_id, return_future=False
             ),
             "fiducial corrected",
         )
     if source == "decon":
         return (
             datastore.load_local_deconvolved_fiducial_image(
-                **{"tile": tile, "round": round_id, "return_future": True}
+                tile=tile, round=round_id, return_future=False
             ),
             "fiducial decon",
         )
@@ -639,21 +596,21 @@ def _load_bit_source_image(
     if source == "corrected":
         return (
             datastore.load_local_corrected_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "corrected",
         )
     if source == "decon":
         return (
             datastore.load_local_deconvolved_readout_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "decon",
         )
     if source == "feature":
         return (
             datastore.load_local_feature_predictor_image(
-                tile=tile, bit=bit_id, return_future=True
+                tile=tile, bit=bit_id, return_future=False
             ),
             "feature predictor",
         )
