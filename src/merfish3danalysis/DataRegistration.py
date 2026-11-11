@@ -231,7 +231,7 @@ def _fuse_views_to_scene(
     verbose: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     """Fuse directly into a Scene because MVS cannot write v0.6 metadata."""
-    from multiview_stitcher import fusion, misc_utils, msi_utils, ngff_utils
+    from multiview_stitcher import fusion, msi_utils, ngff_utils
     from multiview_stitcher import spatial_image_utils as si_utils
     from yaozarrs import DimSpec, v06
     from yaozarrs.write.v06 import prepare_image
@@ -354,24 +354,16 @@ def _fuse_views_to_scene(
             raise ValueError("MVS fusion output must not be sharded.")
         level = int(path.name)
         if level == 0:
-            task = fusion.prepare_block_fusion(
-                str(path),
-                {
-                    "images": sims,
-                    "transform_key": global_transform_key,
-                    "output_stack_properties": grid,
-                    "output_chunksize": output_chunks,
-                    "backend": "numpy",
-                },
-                zarr_array_creation_kwargs=creation_kwargs,
-                verbose=verbose,
+            fusion.fuse(
+                images=sims,
+                transform_key=global_transform_key,
+                output_stack_properties=grid,
+                output_chunksize=output_chunks,
+                output_zarr_url=str(path),
+                zarr_options={"zarr_array_creation_kwargs": creation_kwargs},
+                batch_options=batch_options,
+                backend="numpy",
             )
-            for batch in misc_utils.ndindex_batches(
-                task["nblocks"], batch_options["n_batch"]
-            ):
-                batch_options["batch_func"](
-                    task["func"], batch, **batch_options["batch_func_kwargs"]
-                )
         previous_level = ngff_utils.write_and_return_downsampled_sim(
             previous_level,
             dims=dims,
