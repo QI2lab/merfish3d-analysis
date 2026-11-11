@@ -86,7 +86,7 @@ def test_multichannel_fusion_pyramid_preserves_pixels_and_codec(
 
     fuse_all_channels(
         datastore.datastore_path,
-        output_chunk_zyx="3,16,64",
+        output_chunk_zyx=(3, 16, 64),
         fusion_workers=workers,
         compression=compression,
         compression_level=level,
@@ -137,7 +137,7 @@ def test_multichannel_fusion_pyramid_preserves_pixels_and_codec(
     if workers > 1:
         fuse_all_channels(
             datastore.datastore_path,
-            output_chunk_zyx="3,16,64",
+            output_chunk_zyx=(3, 16, 64),
             fusion_workers=1,
             compression=compression,
             compression_level=level,

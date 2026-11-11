@@ -6,9 +6,7 @@ used by qi2lab 3D MERFISH datasets.
 
 """
 
-import csv
-import re
-import subprocess
+import gzip
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -60,35 +58,7 @@ def read_metadatafile(fname: str | Path) -> dict:
     metadata: Dict
         metadata dictionary
     """
-    scan_data_raw_lines = []
-
-    with open(fname) as f:
-        for line in f:
-            scan_data_raw_lines.append(line.replace("\n", ""))
-
-    titles = scan_data_raw_lines[0].split(",")
-
-    # convert values to appropriate datatypes
-    vals = scan_data_raw_lines[1].split(",")
-    for ii in range(len(vals)):
-        if re.fullmatch(r"\d+", vals[ii]):
-            vals[ii] = int(vals[ii])
-        elif re.fullmatch(r"(?:\d*\.\d+|\d+[eE]\d+|[+-]\d+)", vals[ii]):
-            vals[ii] = float(vals[ii])
-        elif vals[ii].lower() == "False".lower():
-            vals[ii] = False
-        elif vals[ii].lower() == "True".lower():
-            vals[ii] = True
-        else:
-            # otherwise, leave as string
-            pass
-
-    # convert to dictionary
-    metadata = {}
-    for t, v in zip(titles, vals, strict=False):
-        metadata[t] = v
-
-    return metadata
+    return pd.read_csv(fname, nrows=1).iloc[0].to_dict()
 
 
 def read_config_file(config_path: Path | str) -> dict:
@@ -121,7 +91,7 @@ def write_metadata(data_dict: dict, save_path: str | Path) -> None:
     save_path: str or Path
         path for file
     """
-    pd.DataFrame([data_dict]).to_csv(save_path)
+    pd.DataFrame([data_dict]).to_csv(save_path, index=False)
 
 
 def time_stamp() -> str:
@@ -155,11 +125,12 @@ def write_sparse_mtx(
         Feature names
     """
     output_dir_path = Path(output_dir_path)
-    sparse_mat = sparse.coo_matrix(matrix)
-    sio.mmwrite(str(output_dir_path / "matrix.mtx"), sparse_mat)
-    write_tsv(output_dir_path / "barcodes.tsv", ["cell_" + str(cell) for cell in cells])
-    write_tsv(
-        output_dir_path / "features.tsv",
+    with gzip.open(output_dir_path / "matrix.mtx.gz", "wb") as stream:
+        sio.mmwrite(stream, sparse.coo_matrix(matrix))
+    pd.Series(["cell_" + str(cell) for cell in cells]).to_csv(
+        output_dir_path / "barcodes.tsv.gz", sep="\t", index=False, header=False
+    )
+    pd.DataFrame(
         [
             [
                 str(f),
@@ -168,31 +139,4 @@ def write_sparse_mtx(
             ]
             for f in features
         ],
-    )
-    subprocess.run(
-        [
-            "gzip",
-            "-f",
-            *(
-                str(output_dir_path / name)
-                for name in ("matrix.mtx", "barcodes.tsv", "features.tsv")
-            ),
-        ],
-        check=True,
-    )
-
-
-def write_tsv(filename: str | Path, data: Sequence[str | Sequence[str]]) -> None:
-    """Write data to TSV file.
-
-    Parameters
-    ----------
-    filename: str or Path
-        Filename
-    data: Sequence[str or Sequence[str]]
-        Data to write
-    """
-    with open(filename, "w", newline="") as tsvfile:
-        writer = csv.writer(tsvfile, delimiter="\t", lineterminator="\n")
-        for item in data:
-            writer.writerow([item] if isinstance(item, str) else item)
+    ).to_csv(output_dir_path / "features.tsv.gz", sep="\t", index=False, header=False)

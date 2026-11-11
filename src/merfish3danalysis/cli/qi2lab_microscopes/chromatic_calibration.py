@@ -1,14 +1,12 @@
 """Estimate chromatic affine calibration from multi-channel bead images."""
 
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from merfish3danalysis.qi2labDataStore import qi2labDataStore
-from merfish3danalysis.utils.chromatic import (
-    parse_csv_floats,
-    run_chromatic_calibration,
-)
+from merfish3danalysis.utils.chromatic import run_chromatic_calibration
 
 app = typer.Typer()
 app.pretty_exceptions_enable = False
@@ -40,16 +38,20 @@ def calibrate(
         "--axes",
         help="Optional input axis string, for example CZYX or ZCYX.",
     ),
-    voxel_size_zyx: str | None = typer.Option(
-        None,
-        "--voxel-size-zyx",
-        help="Optional voxel spacing override in microns, e.g. 0.315,0.108,0.108.",
-    ),
-    wavelengths_um: str | None = typer.Option(
-        None,
-        "--wavelengths-um",
-        help="Optional channel emission wavelengths in microns, e.g. 0.520,0.580,0.670.",
-    ),
+    voxel_size_zyx: Annotated[
+        tuple[float, float, float] | None,
+        typer.Option(
+            "--voxel-size-zyx",
+            help="Optional Z Y X voxel spacing override in microns, e.g. 0.315 0.108 0.108.",
+        ),
+    ] = None,
+    wavelengths_um: Annotated[
+        list[float] | None,
+        typer.Option(
+            "--wavelengths-um",
+            help="Channel emission wavelengths in microns; repeat once per channel.",
+        ),
+    ] = None,
     na: float = typer.Option(
         1.35,
         "--na",
@@ -119,10 +121,10 @@ def calibrate(
         Optional datastore path to update.
     channel_axis : str or None
         Optional input axis string.
-    voxel_size_zyx : str or None
-        Optional Z, Y, X voxel spacing string in microns.
-    wavelengths_um : str or None
-        Optional emission wavelength string in microns.
+    voxel_size_zyx : tuple[float, float, float] or None
+        Optional Z, Y, X voxel spacing in microns.
+    wavelengths_um : list[float] or None
+        Optional channel emission wavelengths in microns.
     na : float
         Objective numerical aperture.
     ri : float
@@ -152,8 +154,8 @@ def calibrate(
         output_path=output,
         datastore=datastore,
         channel_axis=channel_axis,
-        voxel_size_zyx_um=parse_csv_floats(voxel_size_zyx),
-        wavelengths_um=parse_csv_floats(wavelengths_um),
+        voxel_size_zyx_um=voxel_size_zyx,
+        wavelengths_um=wavelengths_um,
         na=na,
         ri=ri,
         psf_nx=psf_nx,

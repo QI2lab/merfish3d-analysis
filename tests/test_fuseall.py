@@ -87,14 +87,34 @@ def test_fuseall_writes_tiffs_in_fused_directory_after_fiducial_fusion(
         datastore.datastore_path / "fiducial_fusion.ome.zarr"
     )
 
-    fuseall.fuse_all_channels(
-        datastore.datastore_path,
-        write_ome_tiffs=True,
-        output_chunk_zyx="4,12,16",
-        fusion_workers=2 if sharded else 1,
-        compression="blosc-lz4",
-        compression_level=2,
-    )
+    if sharded:
+        result = CliRunner().invoke(
+            fuseall.app,
+            [
+                str(datastore.datastore_path),
+                "--write-ome-tiffs",
+                "--output-chunk-zyx",
+                "4",
+                "12",
+                "16",
+                "--fusion-workers",
+                "2",
+                "--compression",
+                "blosc-lz4",
+                "--compression-level",
+                "2",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+    else:
+        fuseall.fuse_all_channels(
+            datastore.datastore_path,
+            write_ome_tiffs=True,
+            output_chunk_zyx=(4, 12, 16),
+            fusion_workers=1,
+            compression="blosc-lz4",
+            compression_level=2,
+        )
     output = datastore.fused_tiff_path()
     group = open_group(datastore.fused_image_path("full_dataset"))
     image = group.ome_metadata(strict=True)

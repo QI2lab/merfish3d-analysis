@@ -37,8 +37,8 @@ jobs:
           required = {
               "numpy", "scipy", "pandas", "typer", "tqdm", "multiview-stitcher",
               "tifffile", "zarr", "yaozarrs", "roifile", "cellpose", "shapely",
-              "joblib", "numba", "filelock", "ndstorage", "psfmodels", "pyarrow",
-              "ndv", "matplotlib", "scikit-image",
+              "joblib", "filelock", "ndstorage", "psfmodels", "pyarrow",
+              "ndv", "matplotlib", "scikit-image", "ome-types",
           }
           requirements = [
               value for value in project["project"]["dependencies"]
@@ -62,6 +62,7 @@ jobs:
             tests/test_datastore_feature_predictor.py \
             tests/test_data_registration.py \
             tests/test_dataio.py \
+            tests/test_chromatic_calibration.py \
             tests/test_global_fusion_mode.py \
             tests/test_multiview_registration.py \
             tests/test_spacing_precision.py \
