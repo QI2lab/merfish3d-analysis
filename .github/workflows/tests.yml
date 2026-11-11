@@ -23,6 +23,8 @@ jobs:
           python-version: "3.12"
       - name: Install headless rendering dependencies
         run: |
+          # Prefer an independent mirror during Canonical DNS outages.
+          printf 'https://mirrors.kernel.org/ubuntu/\tpriority:0\n' | sudo tee -a /etc/apt/apt-mirrors.txt
           sudo apt-get -o Acquire::Retries=1 \
             -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
             update --error-on=any
