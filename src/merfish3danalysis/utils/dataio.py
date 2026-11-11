@@ -125,10 +125,14 @@ def write_sparse_mtx(
         Feature names
     """
     output_dir_path = Path(output_dir_path)
-    with gzip.open(output_dir_path / "matrix.mtx.gz", "wb") as stream:
+    with gzip.open(output_dir_path / "matrix.mtx.gz", "wb", compresslevel=6) as stream:
         sio.mmwrite(stream, sparse.coo_matrix(matrix))
     pd.Series(["cell_" + str(cell) for cell in cells]).to_csv(
-        output_dir_path / "barcodes.tsv.gz", sep="\t", index=False, header=False
+        output_dir_path / "barcodes.tsv.gz",
+        sep="\t",
+        index=False,
+        header=False,
+        compression={"method": "gzip", "compresslevel": 6},
     )
     pd.DataFrame(
         [
@@ -139,4 +143,10 @@ def write_sparse_mtx(
             ]
             for f in features
         ],
-    ).to_csv(output_dir_path / "features.tsv.gz", sep="\t", index=False, header=False)
+    ).to_csv(
+        output_dir_path / "features.tsv.gz",
+        sep="\t",
+        index=False,
+        header=False,
+        compression={"method": "gzip", "compresslevel": 6},
+    )
