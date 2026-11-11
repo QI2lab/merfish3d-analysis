@@ -6,6 +6,7 @@ from operator import itemgetter
 from typing import Any
 
 import numpy as np
+import tensorstore as ts
 from shapely import from_wkb, get_coordinates, get_exterior_ring
 from shapely.geometry import Polygon
 
@@ -15,141 +16,6 @@ from merfish3danalysis.viewer.models import (
     GlobalChannelStack,
     LazyGlobalChannelData,
 )
-
-
-def _axis_indices(axis_key: Any, axis_size: int) -> tuple[np.ndarray, bool]:
-    """
-    Return selected axis indices and whether the key was scalar.
-
-    Parameters
-    ----------
-    axis_key : Any
-        NumPy-style axis key.
-    axis_size : int
-        Axis length.
-
-    Returns
-    -------
-    tuple[numpy.ndarray, bool]
-        Selected indices and scalar-key flag.
-    """
-    if isinstance(axis_key, np.integer):
-        axis_key = int(axis_key)
-    indices = np.arange(axis_size, dtype=np.intp)
-    if isinstance(axis_key, int):
-        return np.asarray([indices[axis_key]], dtype=np.intp), True
-    return np.asarray(indices[axis_key], dtype=np.intp), False
-
-
-@dataclass(frozen=True)
-class LazyRepeatedPlaneImage:
-    """A 2D image virtually repeated across all Z planes."""
-
-    plane_yx: np.ndarray
-    z_size: int
-
-    @property
-    def shape(self) -> tuple[int, int, int]:
-        """Return Z, Y, X shape."""
-        plane_shape = tuple(int(value) for value in self.plane_yx.shape)
-        return (self.z_size, *plane_shape)
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the image dtype."""
-        dtype = self.plane_yx.dtype
-        numpy_dtype = getattr(dtype, "numpy_dtype", None)
-        if numpy_dtype is not None:
-            return np.dtype(numpy_dtype)
-        return np.dtype(dtype)
-
-    @property
-    def max_value(self) -> int | None:
-        """Return the maximum display value without expanding across Z."""
-        if hasattr(self.plane_yx, "read"):
-            return None
-        if self.plane_yx.size == 0:
-            return 0
-        return int(np.max(self.plane_yx))
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested repeated-plane slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested image slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        z_indices, z_scalar = _axis_indices(key[0], self.z_size)
-        plane = self.plane_yx[key[1], key[2]]
-        if hasattr(plane, "read"):
-            plane = plane.read().result()
-        plane = np.asarray(plane)
-        if z_scalar:
-            return plane
-        return np.broadcast_to(plane, (len(z_indices), *plane.shape)).copy()
-
-
-@dataclass(frozen=True)
-class LazyMaxProjectionImage:
-    """A lazy Z-max projection presented as one Z plane."""
-
-    image_zyx: Any
-
-    @property
-    def shape(self) -> tuple[int, int, int]:
-        """Return projected Z, Y, X shape."""
-        image_shape = tuple(int(value) for value in self.image_zyx.shape)
-        return (1, *image_shape[1:])
-
-    @property
-    def dtype(self) -> np.dtype:
-        """Return the image dtype."""
-        dtype = self.image_zyx.dtype
-        numpy_dtype = getattr(dtype, "numpy_dtype", None)
-        if numpy_dtype is not None:
-            return np.dtype(numpy_dtype)
-        return np.dtype(dtype)
-
-    @property
-    def max_value(self) -> int | None:
-        """Return no cheap display maximum for lazy projected data."""
-        return None
-
-    def __getitem__(self, key: Any) -> np.ndarray:
-        """
-        Return a requested max-projected slice.
-
-        Parameters
-        ----------
-        key : Any
-            Z, Y, X key.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested max-projected image slice.
-        """
-        if not isinstance(key, tuple):
-            key = (key,)
-        key = key + (slice(None),) * (3 - len(key))
-        _z_indices, z_scalar = _axis_indices(key[0], 1)
-        selected = self.image_zyx[(slice(None), key[1], key[2])]
-        if hasattr(selected, "read"):
-            selected = selected.read().result()
-        plane = np.max(np.asarray(selected), axis=0)
-        if z_scalar:
-            return plane
-        return plane[np.newaxis, ...]
 
 
 @dataclass(frozen=True)
@@ -1447,15 +1313,15 @@ def _match_lazy_global_image_shape(
         and shape_zyx[0] == 1
         and image_shape[1:] == shape_zyx[1:]
     ):
-        return LazyMaxProjectionImage(image)
+        return ts.downsample(image, (image_shape[0], 1, 1), method="max")
     if image_shape == shape_zyx[1:]:
-        return LazyRepeatedPlaneImage(image, shape_zyx[0])
+        return image[None][0 : shape_zyx[0]]
     if (
         len(image_shape) == 3
         and image_shape[0] == 1
         and image_shape[1:] == shape_zyx[1:]
     ):
-        return LazyRepeatedPlaneImage(image[0], shape_zyx[0])
+        return image[0][None][0 : shape_zyx[0]]
     raise ValueError("Global image shape does not match fused global image.")
 
 
@@ -1511,7 +1377,7 @@ def _global_base_image(
     """
     if include_fused_image and max_project_fused_image:
         return _GlobalBaseImage(
-            LazyMaxProjectionImage(fused_zyx),
+            ts.downsample(fused_zyx, (full_shape_zyx[0], 1, 1), method="max"),
             (1, *full_shape_zyx[1:]),
             ["global polyDT max projection"],
         )

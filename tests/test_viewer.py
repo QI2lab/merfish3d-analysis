@@ -360,30 +360,89 @@ def test_apply_lut_channel_labels_sets_image_and_cell_boundary_colors(
         app.processEvents()
 
 
-@pytest.mark.unit
-def test_lazy_max_projection_image_presents_one_z_plane() -> None:
-    """Lazy max projection reads selected YX pixels across all Z planes."""
-    from merfish3danalysis.viewer.overlays import LazyMaxProjectionImage
+@pytest.mark.integration
+@pytest.mark.parametrize("project_z", [False, True])
+@pytest.mark.parametrize("include_fused_image", [False, True])
+def test_global_viewer_retains_projection_labels_on_fused_grid(
+    image_datastore, monkeypatch, project_z, include_fused_image
+):
+    """NDV retains the fused grid and labels in volume and projection views."""
+    import tensorstore as ts
+    from qtpy import QtWidgets
+    from scipy.ndimage import gaussian_filter, label
+    from skimage.data import binary_blobs
 
-    image_zyx = np.asarray(
-        [
-            [[1, 2, 3], [4, 5, 6]],
-            [[6, 5, 4], [3, 2, 1]],
-        ],
-        dtype=np.uint16,
-    )
-    projected = LazyMaxProjectionImage(image_zyx)
+    from merfish3danalysis.viewer.view import DatastoreNdvView
 
-    assert projected.shape == (1, 2, 3)
-    assert projected.dtype == np.dtype(np.uint16)
+    monkeypatch.setenv("NDV_GUI_FRONTEND", "qt")
+    monkeypatch.setenv("NDV_CANVAS_BACKEND", "vispy")
+    monkeypatch.setenv("NDV_SYNCHRONOUS", "1")
+
+    datastore = image_datastore
+    objects = binary_blobs(length=32, n_dim=3, rng=0, volume_fraction=0.08)
+    fluorescence = gaussian_filter(objects.astype(np.float32), sigma=(1, 1.5, 1))
+    pixels = (100 + 50000 * fluorescence).astype(np.uint16)
+    projection = pixels.max(axis=0)
+    masks, _ = label(projection > 6000)
+    masks = masks.astype(np.uint32)
+    origin = [10, 20, 30]
+    spacing = datastore.voxel_size_zyx_um
+    datastore.save_global_fiducial_image(pixels, np.eye(4), origin, spacing)
+    datastore.save_global_fiducial_projection(projection, np.eye(4), origin, spacing)
+    datastore.save_global_cellpose_segmentation_image(masks, downsampling=[1, 1, 1])
+
+    displayed = load_global_image_channels(
+        datastore,
+        include_fused_image=include_fused_image,
+        max_project_fused_image=project_z,
+    )
+    z_size = 1 if project_z else pixels.shape[0]
+    assert displayed.stack.data.shape == (2, z_size, *pixels.shape[1:])
+    assert isinstance(displayed.stack.data.image_channels[0], ts.TensorStore)
+    assert displayed.stack.labels[1] == "global Cellpose mask"
+    np.testing.assert_allclose(displayed.origin_zyx_um, origin)
+    np.testing.assert_allclose(displayed.spacing_zyx_um, spacing)
+    np.testing.assert_allclose(
+        displayed.stack.data.coords["y_um"][:3], [20, 20.2, 20.4]
+    )
+    np.testing.assert_allclose(
+        displayed.stack.data.coords["x_um"][:3], [30, 30.4, 30.8]
+    )
+
+    expected_image = projection[None] if project_z else pixels
+    if include_fused_image:
+        assert isinstance(displayed.stack.data.fused_zyx, ts.TensorStore)
+    else:
+        expected_image = np.zeros_like(expected_image)
     np.testing.assert_array_equal(
-        projected[0],
-        np.asarray([[6, 5, 4], [4, 5, 6]], dtype=np.uint16),
+        displayed.stack.data[0, :, 4:20, 6:24], expected_image[:, 4:20, 6:24]
     )
     np.testing.assert_array_equal(
-        projected[:, :, 1:],
-        np.asarray([[[5, 4], [5, 6]]], dtype=np.uint16),
+        displayed.stack.data[1, :, 4:20, 6:24],
+        np.broadcast_to(masks[4:20, 6:24], (z_size, 16, 18)),
     )
+    np.testing.assert_array_equal(displayed.stack.data[1, z_size - 1], masks)
+    assert displayed.stack.data[1, 0].dtype == masks.dtype
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = DatastoreNdvView()
+    try:
+        view.show_stack(
+            displayed.stack,
+            spacing_zyx_um=displayed.spacing_zyx_um,
+            origin_zyx_um=displayed.origin_zyx_um,
+        )
+        app.processEvents()
+        coords = view.array_viewer.data_wrapper.coords
+        np.testing.assert_allclose(coords["y_um"][:3], [20, 20.2, 20.4])
+        np.testing.assert_allclose(coords["x_um"][:3], [30, 30.4, 30.8])
+        image_lut = view.array_viewer.display_model.luts[0]
+        assert image_lut.clims.min == 0
+        assert image_lut.clims.max == np.iinfo(pixels.dtype).max
+        assert view.array_viewer.display_model.luts[1].name == "global Cellpose mask"
+    finally:
+        view.close()
+        app.processEvents()
 
 
 def _write_proseg_run(root: Path) -> None:

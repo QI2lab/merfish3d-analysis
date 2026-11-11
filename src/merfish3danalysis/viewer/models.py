@@ -18,7 +18,11 @@ class ChannelStack:
 
 @dataclass(frozen=True)
 class LazyGlobalChannelData:
-    """Global fused image plus optional image channels."""
+    """Global image channels with physical coordinates and separate dtypes.
+
+    NDV's native TensorStore wrapper uses pixel indices for coordinates, while
+    TensorStore stacks require a common dtype for intensity images and labels.
+    """
 
     fused_zyx: Any
     image_channels: tuple[Any, ...]
