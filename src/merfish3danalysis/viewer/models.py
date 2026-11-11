@@ -75,31 +75,6 @@ class LazyGlobalChannelData:
             coords=coords,
         )
 
-    def channel_value_range(self, channel_index: int) -> tuple[float, float] | None:
-        """
-        Return a cheap display range for an image channel when available.
-
-        Parameters
-        ----------
-        channel_index : int
-            Channel index.
-
-        Returns
-        -------
-        tuple[float, float] or None
-            Inclusive display range, or ``None`` when it would require reading data.
-        """
-        if channel_index == 0:
-            return None
-        image = self.image_channels[channel_index - 1]
-        max_value = getattr(image, "max_value", None)
-        if max_value is None:
-            return None
-        max_value = float(max_value)
-        if max_value >= 1.0:
-            return (1.0, max_value) if max_value > 1.0 else (0.5, 1.5)
-        return (0.0, 1.0)
-
     def __getitem__(self, key: Any) -> np.ndarray:
         """
         Read selected channels from tensorstore or image channels.
@@ -132,45 +107,16 @@ class LazyGlobalChannelData:
         )
 
     def __array_function__(self, *_args: Any, **_kwargs: Any) -> Any:
-        """
-        Mark the object as NumPy-like without full-array conversion.
-
-        Parameters
-        ----------
-        *_args : Any
-            NumPy protocol positional arguments.
-        **_kwargs : Any
-            NumPy protocol keyword arguments.
-
-        Returns
-        -------
-        Any
-            ``NotImplemented`` so NumPy does not read the full fused zarr.
-        """
+        """Decline NumPy operations without materializing the full fused image."""
         return NotImplemented
 
     def _read_channel(self, channel_index: int, zyx_key: tuple[Any, ...]) -> np.ndarray:
-        """
-        Read one channel.
-
-        Parameters
-        ----------
-        channel_index : int
-            Channel index.
-        zyx_key : tuple[Any, ...]
-            Z, Y, X index.
-
-        Returns
-        -------
-        numpy.ndarray
-            Requested channel data.
-        """
-        if channel_index == 0:
-            selected = self.fused_zyx[zyx_key]
-            if hasattr(selected, "read"):
-                selected = selected.read().result()
-            return np.asarray(selected)
-        image = self.image_channels[channel_index - 1]
+        """Read one selected channel in Z, Y, X order."""
+        image = (
+            self.fused_zyx
+            if channel_index == 0
+            else self.image_channels[channel_index - 1]
+        )
         selected = image[zyx_key]
         if hasattr(selected, "read"):
             selected = selected.read().result()

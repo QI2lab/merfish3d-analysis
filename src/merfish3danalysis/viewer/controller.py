@@ -190,16 +190,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         control_layout: QtWidgets.QVBoxLayout,
         selection_mode: Any,
     ) -> None:
-        """
-        Create local tile, fiducial, and bit controls.
-
-        Parameters
-        ----------
-        control_layout : QtWidgets.QVBoxLayout
-            Controller widget layout.
-        selection_mode : Any
-            Qt item selection mode.
-        """
+        """Create local tile, fiducial, and bit controls."""
         self.tile_label = QtWidgets.QLabel("Tile")
         self.tile_combo = QtWidgets.QComboBox()
         self.tile_combo.currentTextChanged.connect(self._mark_local_selection_pending)
@@ -257,16 +248,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         control_layout: QtWidgets.QVBoxLayout,
         selection_mode: Any,
     ) -> None:
-        """
-        Create transcript source, filter, and marker controls.
-
-        Parameters
-        ----------
-        control_layout : QtWidgets.QVBoxLayout
-            Controller widget layout.
-        selection_mode : Any
-            Qt item selection mode.
-        """
+        """Create transcript source, filter, and marker controls."""
         self._create_image_boundary_widgets()
         self._build_transcript_source_controls(control_layout)
         self._build_transcript_filter_controls(control_layout, selection_mode)
@@ -336,16 +318,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         control_layout: QtWidgets.QVBoxLayout,
         selection_mode: Any,
     ) -> None:
-        """
-        Create transcript filter list and apply controls.
-
-        Parameters
-        ----------
-        control_layout : QtWidgets.QVBoxLayout
-            Controller widget layout.
-        selection_mode : Any
-            Qt item selection mode.
-        """
+        """Create transcript filter list and apply controls."""
         self.transcript_filter_label = QtWidgets.QLabel("Transcript filter")
         control_layout.addWidget(self.transcript_filter_label)
         self.transcript_button_panel = QtWidgets.QWidget()
@@ -470,23 +443,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         label: QtWidgets.QLabel,
         widget: QtWidgets.QWidget,
     ) -> QtWidgets.QWidget:
-        """
-        Add a compact label-widget row to the controller.
-
-        Parameters
-        ----------
-        control_layout : QtWidgets.QVBoxLayout
-            Controller widget layout.
-        label : QtWidgets.QLabel
-            Row label widget.
-        widget : QtWidgets.QWidget
-            Row input widget.
-
-        Returns
-        -------
-        QtWidgets.QWidget
-            Row container widget.
-        """
+        """Add a compact label-widget row and return its container."""
         row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -530,15 +487,9 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
             or self.proseg_transcripts_checkbox.isChecked()
             or self.baysor_transcripts_checkbox.isChecked()
         )
-        sparse_geometry_selected = (
-            transcript_source_selected
-            or self.cellpose_boundaries_checkbox.isChecked()
-            or self.proseg_boundaries_checkbox.isChecked()
-            or self.baysor_boundaries_checkbox.isChecked()
-        )
         self._set_global_option_states(global_mode)
         self._set_transcript_option_states(mode_selected, transcript_source_selected)
-        self._set_boundary_option_states(mode_selected, sparse_geometry_selected)
+        self._set_boundary_option_states(mode_selected)
         self._set_option_state(self.display_button, mode_selected)
         self.display_button.setEnabled(mode_selected)
         self._enable_view_mode_selection()
@@ -654,16 +605,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         mode_selected: bool,
         transcript_source_selected: bool,
     ) -> None:
-        """
-        Show transcript controls for the selected transcript source.
-
-        Parameters
-        ----------
-        mode_selected : bool
-            Whether a display mode is selected.
-        transcript_source_selected : bool
-            Whether a transcript source is selected.
-        """
+        """Show transcript controls for the selected source."""
         has_baysor = self._baysor_available()
         self._set_option_state(
             self.datastore_transcripts_checkbox, mode_selected, mode_selected
@@ -687,21 +629,8 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
                 enabled,
             )
 
-    def _set_boundary_option_states(
-        self,
-        mode_selected: bool,
-        sparse_geometry_selected: bool,
-    ) -> None:
-        """
-        Show cell-boundary and sparse-dimension controls.
-
-        Parameters
-        ----------
-        mode_selected : bool
-            Whether a display mode is selected.
-        sparse_geometry_selected : bool
-            Whether sparse overlays are selected.
-        """
+    def _set_boundary_option_states(self, mode_selected: bool) -> None:
+        """Show cell-boundary and sparse-dimension controls."""
         has_baysor = self._baysor_available()
         self._set_option_state(
             self.sparse_dimension_panel,
@@ -725,18 +654,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         visible: bool,
         enabled: bool | None = None,
     ) -> None:
-        """
-        Set visibility and enabled state for an option row.
-
-        Parameters
-        ----------
-        widget : QtWidgets.QWidget
-            Widget or row member.
-        visible : bool
-            Whether the option row is visible.
-        enabled : bool or None
-            Optional enabled state.
-        """
+        """Set visibility and optional enabled state for an option row."""
         target = self._control_rows.get(widget, widget)
         target.setVisible(visible)
         if enabled is not None:
@@ -794,19 +712,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self._update_view_options()
 
     def _component_summary_text(self, components: dict[str, bool]) -> str:
-        """
-        Return compact component availability text.
-
-        Parameters
-        ----------
-        components : dict[str, bool]
-            Component availability flags.
-
-        Returns
-        -------
-        str
-            Comma-separated component names.
-        """
+        """Return comma-separated names of available components."""
         names = [name for name, available in components.items() if available]
         if self._baysor_available():
             names.append("Baysor3D")
@@ -1079,18 +985,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         checked: bool,
         color_hex: str | None,
     ) -> None:
-        """
-        Add one transcript gene row with a stable color tooltip.
-
-        Parameters
-        ----------
-        gene : str
-            Transcript gene name.
-        checked : bool
-            Whether the row starts checked.
-        color_hex : str or None
-            Optional selected-gene color.
-        """
+        """Add one transcript gene row with its checked state and color tooltip."""
         item = QtWidgets.QListWidgetItem(gene)
         item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(
@@ -1125,19 +1020,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self._mark_local_selection_pending()
 
     def _checked_items(self, list_widget: Any) -> tuple[str, ...]:
-        """
-        Return checked items from a Qt list widget.
-
-        Parameters
-        ----------
-        list_widget : Any
-            Qt list widget with checkable items.
-
-        Returns
-        -------
-        tuple[str, ...]
-            Checked item text values.
-        """
+        """Return checked text values from a Qt list widget."""
         checked: list[str] = []
         for row in range(list_widget.count()):
             item = list_widget.item(row)
@@ -1248,19 +1131,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         )
 
     def _global_display_request(self, state: ViewerState) -> GlobalDisplayRequest:
-        """
-        Return the current global display request.
-
-        Parameters
-        ----------
-        state : ViewerState
-            Current controller state.
-
-        Returns
-        -------
-        GlobalDisplayRequest
-            Global display request.
-        """
+        """Build a global display request from the controller state."""
         return GlobalDisplayRequest(
             include_fused_image=state.include_fused_image,
             include_segmentation=state.include_segmentation,
@@ -1275,19 +1146,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         )
 
     def _local_display_request(self, state: ViewerState) -> LocalDisplayRequest:
-        """
-        Return the current local display request.
-
-        Parameters
-        ----------
-        state : ViewerState
-            Current controller state.
-
-        Returns
-        -------
-        LocalDisplayRequest
-            Local display request.
-        """
+        """Build a local display request from the controller state."""
         return LocalDisplayRequest(
             tile=state.tile,
             fiducial_sources=state.fiducial_sources,
@@ -1306,16 +1165,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         )
 
     def _start_display_worker(self, build_display: Any, message: str) -> None:
-        """
-        Start a background display worker.
-
-        Parameters
-        ----------
-        build_display : Any
-            Callable that builds the display payload.
-        message : str
-            Status message shown while work runs.
-        """
+        """Start display preparation in the background and show its status message."""
         if self._closing:
             return
         if not self._workers.start(build_display, message):
@@ -1602,14 +1452,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         self.display_selection()
 
     def _update_sparse_dimension_button_style(self) -> None:
-        """
-        Highlight the active sparse geometry dimension button.
-
-        Returns
-        -------
-        None
-            No return value.
-        """
+        """Highlight the active sparse geometry dimension button."""
         active_style = (
             "QPushButton {"
             "background-color: #4f7cff;"
@@ -1631,19 +1474,7 @@ class DatastoreViewerWindow(QtWidgets.QMainWindow):
         )
 
     def _on_sparse_dimension_toggled(self, checked: bool) -> None:
-        """
-        Switch sparse geometry between current-slice 2D and sparse 3D display.
-
-        Parameters
-        ----------
-        checked : bool
-            Whether the toggled button became active.
-
-        Returns
-        -------
-        None
-            No return value.
-        """
+        """Update sparse geometry when a dimension button becomes checked."""
         if not checked:
             return
         self._update_sparse_dimension_button_style()
