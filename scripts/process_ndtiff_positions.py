@@ -1,6 +1,5 @@
 """Export camera-corrected NDTiff positions and selected U-FISH predictions."""
 
-import sys
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -45,37 +44,8 @@ def _load_dataset(dataset_path: Path) -> Any:
     return dataset
 
 
-def _expand_ufish_channel_arguments(arguments: Sequence[str]) -> list[str]:
-    """Expand consecutive U-FISH channel values into repeated CLI options."""
-    expanded_arguments = []
-    argument_index = 0
-    while argument_index < len(arguments):
-        argument = arguments[argument_index]
-        if argument != "--ufish-channel":
-            expanded_arguments.append(argument)
-            argument_index += 1
-            continue
-
-        expanded_arguments.append(argument)
-        argument_index += 1
-        if argument_index >= len(arguments) or arguments[argument_index].startswith(
-            "-"
-        ):
-            continue
-
-        expanded_arguments.append(arguments[argument_index])
-        argument_index += 1
-        while argument_index < len(arguments) and not arguments[
-            argument_index
-        ].startswith("-"):
-            expanded_arguments.extend(["--ufish-channel", arguments[argument_index]])
-            argument_index += 1
-
-    return expanded_arguments
-
-
 def _alias_zero_suffixed_stack_reader(dataset: Any) -> None:
-    """Alias an indexed first stack to its on-disk ``_0`` reader when needed."""
+    """Handle NDStorage's missing first-stack ``_0`` filename lookup."""
     readers = getattr(dataset, "_readers_by_filename", None)
     index = getattr(dataset, "index", None)
     if not isinstance(readers, dict) or not isinstance(index, dict):
@@ -750,7 +720,7 @@ def process(
 
 def main() -> None:
     """Run the command-line interface."""
-    app(args=_expand_ufish_channel_arguments(sys.argv[1:]))
+    app()
 
 
 if __name__ == "__main__":
