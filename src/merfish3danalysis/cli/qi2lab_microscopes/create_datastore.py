@@ -104,11 +104,15 @@ def _camera_parameters(ndtiff_metadata: dict) -> tuple[str, float, float]:
     camera_id_alt = ndtiff_metadata.get("Core-Camera")
 
     if camera_id == "C13440-20CU" or camera_id_alt == "C13440-20CU":
-        return (
-            "orcav3",
-            float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"]),
-            float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"]),
-        )
+        try:
+            gain = float(ndtiff_metadata["Camera-CONVERSION FACTOR COEFF"])
+            offset = float(ndtiff_metadata["Camera-CONVERSION FACTOR OFFSET"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                "ORCA-Flash4.0 V3 metadata is missing a valid conversion factor "
+                "coefficient or offset."
+            ) from error
+        return "orcav3", gain, offset
 
     if (
         camera_id == "Blackfly S BFS-U3-200S6M"

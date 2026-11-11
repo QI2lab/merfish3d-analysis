@@ -135,12 +135,18 @@ def test_fiducial_deconvolution_restores_generated_point_source(
 def test_readout_processing_switches_from_deconvolved_to_corrected_images(
     image_datastore,
 ):
+    import shutil
+    from pathlib import Path
+
     from scipy.signal import fftconvolve
     from ufish.api import UFish
     from yaozarrs import open_group
 
     from merfish3danalysis.utils.psf import generate_qi2lab_psf
-    from merfish3danalysis.utils.ufish import load_ufish_model
+    from merfish3danalysis.utils.ufish import (
+        load_ufish_model,
+        resolve_ufish_weights_path,
+    )
 
     datastore = image_datastore
     shape = (9, 96, 96)
@@ -184,7 +190,14 @@ def test_readout_processing_switches_from_deconvolved_to_corrected_images(
     products = open_group(datastore.tile_scene_path).attrs["qi2lab"]["products"]
     decon_revision = products["tile0000/bit001/decon_data"]["revision"]
     model = UFish(device="cuda:0")
+    weights_file = resolve_ufish_weights_path(None)
+    custom_cache = datastore.datastore_path.parent / "ufish-cache"
+    custom_weights = custom_cache / weights_file
+    custom_weights.parent.mkdir(parents=True)
+    shutil.copyfile(model.local_store_path / weights_file, custom_weights)
+    model = UFish(device="cuda:0", local_store_path=str(custom_cache))
     load_ufish_model(model)
+    assert Path(model.weight_path) == custom_weights
     corrected_spots, expected_prediction = model.predict(
         image, axes="zyx", blend_3d=False, batch_size=1
     )

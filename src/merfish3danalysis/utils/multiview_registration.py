@@ -460,7 +460,6 @@ def warp_array_to_reference_gpu(
     cval: float = 0.0,
     order: int = 1,
     gpu_id: int = 0,
-    z_batch_size: int = 4,
     diagnostics: bool = False,
 ) -> np.ndarray:
     """
@@ -497,9 +496,6 @@ def warp_array_to_reference_gpu(
         Interpolation order passed to ``cupyx.scipy.ndimage.affine_transform``.
     gpu_id : int, default=0
         CUDA device ID to use.
-    z_batch_size : int, default=4
-        Number of output z planes to process per GPU batch. Keeping this small
-        avoids allocating full-volume coordinate grids for large tiles.
     diagnostics : bool, default=False
         If True, print detailed timing diagnostics.
 

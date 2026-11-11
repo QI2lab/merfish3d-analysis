@@ -1,7 +1,7 @@
 """Export camera-corrected NDTiff positions and selected U-FISH predictions."""
 
 import sys
-from collections import defaultdict
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +11,9 @@ import numpy as np
 import typer
 from tifffile import imwrite
 
+from merfish3danalysis.cli.qi2lab_microscopes.create_datastore import (
+    _camera_parameters as camera_parameters,
+)
 from merfish3danalysis.utils.psf import (
     QI2LAB_EMISSION_WAVELENGTHS_UM,
     generate_qi2lab_psf,
@@ -177,34 +180,6 @@ def inspect_dataset(dataset: Any) -> DatasetLayout:
     )
 
 
-def camera_parameters(metadata: dict[str, Any]) -> tuple[str, float, float]:
-    """Return camera name, electrons per ADU, and offset from image metadata."""
-    camera_id = metadata.get("Camera-CameraName")
-    alternate_camera_id = metadata.get("Core-Camera")
-
-    if camera_id == "C13440-20CU" or alternate_camera_id == "C13440-20CU":
-        try:
-            gain = float(metadata["Camera-CONVERSION FACTOR COEFF"])
-            offset = float(metadata["Camera-CONVERSION FACTOR OFFSET"])
-        except (KeyError, TypeError, ValueError) as error:
-            raise ValueError(
-                "ORCA-Flash4.0 V3 metadata is missing a valid conversion factor "
-                "coefficient or offset."
-            ) from error
-        return "orcav3", gain, offset
-
-    if (
-        camera_id == "Blackfly S BFS-U3-200S6M"
-        or alternate_camera_id == "Blackfly S BFS-U3-200S6M"
-    ):
-        return "flir", 0.03, 0.0
-
-    raise ValueError(
-        "Unsupported camera metadata: "
-        f"Camera-CameraName={camera_id!r}, Core-Camera={alternate_camera_id!r}."
-    )
-
-
 def voxel_size_zyx_um(
     dataset: Any,
     *,
@@ -336,7 +311,6 @@ def deconvolve_stack(
         psf=psf_zyx,
         gpu_id=gpu_id,
         crop_yx=QI2LAB_DECON_CROP_YX,
-        crop_z=None,
         release_memory=True,
     )
     return np.asarray(deconvolved).clip(0, np.iinfo(np.uint16).max).astype(np.uint16)
@@ -446,19 +420,11 @@ def _planned_output_paths(
             if channel in ufish_channels:
                 paths.append(position_dir / f"{channel}_ufish.ome.tif")
     if len(paths) != len(set(paths)):
-        duplicates = [str(path) for path, count in _counts(paths).items() if count > 1]
+        duplicates = [str(path) for path, count in Counter(paths).items() if count > 1]
         raise ValueError(
             "Channel names produce colliding output filenames: " + ", ".join(duplicates)
         )
     return paths
-
-
-def _counts(paths: Sequence[Path]) -> dict[Path, int]:
-    """Count paths while retaining their first-seen order."""
-    counts: dict[Path, int] = defaultdict(int)
-    for path in paths:
-        counts[path] += 1
-    return dict(counts)
 
 
 def _write_stack(

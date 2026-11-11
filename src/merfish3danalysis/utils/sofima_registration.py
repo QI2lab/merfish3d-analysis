@@ -191,6 +191,9 @@ def _compose_flow_fields_same_grid(
     """
     Compose two SOFIMA flow fields sampled on the same reference grid.
 
+    Upstream ``compose_maps_fast`` clamps absolute coordinates at map edges.
+    Clamping only the sampled displacement here preserves boundary residuals.
+
     Parameters
     ----------
     base_flow_xyz : numpy.ndarray

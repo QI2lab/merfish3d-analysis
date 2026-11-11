@@ -36,7 +36,6 @@ PREPROCESS_MODES = {
     "decon": True,
 }
 DEFAULT_PREPROCESS_MODE = "decon"
-DEFAULT_FEATURE_PREDICTOR_THRESHOLD = 0.5
 F1_ACCURACY_ALLOWANCE = 0.02
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 SIMULATION_MAGNITUDE_THRESHOLDS = {
@@ -289,9 +288,6 @@ def performance_records() -> list[dict[str, Any]]:
         dataset_variant = record.get("dataset_variant", "flat")
         preprocess_mode = record.get("preprocess_mode", "no-decon")
         ufish_model = record.get("ufish_model", "unknown")
-        feature_predictor_threshold = record.get(
-            "feature_predictor_threshold", "unknown"
-        )
         magnitude_threshold_lower = record.get("magnitude_threshold_lower")
         magnitude_suffix = (
             f":mag={magnitude_threshold_lower}"
@@ -300,7 +296,7 @@ def performance_records() -> list[dict[str, Any]]:
         )
         print(
             (
-                f"{dataset_variant}:{record['axial_spacing_um']} um:{ufish_model}:{preprocess_mode}:fp={feature_predictor_threshold}{magnitude_suffix} | "
+                f"{dataset_variant}:{record['axial_spacing_um']} um:{ufish_model}:{preprocess_mode}{magnitude_suffix} | "
                 f"total={record['total_seconds']:.2f}s | "
                 f"decode={record['timings_seconds']['decode_pixels']:.2f}s | "
                 f"F1={record['f1_score']:.4f} | "
@@ -479,8 +475,7 @@ def _prepare_preprocessed_magnitude_case(
     case_root = _prepare_case_workspace(source_case_dir, tmp_path)
     case_label = (
         f"{dataset_variant}-{axial_spacing_um}-{ufish_model_name}-{preprocess_mode}-"
-        f"{case_spec.get('registration_mode', 'affine')}-"
-        f"fp{DEFAULT_FEATURE_PREDICTOR_THRESHOLD}"
+        f"{case_spec.get('registration_mode', 'affine')}"
     )
     setup_timings = _run_simulation_case_setup(
         case_root,
@@ -499,7 +494,6 @@ def _prepare_preprocessed_magnitude_case(
         simulation_api["decode_pixels"](
             case_root / "sim_acquisition",
             minimum_pixels_per_RNA=default_minimum_pixels,
-            feature_predictor_threshold=DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
             magnitude_threshold=default_magnitude_threshold,
             skip_optimization=False,
             estimate_chromatic_affines=estimate_chromatic_affines,
@@ -526,7 +520,6 @@ def _run_simulation_decode_and_f1(
     case_root: Path,
     simulation_api: dict[str, Any],
     search_radius: float,
-    feature_predictor_threshold: float,
     lowpass_sigma: tuple[float, float, float],
     magnitude_threshold: tuple[float, float],
     case_label: str,
@@ -546,7 +539,6 @@ def _run_simulation_decode_and_f1(
     simulation_api["decode_pixels"](
         acquisition_root,
         minimum_pixels_per_RNA=minimum_pixels_per_rna,
-        feature_predictor_threshold=feature_predictor_threshold,
         lowpass_sigma=lowpass_sigma,
         magnitude_threshold=magnitude_threshold,
         skip_optimization=skip_optimization,
@@ -596,7 +588,6 @@ def _run_simulation_pipeline(
     search_radius: float,
     decon_readout: bool,
     ufish_model: str | None,
-    feature_predictor_threshold: float,
     perform_deformable_registration: bool = False,
     synthetic_chromatic_aberration: bool = False,
     estimate_chromatic_affines: bool = False,
@@ -621,7 +612,6 @@ def _run_simulation_pipeline(
         case_root,
         simulation_api,
         search_radius,
-        feature_predictor_threshold=feature_predictor_threshold,
         lowpass_sigma=lowpass_sigma,
         magnitude_threshold=magnitude_threshold,
         minimum_pixels_per_rna=minimum_pixels_per_rna,
@@ -760,7 +750,6 @@ def _run_standard_simulation_case(
     registration_mode, perform_deformable_registration = registration_case
     preprocess_mode = DEFAULT_PREPROCESS_MODE
     decon_readout = PREPROCESS_MODES[preprocess_mode]
-    feature_predictor_threshold = DEFAULT_FEATURE_PREDICTOR_THRESHOLD
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
@@ -775,8 +764,7 @@ def _run_standard_simulation_case(
     case_label = (
         f"{dataset_variant}-{axial_spacing_um}-{ufish_model_name}-{preprocess_mode}-"
         f"{registration_mode}-"
-        f"{chromatic_mode}-"
-        f"fp{feature_predictor_threshold}"
+        f"{chromatic_mode}"
     )
     f1_results, timings_seconds, performance_metrics = _run_simulation_pipeline(
         case_root,
@@ -784,7 +772,6 @@ def _run_standard_simulation_case(
         search_radius,
         decon_readout=decon_readout,
         ufish_model=ufish_model,
-        feature_predictor_threshold=feature_predictor_threshold,
         perform_deformable_registration=perform_deformable_registration,
         synthetic_chromatic_aberration=synthetic_chromatic_aberration,
         estimate_chromatic_affines=estimate_chromatic_affines,
@@ -804,7 +791,6 @@ def _run_standard_simulation_case(
         "chromatic_mode": chromatic_mode,
         "synthetic_chromatic_aberration": synthetic_chromatic_aberration,
         "estimate_chromatic_affines": estimate_chromatic_affines,
-        "feature_predictor_threshold": feature_predictor_threshold,
         "magnitude_threshold_lower": default_magnitude_threshold[0],
         "minimum_pixels_per_rna": default_minimum_pixels,
         "f1_search_radius_um": search_radius,
@@ -1055,7 +1041,6 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         datastore = simulation_api["qi2labDataStore"](
             acquisition_root / "qi2labdatastore"
         )
-        assert not pixeldecode._readouts_are_deconvolved(datastore)
         for bit in datastore.bit_ids:
             corrected = datastore.load_local_corrected_image(
                 0, bit=bit, return_future=False
@@ -1091,6 +1076,39 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
             EXHAUSTIVE_EXPECTED_F1_SCORES[("uniform", "0.315", "no-decon")]
             - F1_ACCURACY_ALLOWANCE
         )
+
+        from merfish3danalysis.cli.statphysbio_simulation import sweep_f1
+
+        result = runner.invoke(
+            sweep_f1.app,
+            [
+                str(case_root),
+                "--mag-threshold-range",
+                "0.9",
+                "1.0",
+                "--mag-threshold-step",
+                "0.2",
+                "--minimum-pixels-range",
+                "28",
+                "29",
+                "--minimum-pixels-step",
+                "2",
+            ],
+        )
+        assert result.exit_code == 0, (result.output, result.exception)
+        records = json.loads((case_root / "decode_params_results.json").read_text())
+        parameters = {
+            "target_gross_misid_rate": 0.05,
+            "min_pixels": 28.0,
+            "mag_lower_thresh": 0.9,
+            "mag_upper_thresh": 2.0,
+        }
+        assert list(records) == [str(parameters)]
+        # Sweep candidates deliberately vary decoding cutoffs. Their saved
+        # scores must describe the resulting codewords, including poor fits.
+        scores = simulation_api["calculate_F1"](case_root, search_radius=1.0)
+        assert scores["True Positives"] > 0
+        assert records[str(parameters)] == scores
 
     if check_exclusions:
         import pandas as pd
@@ -1296,7 +1314,6 @@ def simulation_full_case_result(
         case_root,
         simulation_api,
         search_radius,
-        feature_predictor_threshold=DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
         lowpass_sigma=DEFAULT_LOWPASS_SIGMA,
         magnitude_threshold=default_magnitude_threshold,
         minimum_pixels_per_rna=default_minimum_pixels,
@@ -1319,7 +1336,6 @@ def simulation_full_case_result(
         "chromatic_mode": chromatic_mode,
         "synthetic_chromatic_aberration": synthetic_chromatic_aberration,
         "estimate_chromatic_affines": estimate_chromatic_affines,
-        "feature_predictor_threshold": DEFAULT_FEATURE_PREDICTOR_THRESHOLD,
         "magnitude_threshold_lower": default_magnitude_threshold[0],
         "lowpass_sigma": list(DEFAULT_LOWPASS_SIGMA),
         "minimum_pixels_per_rna": default_minimum_pixels,

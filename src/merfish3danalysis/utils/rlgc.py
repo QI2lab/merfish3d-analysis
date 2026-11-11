@@ -56,12 +56,6 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
         cp.fft.config.get_plan_cache().clear()
     except Exception:
         pass
-    try:
-        import cupyx
-
-        cupyx.scipy.fft.clear_plan_cache()
-    except Exception:
-        pass
     if clear_memory_pool:
         gc.collect()
         cp.cuda.Stream.null.synchronize()
@@ -72,6 +66,8 @@ def clear_rlgc_caches(clear_memory_pool: bool = False) -> None:
 def next_gpu_fft_size(x: int) -> int:
     """
     Return the smallest FFT-friendly size >= ``x`` with prime factors in {2, 3}.
+
+    Upstream ``next_fast_len`` admits other radices and changes this solver's padding.
 
     Parameters
     ----------
@@ -785,7 +781,7 @@ def _chunked_rlgc_once(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 2048,
-    crop_z: int | None = None,
+    *,
     safe_mode: bool = True,
     limit: float = 0.01,
     max_delta: float = 0.001,
@@ -800,8 +796,7 @@ def _chunked_rlgc_once(
     Run one chunked RLGC attempt without GPU-memory fallback retries.
 
     This function performs either full-frame RLGC or lateral tiling for the
-    requested crop size. It keeps the full z extent for every tile unless
-    ``crop_z`` is explicitly supplied by an internal caller.
+    requested lateral crop size. Every tile keeps the full Z extent.
 
     Parameters
     ----------
@@ -813,8 +808,6 @@ def _chunked_rlgc_once(
         CUDA device ID to use.
     crop_yx : int, default=2048
         Retained lateral tile size for Y and X.
-    crop_z : int or None, default=None
-        Internal axial tile size. Public callers should leave this as None.
     safe_mode : bool, default=True
         If True, stop when either split KLD increases. If False, stop only when
         both split KLDs increase.
@@ -843,8 +836,6 @@ def _chunked_rlgc_once(
     cp.cuda.Device(gpu_id).use()
     if crop_yx <= 0:
         raise ValueError("crop_yx must be greater than 0.")
-    if crop_z is not None and crop_z <= 0:
-        raise ValueError("crop_z must be greater than 0 when provided.")
 
     image_arr = np.asarray(image)
     original_ndim = image_arr.ndim
@@ -860,14 +851,8 @@ def _chunked_rlgc_once(
         raise ValueError(f"Expected a 2D or 3D PSF, got shape {psf_arr.shape}")
     psf_shape = psf_arr.shape if psf_arr.ndim == 3 else (1, *psf_arr.shape)
 
-    effective_crop_z = image_work.shape[0] if crop_z is None else crop_z
-
     # Full-frame path if tiling not needed
-    if (
-        effective_crop_z >= image_work.shape[0]
-        and crop_yx >= image_work.shape[-2]
-        and crop_yx >= image_work.shape[-1]
-    ):
+    if crop_yx >= image_work.shape[-2] and crop_yx >= image_work.shape[-1]:
         if logger is not None and logger.isEnabledFor(logging.INFO):
             logger.info(
                 "%spath=3d_fullframe image_shape=%s psf_shape=%s",
@@ -897,17 +882,6 @@ def _chunked_rlgc_once(
     # influence can propagate farther than one PSF half-width.
     else:
         full_shape = image_work.shape
-        if effective_crop_z >= full_shape[0]:
-            retained_z = full_shape[0]
-            tile_pad_z = 0
-        else:
-            tile_pad_z = int(psf_shape[0])
-            if effective_crop_z <= 2 * tile_pad_z:
-                raise ValueError(
-                    "crop_z must be larger than twice the axial processing halo "
-                    f"({2 * tile_pad_z} for PSF support {int(psf_shape[0])})."
-                )
-            retained_z = int(effective_crop_z) - 2 * tile_pad_z
         retained_y, tile_pad_y = _resolve_tiled_axis_geometry(
             crop_yx,
             full_shape[1],
@@ -922,14 +896,12 @@ def _chunked_rlgc_once(
         )
         output = np.zeros_like(image_work, dtype=np.float32)
 
-        retained_bounds_z = _axis_retained_bounds(retained_z, full_shape[0])
         retained_bounds_y = _axis_retained_bounds(retained_y, full_shape[1])
         retained_bounds_x = _axis_retained_bounds(retained_x, full_shape[2])
         tile_bounds = [
-            (z_bounds, y_bounds, x_bounds)
+            (y_bounds, x_bounds)
             for x_bounds in retained_bounds_x
             for y_bounds in retained_bounds_y
-            for z_bounds in retained_bounds_z
         ]
         num_tiles = len(tile_bounds)
 
@@ -939,8 +911,8 @@ def _chunked_rlgc_once(
                 f"{log_prefix} " if log_prefix else "",
                 tuple(int(v) for v in image_work.shape),
                 tuple(int(v) for v in psf_shape),
-                (retained_z, retained_y, retained_x),
-                (tile_pad_z, tile_pad_y, tile_pad_x),
+                (full_shape[0], retained_y, retained_x),
+                (0, tile_pad_y, tile_pad_x),
                 num_tiles,
             )
 
@@ -957,19 +929,16 @@ def _chunked_rlgc_once(
             iterator = enumerate(tile_bounds)
 
         for tile_idx, (
-            (z_dest_start, z_dest_stop),
             (y_dest_start, y_dest_stop),
             (x_dest_start, x_dest_stop),
         ) in iterator:
-            z_crop_start = max(z_dest_start - tile_pad_z, 0)
-            z_crop_stop = min(z_dest_stop + tile_pad_z, full_shape[0])
             y_crop_start = max(y_dest_start - tile_pad_y, 0)
             y_crop_stop = min(y_dest_stop + tile_pad_y, full_shape[1])
             x_crop_start = max(x_dest_start - tile_pad_x, 0)
             x_crop_stop = min(x_dest_stop + tile_pad_x, full_shape[2])
 
             crop = image_work[
-                z_crop_start:z_crop_stop,
+                :,
                 y_crop_start:y_crop_stop,
                 x_crop_start:x_crop_stop,
             ]
@@ -989,19 +958,17 @@ def _chunked_rlgc_once(
                 ),
             )
 
-            z_source_start = z_dest_start - z_crop_start
-            z_source_stop = z_source_start + (z_dest_stop - z_dest_start)
             y_source_start = y_dest_start - y_crop_start
             y_source_stop = y_source_start + (y_dest_stop - y_dest_start)
             x_source_start = x_dest_start - x_crop_start
             x_source_stop = x_source_start + (x_dest_stop - x_dest_start)
             crop_sub = crop_array[
-                z_source_start:z_source_stop,
+                :,
                 y_source_start:y_source_stop,
                 x_source_start:x_source_stop,
             ]
             output[
-                z_dest_start:z_dest_stop,
+                :,
                 y_dest_start:y_dest_stop,
                 x_dest_start:x_dest_stop,
             ] = crop_sub
@@ -1023,7 +990,7 @@ def chunked_rlgc(
     psf: np.ndarray,
     gpu_id: int = 0,
     crop_yx: int = 2048,
-    crop_z: int | None = None,
+    *,
     safe_mode: bool = True,
     limit: float = 0.01,
     max_delta: float = 0.001,
@@ -1055,8 +1022,6 @@ def chunked_rlgc(
     crop_yx : int, default=2048
         Requested retained lateral tile size. Values larger than the image are
         treated as full-frame processing.
-    crop_z : None, default=None
-        Axial chunking is no longer supported; this must remain None.
     safe_mode : bool, default=True
         If True, stop when either split KLD increases. If False, stop only when
         both split KLDs increase.
@@ -1085,9 +1050,6 @@ def chunked_rlgc(
     numpy.ndarray
         Deconvolved image as float32.
     """
-    if crop_z is not None:
-        raise ValueError("RLGC no longer supports axial chunking; leave crop_z=None.")
-
     image_arr = np.asarray(image)
     if image_arr.ndim == 2:
         max_yx = max(image_arr.shape)
@@ -1114,7 +1076,6 @@ def chunked_rlgc(
                 psf=psf,
                 gpu_id=gpu_id,
                 crop_yx=attempted_crop_yx,
-                crop_z=None,
                 safe_mode=safe_mode,
                 limit=limit,
                 max_delta=max_delta,

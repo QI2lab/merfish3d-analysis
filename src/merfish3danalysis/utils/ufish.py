@@ -43,10 +43,6 @@ def resolve_ufish_weights_path(model: str | Path | None) -> Path | str:
 
     weights_file = UFISH_MODEL_ALIASES.get(model_str.lower(), model_str)
 
-    local_path = Path.home() / ".ufish" / weights_file
-    if local_path.exists():
-        return local_path
-
     return weights_file
 
 

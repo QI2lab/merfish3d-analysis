@@ -474,12 +474,6 @@ def _release_worker_gpu_memory(cp: Any) -> None:
         cp.fft.config.get_plan_cache().clear()
     except Exception:
         pass
-    try:
-        import cupyx
-
-        cupyx.scipy.fft.clear_plan_cache()
-    except Exception:
-        pass
     cp.get_default_memory_pool().free_all_blocks()
     cp.get_default_pinned_memory_pool().free_all_blocks()
     try:
@@ -570,7 +564,6 @@ def _run_chunked_rlgc_remembering_crop(
         psf=psf,
         gpu_id=gpu_id,
         crop_yx=dr._crop_yx_decon,
-        crop_z=None,
         release_memory=release_memory,
         on_successful_crop_yx=_remember_successful_crop,
     )

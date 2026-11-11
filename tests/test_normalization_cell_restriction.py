@@ -112,7 +112,6 @@ def test_named_run_workers_share_one_normalization_cache(
                 "lowpass_sigma": None,
                 "magnitude_threshold": (0.1, 20),
                 "minimum_pixels": 1,
-                "feature_predictor_threshold": 0.1,
                 "normalization_method": normalization_method,
                 "decode_run_key": run,
                 "normalization_features": "all",
