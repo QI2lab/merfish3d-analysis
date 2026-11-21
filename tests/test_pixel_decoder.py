@@ -212,6 +212,157 @@ def test_within_tile_duplicates_follow_physical_clusters_and_preserve_identity(
 
 @pytest.mark.unit
 @pytest.mark.gpu
+@pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)
+@pytest.mark.parametrize("load_filtered", [False, True])
+@pytest.mark.parametrize(
+    ("radius_xy", "radius_z", "collapse"),
+    [(None, None, True), (0.081, None, False), (None, 1.0, False)],
+)
+def test_default_duplicate_radius_allows_lateral_drift_between_planes(
+    cuda, image_datastore, load_filtered, radius_xy, radius_z, collapse
+):
+    """Collapse shifted copies while preserving distinct transcript identities.
+
+    Parameters
+    ----------
+    cuda : module
+        CuPy module after verifying CUDA availability.
+    image_datastore : qi2labDataStore
+        Synthetic acquisition populated through the datastore API.
+    load_filtered : bool
+        Load global filtered spots rather than local calibration spots.
+    radius_xy : float or None
+        Explicit lateral radius in micrometers, or the sampling-based default.
+    radius_z : float or None
+        Explicit axial radius in micrometers, or one Z step by default.
+    collapse : bool
+        Whether the shifted same-gene pair lies inside both search radii.
+    """
+    datastore = image_datastore
+    datastore.voxel_size_zyx_um = [1.5, 0.081, 0.081]
+    datastore.codebook = pd.DataFrame(
+        [["A", 1, 1, 1, 1, 0, 0], ["B", 1, 1, 0, 0, 1, 1]],
+        columns=["gene_id", "bit1", "bit2", "bit3", "bit4", "bit5", "bit6"],
+    )
+    table = pd.DataFrame(
+        [
+            (0, "A", 0, 0.0, 0.00, 0.2),
+            (1, "A", 0, 1.5, 0.12, 0.1),
+            # Outside three lateral pixels, or beyond one axial step.
+            (2, "A", 0, 0.0, 1.00, 0.2),
+            (3, "A", 0, 1.5, 1.25, 0.1),
+            (4, "A", 0, 0.0, 2.00, 0.2),
+            (5, "A", 0, 1.51, 2.12, 0.1),
+            # Same plane, different gene, or different tile: keep both.
+            (6, "A", 0, 0.0, 3.00, 0.2),
+            (7, "A", 0, 0.0, 3.12, 0.1),
+            (8, "A", 0, 0.0, 4.00, 0.2),
+            (9, "B", 0, 1.5, 4.12, 0.1),
+            (10, "A", 0, 0.0, 5.00, 0.2),
+            (11, "A", 1, 1.5, 5.12, 0.1),
+        ],
+        columns=[
+            "detection",
+            "gene_id",
+            "tile_idx",
+            "global_z",
+            "global_x",
+            "distance_min",
+        ],
+    )
+    table["global_y"] = 0.0
+    if load_filtered:
+        datastore.save_global_filtered_decoded_spots(table)
+    else:
+        for tile in range(2):
+            datastore.save_local_decoded_spots(table[table.tile_idx == tile], tile)
+    decoder = PixelDecoder(datastore, merfish_bits=6, num_gpus=0, verbose=0)
+    decoder._load_tile_decoding = not load_filtered
+    decoder._load_all_barcodes()
+
+    decoder._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
+
+    retained = (
+        decoder._df_filtered_barcodes if load_filtered else decoder._df_barcodes_loaded
+    )
+    assert sorted(retained.detection) == list(range(1 if collapse else 0, 12))
+
+
+@pytest.mark.integration
+@pytest.mark.gpu
+@pytest.mark.parametrize("image_datastore", ["six_bits_one_tile"], indirect=True)
+def test_decode_and_refilter_collapse_shifted_adjacent_plane_copies(
+    cuda, image_datastore
+):
+    """Use the same duplicate defaults in worker decoding and re-filtering.
+
+    Parameters
+    ----------
+    cuda : module
+        CuPy module after verifying CUDA availability.
+    image_datastore : qi2labDataStore
+        Single-tile acquisition populated with six synthetic readout bits.
+    """
+    datastore = image_datastore
+    spacing = [1.5, 0.081, 0.081]
+    datastore.voxel_size_zyx_um = spacing
+    datastore.microscope_type = "2D"
+    codebook = np.array([[1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1]], dtype=np.float32)
+    datastore.codebook = pd.DataFrame(
+        {"gene_id": ["A", "B"], **{f"bit{i + 1:02}": codebook[:, i] for i in range(6)}}
+    )
+    shape = (2, 20, 20)
+    readouts = np.zeros((6, *shape), dtype=np.float32)
+    readouts[:, 0, 3:5, 3:5] = codebook[0, :, None, None] * 0.75
+    readouts[:, 1, 3:5, 5:7] = codebook[0, :, None, None] * 0.75
+    # Distinct same-plane A and laterally separated B detections remain.
+    readouts[:, 0, 14:16, 14:16] = codebook[0, :, None, None] * 0.75
+    readouts[:, 0, 10:12, 3:5] = codebook[1, :, None, None] * 0.75
+    readouts[:, 1, 10:12, 7:9] = codebook[1, :, None, None] * 0.75
+    datastore.save_local_corrected_image(readouts.max(axis=0), tile=0, round=0)
+    for bit, image in enumerate(readouts):
+        datastore.save_local_round_linker(1, tile=0, bit=bit)
+        datastore.save_local_corrected_image(image, tile=0, bit=bit)
+        datastore.save_local_feature_predictor_image(
+            np.ones(shape, dtype=np.float32), tile=0, bit=bit
+        )
+    datastore.save_local_stage_position_zyx_um(np.zeros(3), np.eye(4), tile=0, round=0)
+    datastore.save_global_coord_xforms_um(np.eye(4), np.zeros(3), spacing, tile=0)
+    run = "duplicate_radius"
+    decoder = PixelDecoder(
+        datastore, merfish_bits=6, num_gpus=1, verbose=0, decode_run_key=run
+    )
+    decoder.decode_all_tiles(
+        assign_to_cells=False,
+        lowpass_sigma=None,
+        magnitude_threshold=(1, 2),
+        minimum_pixels=4,
+        normalization_method="none",
+        filter_method="lr",
+    )
+    local = datastore.load_local_decoded_spots(0, decode_run_key=run)
+    filtered = datastore.load_global_filtered_decoded_spots(decode_run_key=run)
+    assert len(local) == 5
+    assert len(filtered) == 4
+    assert filtered.groupby("gene_id").size().to_dict() == {"A": 2, "B": 2}
+    assert sorted(filtered.loc[filtered.gene_id == "A", "global_z"]) == [0.0, 0.0]
+    assert sorted(filtered.loc[filtered.gene_id == "B", "global_z"]) == [0.0, 1.5]
+
+    decoder.optimize_filtering(
+        assign_to_cells=False, duplicate_radius_xy=0.081, filter_method="lr"
+    )
+    assert len(datastore.load_global_filtered_decoded_spots(decode_run_key=run)) == 5
+    decoder.optimize_filtering(assign_to_cells=False, filter_method="lr")
+    pd.testing.assert_frame_equal(
+        filtered, datastore.load_global_filtered_decoded_spots(decode_run_key=run)
+    )
+    pd.testing.assert_frame_equal(
+        local, datastore.load_local_decoded_spots(0, decode_run_key=run)
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.gpu
 @pytest.mark.parametrize("is_3d", [False, True])
 @pytest.mark.parametrize("empty", [False, True])
 @pytest.mark.parametrize("image_datastore", ["six_bits"], indirect=True)

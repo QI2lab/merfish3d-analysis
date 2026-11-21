@@ -4228,8 +4228,8 @@ class PixelDecoder:
 
     def _remove_duplicates_within_tile(
         self,
-        radius_xy: float = 0.1,
-        radius_z: float = 0.50,
+        radius_xy: float | None = None,
+        radius_z: float | None = None,
     ) -> None:
         """Collapse cross-plane near-duplicate detections within each tile.
 
@@ -4247,10 +4247,11 @@ class PixelDecoder:
 
         Parameters
         ----------
-        radius_xy : float, default 0.1
-            Neighborhood radius in the XY plane, in microns.
-        radius_z : float, default 0.50
-            Neighborhood half-extent along Z, in microns.
+        radius_xy : float or None, default None
+            Neighborhood radius in the XY plane, in microns. None uses three
+            X pixels to allow lateral centroid drift between adjacent planes.
+        radius_z : float or None, default None
+            Neighborhood half-extent along Z, in microns. None uses one Z step.
 
         Modifies
         --------
@@ -4269,6 +4270,10 @@ class PixelDecoder:
 
         if df is None or df.empty or len(df) < 2:
             return
+
+        spacing = self._datastore.voxel_size_zyx_um
+        radius_xy = 3 * spacing[-1] if radius_xy is None else float(radius_xy)
+        radius_z = spacing[0] if radius_z is None else float(radius_z)
 
         # Stable order & deterministic tie-breaks
         df.reset_index(drop=True, inplace=True)
@@ -4631,6 +4636,9 @@ class PixelDecoder:
     ) -> None:
         """Refine normalization vectors using exact-called transcripts.
 
+        In 2D mode, collapse adjacent-plane calibration calls within one X
+        pixel in XY and one Z step before updating the vectors.
+
         Parameters
         ----------
         n_random_tiles : int, default 5
@@ -4765,10 +4773,8 @@ class PixelDecoder:
                 # gather results and update
                 self._load_all_barcodes()
                 if not (self._is_3D):
-                    radius_xy = self._datastore.voxel_size_zyx_um[-1]
-                    radius_z = self._datastore.voxel_size_zyx_um[0]
                     self._remove_duplicates_within_tile(
-                        radius_xy=radius_xy, radius_z=radius_z
+                        radius_xy=self._datastore.voxel_size_zyx_um[-1]
                     )
                 if run_chromatic_estimation:
                     self._estimate_chromatic_affines_from_barcodes()
@@ -4818,10 +4824,12 @@ class PixelDecoder:
             Minimum number of pixels for a barcode.
         normalization_method : {"iterative", "global", "none"}, default "iterative"
             Normalization source for pixel traces.
-        duplicate_radius_xy : float, optional
-            Override XY radius, in microns, for within-tile duplicate collapse.
-        duplicate_radius_z : float, optional
-            Override Z radius, in microns, for within-tile duplicate collapse.
+        duplicate_radius_xy : float or None, default None
+            XY radius in microns for within-tile duplicate collapse. None uses
+            three X pixels.
+        duplicate_radius_z : float or None, default None
+            Z radius in microns for within-tile duplicate collapse. None uses
+            one Z step.
         filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
             Downstream filter to apply after exact transcript calling.
         target_gross_misid_rate : float, default 0.05
@@ -4892,17 +4900,9 @@ class PixelDecoder:
             lr_fdr_target=float(lr_fdr_target),
         )
         if not (self._is_3D):
-            radius_xy = (
-                self._datastore.voxel_size_zyx_um[-1]
-                if duplicate_radius_xy is None
-                else float(duplicate_radius_xy)
+            self._remove_duplicates_within_tile(
+                radius_xy=duplicate_radius_xy, radius_z=duplicate_radius_z
             )
-            radius_z = (
-                self._datastore.voxel_size_zyx_um[0]
-                if duplicate_radius_z is None
-                else float(duplicate_radius_z)
-            )
-            self._remove_duplicates_within_tile(radius_xy=radius_xy, radius_z=radius_z)
 
         if len(all_tiles) > 1:
             self._remove_duplicates_in_tile_overlap()
@@ -4993,10 +4993,12 @@ class PixelDecoder:
         ----------
         assign_to_cells : bool, default True
             Assign barcodes to cells.
-        duplicate_radius_xy : float, optional
-            Override XY radius, in microns, for within-tile duplicate collapse.
-        duplicate_radius_z : float, optional
-            Override Z radius, in microns, for within-tile duplicate collapse.
+        duplicate_radius_xy : float or None, default None
+            XY radius in microns for within-tile duplicate collapse. None uses
+            three X pixels.
+        duplicate_radius_z : float or None, default None
+            Z radius in microns for within-tile duplicate collapse. None uses
+            one Z step.
         filter_method : {"blank_fraction", "lr"}, default "blank_fraction"
             Downstream filter to apply to decoded transcripts.
         target_gross_misid_rate : float, default 0.05
@@ -5032,18 +5034,8 @@ class PixelDecoder:
         )
         if len(all_tiles) or not (self._is_3D):
             if not (self._is_3D):
-                radius_xy = (
-                    self._datastore.voxel_size_zyx_um[-1]
-                    if duplicate_radius_xy is None
-                    else float(duplicate_radius_xy)
-                )
-                radius_z = (
-                    self._datastore.voxel_size_zyx_um[0]
-                    if duplicate_radius_z is None
-                    else float(duplicate_radius_z)
-                )
                 self._remove_duplicates_within_tile(
-                    radius_xy=radius_xy, radius_z=radius_z
+                    radius_xy=duplicate_radius_xy, radius_z=duplicate_radius_z
                 )
             else:
                 self._remove_duplicates_in_tile_overlap()

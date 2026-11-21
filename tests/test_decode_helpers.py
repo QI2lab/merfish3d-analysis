@@ -88,6 +88,17 @@ def test_one_empty_spot_set_has_zero_precision_recall_and_f1(
 def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     image_datastore, tmp_path, world_mapping
 ):
+    """Score full axial voxel support in local and world coordinates.
+
+    Parameters
+    ----------
+    image_datastore : qi2labDataStore
+        Synthetic acquisition populated through the datastore API.
+    tmp_path : pathlib.Path
+        Experiment directory containing the ground-truth CSV files.
+    world_mapping : bool
+        Apply stage translation, camera reflection, and global rotation.
+    """
     import importlib
 
     import pandas as pd
@@ -95,8 +106,9 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     command = importlib.import_module(
         "merfish3danalysis.cli.statphysbio_simulation.calculate_F1"
     )
-    # The 3x8x10 image spans Z centers 1, 3, 5 um. Centered ground-truth
-    # X,Y columns correspond to image Y,X, with offsets 1.75 and 1.125 um.
+    # The 3x8x10 image has Z centers 1, 3, 5 um and voxel support [0, 6] um.
+    # Centered ground-truth X,Y columns correspond to image Y,X, with offsets
+    # 1.75 and 1.125 um.
     datastore = image_datastore
     datastore.voxel_size_zyx_um = [2.0, 0.5, 0.25]
     datastore.codebook = pd.DataFrame(
@@ -139,10 +151,10 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     datastore.save_global_coord_xforms_um(affine, origin, [2, 0.5, 0.25], tile=0)
     truth = pd.DataFrame(
         {
-            "Z": [1.0, 3.0, 5.0, 0.5, 5.5],
-            "X": [-0.25, 0.25, 1.25, -0.25, 1.25],
-            "Y": [-0.125, 0.375, 0.875, -0.125, 0.875],
-            "Gene_label": [1, 2, 1, 1, 1],
+            "Z": [1.0, 3.0, 5.0, 0.5, 5.5, -0.5, 6.5],
+            "X": [-0.25, 0.25, 1.25, -0.25, 1.25, -0.25, 1.25],
+            "Y": [-0.125, 0.375, 0.875, -0.125, 0.875, -0.125, 0.875],
+            "Gene_label": [1, 2, 1, 1, 1, 1, 1],
         }
     )
     truth.to_csv(tmp_path / "GT_spots.csv", index=False)
@@ -153,14 +165,28 @@ def test_simulation_f1_uses_voxel_centers_axis_order_and_physical_radius(
     )
     result = command.calculate_F1(tmp_path, search_radius=0.01)
     pd.testing.assert_frame_equal(datastore.load_global_filtered_decoded_spots(), spots)
-    # Two exact same-gene matches, two unmatched detections, one missed truth;
-    # the two truth points outside the acquired Z support are excluded.
+    # Include missed truth inside the first and last voxels. Only the two
+    # truth points outside the full [0, 6] um support are excluded.
     assert result["True Positives"] == 2
     assert result["False Positives"] == 2
-    assert result["False Negatives"] == 1
+    assert result["False Negatives"] == 3
     assert result["Precision"] == pytest.approx(1 / 2)
-    assert result["Recall"] == pytest.approx(2 / 3)
-    assert result["F1 Score"] == pytest.approx(4 / 7)
+    assert result["Recall"] == pytest.approx(2 / 5)
+    assert result["F1 Score"] == pytest.approx(4 / 9)
+
+    # Edge truth can also match the first and last plane centers. Unmatched
+    # wrong-gene and spatially distant calls remain false positives.
+    edge_truth_path = tmp_path / "edge_ground_truth.csv"
+    truth.iloc[[3, 4]].to_csv(edge_truth_path, index=False)
+    edge_result = command.calculate_F1(
+        tmp_path, search_radius=0.51, gt_path=edge_truth_path
+    )
+    assert edge_result["True Positives"] == 2
+    assert edge_result["False Positives"] == 2
+    assert edge_result["False Negatives"] == 0
+    assert edge_result["Precision"] == pytest.approx(1 / 2)
+    assert edge_result["Recall"] == 1
+    assert edge_result["F1 Score"] == pytest.approx(2 / 3)
 
     # Explicit ground truth must override the default CSV without changing
     # coordinate conventions.

@@ -27,6 +27,9 @@ def calculate_F1(
 ) -> dict:
     """Calculate F1 using ground truth.
 
+    Score the full local axial voxel support, from zero to the number of
+    planes times the Z spacing, in micrometers.
+
     Parameters
     ----------
     root_path : Path
@@ -93,8 +96,9 @@ def calculate_F1(
     gt_gene_ids = gene_ids[(gt_spots["Gene_label"].to_numpy(dtype=int) - 1)]
 
     image_shape_zyx = np.squeeze(image).shape[-3:]
-    z_min_um = datastore.voxel_size_zyx_um[0] / 2
-    z_max_um = (image_shape_zyx[0] - 0.5) * datastore.voxel_size_zyx_um[0]
+    # Include the full first and last voxels, beyond their center coordinates.
+    z_min_um = 0.0
+    z_max_um = image_shape_zyx[0] * datastore.voxel_size_zyx_um[0]
     decoded_z_centers = local_coords[:, 0] + spacing[0] / 2
     qi2lab_keep = (decoded_z_centers >= z_min_um) & (decoded_z_centers <= z_max_um)
     gt_keep = (gt_coords[:, 0] >= z_min_um) & (gt_coords[:, 0] <= z_max_um)

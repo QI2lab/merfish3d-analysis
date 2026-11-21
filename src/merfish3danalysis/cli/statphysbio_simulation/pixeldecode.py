@@ -91,10 +91,12 @@ def decode_pixels(
         ~3x Nyquist -> 0.7 and ~5x Nyquist -> 0.2.
     skip_optimization : bool, default False
         if True, reuse existing normalization vectors and skip iterative decoding.
-    duplicate_radius_xy : float, optional
-        override XY radius, in microns, for within-tile duplicate collapse.
-    duplicate_radius_z : float, optional
-        override Z radius, in microns, for within-tile duplicate collapse.
+    duplicate_radius_xy : float or None, default None
+        XY radius in microns for within-tile duplicate collapse. None uses
+        three X pixels.
+    duplicate_radius_z : float or None, default None
+        Z radius in microns for within-tile duplicate collapse. None uses
+        one Z step.
     filter_method : str, default "blank_fraction"
         downstream transcript filter. Supported values are "blank_fraction" and "lr".
     target_gross_misid_rate : float, default .05

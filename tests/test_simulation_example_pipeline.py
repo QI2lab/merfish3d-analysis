@@ -2,8 +2,8 @@
 
 The matrix converts StatPhysBio simulation outputs into qi2lab datastores,
 runs preprocessing, decodes transcripts, and scores decoded features against
-simulation ground truth. The optional exhaustive mode adds deconvolution-off
-coverage to the standard Zenodo F1 integration matrix.
+simulation ground truth. Both matrices deconvolve fiducials and readouts at
+0.315 and 1.0 µm and skip deconvolution at 1.5 µm.
 """
 
 import hashlib
@@ -31,12 +31,12 @@ SIMULATION_DATASET_DIRS = {
     "cells": "example_16bit_cells",
     "uniform": "example_16bit_flat",
 }
-PREPROCESS_MODES = {
-    "no-decon": False,
-    "decon": True,
+DECONVOLVE_BY_AXIAL_SPACING_UM = {
+    spacing: float(spacing) <= 1.0 for spacing in AXIAL_SPACING_UM
 }
-DEFAULT_PREPROCESS_MODE = "decon"
 F1_ACCURACY_ALLOWANCE = 0.02
+SIMULATION_TARGET_GROSS_MISID_RATE = 0.05
+SIMULATION_NORMALIZATION_ITERATIONS = 3
 DEFAULT_LOWPASS_SIGMA = (3.0, 1.0, 1.0)
 SIMULATION_MAGNITUDE_THRESHOLDS = {
     "0.315": (0.9, 10.0),
@@ -95,36 +95,21 @@ ZENODO_ALIGNED_IMAGE_SHA256 = {
     ): "9e21b88fc5cb0cb39f4a9c9f90540145e903e6b6fcc6c1e94b012d6042a83b16",
 }
 
-# Reference accuracy measured from Zenodo record 17274305 on 2026-09-17.
-# Tests enforce these scores minus the allowance as floors; improvements pass.
+# Reference accuracy on Zenodo record 17274305. The 1.5 µm entries use the
+# full-volume scorer, three normalization rounds, and no deconvolution.
 STANDARD_EXPECTED_F1_SCORES = {
     ("cells", "0.315", "no-chromatic"): 0.9848,
     ("cells", "0.315", "chromatic"): 0.9823,
     ("cells", "1.0", "no-chromatic"): 0.9623,
     ("cells", "1.0", "chromatic"): 0.9483,
-    ("cells", "1.5", "no-chromatic"): 0.3867,
-    ("cells", "1.5", "chromatic"): 0.3352,
+    ("cells", "1.5", "no-chromatic"): 0.7004,
+    ("cells", "1.5", "chromatic"): 0.8962,
     ("uniform", "0.315", "no-chromatic"): 0.9899,
     ("uniform", "0.315", "chromatic"): 0.9891,
     ("uniform", "1.0", "no-chromatic"): 0.9669,
     ("uniform", "1.0", "chromatic"): 0.9641,
-    ("uniform", "1.5", "no-chromatic"): 0.6090,
-    ("uniform", "1.5", "chromatic"): 0.5370,
-}
-
-EXHAUSTIVE_EXPECTED_F1_SCORES = {
-    ("cells", "0.315", "decon"): 0.9823,
-    ("cells", "0.315", "no-decon"): 0.9899,
-    ("cells", "1.0", "decon"): 0.9483,
-    ("cells", "1.0", "no-decon"): 0.9379,
-    ("cells", "1.5", "decon"): 0.3352,
-    ("cells", "1.5", "no-decon"): 0.8308,
-    ("uniform", "0.315", "decon"): 0.9891,
-    ("uniform", "0.315", "no-decon"): 0.9865,
-    ("uniform", "1.0", "decon"): 0.9641,
-    ("uniform", "1.0", "no-decon"): 0.9500,
-    ("uniform", "1.5", "decon"): 0.5370,
-    ("uniform", "1.5", "no-decon"): 0.7914,
+    ("uniform", "1.5", "no-chromatic"): 0.8913,
+    ("uniform", "1.5", "chromatic"): 0.8358,
 }
 
 
@@ -181,8 +166,10 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
         "axial_spacing_um": axial_spacing_um,
         "ufish_model_name": ufish_model_name,
         "ufish_model": ufish_model,
-        "preprocess_mode": preprocess_mode,
-        "decon_readout": decon_readout,
+        "preprocess_mode": "decon"
+        if DECONVOLVE_BY_AXIAL_SPACING_UM[axial_spacing_um]
+        else "no-decon",
+        "deconvolve": DECONVOLVE_BY_AXIAL_SPACING_UM[axial_spacing_um],
         "registration_mode": registration_mode,
         "perform_deformable_registration": perform_deformable_registration,
         "chromatic_mode": chromatic_mode,
@@ -192,9 +179,6 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
     for (dataset_variant, dataset_dir), axial_spacing_um, (
         ufish_model_name,
         ufish_model,
-    ), (
-        preprocess_mode,
-        decon_readout,
     ), (
         registration_mode,
         perform_deformable_registration,
@@ -206,7 +190,6 @@ EXHAUSTIVE_SIMULATION_MATRIX = tuple(
         SIMULATION_DATASET_DIRS.items(),
         AXIAL_SPACING_UM,
         DEFAULT_UFISH_MODELS,
-        PREPROCESS_MODES.items(),
         (("sofima", True),),
         (("chromatic", True, True),),
     )
@@ -353,22 +336,44 @@ def _prepare_case_workspace(source_case_dir: Path, work_root: Path) -> Path:
 def _run_simulation_preprocess(
     acquisition_root: Path,
     simulation_api: dict[str, Any],
-    decon_readout: bool,
+    deconvolve: bool,
     ufish_model: str | None,
     perform_deformable_registration: bool,
 ) -> None:
-    """Run simulation preprocess."""
+    """Register and preprocess a simulated acquisition.
+
+    Parameters
+    ----------
+    acquisition_root : Path
+        Simulated acquisition containing the corrected datastore.
+    simulation_api : dict[str, Any]
+        Datastore and registration APIs used by the simulation workflow.
+    deconvolve : bool
+        Deconvolve both fiducials and readouts when True.
+    ufish_model : str or None
+        U-FISH weights alias or path. None selects the package default.
+    perform_deformable_registration : bool
+        Estimate residual SOFIMA transforms when True.
+    """
     datastore = simulation_api["qi2labDataStore"](acquisition_root / "qi2labdatastore")
     registration_factory = simulation_api["DataRegistration"](
         datastore=datastore,
         perform_deformable_registration=perform_deformable_registration,
         overwrite_outputs=True,
-        decon_readout=decon_readout,
+        decon_fiducial=deconvolve,
+        decon_readout=deconvolve,
         ufish_model=ufish_model,
         num_gpus=1,
         verbose=1,
     )
     registration_factory.register_all_tiles()
+    for tile in datastore.tile_ids:
+        for round_id in datastore.round_ids:
+            path = datastore.local_image_path(tile, "decon_data", round=round_id)
+            assert path.exists() == deconvolve, path
+        for bit_id in datastore.bit_ids:
+            path = datastore.local_image_path(tile, "decon_data", bit=bit_id)
+            assert path.exists() == deconvolve, path
     registration_factory.global_register(create_max_proj_tiff=False)
 
     # Mark local registration complete only after global registration succeeds so
@@ -382,13 +387,31 @@ def _run_simulation_preprocess(
 def _run_simulation_case_setup(
     case_root: Path,
     simulation_api: dict[str, Any],
-    decon_readout: bool,
+    deconvolve: bool,
     ufish_model: str | None,
     perform_deformable_registration: bool,
     case_label: str,
     synthetic_chromatic_aberration: bool = False,
 ) -> dict[str, float]:
-    """Run simulation case setup."""
+    """Convert and preprocess one simulation case.
+
+    Parameters
+    ----------
+    case_root : Path
+        Working directory containing the simulation source files.
+    simulation_api : dict[str, Any]
+        Conversion, datastore, and registration APIs for the simulation.
+    deconvolve : bool
+        Matrix deconvolution setting for both fiducials and readouts.
+    ufish_model : str or None
+        U-FISH weights alias or path. None selects the package default.
+    perform_deformable_registration : bool
+        Estimate residual SOFIMA transforms when True.
+    case_label : str
+        Identifier used in progress messages.
+    synthetic_chromatic_aberration : bool, default False
+        Apply the synthetic chromatic perturbation during conversion.
+    """
     acquisition_root = case_root / "sim_acquisition"
     timings_seconds: dict[str, float] = {}
 
@@ -415,20 +438,20 @@ def _run_simulation_case_setup(
 
     start = time.perf_counter()
     print(
-        f"[{case_label}] preprocess (registration, decon_readout={decon_readout}): start",
+        f"[{case_label}] preprocess (registration, deconvolution={deconvolve}): start",
         flush=True,
     )
     _run_simulation_preprocess(
         acquisition_root,
         simulation_api,
-        decon_readout=decon_readout,
+        deconvolve=deconvolve,
         ufish_model=ufish_model,
         perform_deformable_registration=perform_deformable_registration,
     )
     timings_seconds["preprocess_registration"] = time.perf_counter() - start
     print(
         (
-            f"[{case_label}] preprocess (registration, decon_readout={decon_readout}): "
+            f"[{case_label}] preprocess (registration, deconvolution={deconvolve}): "
             f"done ({timings_seconds['preprocess_registration']:.2f}s)"
         ),
         flush=True,
@@ -450,7 +473,7 @@ def _prepare_preprocessed_magnitude_case(
     axial_spacing_um = case_spec["axial_spacing_um"]
     ufish_model_name = case_spec["ufish_model_name"]
     ufish_model = case_spec["ufish_model"]
-    decon_readout = case_spec["decon_readout"]
+    deconvolve = case_spec["deconvolve"]
     perform_deformable_registration = case_spec.get(
         "perform_deformable_registration", False
     )
@@ -460,7 +483,7 @@ def _prepare_preprocessed_magnitude_case(
     estimate_chromatic_affines = case_spec.get("estimate_chromatic_affines", False)
     preprocess_mode = case_spec.get(
         "preprocess_mode",
-        "decon" if decon_readout else "no-decon",
+        "decon" if deconvolve else "no-decon",
     )
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
@@ -480,7 +503,7 @@ def _prepare_preprocessed_magnitude_case(
     setup_timings = _run_simulation_case_setup(
         case_root,
         simulation_api,
-        decon_readout=decon_readout,
+        deconvolve=deconvolve,
         ufish_model=ufish_model,
         perform_deformable_registration=perform_deformable_registration,
         case_label=case_label,
@@ -496,7 +519,10 @@ def _prepare_preprocessed_magnitude_case(
             minimum_pixels_per_RNA=default_minimum_pixels,
             magnitude_threshold=default_magnitude_threshold,
             skip_optimization=False,
+            normalization_iterations=SIMULATION_NORMALIZATION_ITERATIONS,
             estimate_chromatic_affines=estimate_chromatic_affines,
+            filter_method="blank_fraction",
+            target_gross_misid_rate=SIMULATION_TARGET_GROSS_MISID_RATE,
         )
         setup_timings["decode_calibration"] = time.perf_counter() - calibration_start
         print(
@@ -527,7 +553,7 @@ def _run_simulation_decode_and_f1(
     skip_optimization: bool = False,
     duplicate_radius_xy: float | None = None,
     duplicate_radius_z: float | None = None,
-    normalization_iterations: int = 3,
+    normalization_iterations: int = SIMULATION_NORMALIZATION_ITERATIONS,
     estimate_chromatic_affines: bool = False,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """Run simulation decode and f1."""
@@ -546,6 +572,8 @@ def _run_simulation_decode_and_f1(
         duplicate_radius_z=duplicate_radius_z,
         normalization_iterations=normalization_iterations,
         estimate_chromatic_affines=estimate_chromatic_affines,
+        filter_method="blank_fraction",
+        target_gross_misid_rate=SIMULATION_TARGET_GROSS_MISID_RATE,
     )
     timings_seconds["decode_pixels"] = time.perf_counter() - start
     print(
@@ -586,7 +614,7 @@ def _run_simulation_pipeline(
     case_root: Path,
     simulation_api: dict[str, Any],
     search_radius: float,
-    decon_readout: bool,
+    deconvolve: bool,
     ufish_model: str | None,
     perform_deformable_registration: bool = False,
     synthetic_chromatic_aberration: bool = False,
@@ -596,13 +624,41 @@ def _run_simulation_pipeline(
     minimum_pixels_per_rna: int | None = None,
     case_label: str | None = None,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    """Run simulation pipeline."""
+    """Run a simulation from conversion through scoring.
+
+    Parameters
+    ----------
+    case_root : Path
+        Working directory containing the simulation source and ground truth.
+    simulation_api : dict[str, Any]
+        Conversion, registration, decoding, and scoring APIs.
+    search_radius : float
+        Same-gene spherical matching radius in micrometers.
+    deconvolve : bool
+        Deconvolve fiducials and readouts when True.
+    ufish_model : str or None
+        U-FISH weights alias or path. None selects the package default.
+    perform_deformable_registration : bool, default False
+        Estimate residual SOFIMA transforms when True.
+    synthetic_chromatic_aberration : bool, default False
+        Apply the synthetic readout perturbation during conversion.
+    estimate_chromatic_affines : bool, default False
+        Estimate chromatic transforms during decoder calibration.
+    lowpass_sigma : tuple[float, float, float]
+        Decoder smoothing sigma in ZYX pixels.
+    magnitude_threshold : tuple[float, float]
+        Accepted interval of normalized pixel magnitudes.
+    minimum_pixels_per_rna : int or None
+        Minimum connected region size. None uses the decoder default.
+    case_label : str or None
+        Progress label. None uses the case directory name.
+    """
     if case_label is None:
         case_label = case_root.name
     timings_seconds = _run_simulation_case_setup(
         case_root,
         simulation_api,
-        decon_readout=decon_readout,
+        deconvolve=deconvolve,
         ufish_model=ufish_model,
         perform_deformable_registration=perform_deformable_registration,
         case_label=case_label,
@@ -748,8 +804,8 @@ def _run_standard_simulation_case(
         chromatic_case
     )
     registration_mode, perform_deformable_registration = registration_case
-    preprocess_mode = DEFAULT_PREPROCESS_MODE
-    decon_readout = PREPROCESS_MODES[preprocess_mode]
+    deconvolve = DECONVOLVE_BY_AXIAL_SPACING_UM[axial_spacing_um]
+    preprocess_mode = "decon" if deconvolve else "no-decon"
 
     source_case_dir = simulation_dataset_dirs[dataset_variant] / axial_spacing_um
     search_radius = F1_RADIUS_BY_AXIAL_SPACING_UM.get(axial_spacing_um)
@@ -770,7 +826,7 @@ def _run_standard_simulation_case(
         case_root,
         simulation_api,
         search_radius,
-        decon_readout=decon_readout,
+        deconvolve=deconvolve,
         ufish_model=ufish_model,
         perform_deformable_registration=perform_deformable_registration,
         synthetic_chromatic_aberration=synthetic_chromatic_aberration,
@@ -785,7 +841,11 @@ def _run_standard_simulation_case(
         "axial_spacing_um": axial_spacing_um,
         "ufish_model": ufish_model_name,
         "preprocess_mode": preprocess_mode,
-        "decon_readout": decon_readout,
+        "decon_fiducial": deconvolve,
+        "decon_readout": deconvolve,
+        "filter_method": "blank_fraction",
+        "target_gross_misid_rate": SIMULATION_TARGET_GROSS_MISID_RATE,
+        "normalization_iterations": SIMULATION_NORMALIZATION_ITERATIONS,
         "registration_mode": registration_mode,
         "perform_deformable_registration": perform_deformable_registration,
         "chromatic_mode": chromatic_mode,
@@ -1072,10 +1132,8 @@ def test_qi2lab_commands_decode_simulation_ground_truth(
         scores = simulation_api["calculate_F1"](
             case_root, search_radius=1.0, decode_run_key=no_decon_run
         )
-        assert scores["F1 Score"] >= (
-            EXHAUSTIVE_EXPECTED_F1_SCORES[("uniform", "0.315", "no-decon")]
-            - F1_ACCURACY_ALLOWANCE
-        )
+        # This CLI case switches only the readout source in an existing run.
+        assert scores["F1 Score"] >= 0.9865 - F1_ACCURACY_ALLOWANCE
 
         from merfish3danalysis.cli.statphysbio_simulation import sweep_f1
 
@@ -1301,7 +1359,7 @@ def simulation_full_case_result(
     axial_spacing_um = case_spec["axial_spacing_um"]
     ufish_model_name = case_spec["ufish_model_name"]
     preprocess_mode = case_spec["preprocess_mode"]
-    decon_readout = case_spec["decon_readout"]
+    deconvolve = case_spec["deconvolve"]
     registration_mode = case_spec["registration_mode"]
     perform_deformable_registration = case_spec["perform_deformable_registration"]
     chromatic_mode = case_spec["chromatic_mode"]
@@ -1330,7 +1388,11 @@ def simulation_full_case_result(
         "axial_spacing_um": axial_spacing_um,
         "ufish_model": ufish_model_name,
         "preprocess_mode": preprocess_mode,
-        "decon_readout": decon_readout,
+        "decon_fiducial": deconvolve,
+        "decon_readout": deconvolve,
+        "filter_method": "blank_fraction",
+        "target_gross_misid_rate": SIMULATION_TARGET_GROSS_MISID_RATE,
+        "normalization_iterations": SIMULATION_NORMALIZATION_ITERATIONS,
         "registration_mode": registration_mode,
         "perform_deformable_registration": perform_deformable_registration,
         "chromatic_mode": chromatic_mode,
@@ -1378,11 +1440,11 @@ def test_simulation_exhaustive_matrix(
     performance_metrics = simulation_full_case_result["performance_metrics"]
 
     case_spec = simulation_full_case_result["case_spec"]
-    expected_f1 = EXHAUSTIVE_EXPECTED_F1_SCORES[
+    expected_f1 = STANDARD_EXPECTED_F1_SCORES[
         (
             case_spec["dataset_variant"],
             case_spec["axial_spacing_um"],
-            case_spec["preprocess_mode"],
+            case_spec["chromatic_mode"],
         )
     ]
     assert performance_metrics["f1_score"] >= expected_f1 - F1_ACCURACY_ALLOWANCE

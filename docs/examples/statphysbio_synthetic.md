@@ -51,7 +51,7 @@ qi2lab datastore, preprocess, decode, and compare with ground truth. For example
 uv run sim-convert simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315
 uv run sim-datastore simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315/sim_acquisition
 uv run sim-preprocess simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315/sim_acquisition
-uv run sim-decode simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315/sim_acquisition
+uv run sim-decode simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315/sim_acquisition --normalization-iterations 3
 uv run sim-f1score simulation-data/merfish3d_analysis-simulation/example_16bit_cells/0.315
 ```
 
@@ -75,19 +75,25 @@ uv run pytest tests/test_simulation_example_pipeline.py -vv \
 
 The standard matrix compares affine-only and SOFIMA registration across both
 RNA distributions and all axial spacings, with and without synthetic chromatic
-aberration. Each F1 score must be within 0.02 of its reference value or higher.
-The reference scores for the standard matrix are:
+aberration. It deconvolves both fiducials and readouts at 0.315 and 1.0 µm and
+skips deconvolution on all channels at 1.5 µm. Each F1 score must be within
+0.02 of its reference value or higher. The decoder uses a 5% blank-fraction
+misidentification target. Precision and recall come from the known simulation
+transcripts. The decoder learns normalization vectors in three rounds. In 2D
+mode, it collapses adjacent-plane calls within one X pixel in XY during
+normalization and within three X pixels for final calls. Both use one Z step.
 
-| Dataset | Axial spacing (µm) | No chromatic aberration | Chromatic aberration |
-| --- | ---: | ---: | ---: |
-| Cells | 0.315 | 0.9848 | 0.9823 |
-| Cells | 1.0 | 0.9623 | 0.9483 |
-| Cells | 1.5 | 0.3867 | 0.3352 |
-| Uniform | 0.315 | 0.9899 | 0.9891 |
-| Uniform | 1.0 | 0.9669 | 0.9641 |
-| Uniform | 1.5 | 0.6090 | 0.5370 |
+| Dataset | Axial spacing (µm) | Deconvolution | No chromatic aberration | Chromatic aberration |
+| --- | ---: | --- | ---: | ---: |
+| Cells | 0.315 | On | 0.9848 | 0.9823 |
+| Cells | 1.0 | On | 0.9623 | 0.9483 |
+| Cells | 1.5 | Off | 0.7004 | 0.8962 |
+| Uniform | 0.315 | On | 0.9899 | 0.9891 |
+| Uniform | 1.0 | On | 0.9669 | 0.9641 |
+| Uniform | 1.5 | Off | 0.8913 | 0.8358 |
 
-To include the longer deconvolution matrix, add `--run-simulation-exhaustive`.
+To test decoding with reused normalization after SOFIMA and chromatic
+calibration, add `--run-simulation-exhaustive`. It uses the same spacing rule.
 For the full local suite:
 
 ```bash
